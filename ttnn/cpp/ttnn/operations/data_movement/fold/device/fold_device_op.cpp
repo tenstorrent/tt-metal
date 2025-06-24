@@ -24,7 +24,7 @@ void validate_fold(
     uint32_t stride_w) {
     const Tensor& input_tensor = input_tensors.at(0);
 
-    const auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
     TT_FATAL(input_tensor.buffer() != nullptr, "Fold: Expect input tensor to be allocated on a device buffer.");
@@ -64,7 +64,7 @@ void Fold::validate_on_program_cache_hit(const operation_attributes_t& op_attr, 
 Fold::spec_return_value_t Fold::compute_output_specs(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto input_tensor = tensors.input_tensor;
-    const ttnn::Shape input_shape = input_tensor.logical_shape();
+    const ttnn::Shape& input_shape = input_tensor.logical_shape();
     // we concatenate (stride_h sticks in H-dim) * (stride_w in W-dim) into 1 stick along C-dim
     ttnn::Shape output_shape(
         {1,

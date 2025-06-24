@@ -217,7 +217,6 @@ std::vector<ComplexTensor> ExecuteBackwardSub::invoke(
     float alpha,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    ComplexTensor grad_a = grad;
     grad_tensor.emplace_back(grad);
     const Tensor& grad_r = grad.real();
     const Tensor& grad_i = grad.imag();

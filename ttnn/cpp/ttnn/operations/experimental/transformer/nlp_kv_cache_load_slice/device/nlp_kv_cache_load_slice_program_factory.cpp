@@ -51,7 +51,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
     const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     const auto output_shape = output.padded_shape();
-    const auto input_shape = a.padded_shape();
+    const auto& input_shape = a.padded_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -137,7 +137,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_tensor = input_tensors.at(0);
+        const auto& src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
         auto dst_tensor_buffer = dst_tensor.buffer();
 

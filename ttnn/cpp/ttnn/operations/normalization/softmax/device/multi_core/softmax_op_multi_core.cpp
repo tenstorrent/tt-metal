@@ -46,7 +46,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     bool numeric_stable,
     bool inplace) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const auto shape = input_tensor.padded_shape();
+    const auto& shape = input_tensor.padded_shape();
     uint32_t W = shape[-1], H = (input_tensor.physical_volume() / (shape[0] * shape[-1])), NC = shape[0];
     uint32_t HW = H * W;
 
@@ -639,7 +639,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
 
     // tensor shape
     const auto shard_orient = input_tensor.shard_spec().value().orientation;
-    const auto shape = input_tensor.padded_shape();
+    const auto& shape = input_tensor.padded_shape();
     uint32_t M = shape[2] * shape[0];
     uint32_t K = shape[3] * shape[1];
     uint32_t Mt = M / TILE_WIDTH;

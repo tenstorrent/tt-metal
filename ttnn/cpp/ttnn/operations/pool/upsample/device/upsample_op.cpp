@@ -45,7 +45,7 @@ std::vector<TensorSpec> UpSample::compute_output_specs(const std::vector<Tensor>
     // NOTE2: Mapping it into in 2D format should be {N*H*W, C}
     // NOTE3: Assuming output data type is same as input
     const auto& input = input_tensors.at(0);
-    const auto input_shape = input.logical_shape();
+    const auto& input_shape = input.logical_shape();
 
     uint32_t out_n = input_shape[0];
     uint32_t out_h = input_shape[1] * scale_factor_h_;
@@ -102,7 +102,7 @@ operation::ProgramWithCallbacks UpSample::create_program(
 }
 
 UpSampleParallelizationStrategy UpSample::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
-    auto input = input_tensors.at(0);
+    const auto& input = input_tensors.at(0);
     if (input.memory_config().is_sharded()) {
         return UpSampleParallelizationStrategy::MULTI_CORE;
     }

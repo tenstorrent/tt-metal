@@ -61,7 +61,6 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     const MemoryConfig& memory_config,
     const QueueId queue_id) {
     auto temp_tensor = tensor;
-    auto intermediate_mem_config = tensor.memory_config();
     auto intermediate_out_memory_config = memory_config;
     if (tensor.memory_config().is_sharded()) {
         MemoryConfig temp_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};

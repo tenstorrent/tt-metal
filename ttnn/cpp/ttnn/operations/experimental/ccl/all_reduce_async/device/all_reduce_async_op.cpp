@@ -67,7 +67,7 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.logical_shape();
+    const auto& shape = input_tensor.logical_shape();
     tt::tt_metal::TensorLayout output_tensor_layout =
         tt::tt_metal::TensorLayout(this->dtype, input_tensor.tensor_spec().page_config(), this->output_mem_config);
 

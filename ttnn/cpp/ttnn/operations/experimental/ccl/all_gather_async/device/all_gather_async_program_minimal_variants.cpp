@@ -318,8 +318,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto output_tensor_layout = output_tensor.buffer()->buffer_layout();
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
     const auto output_tensor_page_layout = output_tensor.layout();
-    const auto input_tensor_shape = input_tensor.get_padded_shape();
-    const auto output_tensor_shape = output_tensor.get_padded_shape();
+    const auto& input_tensor_shape = input_tensor.get_padded_shape();
+    const auto& output_tensor_shape = output_tensor.get_padded_shape();
     const auto intermediate_tensor_buffer_type = intermediate_tensor.buffer()->buffer_type();
 
     auto mesh_device = input_tensor.mesh_device();

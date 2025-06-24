@@ -236,7 +236,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     const bool has_bias = input_tensor_bias.has_value();
 
-    const auto weights_shape = input_tensor_b.padded_shape();
+    const auto& weights_shape = input_tensor_b.padded_shape();
 
     std::optional<unary::UnaryWithParam> fused_activation = std::nullopt;
 

@@ -110,7 +110,7 @@ ttnn::Tensor pad_to_tile_vol(
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config) {
-    auto logical_shape = tensor.logical_shape();
+    const auto& logical_shape = tensor.logical_shape();
     auto padded_shape = tensor.padded_shape();
     auto rank = logical_shape.rank();
     if (padded_shape[-1] % tt::constants::TILE_WIDTH != 0 || padded_shape[-2] % tt::constants::TILE_HEIGHT != 0) {
