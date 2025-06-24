@@ -319,7 +319,7 @@ def test_demo(
     from transformers import logging as transformers_logging
 
     # Set logging level to ERROR to suppress warnings about unexpected keys
-    ref_model_name = "Qwen/" + model_args.model_name  # Qwen2.5-VL reference models expects "Qwen/" prefix
+    ref_model_name = model_args.CKPT_DIR  # allows for local model loading as well
     transformers_logging.set_verbosity_error()
     config = Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
     if ci_only:
