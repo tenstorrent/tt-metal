@@ -281,26 +281,20 @@ def from_torch(
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
 
-    if memory_config is not None:
-        if device is None:
-            raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
+    if memory_config is not None and device is None:
+        raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
 
-    if mesh_mapper:
-        # TODO: #22258 - supply device to pytensor constructor directly.
-        tensor = ttnn.Tensor(
-            tensor,
-            dtype,
-            mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
-            tile,
-            layout,
-            memory_config,
-            pad_value,
-        )
-        if device is not None:
-            tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
-        return tensor
-    else:
-        return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile, cq_id, pad_value)
+    return ttnn.Tensor(
+        tensor=tensor,
+        dtype=dtype,
+        device=device,
+        mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
+        layout=layout,
+        memory_config=memory_config,
+        tile=tile,
+        cq_id=cq_id,
+        pad_value=pad_value,
+    )
 
 
 def _golden_function(tensor, *, torch_rank=None, **kwargs):
