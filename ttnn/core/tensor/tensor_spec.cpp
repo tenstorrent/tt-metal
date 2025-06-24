@@ -167,11 +167,9 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
 
     const auto& shard_spec = mem_config.shard_spec().value();
 
-    // Can't convert logical sharding if physical shard shape is different from logical shard shape
+    // Can't convert logical sharding
     if (shard_spec.mode == ShardMode::LOGICAL) {
-        if (shard_spec.physical_shard_shape.has_value() && *shard_spec.physical_shard_shape != shard_spec.shape) {
-            return std::nullopt;
-        }
+        return std::nullopt;
     }
 
     NdShardSpec nd_shard_spec{
@@ -179,16 +177,6 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
         .grid = shard_spec.grid,
         .orientation = shard_spec.orientation,
     };
-
-    if (mem_layout == TensorMemoryLayout::SINGLE_BANK) {
-        nd_shard_spec.shard_shape = padded_shape();
-        return MemoryConfig::create_with_prepopulated_shard_specs(
-            mem_config.memory_layout(),
-            mem_config.buffer_type(),
-            mem_config.shard_spec(),
-            std::move(nd_shard_spec),
-            mem_config.created_with_nd_shard_spec());
-    }
 
     if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         nd_shard_spec.shard_shape = padded_shape();

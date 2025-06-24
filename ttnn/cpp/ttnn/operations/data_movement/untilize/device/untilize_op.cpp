@@ -36,12 +36,6 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(tensor_width % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
     TT_FATAL(tensor_height % TILE_HEIGHT == 0, "Height must be evenly divisible into tiles");
 
-    // Only support interleaved or sharded memory layouts
-    TT_FATAL(
-        input_memory_layout != TensorMemoryLayout::SINGLE_BANK, "Input memory layout must be interleaved or sharded");
-    TT_FATAL(
-        output_memory_layout != TensorMemoryLayout::SINGLE_BANK, "Output memory layout must be interleaved or sharded");
-
     // Special conditions for sub_core_grids special case
     if (this->sub_core_grids.has_value()) {
         TT_FATAL(

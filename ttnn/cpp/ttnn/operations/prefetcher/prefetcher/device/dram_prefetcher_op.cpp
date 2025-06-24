@@ -19,7 +19,7 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() > 0, "Must have at least one input tensor");
     TT_FATAL(this->num_layers > 0, "Prefetcher must run for at least 1 layer");
     TT_FATAL(global_cb.has_value(), "Global circular buffer must be provided");
-    ttnn::Tensor tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
+    const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
 
     auto global_cb = *this->global_cb;
 

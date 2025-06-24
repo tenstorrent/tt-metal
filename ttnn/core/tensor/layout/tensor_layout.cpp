@@ -170,10 +170,9 @@ void TensorLayout::initialize_alignment() {
     alignment_ = Alignment(std::move(result));
 }
 
-std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>> TensorLayout::compute_distribution_spec(
-    const ttnn::Shape& shape) const {
+BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const ttnn::Shape& shape) const {
     if (!memory_config_.is_sharded()) {
-        return std::nullopt;
+        return {};
     }
 
     TT_FATAL(
@@ -194,6 +193,9 @@ std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>> TensorLayou
         physical_size.height(),
         page_shape.height());
 
+    std::optional<ShardSpecBuffer> shard_spec_buffer;
+    std::optional<BufferDistributionSpec> distribution_spec;
+
     if (auto shard_spec = memory_config_.shard_spec()) {
         const auto width_in_pages = physical_size.width() / page_shape.width();
         const auto height_in_pages = physical_size.height() / page_shape.height();
@@ -210,13 +212,16 @@ std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>> TensorLayou
             default: TT_THROW("Unsupported shard mode {} in compute_distribution_spec!", shard_spec->mode);
         }
 
-        return ShardSpecBuffer(*shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);
+        shard_spec_buffer = ShardSpecBuffer(*shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);
     }
 
-    auto& nd_shard_spec = memory_config_.nd_shard_spec().value();
-    auto padded_shape = compute_padded_shape(shape);
-    return BufferDistributionSpec::from_shard_spec(
-        padded_shape, nd_shard_spec.shard_shape, page_shape, nd_shard_spec.grid, nd_shard_spec.orientation);
+    if (const auto& nd_shard_spec = memory_config_.nd_shard_spec()) {
+        auto padded_shape = compute_padded_shape(shape);
+        distribution_spec = BufferDistributionSpec::from_shard_spec(
+            padded_shape, nd_shard_spec->shard_shape, page_shape, nd_shard_spec->grid, nd_shard_spec->orientation);
+    }
+    return BufferShardingArgs(
+        std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
 }
 
 size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::Shape& shape) const {

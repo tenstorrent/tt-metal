@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/tensor_ops.hpp"
+#include "tensor/tensor_ops.hpp"
 
 #include "tt_stl/overloaded.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -79,9 +79,9 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
     return host_tensor;
 }
 
-Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevice* worker) {
+Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout) {
     ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout, worker);
+    GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout);
     TT_FATAL(
         input_tensor.storage_type() != StorageType::DEVICE, "Bring tensor to host before converting to target layout");
     Tensor output = tensor_impl::to_layout_wrapper(input_tensor, target_layout);

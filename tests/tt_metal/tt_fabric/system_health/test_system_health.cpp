@@ -21,16 +21,17 @@ namespace tt::tt_fabric {
 namespace system_health_tests {
 
 const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
-    {tt::ARCH::WORMHOLE_B0, {0x00, 0x40, 0xC0, 0x80}},
-    {tt::ARCH::BLACKHOLE, {0xC0, 0x80, 0x00, 0x40}},
+    {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
+    {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
 };
 
 std::pair<std::uint32_t, std::uint32_t> get_ubb_ids(chip_id_t chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
-    auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), cluster.get_bus_id(chip_id) & 0xF0);
+    const auto bus_id = cluster.get_bus_id(chip_id);
+    auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
     if (tray_bus_id_it != tray_bus_ids.end()) {
-        auto ubb_asic_id = cluster.get_ubb_asic_id(chip_id);
+        auto ubb_asic_id = bus_id & 0x0F;
         return std::make_pair(tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id);
     }
     return std::make_pair(0, 0);
@@ -70,6 +71,10 @@ bool is_chip_on_corner_of_mesh(chip_id_t physical_chip_id, tt::ClusterType clust
     }
 }
 
+std::string get_ubb_id_str(chip_id_t chip_id) {
+    auto [tray_id, ubb_asic_id] = get_ubb_ids(chip_id);
+    return "Tray: " + std::to_string(tray_id) + " N" + std::to_string(ubb_asic_id);
+}
 
 TEST(Cluster, ReportIntermeshLinks) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -88,12 +93,16 @@ TEST(Cluster, ReportIntermeshLinks) {
     auto all_intermesh_links = control_plane.get_all_intermesh_eth_links();
 
     // Summary
+    size_t total_chips = 0;
     size_t total_links = 0;
     for (const auto& [chip_id, links] : all_intermesh_links) {
-        total_links += links.size();
+        if (links.size() > 0) {
+            total_chips++;
+            total_links += links.size();
+        }
     }
 
-    log_info(tt::LogTest, "Total chips with intermesh links: {}", all_intermesh_links.size());
+    log_info(tt::LogTest, "Total chips with intermesh links: {}", total_chips);
     log_info(tt::LogTest, "Total intermesh links: {}", total_links);
     log_info(tt::LogTest, "");
 
@@ -138,8 +147,7 @@ TEST(Cluster, ReportSystemHealth) {
         std::stringstream chip_id_ss;
         chip_id_ss << std::dec << "Chip: " << chip_id << " Unique ID: " << std::hex << unique_chip_id;
         if (cluster_type == tt::ClusterType::GALAXY) {
-            auto [tray_id, ubb_asic_id] = get_ubb_ids(chip_id);
-            chip_id_ss << " Tray: " << tray_id << " N" << ubb_asic_id;
+            chip_id_ss << " " << get_ubb_id_str(chip_id);
         }
         ss << chip_id_ss.str() << std::endl;
         for (const auto& [eth_core, chan] : soc_desc.logical_eth_core_to_chan_map) {
@@ -154,17 +162,21 @@ TEST(Cluster, ReportSystemHealth) {
                 if (eth_connections.at(chip_id).find(chan) != eth_connections.at(chip_id).end()) {
                     const auto& [connected_chip_id, connected_eth_core] =
                         cluster.get_connected_ethernet_core(std::make_tuple(chip_id, eth_core));
-                    std::cout << "Connected chip: " << connected_chip_id
-                              << " connected eth core: " << connected_eth_core.str() << std::endl;
                     eth_ss << " link UP " << connection_type << ", retrain: " << read_vec[0] << ", connected to chip "
-                           << connected_chip_id << " " << connected_eth_core.str();
+                           << connected_chip_id;
+                    if (cluster_type == tt::ClusterType::GALAXY) {
+                        eth_ss << " " << get_ubb_id_str(connected_chip_id);
+                    }
+                    eth_ss << " " << connected_eth_core.str();
                 } else {
                     const auto& [connected_chip_unique_id, connected_eth_core] =
                         cluster.get_connected_ethernet_core_to_remote_mmio_device(std::make_tuple(chip_id, eth_core));
-                    std::cout << "Connected unique chip: " << connected_chip_unique_id
-                              << " connected eth core: " << connected_eth_core.str() << std::endl;
                     eth_ss << " link UP " << connection_type << ", retrain: " << read_vec[0] << ", connected to chip "
-                           << connected_chip_unique_id << " " << connected_eth_core.str();
+                           << connected_chip_unique_id;
+                    if (cluster_type == tt::ClusterType::GALAXY) {
+                        eth_ss << " " << get_ubb_id_str(connected_chip_unique_id);
+                    }
+                    eth_ss << " " << connected_eth_core.str();
                 }
                 if (read_vec[0] > 0) {
                     unexpected_system_states.push_back(chip_id_ss.str() + eth_ss.str());
@@ -286,13 +298,11 @@ TEST(Cluster, TestMeshFullConnectivity) {
             }
         }
     }
-    uint32_t tray_id = 0, ubb_asic_id = 0;
     for (const auto& [chip, connections] : eth_connections) {
         std::stringstream chip_ss;
         chip_ss << "Chip " << chip;
         if (cluster_type == tt::ClusterType::GALAXY) {
-            std::tie(tray_id, ubb_asic_id) = get_ubb_ids(chip);
-            chip_ss << " Tray: " << tray_id << " N" << ubb_asic_id;
+            chip_ss << " " << get_ubb_id_str(chip);
         }
         const auto& soc_desc = cluster.get_soc_desc(chip);
         std::map<chip_id_t, int> num_connections_to_chip;
@@ -347,8 +357,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
             std::stringstream other_chip_ss;
             other_chip_ss << "Chip " << other_chip;
             if (cluster_type == tt::ClusterType::GALAXY) {
-                auto [other_tray_id, other_ubb_asic_id] = get_ubb_ids(other_chip);
-                other_chip_ss << " Tray: " << other_tray_id << " N" << other_ubb_asic_id;
+                other_chip_ss << " " << get_ubb_id_str(other_chip);
             }
             if (num_target_connections > 0) {
                 EXPECT_GE(count, num_target_connections)

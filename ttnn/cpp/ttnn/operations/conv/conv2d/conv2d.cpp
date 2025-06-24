@@ -429,7 +429,7 @@ Result conv2d_L1(
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     auto input_tensor = input_tensor_;
-    auto weight_tensor = weight_tensor_;
+    const auto& weight_tensor = weight_tensor_;
     std::optional<ttnn::Tensor> bias_tensor = bias_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     // Store the original stride size for weight folding
@@ -579,8 +579,7 @@ Result conv2d_L1(
                 // Reshape is used as a workaround to an issue in to_layout mentioned here :
                 // https://github.com/tenstorrent/tt-metal/issues/16330
                 input_tensor_post_tm = ttnn::reshape(input_tensor_post_tm, input_tensor_post_tm.padded_shape());
-                input_tensor_post_tm =
-                    ttnn::to_layout(input_tensor_post_tm, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
+                input_tensor_post_tm = ttnn::to_layout(input_tensor_post_tm, Layout::ROW_MAJOR);
             }
         } else {
             Tensor halo_output = ttnn::halo(
@@ -640,8 +639,7 @@ Result conv2d_L1(
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         if (input_tensor_post_tm.layout() != Layout::TILE) {
-            input_tensor_post_tm =
-                ttnn::to_layout(input_tensor_post_tm, Layout::TILE, std::nullopt, std::nullopt, device);
+            input_tensor_post_tm = ttnn::to_layout(input_tensor_post_tm, Layout::TILE);
         }
 
         // run conv as matmul

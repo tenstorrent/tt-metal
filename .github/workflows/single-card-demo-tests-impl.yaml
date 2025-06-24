@@ -42,8 +42,10 @@ jobs:
           { name: "vanilla_unet", runner-label: "N150", performance: false, cmd: run_vanilla_unet_demo, owner_id: U045U3DEKM4}, # Mohamed Bahnas (keerthana-r-mcw)
           { name: "yolov8x", runner-label: "N150", performance: false, cmd: run_yolov8x_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "vgg_unet", runner-label: "N150", performance: false, cmd: run_vgg_unet_demo, owner_id: U045U3DEKM4}, # Mohamed Bahnas (keerthana-r-mcw)
+          { name: "yolov4", runner-label: "N150", performance: false, cmd: run_yolov4_perf, owner_id: U045U3DEKM4}, # Mohamed Bahnas (Sudhanshu Singhal)
           { name: "resnet", runner-label: "N150", performance: true, cmd: run_resnet_stability, owner_id: U0837MYG788}, # Marko Radosavljevic
           { name: "sdxl", runner-label: "N150", performance: false, cmd: run_sdxl_func, owner_id: U0837MYG788}, # Marko Radosavljevic
+          { name: "yolov10x", runner-label: "N150", performance: false, cmd: run_yolov10x_demo, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "falcon7b", runner-label: "N300", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
           { name: "llama3", runner-label: "N300", performance: false, cmd: run_llama3_func, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "vgg", runner-label: "N300", performance: false, cmd: run_vgg_func, owner_id: U06Q7ESTFEV}, # Borys Bradel
@@ -69,6 +71,8 @@ jobs:
           { name: "yolov8s_world", runner-label: "N300", performance: false, cmd: run_yolov8s_world_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "vanilla_unet", runner-label: "N300", performance: false, cmd: run_vanilla_unet_demo, owner_id: U045U3DEKM4}, # Mohamed Bahnas (keerthana-r-mcw)
           { name: "vgg_unet", runner-label: "N300", performance: false, cmd: run_vgg_unet_demo, owner_id: U045U3DEKM4}, # Mohamed Bahnas (keerthana-r-mcw)
+          { name: "yolov4", runner-label: "N300", performance: false, cmd: run_yolov4_perf, owner_id: U045U3DEKM4}, # Mohamed Bahnas (Sudhanshu Singhal)
+          { name: "yolov10x", runner-label: "N300", performance: false, cmd: run_yolov10x_demo, owner_id: U056BK5U81E}, # Dalar Vartanians
           # Moved to t3k tests until OOM on single card runners resolved
           # { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U03PUAKE719}, # Mark O'Connor
         ]
@@ -124,7 +128,7 @@ jobs:
             source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
             ${{ matrix.test-group.cmd }}
       - name: Save environment data
-        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() && matrix.test-group.name != 'whisper' }}
+        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() && matrix.test-group.name != 'whisper' && matrix.test-group.name != 'mobilenetv2' }}
         uses: ./.github/actions/docker-run
         env:
           LOGURU_LEVEL: INFO
@@ -139,7 +143,7 @@ jobs:
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
-        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() && matrix.test-group.name != 'whisper' }}
+        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() && matrix.test-group.name != 'whisper' && matrix.test-group.name != 'mobilenetv2' }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
