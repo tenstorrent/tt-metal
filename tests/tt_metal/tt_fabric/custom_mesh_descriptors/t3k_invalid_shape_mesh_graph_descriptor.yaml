@@ -8,19 +8,20 @@ ChipSpec: {
   }
 }
 
+
 Board: [
-  { name: N300,
+  { name: T3K,
     type: Mesh,
-    topology: [1, 2]}
+    topology: [2, 2]}
 ]
 
 Mesh: [
 {
   id: 0,
-  board: N300,
-  device_topology: [1, 2],
+  board: T3K,
+  device_topology: [3, 5],  # Invalid: 3 is not divisible by 2, 5 is not divisible by 2
   host_topology: [1, 1],
-  host_ranks: [[0]]}
+  host_ranks: [[0, 1]]}
 ]
 
 Graph: [
