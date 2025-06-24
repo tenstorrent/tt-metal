@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <vector>
 #include "tt_metal/fabric/serialization/intermesh_link_table.hpp"
 #include "intermesh_link_table_generated.h"
 
