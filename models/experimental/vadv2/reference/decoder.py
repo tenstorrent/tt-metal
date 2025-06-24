@@ -5,6 +5,7 @@ from torch.nn.modules import ModuleList
 import warnings
 import torch.nn.functional as F
 import copy
+import math
 
 
 def multi_scale_deformable_attn_pytorch(value, value_spatial_shapes, sampling_locations, attention_weights):
@@ -144,48 +145,9 @@ class MultiheadAttention(nn.Module):
         key_pos=None,
         attn_mask=None,
         key_padding_mask=None,
+        dropout_p=0.1,
         **kwargs,
     ):
-        """Forward function for `MultiheadAttention`.
-
-        **kwargs allow passing a more general data flow when combining
-        with other operations in `transformerlayer`.
-
-        Args:
-            query (Tensor): The input query with shape [num_queries, bs,
-                embed_dims] if self.batch_first is False, else
-                [bs, num_queries embed_dims].
-            key (Tensor): The key tensor with shape [num_keys, bs,
-                embed_dims] if self.batch_first is False, else
-                [bs, num_keys, embed_dims] .
-                If None, the ``query`` will be used. Defaults to None.
-            value (Tensor): The value tensor with same shape as `key`.
-                Same in `nn.MultiheadAttention.forward`. Defaults to None.
-                If None, the `key` will be used.
-            identity (Tensor): This tensor, with the same shape as x,
-                will be used for the identity link.
-                If None, `x` will be used. Defaults to None.
-            query_pos (Tensor): The positional encoding for query, with
-                the same shape as `x`. If not None, it will
-                be added to `x` before forward function. Defaults to None.
-            key_pos (Tensor): The positional encoding for `key`, with the
-                same shape as `key`. Defaults to None. If not None, it will
-                be added to `key` before forward function. If None, and
-                `query_pos` has the same shape as `key`, then `query_pos`
-                will be used for `key_pos`. Defaults to None.
-            attn_mask (Tensor): ByteTensor mask with shape [num_queries,
-                num_keys]. Same in `nn.MultiheadAttention.forward`.
-                Defaults to None.
-            key_padding_mask (Tensor): ByteTensor with shape [bs, num_keys].
-                Defaults to None.
-
-        Returns:
-            Tensor: forwarded results with shape
-                [num_queries, bs, embed_dims]
-                if self.batch_first is False, else
-                [bs, num_queries embed_dims].
-        """
-
         if key is None:
             key = query
         if value is None:
@@ -197,29 +159,71 @@ class MultiheadAttention(nn.Module):
                 # use query_pos if key_pos is not available
                 if query_pos.shape == key.shape:
                     key_pos = query_pos
-                else:
-                    warnings.warn(f"position encoding of key is" f"missing in {self.__class__.__name__}.")
+
         if query_pos is not None:
             query = query + query_pos
         if key_pos is not None:
             key = key + key_pos
 
-        # Because the dataflow('key', 'query', 'value') of
-        # ``torch.nn.MultiheadAttention`` is (num_query, batch,
-        # embed_dims), We should adjust the shape of dataflow from
-        # batch_first (batch, num_query, embed_dims) to num_query_first
-        # (num_query ,batch, embed_dims), and recover ``attn_output``
-        # from num_query_first to batch_first.
         if self.batch_first:
             query = query.transpose(0, 1)
             key = key.transpose(0, 1)
             value = value.transpose(0, 1)
 
-        out = self.attn(query=query, key=key, value=value, attn_mask=attn_mask, key_padding_mask=key_padding_mask)[0]
+        in_proj_bias = self.attn.in_proj_bias
+        in_proj_weight = self.attn.in_proj_weight
 
-        if self.batch_first:
-            out = out.transpose(0, 1)
-        return identity + self.dropout_layer(self.proj_drop(out))
+        tgt_len, bsz, embed_dim = query.shape
+        src_len, _, _ = key.shape
+
+        q_weight = in_proj_weight[: self.embed_dims, :]  # Query weights
+        k_weight = in_proj_weight[self.embed_dims : 2 * self.embed_dims, :]  # Key weights
+        v_weight = in_proj_weight[2 * self.embed_dims :, :]  # Value weights
+
+        q_bias = in_proj_bias[: self.embed_dims]  # Query biases
+        k_bias = in_proj_bias[self.embed_dims : 2 * self.embed_dims]  # Key biases
+        v_bias = in_proj_bias[2 * self.embed_dims :]  # Value biases
+
+        q_batch_size, q_sequence_size, q_hidden_size = query.shape
+        q_head_size = q_hidden_size // self.num_heads
+
+        k_batch_size, k_sequence_size, k_hidden_size = key.shape
+        k_head_size = k_hidden_size // self.num_heads
+
+        v_batch_size, v_sequence_size, v_hidden_size = value.shape
+        v_head_size = v_hidden_size // self.num_heads
+        query = torch.nn.functional.linear(query, q_weight, bias=q_bias)
+        key = torch.nn.functional.linear(key, k_weight, bias=k_bias)
+        value = torch.nn.functional.linear(value, v_weight, bias=v_bias)
+        query = torch.reshape(query, (tgt_len, bsz * self.num_heads, q_head_size)).transpose(0, 1)
+
+        key = torch.reshape(key, (k_batch_size, bsz * self.num_heads, q_head_size)).transpose(0, 1)
+
+        value = torch.reshape(value, (v_batch_size, bsz * self.num_heads, q_head_size)).transpose(0, 1)
+
+        src_len = key.size(1)
+
+        B, Nt, E = query.shape
+        q_scaled = query * math.sqrt(1.0 / float(E))
+
+        if attn_mask is not None:
+            attn_output_weights = torch.baddbmm(attn_mask, q_scaled, key.transpose(-2, -1))
+        else:
+            attn_output_weights = torch.bmm(q_scaled, key.transpose(-2, -1))
+
+        attn_output_weights = torch.nn.functional.softmax(attn_output_weights, dim=-1)
+
+        attn_output = torch.bmm(attn_output_weights, value)
+
+        attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len * bsz, embed_dim)
+        attn_output = torch.nn.functional.linear(attn_output, self.attn.out_proj.weight, self.attn.out_proj.bias)
+        attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
+
+        # optionally average attention weights over heads
+        attn_output_weights = torch.reshape(attn_output_weights, (bsz, self.num_heads, tgt_len, src_len))
+        attn_output_weights = attn_output_weights.mean(dim=1)
+
+        return attn_output + identity
 
 
 class CustomMSDeformableAttention(nn.Module):
@@ -399,7 +403,7 @@ class CustomMSDeformableAttention(nn.Module):
             # (num_query, bs ,embed_dims)
             output = output.permute(1, 0, 2)
 
-        return self.dropout(output) + identity
+        return output + identity
 
 
 class FFN(nn.Module):
@@ -541,7 +545,7 @@ class MapDetectionTransformerDecoder(nn.Module):
                 reference_points=reference_points_input,
                 spatial_shapes=spatial_shapes,
             )
-            output = output.permute(1, 0, 2)
+            # output = output.permute(1, 0, 2)
 
             if reg_branches is not None:
                 tmp = reg_branches[lid](output)
@@ -556,13 +560,14 @@ class MapDetectionTransformerDecoder(nn.Module):
 
                 reference_points = new_reference_points.detach()
 
-            output = output.permute(1, 0, 2)
+            # output = output.permute(1, 0, 2)
             if self.return_intermediate:
                 intermediate.append(output)
                 intermediate_reference_points.append(reference_points)
 
         if self.return_intermediate:
             a = torch.stack(intermediate)
+
             b = torch.stack(intermediate_reference_points)
             return a, b
         return output, reference_points
@@ -641,7 +646,6 @@ class DetectionTransformerDecoder(nn.Module):
         output = query
         intermediate = []
         intermediate_reference_points = []
-        print("-------reg_branches-----------", reg_branches)
         for lid, layer in enumerate(self.layers):
             reference_points_input = reference_points[..., :2].unsqueeze(2)  # BS NUM_QUERY NUM_LEVEL 2
             output = layer(
@@ -831,10 +835,8 @@ class BaseTransformerLayer(nn.Module):
         self.embed_dims = self.attentions[0].embed_dims
 
         num_attn = operation_order.count("self_attn") + operation_order.count("cross_attn")
-        print("------------", num_attn)
         if isinstance(attn_cfgs, dict):
             attn_cfgs = [copy.deepcopy(attn_cfgs) for _ in range(num_attn)]
-            print(attn_cfgs)
         else:
             assert num_attn == len(attn_cfgs), (
                 f"The length "
@@ -886,9 +888,7 @@ class BaseTransformerLayer(nn.Module):
 
         for layer in self.operation_order:
             if layer == "self_attn":
-                print("self_attn")
                 temp_key = temp_value = query
-                # print(kwargs)
                 query = self.attentions[attn_index](
                     query,
                     temp_key,
@@ -904,12 +904,11 @@ class BaseTransformerLayer(nn.Module):
                 identity = query
 
             elif layer == "norm":
-                print("norm")
                 query = self.norms[norm_index](query)
                 norm_index += 1
+                # return query
 
             elif layer == "cross_attn":
-                print("cross_attn")
                 query = self.attentions[attn_index](
                     query,
                     key,
@@ -925,7 +924,6 @@ class BaseTransformerLayer(nn.Module):
                 identity = query
 
             elif layer == "ffn":
-                print("ffn")
                 query = self.ffns[ffn_index](query, identity if self.pre_norm else None)
                 ffn_index += 1
 
