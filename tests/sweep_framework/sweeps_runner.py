@@ -633,11 +633,7 @@ def initialize_postgres_database():
             message TEXT,
             exception TEXT,
             e2e_perf FLOAT,
-            device_perf JSONB,
-            git_hash VARCHAR(50),
-            test_parameters JSONB,
-            vector_data_jsonb JSONB,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            device_perf JSONB
         );
         """
 
@@ -664,7 +660,6 @@ def initialize_postgres_database():
         CREATE INDEX IF NOT EXISTS idx_sweep_testcases_status ON sweep_testcases(status);
         CREATE INDEX IF NOT EXISTS idx_sweep_testcases_host ON sweep_testcases(host);
         CREATE INDEX IF NOT EXISTS idx_sweep_testcases_start_time_ts ON sweep_testcases(start_time_ts);
-        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_git_hash ON sweep_testcases(git_hash);
         """
 
         cursor.execute(create_indexes_query)
@@ -825,22 +820,6 @@ def export_test_results_postgres(header_info, results):
             for idx, result in test_results:
                 header = header_info[idx]
 
-                # Extract test parameters from the original vector
-                test_parameters = {}
-                for key, value in result.items():
-                    if key not in [
-                        "status",
-                        "message",
-                        "exception",
-                        "e2e_perf",
-                        "device_perf",
-                        "timestamp",
-                        "host",
-                        "user",
-                        "original_vector_data",
-                    ]:
-                        test_parameters[key] = serialize(value) if hasattr(value, "__dict__") else value
-
                 # Map test status to database status
                 db_status = map_test_status_to_db_status(result.get("status"))
                 test_statuses.append(db_status)
@@ -850,9 +829,9 @@ def export_test_results_postgres(header_info, results):
                 INSERT INTO sweep_testcases (
                     test_id, name, device, host, start_time_ts, end_time_ts,
                     status, suite_name, test_vector, message, exception,
-                    e2e_perf, device_perf, git_hash, test_parameters, vector_data_jsonb
+                    e2e_perf, device_perf
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 """
 
@@ -871,14 +850,11 @@ def export_test_results_postgres(header_info, results):
                     None,  # end_time_ts - could be calculated if we track duration
                     db_status,
                     header.get("suite_name"),
-                    json.dumps(header.get("vector_id")),  # test_vector as JSON
+                    json.dumps(result.get("original_vector_data")),  # test_vector now stores original vector data
                     result.get("message"),
                     result.get("exception"),
                     result.get("e2e_perf"),
                     json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
-                    curr_git_hash,
-                    json.dumps(test_parameters),
-                    json.dumps(result.get("original_vector_data")),
                 )
 
                 cursor.execute(testcase_insert_query, testcase_values)
@@ -1094,9 +1070,15 @@ if __name__ == "__main__":
     else:
         module_names = None
 
+    # Determine which execution path to take
     if READ_FILE:
+        # Using explicit read-file argument
+        run_sweeps_json(module_names, args.suite_name)
+    elif DATABASE_BACKEND == "postgres" and args.module_name and not args.read_file:
+        # Using PostgreSQL with module names but no read-file - use automatic file discovery
         run_sweeps_json(module_names, args.suite_name)
     else:
+        # Using Elasticsearch or no module names specified
         run_sweeps(module_names, args.suite_name, args.vector_id)
 
     if args.watcher:
