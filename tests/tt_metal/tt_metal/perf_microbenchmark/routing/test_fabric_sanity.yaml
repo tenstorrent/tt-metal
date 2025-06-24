@@ -80,3 +80,30 @@ Tests:
             num_packets: 10
             destination:
               device: [0, 7]
+
+  - name: "AllToAllUnicastMesh"
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+
+    patterns:
+      - type: all_to_all_unicast
+
+  - name: "FullDevicePairingMesh"
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 5

@@ -32,6 +32,74 @@
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
+// Helper functions and mappings for converting between string representations in YAML
+// and their corresponding enum types.
+namespace detail {
+template <typename T>
+struct StringEnumMapper {
+    std::unordered_map<std::string, T> to_enum;
+    std::unordered_map<T, std::string> to_string_map;
+
+    StringEnumMapper(const std::initializer_list<std::pair<const char*, T>>& mapping_data) {
+        for (const auto& pair : mapping_data) {
+            to_enum[pair.first] = pair.second;
+            to_string_map[pair.second] = pair.first;
+        }
+    }
+
+    const std::string& to_string(T value, const std::string& type_name) const {
+        auto it = to_string_map.find(value);
+        if (it == to_string_map.end()) {
+            TT_THROW("Unknown enum value for {}", type_name);
+        }
+        return it->second;
+    }
+
+    T from_string(const std::string& s, const std::string& type_name) const {
+        auto it = to_enum.find(s);
+        if (it == to_enum.end()) {
+            TT_THROW("Unsupported string value '{}' for {}", s, type_name);
+        }
+        return it->second;
+    }
+};
+
+static const StringEnumMapper<ChipSendType> chip_send_type_mapper({
+    {"mcast", ChipSendType::CHIP_MULTICAST},
+    {"unicast", ChipSendType::CHIP_UNICAST},
+});
+
+static const StringEnumMapper<NocSendType> noc_send_type_mapper({
+    {"unicast_write", NocSendType::NOC_UNICAST_WRITE},
+    {"atomic_inc", NocSendType::NOC_UNICAST_ATOMIC_INC},
+    {"fused_atomic_inc", NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC},
+});
+
+static const StringEnumMapper<RoutingDirection> routing_direction_mapper({
+    {"N", RoutingDirection::N},
+    {"S", RoutingDirection::S},
+    {"E", RoutingDirection::E},
+    {"W", RoutingDirection::W},
+});
+
+static const StringEnumMapper<Topology> topology_mapper({
+    {"Ring", Topology::Ring},
+    {"Linear", Topology::Linear},
+    {"Mesh", Topology::Mesh},
+});
+
+static const StringEnumMapper<RoutingType> routing_type_mapper({
+    {"Low Latency", RoutingType::LowLatency},
+    {"Dynamic", RoutingType::Dynamic},
+});
+
+static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mapper({
+    {"RoundRobin", CoreAllocationPolicy::RoundRobin},
+    {"ExhaustFirst", CoreAllocationPolicy::ExhaustFirst},
+});
+
+}  // namespace detail
+
 struct ParsedYamlConfig {
     std::vector<TestConfig> test_configs;
     std::optional<AllocatorPolicies> allocation_policies;
@@ -124,78 +192,6 @@ const std::string no_default_test_yaml_config = "";
 
 const std::vector<std::string> supported_high_level_patterns = {
     "all_to_all_unicast", "full_device_random_pairing", "all_to_all_multicast"};
-
-// ======================================================================================
-// Section 2: Enum and String Conversion Utilities
-// ======================================================================================
-// Helper functions and mappings for converting between string representations in YAML
-// and their corresponding C++ enum types.
-
-namespace detail {
-template <typename T>
-struct StringEnumMapper {
-    std::unordered_map<std::string, T> to_enum;
-    std::unordered_map<T, std::string> to_string_map;
-
-    StringEnumMapper(const std::initializer_list<std::pair<const char*, T>>& mapping_data) {
-        for (const auto& pair : mapping_data) {
-            to_enum[pair.first] = pair.second;
-            to_string_map[pair.second] = pair.first;
-        }
-    }
-
-    const std::string& to_string(T value, const std::string& type_name) const {
-        auto it = to_string_map.find(value);
-        if (it == to_string_map.end()) {
-            TT_THROW("Unknown enum value for {}", type_name);
-        }
-        return it->second;
-    }
-
-    T from_string(const std::string& s, const std::string& type_name) const {
-        auto it = to_enum.find(s);
-        if (it == to_enum.end()) {
-            TT_THROW("Unsupported string value '{}' for {}", s, type_name);
-        }
-        return it->second;
-    }
-};
-
-static const StringEnumMapper<ChipSendType> chip_send_type_mapper({
-    {"mcast", ChipSendType::CHIP_MULTICAST},
-    {"unicast", ChipSendType::CHIP_UNICAST},
-});
-
-static const StringEnumMapper<NocSendType> noc_send_type_mapper({
-    {"unicast_write", NocSendType::NOC_UNICAST_WRITE},
-    {"atomic_inc", NocSendType::NOC_UNICAST_ATOMIC_INC},
-    {"fused_atomic_inc", NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC},
-});
-
-static const StringEnumMapper<RoutingDirection> routing_direction_mapper({
-    {"N", RoutingDirection::N},
-    {"S", RoutingDirection::S},
-    {"E", RoutingDirection::E},
-    {"W", RoutingDirection::W},
-});
-
-static const StringEnumMapper<Topology> topology_mapper({
-    {"Ring", Topology::Ring},
-    {"Linear", Topology::Linear},
-    {"Mesh", Topology::Mesh},
-});
-
-static const StringEnumMapper<RoutingType> routing_type_mapper({
-    {"Low Latency", RoutingType::LowLatency},
-    {"Dynamic", RoutingType::Dynamic},
-});
-
-static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mapper({
-    {"RoundRobin", CoreAllocationPolicy::RoundRobin},
-    {"ExhaustFirst", CoreAllocationPolicy::ExhaustFirst},
-});
-
-}  // namespace detail
 
 inline ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_path) {
     std::ifstream yaml_config(yaml_config_path);
@@ -919,7 +915,6 @@ private:
         }
     }
 
-    // Helper to reduce code duplication
     void add_senders_from_pairs(
         TestConfig& test,
         const std::vector<std::pair<FabricNodeId, FabricNodeId>>& pairs,
@@ -945,8 +940,7 @@ private:
 
     void split_all_multicast_patterns(TestConfig& test) {
         // This function iterates through all sender patterns and splits any multi-direction
-        // multicast hops. It uses a copy-on-write approach for efficiency: it only
-        // rebuilds a sender's pattern list if a split is actually performed.
+        // multicast hops.
         for (auto& sender : test.senders) {
             std::vector<TrafficPatternConfig> new_patterns;
             bool sender_was_modified = false;
@@ -1053,16 +1047,14 @@ private:
 };
 
 // ======================================================================================
-// Section 7: Serialization to YAML
+// Serialization to YAML
 // ======================================================================================
-// Functions to convert the C++ TestConfig objects back into a YAML representation.
 
 class YamlTestConfigSerializer {
 public:
     static void dump(
         const std::vector<TestConfig>& test_configs, const AllocatorPolicies& policies, const std::string& dump_path) {
         YAML::Emitter out;
-        out.SetIndent(4);
         out << YAML::BeginMap;
 
         out << YAML::Key << "allocation_policies";

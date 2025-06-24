@@ -263,13 +263,6 @@ int main(int argc, char** argv) {
         auto built_tests = builder.build_tests({test_config});
         log_info(tt::LogTest, "built {} tests", built_tests.size());
 
-        if (cmdline_parser.dump_built_tests()) {
-            log_info(tt::LogTest, "dumping tests");
-            auto dump_path = cmdline_parser.get_built_tests_dump_file_path(default_built_tests_dump_file);
-            YamlTestConfigSerializer::dump(built_tests, allocation_policies, dump_path);
-            log_info(tt::LogTest, "dumped tests");
-        }
-
         for (auto& built_test : built_tests) {
             log_info(tt::LogTest, "Running Test: {}", built_test.name);
 
@@ -286,6 +279,13 @@ int main(int argc, char** argv) {
             log_info(tt::LogTest, "Test {} Finished.", built_test.name);
 
             test_context.reset_devices();
+        }
+
+        if (cmdline_parser.dump_built_tests()) {
+            log_info(tt::LogTest, "dumping tests");
+            auto dump_path = cmdline_parser.get_built_tests_dump_file_path(default_built_tests_dump_file);
+            YamlTestConfigSerializer::dump(built_tests, allocation_policies, dump_path);
+            log_info(tt::LogTest, "dumped tests");
         }
     }
 

@@ -255,7 +255,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() const {
             TT_FATAL(this->dst_node_ids.size() == 1, "2D unicast should have exactly one destination node.");
             const auto& dst_node_id = this->dst_node_ids[0];
             const auto& mesh_shape = this->parameters.mesh_shape;
-            // From tt_fabric_test_common.hpp
+            // TODO: move this out of here
             const uint32_t EW_DIM = 1;
             const auto unicast_fields = ChipUnicastFields2D(
                 this->src_node_id.chip_id, dst_node_id.chip_id, *dst_node_id.mesh_id, mesh_shape[EW_DIM]);
@@ -263,6 +263,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() const {
             args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         } else if (this->parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
             TT_FATAL(!this->dst_node_ids.empty(), "2D multicast should have at least one destination node.");
+            // TODO: fix this
             const auto& dst_rep_node_id = this->dst_node_ids[0];  // Representative destination
             const auto mcast_fields =
                 ChipMulticastFields2D(dst_rep_node_id.chip_id, *dst_rep_node_id.mesh_id, this->hops);
