@@ -246,6 +246,18 @@ def fold_batch_norm2d_into_conv2d(conv, bn):
     return weight, bias
 
 
+def fold_batch_norm2d_into_conv2d_split(conv, bn):
+    weight, bias = fold_batch_norm2d_into_conv2d(conv, bn)
+    bias = bias.reshape(1, 1, 1, -1)
+    chunk_size = bias.shape[-1] // 2
+    return (
+        weight[:chunk_size, :, :, :],
+        bias[:, :, :, :chunk_size],
+        weight[chunk_size:, :, :, :],
+        bias[:, :, :, chunk_size:],
+    )
+
+
 def create_custom_preprocessor(device):
     def custom_preprocessor(model, name, ttnn_module_args):
         parameters = {}
@@ -261,14 +273,24 @@ def create_custom_preprocessor(device):
                         conv_bias.reshape(1, 1, 1, -1),
                     )
                 elif isinstance(child, C2f):
-                    parameters["model"][index]["cv1"] = {}
-                    conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child.cv1.conv, child.cv1.bn)
-                    parameters["model"][index]["cv1"]["conv"] = {}
-                    parameters["model"][index]["cv1"]["conv"]["weight"] = ttnn.from_torch(
-                        conv_weight,
+                    parameters["model"][index]["cv1_a"] = {}
+                    conv_weight_a, conv_bias_a, conv_weight_b, conv_bias_b = fold_batch_norm2d_into_conv2d_split(
+                        child.cv1.conv, child.cv1.bn
                     )
-                    parameters["model"][index]["cv1"]["conv"]["bias"] = ttnn.from_torch(
-                        conv_bias.reshape(1, 1, 1, -1),
+                    parameters["model"][index]["cv1_a"]["conv"] = {}
+                    parameters["model"][index]["cv1_a"]["conv"]["weight"] = ttnn.from_torch(
+                        conv_weight_a,
+                    )
+                    parameters["model"][index]["cv1_a"]["conv"]["bias"] = ttnn.from_torch(
+                        conv_bias_a,
+                    )
+                    parameters["model"][index]["cv1_b"] = {}
+                    parameters["model"][index]["cv1_b"]["conv"] = {}
+                    parameters["model"][index]["cv1_b"]["conv"]["weight"] = ttnn.from_torch(
+                        conv_weight_b,
+                    )
+                    parameters["model"][index]["cv1_b"]["conv"]["bias"] = ttnn.from_torch(
+                        conv_bias_b,
                     )
 
                     parameters["model"][index]["cv2"] = {}
@@ -325,14 +347,24 @@ def create_custom_preprocessor(device):
                         conv_bias.reshape(1, 1, 1, -1),
                     )
                 elif isinstance(child, C2fAttn):
-                    parameters["model"][index]["cv1"] = {}
-                    conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child.cv1.conv, child.cv1.bn)
-                    parameters["model"][index]["cv1"]["conv"] = {}
-                    parameters["model"][index]["cv1"]["conv"]["weight"] = ttnn.from_torch(
-                        conv_weight,
+                    parameters["model"][index]["cv1_a"] = {}
+                    conv_weight_a, conv_bias_a, conv_weight_b, conv_bias_b = fold_batch_norm2d_into_conv2d_split(
+                        child.cv1.conv, child.cv1.bn
                     )
-                    parameters["model"][index]["cv1"]["conv"]["bias"] = ttnn.from_torch(
-                        conv_bias.reshape(1, 1, 1, -1),
+                    parameters["model"][index]["cv1_a"]["conv"] = {}
+                    parameters["model"][index]["cv1_a"]["conv"]["weight"] = ttnn.from_torch(
+                        conv_weight_a,
+                    )
+                    parameters["model"][index]["cv1_a"]["conv"]["bias"] = ttnn.from_torch(
+                        conv_bias_a,
+                    )
+                    parameters["model"][index]["cv1_b"] = {}
+                    parameters["model"][index]["cv1_b"]["conv"] = {}
+                    parameters["model"][index]["cv1_b"]["conv"]["weight"] = ttnn.from_torch(
+                        conv_weight_b,
+                    )
+                    parameters["model"][index]["cv1_b"]["conv"]["bias"] = ttnn.from_torch(
+                        conv_bias_b,
                     )
 
                     parameters["model"][index]["cv2"] = {}

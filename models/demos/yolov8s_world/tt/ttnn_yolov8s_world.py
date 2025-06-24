@@ -226,13 +226,19 @@ class TtC2f:
         self.deallocate_activation = deallocate_activation
         self.output_layout = output_layout
 
-        self.cv1 = TtConv(
+        self.cv1_a = TtConv(
             device,
-            self.parameters["cv1"],
+            self.parameters["cv1_a"],
             input_params=self.input_params[0],
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
-            block_shard=True,
+        )
+        self.cv1_b = TtConv(
+            device,
+            self.parameters["cv1_b"],
+            input_params=self.input_params[0],
+            deallocate_activation=self.deallocate_activation,
+            output_layout=self.output_layout,
         )
         self.cv2 = TtConv(
             self.device,
@@ -259,16 +265,15 @@ class TtC2f:
                 )
             )
 
-    def __call__(self, x):
-        cv1, out_h, out_w = self.cv1(x)
-        cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
+    def __call__(self, x, reshard_bottleneck_input=False):
+        cv1_a, _, _ = self.cv1_a(x)
+        cv1_b, _, _ = self.cv1_b(x)
+        if reshard_bottleneck_input:
+            cv1_a = ttnn.to_memory_config(cv1_a, ttnn.L1_MEMORY_CONFIG)
+            cv1_b = ttnn.to_memory_config(cv1_b, ttnn.L1_MEMORY_CONFIG)
 
         # split is not supported by trace, hence using this this
-        y = []
-        y.append(cv1[:, :, :, : cv1.shape[-1] // 2])
-        y.append(cv1[:, :, :, cv1.shape[-1] // 2 :])
-
-        ttnn.deallocate(cv1)
+        y = [cv1_a, cv1_b]
 
         to_tile = True
         for i in range(self.n):
@@ -474,9 +479,15 @@ class TtC2fAttn:
         self.input_params = input_params
         self.deallocate_activation = deallocate_activation
         self.c = int(c2 * e)  # hidden channels
-        self.cv1 = TtConv(
+        self.cv1_a = TtConv(
             self.device,
-            self.parameters["cv1"],
+            self.parameters["cv1_a"],
+            input_params=input_params[0],
+            deallocate_activation=self.deallocate_activation,
+        )
+        self.cv1_b = TtConv(
+            self.device,
+            self.parameters["cv1_b"],
             input_params=input_params[0],
             deallocate_activation=self.deallocate_activation,
         )
@@ -502,17 +513,16 @@ class TtC2fAttn:
             self.device, self.parameters["attn"], self.input_params[2], c1=self.c, c2=self.c, gc=gc, ec=ec, nh=nh
         )
 
-    def __call__(self, x, guide):
+    def __call__(self, x, guide, reshard_bottleneck_input=False):
         """Forward pass through C2f layer."""
-        cv1, out_h, out_w = self.cv1(x)
-        cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
+        cv1_a, _, _ = self.cv1_a(x)
+        cv1_b, _, _ = self.cv1_b(x)
+        if reshard_bottleneck_input:
+            cv1_a = ttnn.to_memory_config(cv1_a, ttnn.L1_MEMORY_CONFIG)
+            cv1_b = ttnn.to_memory_config(cv1_b, ttnn.L1_MEMORY_CONFIG)
 
         # split is not supported by trace, hence using this this
-        y = []
-        y.append(cv1[:, :, :, : cv1.shape[-1] // 2])
-        y.append(cv1[:, :, :, cv1.shape[-1] // 2 :])
-
-        ttnn.deallocate(cv1)
+        y = [cv1_a, cv1_b]
 
         for i in range(self.n):
             z = self.m[i](y[-1])
@@ -881,14 +891,14 @@ class TtWorldModel:
         ImagePoolingAttn_configs = {"input_params": ((1, 1, 0, 256, 128), (1, 1, 0, 256, 256), (1, 1, 0, 256, 512))}
 
         c2f_configs = {
-            "model.2": {"input_params": ((1, 1, 0, 64, 64), (1, 1, 0, 64, 96), (3, 1, 1, 32, 32))},
-            "model.4": {"input_params": ((1, 1, 0, 128, 128), (1, 1, 0, 128, 256), (3, 1, 1, 64, 64))},
-            "model.6": {"input_params": ((1, 1, 0, 256, 256), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))},
-            "model.8": {"input_params": ((1, 1, 0, 512, 512), (1, 1, 0, 512, 768), (3, 1, 1, 256, 256))},
-            "model.12": {"input_params": ((1, 1, 0, 256, 768), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))},
-            "model.15": {"input_params": ((1, 1, 0, 128, 384), (1, 1, 0, 128, 256), (3, 1, 1, 64, 64))},
-            "model.19": {"input_params": ((1, 1, 0, 256, 384), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))},
-            "model.22": {"input_params": ((1, 1, 0, 512, 768), (1, 1, 0, 512, 1024), (3, 1, 1, 256, 256))},
+            "model.2": {"input_params": ((1, 1, 0, 32, 64), (1, 1, 0, 64, 96), (3, 1, 1, 32, 32))},
+            "model.4": {"input_params": ((1, 1, 0, 64, 128), (1, 1, 0, 128, 256), (3, 1, 1, 64, 64))},
+            "model.6": {"input_params": ((1, 1, 0, 128, 256), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))},
+            "model.8": {"input_params": ((1, 1, 0, 256, 512), (1, 1, 0, 512, 768), (3, 1, 1, 256, 256))},
+            "model.12": {"input_params": ((1, 1, 0, 128, 768), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))},
+            "model.15": {"input_params": ((1, 1, 0, 64, 384), (1, 1, 0, 128, 256), (3, 1, 1, 64, 64))},
+            "model.19": {"input_params": ((1, 1, 0, 128, 384), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))},
+            "model.22": {"input_params": ((1, 1, 0, 256, 768), (1, 1, 0, 512, 1024), (3, 1, 1, 256, 256))},
         }
 
         world_detect_configs = {

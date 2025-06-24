@@ -125,7 +125,7 @@ def test_C2f(device, input_tensor, use_pretrained_weight, reset_seeds):
     )
 
     c2f_configs = {
-        "model.2": {"input_params": ((1, 1, 0, 64, 64), (1, 1, 0, 64, 96), (3, 1, 1, 32, 32))},
+        "model.2": {"input_params": ((1, 1, 0, 32, 64), (1, 1, 0, 64, 96), (3, 1, 1, 32, 32))},
     }
 
     with torch.inference_mode():
@@ -319,7 +319,7 @@ def test_C2fAttn(device, use_pretrained_weight, reset_seeds):
     )
     parameters["model"][12]["attn"]["bias"] = ttnn.to_device(parameters["model"][12]["attn"]["bias"], device=device)
 
-    c2fAttn_configs = {"input_params": ((1, 1, 0, 256, 768), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))}
+    c2fAttn_configs = {"input_params": ((1, 1, 0, 128, 768), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))}
 
     with torch.inference_mode():
         c2fAttn = TtC2fAttn(
