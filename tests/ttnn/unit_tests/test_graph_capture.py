@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 from ttnn.graph_tracer_utils import GraphTracerUtils
+import time
 
 
 @pytest.mark.parametrize("scalar", [3])
@@ -648,17 +649,21 @@ def test_graph_capture_with_hang_device_operation(device):
     failed = False
     try:
         output = ttnn.prim.test_hang_device_operation(tt_input)
+        ttnn._ttnn.device.synchronize_device(device)
         failed = False
-    except RuntimeError as e:
+    except Exception as e:
+        print("Exception captured")
+        ttnn._ttnn.device.close_device(device)
         captured_graph = ttnn.graph.end_graph_capture()
         failed = True
         assert "TIMEOUT" in str(e)
-        assert "ttnn::experimental::test::test_hang_device_operation" in str(e)
+        assert "potential hang detected, please check the graph capture" in str(e)
 
     # this is the normal case for CI
     if not failed:
         assert output == tt_input
     else:
+        print(captured_graph)
         # this is the case for --ttnn-enable-operation-timeout
         # the graph should have captured the arguments to the hang operation
         assert (
