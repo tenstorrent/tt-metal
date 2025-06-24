@@ -180,7 +180,7 @@ private:
         });
 
         if (future.wait_for(timeout) == std::future_status::timeout) {
-            pthread_kill(t.native_handle(), SIGKILL);
+            pthread_cancel(t.native_handle());
             t.detach();
             TT_THROW(
                 "TIMEOUT: ttnn operation {} timed out, potential hang detected, please check the graph capture",
