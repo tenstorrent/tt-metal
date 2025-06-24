@@ -301,8 +301,7 @@ TEST_P(NDShardingBufferSizeTests, TestBufferSize) {
     EXPECT_EQ(buffer->aligned_size_per_bank(), params.expected_aligned_size_per_bank);
 }
 
-class NDShardingCoreInfoTests : public ttnn::TTNNFixtureWithDevice,
-                                public ::testing::WithParamInterface<NDShardingCoreInfoParams> {};
+class NDShardingCoreInfoTests : public ::testing::TestWithParam<NDShardingCoreInfoParams> {};
 
 TEST_P(NDShardingCoreInfoTests, TestCoreInfo) {
     const auto& params = GetParam();
