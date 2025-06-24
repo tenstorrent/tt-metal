@@ -5,7 +5,7 @@
 from models.experimental.vadv2.tt.common import TtnnConv2D
 
 
-class TtnnConvModule:
+class TtConvModule:
     def __init__(self, conv_args, conv_pth, device=None):
         self.device = device
         self.conv = TtnnConv2D(conv_args.conv, conv_pth.conv, device=self.device, dealloc_act=True)
@@ -15,11 +15,11 @@ class TtnnConvModule:
         return x[0]
 
 
-class TtnnFPN:
+class TtFPN:
     def __init__(self, conv_args, conv_pth, device):
         self.device = device
-        self.lateral_convs = TtnnConvModule(conv_args.lateral_convs, conv_pth.lateral_convs, device=device)
-        self.fpn_convs = TtnnConvModule(conv_args.fpn_convs, conv_pth.fpn_convs, device=device)
+        self.lateral_convs = TtConvModule(conv_args.lateral_convs, conv_pth.lateral_convs, device=device)
+        self.fpn_convs = TtConvModule(conv_args.fpn_convs, conv_pth.fpn_convs, device=device)
 
     def __call__(self, inputs):
         # Build laterals
