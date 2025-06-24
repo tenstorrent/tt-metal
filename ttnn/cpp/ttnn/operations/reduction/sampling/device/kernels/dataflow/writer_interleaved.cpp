@@ -133,61 +133,79 @@ uint16_t bfloat16_div(uint16_t bf16_a, uint16_t bf16_b) {
         return (sign_a ^ sign_b) | 0x7F80;  // Inf
     }
 
-    // Restore implicit leading 1 for normal numbers
+    // Handle subnormal numbers (normalize them first)
     if (exp_a == 0) {
-        // subnormal, no implicit bit
-        // Denormal numbers: exponent is 0 but mantissa is nonzero
-        mant_a = mant_a;
-        // Set exponent to first non-zero
-        exp_a = 1;
+        // Subnormal number - normalize it
+        exp_a = 1;  // Start with minimum normal exponent
+        while (mant_a && !(mant_a & 0x80)) {
+            mant_a <<= 1;
+            exp_a -= 1;
+        }
+        // If mant_a became 0, it was actually zero (handled above)
+        // Otherwise, mant_a now has implicit leading 1 in bit 7
+        if (mant_a) {
+            mant_a &= 0x7F;  // Remove the implicit leading 1
+        }
     } else {
-        mant_a = mant_a | 0x80;  // Restore implicit bit
+        // Normal number - add implicit leading 1
+        mant_a = mant_a | 0x80;
     }
+
     if (exp_b == 0) {
-        mant_b = mant_b;
-        exp_b = 1;
+        // Subnormal number - normalize it
+        exp_b = 1;  // Start with minimum normal exponent
+        while (mant_b && !(mant_b & 0x80)) {
+            mant_b <<= 1;
+            exp_b -= 1;
+        }
+        // If mant_b became 0, it was actually zero (handled above)
+        if (mant_b) {
+            mant_b &= 0x7F;  // Remove the implicit leading 1
+        }
     } else {
+        // Normal number - add implicit leading 1
         mant_b = mant_b | 0x80;
     }
 
-    // Division:
     // Result sign
     uint16_t sign_res = sign_a ^ sign_b;
 
-    // Result exponent
-    int16_t exp_res = exp_a - exp_b + 127;  // Bias=127
+    // Result exponent (subtract exponents, add bias)
+    int16_t exp_res = exp_a - exp_b + 127;
 
-    // Align mantissas to allow division: use 16 bits for numerator to preserve precision
+    // Division of mantissas
+    // Use 16 bits for numerator to preserve precision
     uint32_t mant_res = ((uint32_t)mant_a << 7) / mant_b;
 
-    // Normalize result
-    // The result should fit as 1.xxxxxx in 7 bits (so leading bit is 1 at bit 7)
-    while (mant_res && mant_res < 0x80) {
+    // Normalize result mantissa
+    // The result should have leading 1 in bit 7 position
+    while (mant_res && !(mant_res & 0x80)) {
         mant_res <<= 1;
-        exp_res--;
+        exp_res -= 1;
     }
 
-    // Overflow
+    // Handle exponent overflow
     if (exp_res >= 0xFF) {
-        // Overflow to infinity
-        return sign_res | 0x7F80;
+        return sign_res | 0x7F80;  // Infinity
     }
 
-    // Underflow to subnormal or zero
+    // Handle exponent underflow to subnormal or zero
     if (exp_res <= 0) {
         if (exp_res < -7) {
-            // Too small, returns zero
+            // Too small, return zero
             return sign_res;
         }
-        // Shift mantissa right, denormalized form
+        // Create subnormal result
+        // Shift mantissa right by (1 - exp_res) positions
         mant_res >>= (1 - exp_res);
         exp_res = 0;
+    } else {
+        // Normal result - remove implicit leading 1
+        mant_res &= 0x7F;
     }
 
-    // Rounding: truncate (could improve with round-to-nearest?)
-    mant_res &= 0x7F;
-
-    uint16_t result = sign_res | (exp_res << 7) | mant_res;
+    // Combine the result
+    uint16_t result = sign_res | (exp_res << 7) | (mant_res & 0x7F);
     return result;
 }
 
@@ -265,7 +283,7 @@ void kernel_main() {
     bool cutoff_found = false;
     uint32_t top_p_cutoff = end_id_local_phase_1;  // Default to all tokens
     for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
-        bfloat16_add(cum_prob, local_values[i]);
+        cum_prob = bfloat16_add(cum_prob, local_values[i]);
         if (bfloat16_greater(cum_prob, bf16_p)) {
             top_p_cutoff = i + 1;  // Include this token in the top-p set
             cutoff_found = true;
@@ -282,7 +300,6 @@ void kernel_main() {
             }
         }
     }
-
     // adjust phase indices
     end_id_local_phase_1 = start_id_local_phase_1 + (top_p_cutoff - 16);
     if (top_p_cutoff <= 16) {
@@ -298,7 +315,7 @@ void kernel_main() {
     // Sample from the top-k values
     for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
         // cum sum of local values
-        cum_sum = bfloat16_div(bfloat16_add(cum_sum, local_values[i]), cum_prob);
+        cum_sum = bfloat16_add(cum_sum, bfloat16_div(local_values[i], cum_prob));
         if (bfloat16_greater(cum_sum, rand)) {
             index_out[core_id] = final_indices[local_indices[i]];
             index_found = true;
@@ -308,7 +325,7 @@ void kernel_main() {
     if (!index_found) {
         for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
             // cum sum of local values
-            cum_sum = bfloat16_div(bfloat16_add(cum_sum, local_values[i]), cum_prob);
+            cum_sum = bfloat16_add(cum_sum, bfloat16_div(local_values[i], cum_prob));
             if (bfloat16_greater(cum_sum, rand)) {
                 index_out[core_id] = final_indices[local_indices[i]];
                 index_found = true;
