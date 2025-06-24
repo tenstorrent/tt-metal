@@ -125,35 +125,3 @@ def test_run_vit_trace_2cqs_inference(
         f"ttnn_{model_version}_batch_size{batch_size} tests inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
     )
     logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time}")
-
-
-# @run_for_wormhole_b0()
-# @pytest.mark.parametrize(
-#     "device_params", [{"l1_small_size": 24576, "trace_region_size": 1700000, "num_command_queues": 2}], indirect=True
-# )
-# @pytest.mark.parametrize(
-#     "batch_size_per_device, iterations",
-#     ((8, 100),),
-# )
-# @pytest.mark.parametrize("entire_imagenet_dataset", [True])
-# @pytest.mark.parametrize("expected_accuracy", [0.80])
-# def test_run_vit_trace_2cqs_accuracy(
-#     mesh_device,
-#     use_program_cache,
-#     batch_size_per_device,
-#     iterations,
-#     imagenet_label_dict,
-#     model_location_generator,
-#     entire_imagenet_dataset,
-#     expected_accuracy,
-# ):
-#     test_run_vit_trace_2cqs_inference(
-#         mesh_device,
-#         use_program_cache,
-#         batch_size_per_device,
-#         iterations,
-#         imagenet_label_dict,
-#         model_location_generator,
-#         entire_imagenet_dataset,
-#         expected_accuracy,
-#     )
