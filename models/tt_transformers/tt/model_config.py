@@ -1449,6 +1449,8 @@ class ModelArgs:
         if self.num_devices:
             # Default padding cores for each model, 0 if not set here
             default_padded_cores = {
+                "Qwen2.5-VL-72B": 32,
+                "Qwen2.5-VL-32B": 16,
                 "Qwen2.5-72B": 32,
                 "Qwen2.5-7B": 16,
                 "QwQ-32B": 16,
