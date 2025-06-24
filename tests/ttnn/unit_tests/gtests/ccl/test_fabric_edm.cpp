@@ -146,18 +146,19 @@ static int run_single_test(
          .flush = flush}};
 
     try {
+        int ret = 0;
         if (test_mode == "1_fabric_instance") {
-            Run1DFabricPacketSendTest(
+            ret = Run1DFabricPacketSendTest(
                 test_fixture,
                 test_specs,
                 std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(test_params.params));
         } else if (test_mode == "1D_fabric_on_mesh") {
             auto& params = std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(test_params.params);
             if (params.fabric_mode == FabricTestMode::Linear) {
-                Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_fixture, test_specs, params);
+                ret = Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_fixture, test_specs, params);
             } else if (
                 params.fabric_mode == FabricTestMode::HalfRing || params.fabric_mode == FabricTestMode::FullRing) {
-                Run1DFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_fixture, test_specs, params);
+                ret = Run1DFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_fixture, test_specs, params);
             } else {
                 TT_THROW(
                     "Invalid fabric mode when using device init fabric in 1D fabric on mesh BW test: {}",
@@ -177,6 +178,9 @@ static int run_single_test(
             }
         } else {
             TT_THROW("Invalid test mode: {}", test_mode.c_str());
+        }
+        if (ret != 0) {
+            TT_THROW("Unsupported test config on this system");
         }
         return 0;
     } catch (const std::exception& e) {

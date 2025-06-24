@@ -2680,35 +2680,43 @@ tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_helper(FabricTestM
     }
 }
 
-void validate_1d_fabric_packet_send_test_config(
+int validate_1d_fabric_packet_send_test_config(
     size_t num_devices_with_workers,
     size_t num_devices,
     bool use_device_init_fabric,
     const WriteThroughputStabilityTestWithPersistentFabricParams& params) {
     bool use_t3k = num_devices == 8;
-    TT_FATAL(
-        num_devices_with_workers <= params.line_size,
-        "num_devices_with_workers must be less than or equal to line_size");
+    if (num_devices_with_workers > params.line_size) {
+        log_info(tt::LogTest, "num_devices_with_workers must be less than or equal to line_size");
+        return -1;
+    }
     TT_FATAL(
         !(params.num_fabric_rows > 0 && params.num_fabric_cols > 0),
         "Only one of num_fabric_rows and num_fabric_cols may be greater than 0. Test support for both axes live at the "
         "same time is not yet supported");
     if (use_device_init_fabric && params.num_fabric_rows == 0 && params.num_fabric_cols == 0) {
-        TT_FATAL(use_t3k, "Using the full mesh as one ring topoplogy is only supported for T3K");
+        if (!use_t3k) {
+            log_info(tt::LogTest, "Using the full mesh as one ring topoplogy is only supported for T3K");
+            return -1;
+        }
     }
     if ((params.num_fabric_rows + params.num_fabric_cols) * params.line_size > num_devices) {
-        TT_THROW(
+        log_info(
+            tt::LogTest,
             "The total number of devices in the fabric must be less than or equal to the number of devices in the "
             "system");
+        return -1;
     }
     if (num_devices == 2 && params.num_links > 1 &&
         tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0) {
-        TT_THROW("Bandwidth tests not enabled on N300 yet");
+        log_info(tt::LogTest, "Bandwidth tests not enabled on N300 yet");
+        return -1;
     }
+    return 0;
 }
 
 template <typename FABRIC_DEVICE_FIXTURE = Fabric1DFixture>
-void Run1DFabricPacketSendTest(
+int Run1DFabricPacketSendTest(
     std::unique_ptr<Fabric1DFixture>& test_fixture,
     const std::vector<Fabric1DPacketSendTestSpec>& test_specs,
     const WriteThroughputStabilityTestWithPersistentFabricParams& params = {},
@@ -2732,11 +2740,12 @@ void Run1DFabricPacketSendTest(
     if (num_devices < params.line_size) {
         log_info(
             tt::LogTest, "This test is requesting {} devices but only {} are available", params.line_size, num_devices);
-        return;
+        return -1;
     }
 
     if (params.fabric_mode != FabricTestMode::Linear && tt::tt_metal::GetNumPCIeDevices() == 2) {
-        TT_THROW("This test can only be run on systems with > 2 devices. {} devices found", num_devices);
+        log_info(tt::LogTest, "This test can only be run on systems with > 2 devices. {} devices found", num_devices);
+        return -1;
     }
 
     size_t line_size = params.line_size;
@@ -2745,7 +2754,11 @@ void Run1DFabricPacketSendTest(
         num_devices_with_workers = line_size;
     }
     using namespace ttnn::ccl;
-    validate_1d_fabric_packet_send_test_config(num_devices_with_workers, num_devices, use_device_init_fabric, params);
+    int ret = validate_1d_fabric_packet_send_test_config(
+        num_devices_with_workers, num_devices, use_device_init_fabric, params);
+    if (ret != 0) {
+        return ret;
+    }
 
     ttnn::ccl::Topology topology;
     FabricTestMode fabric_mode = params.fabric_mode;
@@ -3147,6 +3160,7 @@ void Run1DFabricPacketSendTest(
         }
     }
     log_trace(tt::LogTest, "Finished");
+    return 0;
 }
 
 struct FullMeshTestParams {
