@@ -594,8 +594,8 @@ def test_demo(
 
     vision_model_time = profiler.get_duration("vision_model_prefill")
     vision_model_time_per_user = vision_model_time / batch_size
-    vision_model_t_u_s = sum(num_image_tokens[0]) / vision_model_time_per_user
     vision_model_t_s = sum(num_image_tokens[0]) / vision_model_time
+    vision_model_t_u_s = vision_model_t_s / batch_size
 
     measurements = {
         # Required measurements
