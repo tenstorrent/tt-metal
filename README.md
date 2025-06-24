@@ -99,7 +99,10 @@
 | [ResNet-50 (224x224) (DP=2)](./models/demos/t3000/resnet50)                 | 32    | [n300](https://tenstorrent.com/hardware/wormhole)        | 9,200   | 14,000     | [v0.59.0](https://github.com/tenstorrent/tt-metal/tree/v0.59.0) |
 | [ResNet-50 (224x224) (DP=8)](./models/demos/t3000/resnet50)                 | 128   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 35,800  | 56,000     | [v0.59.0](https://github.com/tenstorrent/tt-metal/tree/v0.59.0) |
 | [ResNet-50 (224x224) (DP=32)](./models/demos/tg/resnet50)                   | 512   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 96,800  | 224,000    | [v0.59.0](https://github.com/tenstorrent/tt-metal/tree/v0.59.0) |
-| [ViT (224x224)](./models/demos/wormhole/vit)                                | 8     | [n150](https://tenstorrent.com/hardware/wormhole)        | 1370    | 1,600      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
+| [ViT-base (224x224)](./models/demos/wormhole/vit)                                | 8     | [n150](https://tenstorrent.com/hardware/wormhole)        | 1,440    | 1,800      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
+| [ViT-base (224x224)  (DP=2)](./models/demos/wormhole/vit)                                | 16     | [n300](https://tenstorrent.com/hardware/wormhole)        | 1370    | 3,600      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
+| [ViT-base (224x224)  (DP=8)](./models/demos/wormhole/vit)                                | 64     | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox)        | 1370    | 14,400      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
+| [ViT-base (224x224)  (DP=32)](./models/demos/wormhole/vit)                                | 256     | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | ----    | 57,600      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
 
 
 ### Object Detection
