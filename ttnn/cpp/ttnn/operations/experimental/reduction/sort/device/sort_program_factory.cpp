@@ -382,18 +382,20 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
               << std::endl;  // TODO: Remove
 
     // Lookup tensor data with physical core coordinates
-    std::vector<uint16_t> physical_core_lookup_table_data;
+    std::vector<uint32_t> physical_core_lookup_table_data;
     for (const auto& core_range : core_range.ranges()) {
         for (const auto& core_coord : core_range) {
-            std::cout << "Core coord: " << core_coord.x << ", " << core_coord.y << std::endl;  // TODO: Remove
             const auto physical_core = device->worker_core_from_logical_core(core_coord);
+            std::cout << "Core coord: " << core_coord.x << ", " << core_coord.y
+                      << " | Physical core: " << physical_core.x << ", " << physical_core.y
+                      << std::endl;  // TODO: Remove
             physical_core_lookup_table_data.emplace_back(physical_core.x);
             physical_core_lookup_table_data.emplace_back(physical_core.y);
         }
     }
     const TensorSpec physical_core_lookup_table_spec(
         ttnn::Shape{1, physical_core_lookup_table_data.size()},
-        TensorLayout{DataType::UINT16, PageConfig{Layout::ROW_MAJOR}, MemoryConfig()});
+        TensorLayout{DataType::UINT32, PageConfig{Layout::ROW_MAJOR}, MemoryConfig()});
     Tensor physical_core_lookup_table_tensor =
         Tensor::from_vector(std::move(physical_core_lookup_table_data), physical_core_lookup_table_spec);
     physical_core_lookup_table_tensor = physical_core_lookup_table_tensor.to_device(device);
