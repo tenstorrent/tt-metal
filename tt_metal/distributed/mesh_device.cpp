@@ -156,6 +156,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
 MeshDevice::ScopedDevices::~ScopedDevices() {
     if (!opened_devices_.empty()) {
         std::vector<IDevice*> devices_to_close;
+        devices_to_close.reserve(opened_devices_.size());
         for (auto& [id, device] : opened_devices_) {
             devices_to_close.push_back(device);
         }
@@ -167,7 +168,7 @@ const std::vector<IDevice*>& MeshDevice::ScopedDevices::root_devices() const { r
 
 uint8_t MeshDevice::num_hw_cqs() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->num_hw_cqs(); });
+        this->get_devices(), [](const auto* device) { return device->num_hw_cqs(); });
 }
 
 bool MeshDevice::is_initialized() const {
@@ -175,17 +176,17 @@ bool MeshDevice::is_initialized() const {
         return false;
     }
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->is_initialized(); });
+        this->get_devices(), [](const auto* device) { return device->is_initialized(); });
 }
 
 uint32_t MeshDevice::l1_size_per_core() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->l1_size_per_core(); });
+        this->get_devices(), [](const auto* device) { return device->l1_size_per_core(); });
 }
 
 uint32_t MeshDevice::dram_size_per_channel() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->dram_size_per_channel(); });
+        this->get_devices(), [](const auto* device) { return device->dram_size_per_channel(); });
 }
 
 IDevice* MeshDevice::reference_device() const { return this->get_devices().at(0); }
@@ -409,12 +410,11 @@ size_t MeshDevice::num_devices() const { return view_->num_devices(); }
 
 CoreCoord MeshDevice::compute_with_storage_grid_size() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->compute_with_storage_grid_size(); });
+        this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
 }
 
 tt::ARCH MeshDevice::arch() const {
-    return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->arch(); });
+    return validate_and_get_reference_value(this->get_devices(), [](const auto* device) { return device->arch(); });
 }
 
 size_t MeshDevice::num_rows() const { return view_->num_rows(); }
@@ -564,56 +564,54 @@ std::tuple<SubDeviceManagerId, SubDeviceId> MeshDevice::create_sub_device_manage
 }
 CoreCoord MeshDevice::dram_grid_size() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->dram_grid_size(); });
+        this->get_devices(), [](const auto* device) { return device->dram_grid_size(); });
 }
 
 bool MeshDevice::using_slow_dispatch() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->using_slow_dispatch(); });
+        this->get_devices(), [](const auto* device) { return device->using_slow_dispatch(); });
 }
 
 bool MeshDevice::using_fast_dispatch() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->using_fast_dispatch(); });
+        this->get_devices(), [](const auto* device) { return device->using_fast_dispatch(); });
 }
 
 // Device property methods that can be delegated to reference device
 CoreCoord MeshDevice::grid_size() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->grid_size(); });
+        this->get_devices(), [](const auto* device) { return device->grid_size(); });
 }
 CoreCoord MeshDevice::logical_grid_size() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->logical_grid_size(); });
+        this->get_devices(), [](const auto* device) { return device->logical_grid_size(); });
 }
 CoreCoord MeshDevice::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [noc_index, coord](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [noc_index, coord](const auto* device) {
         return device->virtual_noc0_coordinate(noc_index, coord);
     });
 }
 std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [logical_cores](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [logical_cores](const auto* device) {
         return device->worker_cores_from_logical_cores(logical_cores);
     });
 }
 std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment() {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [](const auto& device) {
-        return device->get_optimal_dram_bank_to_logical_worker_assignment();
-    });
+    return validate_and_get_reference_value(
+        this->get_devices(), [](auto* device) { return device->get_optimal_dram_bank_to_logical_worker_assignment(); });
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
-    return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [logical_coord, core_type](const auto& device) {
-            return device->virtual_core_from_logical_core(logical_coord, core_type);
-        });
+    return validate_and_get_reference_value(this->get_devices(), [logical_coord, core_type](const auto* device) {
+        return device->virtual_core_from_logical_core(logical_coord, core_type);
+    });
 }
 CoreCoord MeshDevice::worker_core_from_logical_core(const CoreCoord& logical_core) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [logical_core](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [logical_core](const auto* device) {
         return device->worker_core_from_logical_core(logical_core);
     });
 }
 CoreCoord MeshDevice::logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [ethernet_core](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [ethernet_core](const auto* device) {
         return device->logical_core_from_ethernet_core(ethernet_core);
     });
 }
@@ -621,12 +619,12 @@ CoreCoord MeshDevice::logical_core_from_ethernet_core(const CoreCoord& ethernet_
 // These methods require some change / or assert out for now
 std::vector<CoreCoord> MeshDevice::ethernet_cores_from_logical_cores(
     const std::vector<CoreCoord>& logical_cores) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [logical_cores](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [logical_cores](const auto* device) {
         return device->ethernet_cores_from_logical_cores(logical_cores);
     });
 }
 CoreCoord MeshDevice::ethernet_core_from_logical_core(const CoreCoord& logical_core) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [logical_core](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [logical_core](const auto* device) {
         return device->ethernet_core_from_logical_core(logical_core);
     });
 }
@@ -672,17 +670,17 @@ uint32_t MeshDevice::num_worker_cores(HalProgrammableCoreType core_type, SubDevi
 int MeshDevice::num_dram_channels() const { return reference_device()->num_dram_channels(); }
 
 CoreCoord MeshDevice::logical_core_from_dram_channel(uint32_t dram_channel) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [dram_channel](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [dram_channel](const auto* device) {
         return device->logical_core_from_dram_channel(dram_channel);
     });
 }
 uint32_t MeshDevice::dram_channel_from_logical_core(const CoreCoord& logical_core) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [logical_core](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [logical_core](const auto* device) {
         return device->dram_channel_from_logical_core(logical_core);
     });
 }
 uint32_t MeshDevice::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [virtual_core](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [virtual_core](const auto* device) {
         return device->dram_channel_from_virtual_core(virtual_core);
     });
 }
@@ -690,21 +688,20 @@ uint32_t MeshDevice::dram_channel_from_virtual_core(const CoreCoord& virtual_cor
 // Core management and network operations
 const std::set<CoreCoord>& MeshDevice::ethernet_cores() const {
     return validate_and_get_reference_value(
-        scoped_devices_->root_devices(),
-        [](const auto& device) -> const std::set<CoreCoord>& { return device->ethernet_cores(); });
+        this->get_devices(), [](const auto* device) -> const std::set<CoreCoord>& { return device->ethernet_cores(); });
 }
 const std::set<CoreCoord>& MeshDevice::storage_only_cores() const {
-    return validate_and_get_reference_value(
-        scoped_devices_->root_devices(),
-        [](const auto& device) -> const std::set<CoreCoord>& { return device->storage_only_cores(); });
+    return validate_and_get_reference_value(this->get_devices(), [](const auto* device) -> const std::set<CoreCoord>& {
+        return device->storage_only_cores();
+    });
 }
 uint32_t MeshDevice::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [noc_index, core](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [noc_index, core](const auto* device) {
         return device->get_noc_unicast_encoding(noc_index, core);
     });
 }
 uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [noc_index, cores](const auto& device) {
+    return validate_and_get_reference_value(this->get_devices(), [noc_index, cores](const auto* device) {
         return device->get_noc_multicast_encoding(noc_index, cores);
     });
 }
@@ -883,9 +880,8 @@ SubDeviceManagerId MeshDevice::get_default_sub_device_manager_id() const {
     return sub_device_manager_tracker_->get_default_sub_device_manager()->id();
 }
 CoreCoord MeshDevice::virtual_program_dispatch_core(uint8_t cq_id) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [cq_id](const auto& device) {
-        return device->virtual_program_dispatch_core(cq_id);
-    });
+    return validate_and_get_reference_value(
+        this->get_devices(), [cq_id](const auto* device) { return device->virtual_program_dispatch_core(cq_id); });
 }
 const std::vector<SubDeviceId>& MeshDevice::get_sub_device_ids() const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_ids();
