@@ -24,7 +24,11 @@ ExecuteTestHangDeviceOperation::SingleCore::cached_program_t ExecuteTestHangDevi
     std::vector<uint32_t> compute_kernel_args = {};
     KernelHandle void_compute_kernel_id = CreateKernel(
         program,
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
         "ttnn/cpp/ttnn/operations/experimental/test/hang_device/device/kernels/compute/hang_device_kernel.cpp",
+#else
+        "ttnn/cpp/ttnn/operations/experimental/test/hang_device/device/kernels/compute/non_hang_device_kernel.cpp",
+#endif
         core,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
