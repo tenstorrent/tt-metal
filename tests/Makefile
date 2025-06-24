@@ -7,8 +7,14 @@
 # =========================
 CXX_VERSION     := c++17
 TOOL_PATH       ?= sfpi/compiler/bin
+
 BUILD_DIR       ?= build
-OUTPUT_ELFS     := $(BUILD_DIR)/elf
+SHARED_DIR       := $(BUILD_DIR)/shared
+TEST_DIR        := $(BUILD_DIR)/tests/$(testname)
+OBJ_DIR         := $(TEST_DIR)/obj
+DIS_DIR         := $(TEST_DIR)/dis
+ELF_DIR         := $(TEST_DIR)/elf
+
 HELPERS         := helpers
 RISCV_SOURCES   := $(HELPERS)/src
 LINKER_SCRIPTS  := $(HELPERS)/ld
@@ -50,75 +56,59 @@ INCLUDES := -I../$(ARCH_LLK_ROOT)/llk_lib -I../$(ARCH_LLK_ROOT)/common/inc \
 
 OPTIONS_COMPILE += $(INCLUDES)
 
+TO_UPPER = $(shell echo $(1) | tr '[:lower:]' '[:upper:]')
+
 # =========================
 # Targets
 # =========================
 .PHONY: all dis clean
 
-all: $(BUILD_DIR) $(OUTPUT_ELFS) \
-	 $(OUTPUT_ELFS)/$(testname)_trisc0.elf \
-	 $(OUTPUT_ELFS)/$(testname)_trisc1.elf \
-	 $(OUTPUT_ELFS)/$(testname)_trisc2.elf \
-	 $(OUTPUT_ELFS)/brisc.elf
+all: $(ELF_DIR)/unpack.elf \
+	 $(ELF_DIR)/math.elf \
+	 $(ELF_DIR)/pack.elf \
+	 $(SHARED_DIR)/brisc.elf
 
-dis: $(BUILD_DIR) $(OUTPUT_ELFS) \
-	 $(BUILD_DIR)/$(testname)_trisc0.dis \
-	 $(BUILD_DIR)/$(testname)_trisc1.dis \
-	 $(BUILD_DIR)/$(testname)_trisc2.dis \
-	 $(BUILD_DIR)/brisc.dis
+dis: $(DIS_DIR)/unpack.S \
+	 $(DIS_DIR)/math.S \
+	 $(DIS_DIR)/pack.S \
+	 $(SHARED_DIR)/brisc.S
 
 # =========================
 # Build Rules
 # =========================
 
-$(BUILD_DIR)/%.dis :  $(OUTPUT_ELFS)/%.elf
+# Currently only used for brisc.dis
+$(SHARED_DIR)/%.S: $(SHARED_DIR)/%.elf | $(SHARED_DIR)
 	$(OBJDUMP) -xsD $< > $@
 	$(OBJDUMP) -t $< | sort >> $@
 
-$(BUILD_DIR):
-	mkdir -p $@
+$(DIS_DIR)/%.S: $(ELF_DIR)/%.elf | $(DIS_DIR)
+	$(OBJDUMP) -xsD $< > $@
+	$(OBJDUMP) -t $< | sort >> $@
 
-$(OUTPUT_ELFS): $(BUILD_DIR)
-	mkdir -p $@
-
-# Explicit rules for TRISC .elfs
-# Buiding .elf files for every TRISC core
-$(OUTPUT_ELFS)/$(testname)_trisc0.elf :$(BUILD_DIR)/tmu-crt0.o $(BUILD_DIR)/main_unpack.o $(BUILD_DIR)/$(testname)_unpack.o
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(CHIP_ARCH).ld -T$(LINKER_SCRIPTS)/trisc0.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
-$(OUTPUT_ELFS)/$(testname)_trisc1.elf: $(BUILD_DIR)/tmu-crt0.o $(BUILD_DIR)/main_math.o $(BUILD_DIR)/$(testname)_math.o
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(CHIP_ARCH).ld -T$(LINKER_SCRIPTS)/trisc1.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
-$(OUTPUT_ELFS)/$(testname)_trisc2.elf: $(BUILD_DIR)/tmu-crt0.o $(BUILD_DIR)/main_pack.o $(BUILD_DIR)/$(testname)_pack.o
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(CHIP_ARCH).ld -T$(LINKER_SCRIPTS)/trisc2.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
+$(ELF_DIR)/%.elf: $(SHARED_DIR)/tmu-crt0.o $(SHARED_DIR)/main_%.o $(OBJ_DIR)/kernel_%.o | $(ELF_DIR)
+	$(GXX) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(CHIP_ARCH).ld -T$(LINKER_SCRIPTS)/$*.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
 
 # Building brisc.elf for BRISC core
-$(OUTPUT_ELFS)/brisc.elf: $(BUILD_DIR)/tmu-crt0.o $(BUILD_DIR)/brisc.o
+$(SHARED_DIR)/brisc.elf: $(SHARED_DIR)/tmu-crt0.o $(SHARED_DIR)/brisc.o | $(SHARED_DIR)
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(CHIP_ARCH).ld -T$(LINKER_SCRIPTS)/brisc.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
 
-# force recompilation of tests per core
-# force recompilation of trisc.cpp for ZONE_SCOPED("KERNEL") to work
-.PHONY: $(BUILD_DIR)/$(testname)_unpack.o $(BUILD_DIR)/$(testname)_math.o $(BUILD_DIR)/$(testname)_pack.o \
-        $(BUILD_DIR)/main_unpack.o $(BUILD_DIR)/main_math.o $(BUILD_DIR)/main_pack.o
+$(OBJ_DIR)/kernel_%.o: sources/$(testname).cpp | $(OBJ_DIR)
+	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -MMD -MP -MF $(@:.o=.d) -DLLK_TRISC_$(call TO_UPPER, $*) -c -o $@ $<
 
-$(BUILD_DIR)/$(testname)_unpack.o: sources/$(testname).cpp
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DLLK_TRISC_UNPACK -c -o $@ $<
-$(BUILD_DIR)/$(testname)_math.o: sources/$(testname).cpp
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DLLK_TRISC_MATH -c -o $@ $<
-$(BUILD_DIR)/$(testname)_pack.o: sources/$(testname).cpp
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DLLK_TRISC_PACK -c -o $@ $<
+# compiling main for every TRISC core
+$(SHARED_DIR)/main_%.o: $(RISCV_SOURCES)/trisc.cpp | $(SHARED_DIR)
+	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -MMD -MP -MF $(@:.o=.d) -DLLK_TRISC_$(call TO_UPPER, $*) -c -o $@ $<
 
-#compiling main for every TRISC core
-$(BUILD_DIR)/main_unpack.o : $(RISCV_SOURCES)/trisc.cpp
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DLLK_TRISC_UNPACK -c -o $@ $<
-$(BUILD_DIR)/main_math.o : $(RISCV_SOURCES)/trisc.cpp
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DLLK_TRISC_MATH -c -o $@ $<
-$(BUILD_DIR)/main_pack.o : $(RISCV_SOURCES)/trisc.cpp
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DLLK_TRISC_PACK -c -o $@ $<
+$(SHARED_DIR)/brisc.o: $(RISCV_SOURCES)/brisc.cpp | $(SHARED_DIR)
+	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -MMD -MP -MF $(@:.o=.d) -c -o $@ $<
 
-$(BUILD_DIR)/tmu-crt0.o: $(HELPERS)/tmu-crt0.S | $(BUILD_DIR)
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -c -o $@ $<
+$(SHARED_DIR)/tmu-crt0.o: $(HELPERS)/tmu-crt0.S | $(SHARED_DIR)
+	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -MMD -MP -MF $(@:.o=.d) -c -o $@ $<
 
-$(BUILD_DIR)/brisc.o: $(RISCV_SOURCES)/brisc.cpp | $(BUILD_DIR)
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -c -o $@ $<
+# required folder structure
+$(DIS_DIR) $(ELF_DIR) $(OBJ_DIR) $(SHARED_DIR):
+	mkdir -p $@
 
 # =========================
 # Clean
@@ -128,3 +118,6 @@ clean:
 	$(RMDIR) __pycache__
 	$(RMDIR) .pytest_cache
 	$(MAKE) -C python_tests clean
+
+-include $(wildcard $(OBJ_DIR)/*.d)
+-include $(wildcard $(SHARED_DIR)/*.d)
