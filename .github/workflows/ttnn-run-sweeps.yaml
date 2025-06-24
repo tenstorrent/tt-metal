@@ -111,10 +111,12 @@ on:
           - eltwise.unary.bitwise.bitwise_and.bitwise_and_sharded
           - eltwise.unary.bitwise.bitwise_and.bitwise_and_unary
           - eltwise.unary.bitwise.bitwise_and.bitwise_and_unary_sharded
+          - eltwise.unary.bitwise.bitwise_and.bitwise_and_ng_survey
           - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift
           - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift_sharded
           - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift_unary
           - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift_unary_sharded
+          - eltwise.unary.bitwise_left_shift.bitwise_left_shift_ng_survey
           - eltwise.unary.bitwise.bitwise_not.bitwise_not
           - eltwise.unary.bitwise.bitwise_not.bitwise_not_sharded
           - eltwise.unary.bitwise.bitwise_not.bitwise_not_pytorch2
@@ -122,14 +124,17 @@ on:
           - eltwise.unary.bitwise.bitwise_or.bitwise_or_sharded
           - eltwise.unary.bitwise.bitwise_or.bitwise_or_unary
           - eltwise.unary.bitwise.bitwise_or.bitwise_or_unary_sharded
+          - eltwise.unary.bitwise.bitwise_or.bitwise_or_ng_survey
           - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift
           - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift_sharded
           - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift_unary
           - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift_unary_sharded
+          - eltwise.unary.bitwise_right_shift.bitwise_right_shift_ng_survey
           - eltwise.unary.bitwise.bitwise_xor.bitwise_xor
           - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_sharded
           - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_unary
           - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_unary_sharded
+          - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_ng_survey
           - eltwise.unary.log_sigmoid.log_sigmoid
           - eltwise.unary.logical_not.logical_not_
           - eltwise.unary.logical_not.logical_not
@@ -325,6 +330,7 @@ on:
           - eltwise.binary.add.add_different_memory_configs
           - eltwise.binary.add.add_forge
           - eltwise.binary.add.add_llama
+          - eltwise.binary.add.add_survey_ng
           - eltwise.binary.atan2.atan2
           - eltwise.binary.atan2.atan2_sharded
           - eltwise.unary.gtz.gtz
@@ -349,31 +355,39 @@ on:
           - eltwise.binary.subtract.subtract
           - eltwise.binary.subtract.subtract_tensor_pytorch2
           - eltwise.binary.subtract.subtract_forge
+          - eltwise.binary.subtract.subtract_ng_survey
           - eltwise.binary.multiply.multiply
           - eltwise.binary.multiply.mul_tensor_pytorch2
           - eltwise.binary.multiply.multiply_scalar_pytorch2
           - eltwise.binary.multiply.multiply_forge
           - eltwise.binary.multiply.multiply_llama
           - eltwise.binary.multiply.mul_no_act_llama
+          - eltwise.binary.multiply.multiply_ng_survey
           - eltwise.binary.div.div
           - eltwise.binary.div.div_tensor_pytorch2
           - eltwise.binary.div.div_forge
+          - eltwise.binary.div.div_ng_survey
+          - eltwise.binary.bias_gelu.bias_gelu_ng_survey
           - eltwise.binary.div_no_nan.div_no_nan
           - eltwise.binary.logical_or.logical_or_
           - eltwise.binary.logical_or.logical_or
           - eltwise.binary.logical_or.logical_or_output
           - eltwise.binary.logical_or.logical_or_forge
           - eltwise.binary.logical_or.logical_or_sharded
+          - eltwise.binary.logical_or.logical_or_ng_survey
           - eltwise.binary.logical_xor.logical_xor_
           - eltwise.binary.logical_xor.logical_xor
           - eltwise.binary.logical_xor.logical_xor_sharded
+          - eltwise.binary.logical_xor.logical_xor_ng_survey
           - eltwise.binary.logical_and.logical_and_
           - eltwise.binary.logical_and.logical_and
           - eltwise.binary.logical_and.logical_and_output
           - eltwise.binary.logical_and.logical_and_forge
           - eltwise.binary.logical_and.logical_and_sharded
+          - eltwise.binary.logical_and.logical_and_ng_survey
           - eltwise.binary.polyval.polyval
           - eltwise.binary.polyval.polyval_sharded
+          - eltwise.binary.pow.pow_ng_survey
           - eltwise.binary.remainder.remainder
           - eltwise.binary.remainder.remainder_scalar_pytorch2
           - eltwise.binary.remainder.remainder_forge
@@ -384,15 +398,22 @@ on:
           - eltwise.binary.rpow.rpow_sharded
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
+          - eltwise.binary.squared_difference.squared_difference_ng_survey
+          - eltwise.binary.rsub.rsub_ng_survey
+          - eltwise.binary.rsub.rsub_ng_scalar_survey
           - eltwise.binary.scatter.scatter_forge
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
           - eltwise.binary.eq.eq_scalar_pytorch2
           - eltwise.binary.eq.eq_forge
+          - eltwise.binary.eq.eq_ng_survey
           - eltwise.binary.ge.ge_forge
+          - eltwise.binary.ge.ge_ng_survey
           - eltwise.binary.gt.gt_scalar_pytorch2
           - eltwise.binary.gt.gt_forge
+          - eltwise.binary.gt.gt_ng_survey
           - eltwise.binary.le.le_tensor_pytorch2
+          - eltwise.binary.le.le_ng_survey
           - eltwise.binary.fmod.fmod
           - eltwise.binary.fmod.fmod_unary
           - eltwise.binary.fmod.fmod_unary_sharded
@@ -400,19 +421,25 @@ on:
           - eltwise.binary.floor_divide.floor_divide
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.logaddexp.logaddexp_sharded
+          - eltwise.binary.logaddexp.logaddexp_ng_survey
           - eltwise.binary.logaddexp2.logaddexp2
           - eltwise.binary.logaddexp2.logaddexp2_sharded
+          - eltwise.binary.logaddexp2.logaddexp2_ng_survey
           - eltwise.binary.ldexp.ldexp
           - eltwise.binary.ldexp.ldexp_sharded
+          - eltwise.binary.ldexp.ldexp_ng_survey
           - eltwise.binary.lt.lt_tensor_pytorch2
           - eltwise.binary.lt.lt_scalar_pytorch2
           - eltwise.binary.lt.lt_forge
+          - eltwise.binary.lt.lt_ng_survey
           - eltwise.binary.ne.ne_scalar_pytorch2
           - eltwise.binary.ne.ne_forge
+          - eltwise.binary.ne.ne_ng_survey
           - eltwise.binary.isclose.isclose
           - eltwise.binary.isclose.isclose_sharded
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
+          - eltwise.binary_ng.binary_ng_all_ops
           - eltwise.binary_backward.ldexp_bw.ldexp_bw
           - eltwise.binary_backward.ldexp_bw.ldexp_bw_sharded
           - eltwise.binary_backward.logaddexp_bw.logaddexp_bw
