@@ -12,22 +12,14 @@ To run the performance tests:
 
 ```bash
 # Trace + 2CQs optimization (best performance)
-pytest models/demos/t3000/vit/tests/test_perf_e2e_vit.py::test_perf_trace_2cqs
+pytest models/demos/t3000/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference
 ```
 
 ## Data Parallel Implementation
 
 This implementation uses data parallel execution across T3000 devices:
 
-- `device_batch_size`: The batch size per device
+- `device_batch_size`: The batch size per device = 8
 - `batch_size = device_batch_size * num_devices`: Total batch size across all devices
 - Images are distributed across devices for parallel processing
 - Results are aggregated for final output
-
-## Model Details
-
-- **Model**: google/vit-base-patch16-224
-- **Input Resolution**: 224x224
-- **Patch Size**: 16x16
-- **Architecture**: Vision Transformer with 12 transformer blocks
-- **Parameters**: ~86M parameters
