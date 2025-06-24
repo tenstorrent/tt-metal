@@ -58,6 +58,7 @@ public:
     // factory (initialises MPI environment once per process)
     static void create(int argc, char** argv);
     static const ContextPtr& get_current_world();
+    static bool is_initialized();
 
     // destructor – communicator MPI_COMM_WORLD is freed automatically by MPI_Finalize
     // All other communicators are freed here

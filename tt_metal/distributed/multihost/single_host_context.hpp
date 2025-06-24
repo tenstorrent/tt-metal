@@ -20,6 +20,7 @@ public:
     static void create(int argc, char** argv);
     static const ContextPtr& get_current_world();
     static void set_current_world(const ContextPtr&);
+    static bool is_initialized();
 
     // destructor – no-op
     ~SingleHostContext() override = default;
