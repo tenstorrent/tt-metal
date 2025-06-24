@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 import warnings
 import torch.nn.functional as F
@@ -43,16 +47,8 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
         output, [output.shape[0], output.shape[1], output.shape[2], output.shape[3] * output.shape[4]]
     )
     output = output * attention_weights
-    # output = ttnn.to_torch(output).float()
     output = ttnn.sum(output, 3)
-    print("Output", type(output))
-    # output = ttnn.from_torch(output, device=device, dtype=ttnn.bfloat16)
     output = ttnn.reshape(output, [bs, num_heads * embed_dims, num_queries])
-    # output = (
-    #     (torch.stack(sampling_value_list, dim=-2).flatten(-2) * attention_weights)
-    #     .sum(-1)
-    #     .view(bs, num_heads * embed_dims, num_queries)
-    # )
     output = ttnn.permute(output, (0, 2, 1))
     ttnn.deallocate(attention_weights)
     ttnn.deallocate(sampling_grids)
@@ -61,7 +57,7 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
     return output
 
 
-class TemporalSelfAttentionTT:
+class TtTemporalSelfAttention:
     def __init__(
         self,
         embed_dims=256,
@@ -140,8 +136,7 @@ class TemporalSelfAttentionTT:
         assert self.num_bev_queue == 2
 
         query = ttnn.concat([value[:bs], query], dim=-1)
-        # bias = ttnn.to_device(parameter.value_proj.bias, self.device)
-        # weight = ttnn.to_device(parameter.value_proj.weight, self.device)
+
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
         value = ttnn.linear(value, parameter.value_proj.weight, bias=parameter.value_proj.bias)
         if key_padding_mask is not None:
@@ -150,16 +145,12 @@ class TemporalSelfAttentionTT:
 
         value = ttnn.reshape(value, (bs * self.num_bev_queue, num_value, self.num_heads, -1))
 
-        # bias = ttnn.to_device(parameter.sampling_offsets.bias, self.device)
-        # weight = ttnn.to_device(parameter.sampling_offsets.weight, self.device)
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
         sampling_offsets = ttnn.linear(query, parameter.sampling_offsets.weight, bias=parameter.sampling_offsets.bias)
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels, self.num_points, 2)
         )
 
-        # bias = ttnn.to_device(parameter.attention_weights.bias, self.device)
-        # weight = ttnn.to_device(parameter.attention_weights.weight, self.device)
         attention_weights = ttnn.linear(
             query, parameter.attention_weights.weight, bias=parameter.attention_weights.bias
         )
@@ -197,10 +188,8 @@ class TemporalSelfAttentionTT:
             offset_normalizer_xy = ttnn.to_torch(offset_normalizer_xy)
             sampling_locations = sampling_offsets / offset_normalizer_xy
             reference_xy = ttnn.to_torch(reference_xy)
-            # sampling_locations = ttnn.from_torch(sampling_locations, device=self.device, dtype=ttnn.bfloat16)
             sampling_locations = reference_xy + sampling_locations
             sampling_locations = ttnn.from_torch(sampling_locations, device=self.device, dtype=ttnn.bfloat16)
-            # return sampling_locations
 
         elif reference_points.shape[-1] == 4:
             reference_points_reshape = ttnn.reshape(
@@ -224,8 +213,6 @@ class TemporalSelfAttentionTT:
         output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.mean(output, dim=-1)
         output = ttnn.permute(output, (2, 0, 1))
-        # bias = ttnn.to_device(parameter.output_proj.bias, self.device)
-        # weight = ttnn.to_device(parameter.output_proj.weight, self.device)
         output = ttnn.linear(output, parameter.output_proj.weight, bias=parameter.output_proj.bias)
         ttnn.deallocate(parameter.output_proj.weight)
         ttnn.deallocate(parameter.output_proj.bias)
