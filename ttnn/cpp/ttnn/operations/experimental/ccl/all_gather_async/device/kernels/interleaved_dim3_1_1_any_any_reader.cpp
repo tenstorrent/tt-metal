@@ -48,6 +48,8 @@ void kernel_main() {
     uint32_t input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
 
     OpSignaler op_signaler;
     if constexpr (fuse_op) {
@@ -151,8 +153,8 @@ void kernel_main() {
             tiles_to_read = input_tile_id_end;
 
             uint32_t output_tile_id_start = 0;
-            uint32_t pages_read_in_row = input_tile_id_start % input_tensor_Wt;
-            uint32_t row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
+            uint32_t pages_read_in_row = start_pages_read_in_row;
+            uint32_t row_offset = start_row_offset;
             uint32_t slice_Wt = input_tensor_Wt;
             uint32_t stride_Wt = output_tensor_Wt;
             if (gather_dim == 3) {
@@ -183,8 +185,8 @@ void kernel_main() {
                     noc_async_read_barrier();
                     cb_push_back(cb_output_id, packet_size_in_pages);
                 }
-                pages_read_in_row = input_tile_id_start % input_tensor_Wt;
-                row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
+                pages_read_in_row = start_pages_read_in_row;
+                row_offset = start_row_offset;
                 tiles_read = input_tile_id_start;
                 tiles_to_read = input_tile_id_end;
                 output_tile_id_start += output_tensor_Wt * output_tensor_Ht;

@@ -546,18 +546,20 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
 
         std::vector<uint32_t> reader_forward_rt_args = {
-            input_tensor.buffer()->address(),   // input_tensor_address
-            output_tensor.buffer()->address(),  // output_tensor_address
-            input_tensor_Wt,                    // width in tiles of the output shard
-            input_tensor_Ht,                    // height in tiles of the output shard
-            output_tensor_Wt,                   // width in tiles of entire output
-            output_tensor_Ht,                   // height in tiles of entire output
-            dim,                                // dim to gather on
-            batch_head_size,                    // product of the first two dims
-            input_tile_id_start,                //
-            input_tile_id_end,                  //
-            ring_size,                          // ring_size
-            semaphore.at(1).address(),          // out_ready_semaphore_forward
+            input_tensor.buffer()->address(),                         // input_tensor_address
+            output_tensor.buffer()->address(),                        // output_tensor_address
+            input_tensor_Wt,                                          // width in tiles of the output shard
+            input_tensor_Ht,                                          // height in tiles of the output shard
+            output_tensor_Wt,                                         // width in tiles of entire output
+            output_tensor_Ht,                                         // height in tiles of entire output
+            dim,                                                      // dim to gather on
+            batch_head_size,                                          // product of the first two dims
+            input_tile_id_start,                                      //
+            input_tile_id_end,                                        //
+            ring_size,                                                // ring_size
+            semaphore.at(1).address(),                                // out_ready_semaphore_forward
+            input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
+            input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
         };
         if (fuse_op) {
             fused_op_signaler_forward->push_all_gather_fused_op_rt_args(reader_forward_rt_args, 1, 0, 1);
@@ -569,18 +571,20 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             reader_forward_rt_args);
 
         std::vector<uint32_t> reader_backward_rt_args = {
-            input_tensor.buffer()->address(),   // input_tensor_address
-            output_tensor.buffer()->address(),  // output_tensor_address
-            input_tensor_Wt,                    // width in tiles of the output shard
-            input_tensor_Ht,                    // height in tiles of the output shard
-            output_tensor_Wt,                   // width in tiles of entire output
-            output_tensor_Ht,                   // height in tiles of entire output
-            dim,                                // dim to gather on
-            batch_head_size,                    // product of the first two dims
-            input_tile_id_start,                // slice_num_pages
-            input_tile_id_end,                  // slice_num_pages
-            ring_size,                          // ring_size
-            semaphore.at(0).address(),          // out_ready_semaphore_backward
+            input_tensor.buffer()->address(),                         // input_tensor_address
+            output_tensor.buffer()->address(),                        // output_tensor_address
+            input_tensor_Wt,                                          // width in tiles of the output shard
+            input_tensor_Ht,                                          // height in tiles of the output shard
+            output_tensor_Wt,                                         // width in tiles of entire output
+            output_tensor_Ht,                                         // height in tiles of entire output
+            dim,                                                      // dim to gather on
+            batch_head_size,                                          // product of the first two dims
+            input_tile_id_start,                                      // slice_num_pages
+            input_tile_id_end,                                        // slice_num_pages
+            ring_size,                                                // ring_size
+            semaphore.at(0).address(),                                // out_ready_semaphore_backward
+            input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
+            input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
         };
         if (fuse_op) {
             fused_op_signaler_backward->push_all_gather_fused_op_rt_args(reader_backward_rt_args, 1, 0, 0);
@@ -597,19 +601,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             mesh_device->worker_core_from_logical_core(sender_worker_cores[0 + 2 * link]);
 
         std::vector<uint32_t> writer_forward_rt_args = {
-            output_tensor.buffer()->address(),  // output_tensor_address
-            input_tensor_Wt,                    // width in tiles of the output shard
-            input_tensor_Ht,                    // height in tiles of the output shard
-            output_tensor_Wt,                   // width in tiles of entire output
-            output_tensor_Ht,                   // height in tiles of entire output
-            dim,                                // dim to gather on
-            batch_head_size,                    // product of the first two dims
-            input_tile_id_start,                //
-            input_tile_id_end,                  //
-            sender_forward_worker_core.x,       // out_ready_sem_noc0_x
-            sender_forward_worker_core.y,       // out_ready_sem_noc0_y
-            ring_size,                          // ring_size
-            semaphore.at(1).address()           // out_ready_semaphore_forward
+            output_tensor.buffer()->address(),                        // output_tensor_address
+            input_tensor_Wt,                                          // width in tiles of the output shard
+            input_tensor_Ht,                                          // height in tiles of the output shard
+            output_tensor_Wt,                                         // width in tiles of entire output
+            output_tensor_Ht,                                         // height in tiles of entire output
+            dim,                                                      // dim to gather on
+            batch_head_size,                                          // product of the first two dims
+            input_tile_id_start,                                      //
+            input_tile_id_end,                                        //
+            sender_forward_worker_core.x,                             // out_ready_sem_noc0_x
+            sender_forward_worker_core.y,                             // out_ready_sem_noc0_y
+            ring_size,                                                // ring_size
+            semaphore.at(1).address(),                                // out_ready_semaphore_forward
+            input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
+            input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
         };
         writer_forward_rt_args.push_back(false);
         writer_forward_rt_args.push_back(backward_device.has_value());
@@ -629,19 +635,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             program, worker_sender_writer_forward_kernel_id, sender_worker_cores[1 + 2 * link], writer_forward_rt_args);
 
         std::vector<uint32_t> writer_backward_rt_args = {
-            output_tensor.buffer()->address(),  // output_tensor_address
-            input_tensor_Wt,                    // width in tiles of the output shard
-            input_tensor_Ht,                    // height in tiles of the output shard
-            output_tensor_Wt,                   // width in tiles of entire output
-            output_tensor_Ht,                   // height in tiles of entire output
-            dim,                                // dim to gather on
-            batch_head_size,                    // product of the first two dims
-            input_tile_id_start,                //
-            input_tile_id_end,                  //
-            sender_backward_worker_core.x,      // out_ready_sem_noc0_x
-            sender_backward_worker_core.y,      // out_ready_sem_noc0_y
-            ring_size,                          // ring_size
-            semaphore.at(0).address()           // out_ready_semaphore_backward
+            output_tensor.buffer()->address(),                        // output_tensor_address
+            input_tensor_Wt,                                          // width in tiles of the output shard
+            input_tensor_Ht,                                          // height in tiles of the output shard
+            output_tensor_Wt,                                         // width in tiles of entire output
+            output_tensor_Ht,                                         // height in tiles of entire output
+            dim,                                                      // dim to gather on
+            batch_head_size,                                          // product of the first two dims
+            input_tile_id_start,                                      //
+            input_tile_id_end,                                        //
+            sender_backward_worker_core.x,                            // out_ready_sem_noc0_x
+            sender_backward_worker_core.y,                            // out_ready_sem_noc0_y
+            ring_size,                                                // ring_size
+            semaphore.at(0).address(),                                // out_ready_semaphore_backward
+            input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
+            input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
         };
         writer_backward_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {

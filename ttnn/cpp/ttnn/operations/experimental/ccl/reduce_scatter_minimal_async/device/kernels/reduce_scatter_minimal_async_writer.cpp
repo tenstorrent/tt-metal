@@ -51,17 +51,14 @@ void kernel_main() {
     uint32_t link = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
 
+    uint32_t slice_Wt = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
+    int32_t start_tiles_read = get_arg_val<int32_t>(arg_idx++);
+    uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
-
-    // DPRINT << "my_chip_id: " << my_chip_id << "\n";
-    // DPRINT << "tile_granularity: " << tile_granularity << "\n";
-    // DPRINT << "input_tensor_Wt: " << input_tensor_Wt << "\n";
-    // DPRINT << "batch_slice_num_pages: " << batch_slice_num_pages << "\n";
-    // DPRINT << "ring_size: " << ring_size << "\n";
-    // DPRINT << "num_batches: " << num_batches << "\n";
-    // DPRINT << "link: " << link << "\n";
-    // DPRINT << "num_links: " << num_links << "\n";
 
     // packet header cb
     cb_reserve_back(reserved_packet_header_cb_id, 1);
@@ -74,8 +71,6 @@ void kernel_main() {
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
     pkt_hdr->to_chip_unicast(1);
-
-    uint32_t slice_Wt = input_tensor_Wt / ring_size;
 
     // interleaved addrgen
     constexpr bool intermediate_is_dram = intermediate_type == tt::tt_metal::BufferType::DRAM;
@@ -98,22 +93,21 @@ void kernel_main() {
 
         uint32_t batch_slice_offset = batch_slice_num_pages * b;
         for (uint32_t i = 0; i < ring_size; ++i) {
-            uint32_t actual_slice_idx = direction ? (slice_idx + ring_size) % ring_size : slice_idx % ring_size;
+            uint32_t actual_slice_idx;
+            if (direction) {
+                actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
+            } else {
+                actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
+            }
 
             uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
             // If not the last slice, write what's on cb_output_id forward
             if (i < (ring_size - 1)) {
                 uint32_t stride_Wt = input_tensor_Wt;
-                uint32_t pages_read_in_row = (link * batch_slice_num_pages / num_links) % slice_Wt;
-                uint32_t row_offset = (link * batch_slice_num_pages / num_links) / slice_Wt * stride_Wt;
-                uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
-                uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
-                // DPRINT << "WRITER: for link " << link << ", tiles_read: " << tiles_read
-                //        << ", tiles_to_read: " << tiles_to_read << ", "
-                //        << "pages_read_in_row: " << pages_read_in_row << ", row_offset: " << row_offset << ", "
-                //        << "slice_Wt: " << slice_Wt << ", stride_Wt: " << stride_Wt << ", batch_offset: " <<
-                //        batch_offset
-                //        << "\n";
+                uint32_t pages_read_in_row = start_pages_read_in_row;
+                uint32_t row_offset = start_row_offset;
+                uint32_t tiles_read = start_tiles_read;
+                uint32_t tiles_to_read = start_tiles_to_read;
                 uint32_t input_tile_id_start = actual_slice_idx * slice_Wt;
                 if (!direction) {
                     uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
@@ -121,8 +115,8 @@ void kernel_main() {
                     pages_read_in_row += backwards_offset;
 
                     if (pages_read_in_row >= slice_Wt) {
-                        row_offset += (pages_read_in_row / slice_Wt) * stride_Wt;
-                        pages_read_in_row = pages_read_in_row % slice_Wt;
+                        row_offset += stride_Wt;
+                        pages_read_in_row = pages_read_in_row - slice_Wt;
                     }
                 }
 
@@ -175,7 +169,7 @@ void kernel_main() {
 
                         pages_read_in_row++;
                         if (pages_read_in_row >= slice_Wt) {
-                            row_offset += (pages_read_in_row / slice_Wt) * stride_Wt;
+                            row_offset += stride_Wt;
                             pages_read_in_row = 0;
                         }
                     }
@@ -193,8 +187,8 @@ void kernel_main() {
                         tiles_read += num_pages_to_read;
                         pages_read_in_row += num_pages_to_read;
                         if (pages_read_in_row >= slice_Wt) {
-                            row_offset += (pages_read_in_row / slice_Wt) * stride_Wt;
-                            pages_read_in_row = pages_read_in_row % slice_Wt;
+                            row_offset += stride_Wt;
+                            pages_read_in_row = pages_read_in_row - slice_Wt;
                         }
                     }
                 }
@@ -221,8 +215,8 @@ void kernel_main() {
                 noc_async_writes_flushed();
             } else {
                 // Otherwise, on the last slice, write it to output buffer
-                uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
-                uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
+                uint32_t tiles_read = start_tiles_read;
+                uint32_t tiles_to_read = start_tiles_to_read;
                 uint32_t tile_id_start = batch_slice_offset;
                 if (!direction) {
                     tiles_read += std::min((tiles_to_read - tiles_read) / 2, tile_granularity);

@@ -299,7 +299,14 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
                 semaphore.at(core_idx + link * 3).address(),  // out_ready_semaphore
                 semaphore.at(2 + link * 3).address(),         // batch_ready_semaphore
                 link,
-                num_links};
+                num_links,
+                input_tensor_Wt / ring_size,                                                 // slice_Wt
+                (link * batch_slice_num_pages / num_links) % (input_tensor_Wt / ring_size),  // start_pages_read_in_row
+                (link * batch_slice_num_pages / num_links) / (input_tensor_Wt / ring_size) *
+                    input_tensor_Wt,                            // start_row_offset
+                link * batch_slice_num_pages / num_links,       // start_tiles_read
+                (link + 1) * batch_slice_num_pages / num_links  // start_tiles_to_read
+            };
             if (fuse_op) {
                 fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
             }
@@ -313,7 +320,13 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
                 semaphore.at(core_idx + link * 3).address(),  // out_ready_fwd_semaphore
                 semaphore.at(2 + link * 3).address(),         // batch_ready_semaphore
                 link,
-                num_links};
+                num_links,
+                input_tensor_Wt / ring_size,                                                 // slice_Wt
+                (link * batch_slice_num_pages / num_links) % (input_tensor_Wt / ring_size),  // pages_read_in_row
+                (link * batch_slice_num_pages / num_links) / (input_tensor_Wt / ring_size) *
+                    input_tensor_Wt,                              // row_offset
+                (link * batch_slice_num_pages / num_links),       // tiles_read
+                (link + 1) * batch_slice_num_pages / num_links};  // tiles_to_read
             if (core_idx % num_senders_per_link) {  // forward
                 writer_rt_args.push_back(forward_device.has_value());
                 if (forward_device.has_value()) {
