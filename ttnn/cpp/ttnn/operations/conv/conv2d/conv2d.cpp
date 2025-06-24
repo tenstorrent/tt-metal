@@ -220,8 +220,7 @@ Result conv2d_DRAM(
         device);
 
     uint32_t slice_rounding_value = 1;
-    if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::WIDTH &&
-        output_layout == tt_metal::Layout::TILE) {
+    if (output_layout == tt_metal::Layout::TILE) {
         // For width sharded conv2d with TILE layout, we need to round the slice size to a multiple of TILE_HEIGHT.
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
@@ -287,16 +286,7 @@ Result conv2d_DRAM(
             pad_bottom = padding_n4[1];
             pad_left = std::max<int>(0, -input_slice_width_start);
             pad_right = std::max<int>(0, input_slice_width_end - input_width);
-            if (this_output_slice_dim % slice_rounding_value != 0) {
-                additional_padded_width = slice_rounding_value - (this_output_slice_dim % slice_rounding_value);
-                pad_right += additional_padded_width * stride[1];
 
-                log_info(
-                    LogOp,
-                    "Conv2d DRAM Slicing: Slice {}: Additional padding of {} added to the right side.",
-                    slice_index,
-                    additional_padded_width);
-            }
             input_slice_width_start = std::max<int>(0, input_slice_width_start);
             input_slice_width_end = std::min<int>(input_width, input_slice_width_end);
 
@@ -304,7 +294,8 @@ Result conv2d_DRAM(
                 continue;
             }
         }
-        log_info(
+
+        log_trace(
             LogOp,
             "Conv2d DRAM Slicing: Slice {}: Output Slice Start: ({}, {}), End: ({}, {})",
             slice_index,
@@ -312,7 +303,7 @@ Result conv2d_DRAM(
             output_slice_width_start,
             output_slice_height_end,
             output_slice_width_end);
-        log_info(
+        log_trace(
             LogOp,
             "Conv2d DRAM Slicing: Slice {}: Input Slice Start: ({}, {}), End: ({}, {})",
             slice_index,
@@ -321,11 +312,30 @@ Result conv2d_DRAM(
             input_slice_height_end,
             input_slice_width_end);
 
-        const uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
-        const uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
-
         const uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
         const uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
+
+        const uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
+
+        uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
+        if (output_slice_width % slice_rounding_value != 0) {
+            additional_padded_width = slice_rounding_value - (output_slice_width % slice_rounding_value);
+            log_trace(
+                LogOp,
+                "Conv2d DRAM Slicing: Slice {}: Additional padding of {} added to the right side.",
+                slice_index,
+                additional_padded_width);
+            pad_right += additional_padded_width * stride[1];
+            output_slice_width += additional_padded_width;
+        }
+
+        log_debug(
+            tt::LogOp,
+            "Input Slice : {} x {}, Output Slice {} x {}",
+            input_slice_height,
+            input_slice_width,
+            output_slice_height,
+            output_slice_width);
 
         if (!conv_config.shard_layout.has_value()) {
             if (!conv_config.weights_dtype.has_value()) {
@@ -338,7 +348,7 @@ Result conv2d_DRAM(
                 in_channels,
                 out_channels,
                 output_slice_height,
-                output_slice_width + additional_padded_width,
+                output_slice_width,
                 weight_tensor.logical_shape()[3],
                 input_slice_height,
                 input_slice_width,
@@ -366,8 +376,7 @@ Result conv2d_DRAM(
                 conv_config,
                 batch_size,
                 ttnn::Shape({batch_size, input_slice_height, input_slice_width, in_channels}),
-                ttnn::Shape(
-                    {batch_size, output_slice_height, output_slice_width + additional_padded_width, out_channels}),
+                ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
                 mm_conv,
                 device,
                 // Setting layout to TILE forces input_channels_alignment to 32.

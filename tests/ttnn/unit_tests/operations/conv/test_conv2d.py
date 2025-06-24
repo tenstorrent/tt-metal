@@ -117,12 +117,12 @@ SliceWidth = ttnn.Conv2dSliceWidth
     # fmt: off
     (
         (2,  13,   31,  313,    71,   SliceWidth,   16,  ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (2, 2), (2, 2), 32 * 4,  ttnn.MathFidelity.LoFi  ),
-        (2,  63,  129,  981,    39,   SliceHeight,  16,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (2, 2), (2, 2), (1, 1),      0,  ttnn.MathFidelity.LoFi  ),
+        (2,  63,  129,  64,    39,   SliceHeight,  2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (2, 2), (2, 2), (1, 1),      0,  ttnn.MathFidelity.LoFi  ),
         (2, 512,  512,  128,   128,   SliceWidth,    4,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32 * 8,  ttnn.MathFidelity.LoFi  ),
         (2, 64,   64,   384,   64,    SliceHeight,   6,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
         (1, 32,    32,   64,  64,  SliceWidth,    2,  ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (0, 0), (1, 1), 32,      ttnn.MathFidelity.LoFi  ),
         (1, 64,   128,  992,   128,   SliceWidth,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 4,  ttnn.MathFidelity.LoFi  ),
-        # (1, 2904, 2904,  48,    48,   SliceWidth,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ),
+        (1, 2904, 2904,  48,    48,   SliceWidth,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ),
     )
     # fmt: on
 )
@@ -162,6 +162,8 @@ def test_conv_dram(
     config = {
         "act_block_h": act_block_h_override,
     }
+    if output_channels == 2904 and input_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("Width Sharded Conv2d DRAM Slicing doesn't support Tiled outputs. ")
     run_conv(
         device,
         torch_tensor_map,
@@ -183,7 +185,7 @@ def test_conv_dram(
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
         input_layout=input_layout,
-        run_twice=False,
+        run_twice=True,
         fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(
             slice_type=slice_type,
