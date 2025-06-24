@@ -111,11 +111,6 @@ def run_all_gather_impl(
         ag_output_tensor = torch.rand(ag_output_shape).bfloat16()
         ag_output_tensor_goldens_list.append(ag_output_tensor)
 
-        # slice_shape=ag_output_shape
-        # slice_shape[3]=slice_shape[3]//num_devices
-        # for k in range(num_devices):
-        #     ag_output_tensor[:,:,:,slice_shape[3]*k:slice_shape[3]*(k+1)] = torch.full(slice_shape, k+1)
-
         input_tensors = torch.chunk(ag_output_tensor, num_devices, dim)
 
         tt_input_tensors = []
