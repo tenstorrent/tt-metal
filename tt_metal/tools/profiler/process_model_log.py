@@ -63,7 +63,13 @@ def run_device_profiler(command, output_logs_subdir, check_test_return_code=True
         device_analysis_opt = "".join(device_analysis_opt_list)
     profiler_cmd = f"python3 -m tracy -p -r -o {output_profiler_dir} {check_return_code} {device_analysis_opt} -t 5000 -m {command}"
     logger.info(profiler_cmd)
-    subprocess.run([profiler_cmd], shell=True, check=True)
+    try:
+        subprocess.run([profiler_cmd], shell=True, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print("CalledProcessError:", e)
+        print("Return code:", e.returncode)
+        print("Stdout:", e.stdout)
+        print("Stderr:", e.stderr)
 
 
 def get_samples_per_s(time_ns, num_samples):
