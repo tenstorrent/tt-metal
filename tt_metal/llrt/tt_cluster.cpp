@@ -333,7 +333,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         // generate the cluster desc and pull chip ids from there
         auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
         if (rtoptions_.is_visible_device_specified()) {
-            chips_set = rtoptions_.get_visible_device();
+            chips_set.emplace(rtoptions_.get_visible_device());
         }
         // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
         // that is later expected to be populated by unrelated APIs
