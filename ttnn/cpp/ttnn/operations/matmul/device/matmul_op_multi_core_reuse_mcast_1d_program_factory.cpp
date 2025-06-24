@@ -2560,6 +2560,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
 
     if (gather_in0) {
         std::vector<tt_metal::Buffer*> out_buffers;
+        out_buffers.reserve(output_tensors.size());
         for (const auto& output_tensor : output_tensors) {
             out_buffers.push_back(output_tensor.buffer());
         }

@@ -221,6 +221,7 @@ namespace {
 template <typename T>
 Tensor concat_impl(const std::vector<Tensor>& tensors, const tt::tt_metal::TensorLayout& layout, int dim) {
     std::vector<xt::xarray<T>> xtensors;
+    xtensors.reserve(tensors.size());
     for (const auto& tensor : tensors) {
         xtensors.push_back(to_xtensor<T>(tensor));
     }

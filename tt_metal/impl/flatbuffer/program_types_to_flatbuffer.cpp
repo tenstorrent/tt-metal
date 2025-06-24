@@ -52,6 +52,7 @@ std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
 FlatbufferCoreCoordVector to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::vector<CoreCoord>& core_spec) {
     std::vector<flatbuffers::Offset<flatbuffer::CoreCoord>> core_offsets;
+    core_offsets.reserve(core_spec.size());
     for (const auto& coord : core_spec) {
         core_offsets.push_back(flatbuffer::CreateCoreCoord(builder, coord.x, coord.y));
     }
@@ -107,6 +108,7 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
 
     // Convert unpack_to_dest_mode to FlatBuffer format
     std::vector<flatbuffer::UnpackToDestMode> unpack_modes;
+    unpack_modes.reserve(config.unpack_to_dest_mode.size());
     for (const auto& mode : config.unpack_to_dest_mode) {
         unpack_modes.push_back(to_flatbuffer(mode));
     }
