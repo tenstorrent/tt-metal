@@ -1,4 +1,3 @@
-# Target for all STL tests regardless of duration
 add_executable(distributed_multiprocess_tests)
 target_sources(
     distributed_multiprocess_tests
