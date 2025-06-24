@@ -112,6 +112,16 @@ public:
         const ttnn::Shape& shape,
         const std::function<void()>& on_creation_callback,
         const std::function<void()>& on_destruction_callback,
+        const std::optional<Tile>& tile = std::nullopt) {
+        return from_borrowed_data(buffer, shape, MemoryPin(on_creation_callback, on_destruction_callback), tile);
+    }
+
+    // Overload that takes a memory pin.
+    template <typename T>
+    [[nodiscard]] static Tensor from_borrowed_data(
+        tt::stl::Span<T> buffer,
+        const ttnn::Shape& shape,
+        tt::tt_metal::MemoryPin buffer_pin,
         const std::optional<Tile>& tile = std::nullopt);
 
     // Same as `from_span`, but operates on a vector instead.

@@ -7,6 +7,7 @@
 #include <memory>
 
 #include <tt_stl/small_vector.hpp>
+#include <tt-metalium/memory_pin.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -90,8 +91,9 @@ public:
     // materialized.
     template <typename T>
     Tensor operator()(
-        tt::stl::Span<const T> buffer,
+        tt::stl::Span<T> buffer,
         const ttnn::Shape& shape,
+        const tt::tt_metal::MemoryPin& buffer_pin,
         const tt::tt_metal::TensorLayout& layout,
         T pad_value = 0) const;
 
@@ -166,10 +168,15 @@ Tensor distribute_tensor(
     ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 // Creates a distributed tensor from a span of logical data specified in `buffer`.
+// `global_shape` must match the size of `buffer`; shapes of shards will be derived automatically based on the `mapper`,
+// and the `shard_layout` will be applied subsequently. `buffer` may be re-used to create tensors directly, taking
+// `buffer_pin` as the RAII to retain reference count to the object.
 template <typename T>
 Tensor create_distributed_tensor(
-    tt::stl::Span<const T> buffer,
-    const TensorSpec& spec,
+    tt::stl::Span<T> buffer,
+    const ttnn::Shape& global_shape,
+    const tt::tt_metal::MemoryPin& buffer_pin,
+    const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
     ttnn::QueueId cq_id = ttnn::DefaultQueueId,
