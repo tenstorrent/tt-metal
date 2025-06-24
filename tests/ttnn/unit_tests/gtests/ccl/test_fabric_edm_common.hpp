@@ -83,6 +83,8 @@ protected:
     MeshShape GetDeterminedMeshShape() const {
         if (num_devices_ == TG_NUM_DEVICES || num_devices_ == GALAXY_6U_NUM_DEVICES) {
             return MeshShape{8, 4};
+        } else if (num_devices_ == 2) {
+            return MeshShape{1, 2};
         } else {
             return MeshShape{2, 4};
         }
@@ -97,10 +99,8 @@ protected:
 
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-
-        if (!(num_devices_ >= 8 &&
-              (tt::tt_metal::GetNumPCIeDevices() == 4 || tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
-            TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
+        if (num_devices_ == 1) {
+            TT_THROW("This suite can only be run on multi-device systems");
         }
     }
 
@@ -2370,12 +2370,18 @@ static std::vector<IDevice*> generate_default_line_fabric_under_test(
         }
     } else {
         // Choosing pcie devices so that more links are supported. More links == more (likelihood of) congestion.
-        if (line_size <= 4) {
-            devices_ = {
-                view.get_device(MeshCoordinate(0, 1)),
-                view.get_device(MeshCoordinate(0, 2)),
-                view.get_device(MeshCoordinate(1, 2)),
-                view.get_device(MeshCoordinate(1, 1))};
+        if (line_size == 2 && view.num_devices() == 2) {
+            devices_ = {view.get_device(MeshCoordinate(0, 0)), view.get_device(MeshCoordinate(0, 1))};
+        } else if (line_size <= 4) {
+            if (view.num_devices() == 4) {
+                devices_ = view.get_line_devices();
+            } else {
+                devices_ = {
+                    view.get_device(MeshCoordinate(0, 1)),
+                    view.get_device(MeshCoordinate(0, 2)),
+                    view.get_device(MeshCoordinate(1, 2)),
+                    view.get_device(MeshCoordinate(1, 1))};
+            }
         } else {
             devices_ = {
                 view.get_device(MeshCoordinate(0, 0)),
@@ -2697,9 +2703,13 @@ void Run1DFabricPacketSendTest(
     bool use_galaxy = num_devices == 32;
     bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
     bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
-    if (num_devices < 4) {
+    if (num_devices < params.line_size) {
         log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return;
+    }
+
+    if (params.fabric_mode != FabricTestMode::Linear && tt::tt_metal::GetNumPCIeDevices() == 2) {
+        TT_THROW("This test can only be run on systems with > 2 devices. {} devices found", num_devices);
     }
 
     size_t line_size = params.line_size;

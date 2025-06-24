@@ -44,7 +44,7 @@ inline void RunPersistent1dFabricLatencyTest(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     bool is_6u = num_devices == 32 && tt::tt_metal::GetNumPCIeDevices() == num_devices;
-    if (num_devices < 4 && !is_6u) {
+    if (num_devices < line_size && !is_6u) {
         log_info(tt::LogTest, "This test can only be run on T3000 or 6u systems");
         return;
     }
@@ -74,7 +74,9 @@ inline void RunPersistent1dFabricLatencyTest(
             devices_.push_back(view.get_device(MeshCoordinate(r, c)));
         }
     } else {
-        if (line_size == 4) {
+        if (line_size == 2) {
+            devices_ = {view.get_device(MeshCoordinate(0, 0)), view.get_device(MeshCoordinate(0, 1))};
+        } else if (line_size == 4) {
             devices_ = {
                 view.get_device(MeshCoordinate(0, 1)),
                 view.get_device(MeshCoordinate(0, 2)),
@@ -487,7 +489,7 @@ int main(int argc, char** argv) {
     std::string topology_str = argv[arg_idx++];
     TT_FATAL(arg_idx == argc, "Read past end of args or didn't read all args");
 
-    uint32_t test_expected_num_devices = 8;
+    uint32_t test_expected_num_devices = line_size;
     size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
     bool is_6u = num_devices == 32 && tt::tt_metal::GetNumPCIeDevices() == num_devices;
     if (num_devices < test_expected_num_devices) {

@@ -58,8 +58,8 @@ static std::tuple<tt::tt_fabric::NocSendType, bool> get_noc_send_type(const std:
 }
 
 constexpr uint32_t min_test_num_devices = 8;
-static int baseline_validate_min_num_devices() {
-    if (tt::tt_metal::GetNumAvailableDevices() < min_test_num_devices) {
+static int baseline_validate_min_num_devices(size_t test_minimum_num_devices = min_test_num_devices) {
+    if (tt::tt_metal::GetNumAvailableDevices() < test_minimum_num_devices) {
         log_warning(tt::LogTest, "This test can only be run on T3000 or TG devices");
         return 1;
     }
@@ -89,7 +89,7 @@ static int baseline_validate_test_environment(const FullMeshTestParams& params) 
 }
 
 static int baseline_validate_test_environment(const WriteThroughputStabilityTestWithPersistentFabricParams& params) {
-    if (baseline_validate_min_num_devices() != 0) {
+    if (baseline_validate_min_num_devices(params.line_size) != 0) {
         return 1;
     }
 
