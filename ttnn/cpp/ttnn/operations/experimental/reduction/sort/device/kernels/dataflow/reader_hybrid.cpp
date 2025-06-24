@@ -9,6 +9,26 @@
 #include <array>
 #include <algorithm>
 #include <cstdint>
+#include <utility>
+
+FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
+    const uint32_t core_id, const uint32_t lookup_table_buffer_cb_index, const uint32_t tile_size = 1024) {
+    // Initialize as max to indicate invalid coordinates
+    uint32_t core_x = std::numeric_limits<uint32_t>::max();
+    uint32_t core_y = std::numeric_limits<uint32_t>::max();
+
+    if (2 * core_id >= tile_size) {
+        return {core_x, core_y};  // Invalid core ID
+    }
+
+    const uint32_t l1_read_addr = get_read_ptr(lookup_table_buffer_cb_index);
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr);
+
+    core_x = ptr[core_id * 2];
+    core_y = ptr[core_id * 2 + 1];
+
+    return {core_x, core_y};
+}
 
 void kernel_main() {
     // Runtime args
@@ -58,6 +78,16 @@ void kernel_main() {
         .bank_base_address = physical_core_lookup_table_buffer_addr,
         .page_size = physical_core_lookup_table_tile_size_bytes,
         .data_format = physical_core_lookup_table_data_format};
+
+    // Read lookup table for physical core IDs
+    cb_reserve_back(physical_core_lookup_table_cb_index, one_tile);
+    const uint32_t physical_core_lookup_table_l1_write_addr = get_write_ptr(physical_core_lookup_table_cb_index);
+    uint64_t noc_addr = get_noc_addr(0, physical_core_lookup_table_accessor);
+    noc_async_read(noc_addr, physical_core_lookup_table_l1_write_addr, physical_core_lookup_table_tile_size_bytes);
+    noc_async_read_barrier();
+
+    const auto x = get_core_physical_coordinates(7, physical_core_lookup_table_cb_index);
+    DPRINT << "Reader: " << x.first << ", " << x.second << ENDL();
     /*
         for (uint32_t h = 0; h < Ht; h++) {
             // Tiles for each core placeholder
