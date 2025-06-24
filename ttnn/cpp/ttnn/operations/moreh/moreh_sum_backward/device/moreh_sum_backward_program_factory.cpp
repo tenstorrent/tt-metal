@@ -56,7 +56,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     tensor_return_value_t& output_tensor) {
     auto output_grad = tensor_args.output_grad;
     auto input = tensor_args.input;
-    auto input_grad = output_tensor;
+    const auto& input_grad = output_tensor;
 
     auto dims = operation_attributes.dims;
     auto keepdim = operation_attributes.keepdim;
