@@ -73,29 +73,41 @@ size_t get_tt_fabric_max_payload_size_bytes() {
     return control_plane.get_fabric_context().get_fabric_max_payload_size_bytes();
 }
 
+FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    return control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+}
+
 void append_fabric_connection_rt_args(
-    const chip_id_t src_chip_id,
-    const chip_id_t dst_chip_id,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
     const uint32_t link_idx,
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type) {
     TT_FATAL(
-        src_chip_id != dst_chip_id,
-        "Expected different src and dst chip ids but got same, src: {}, dst: {}",
-        src_chip_id,
-        dst_chip_id);
+        src_fabric_node_id != dst_fabric_node_id,
+        "Expected different src and dst chip ids but got same, src:  (M {} D {}), dst:  (M {} D {})",
+        src_fabric_node_id.mesh_id,
+        src_fabric_node_id.chip_id,
+        dst_fabric_node_id.mesh_id,
+        dst_fabric_node_id.chip_id);
 
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    const auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_chip_id);
-    const auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
 
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
     const bool is_2d_fabric = topology == Topology::Mesh;
 
+    // src_chip_id is still required to get the fabric_router_virtual_core from tt_cluster
+    chip_id_t src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+
+    // dst_chip_id is only required for 1D fabric because we can't rely on routing tables for 1D torus
+    chip_id_t dst_chip_id =
+        is_2d_fabric
+            ? 0
+            : control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);  // 0 Initialize if 2D fabric
     // Make an exception for TG gateway connections. TG gateways are on a different mesh compared to remote chips
     // but the routing is simple and doesnt need any special inter-mesh handling
     if (!is_2d_fabric && !is_TG_gateway_connection(src_chip_id, dst_chip_id)) {
@@ -132,9 +144,11 @@ void append_fabric_connection_rt_args(
     }
     TT_FATAL(
         forwarding_direction.has_value(),
-        "Could not find any forwarding direction from src {} to dst {}",
-        src_chip_id,
-        dst_chip_id);
+        "Could not find any forwarding direction from src  (M {} D {}) to dst  (M {} D {})",
+        src_fabric_node_id.mesh_id,
+        src_fabric_node_id.chip_id,
+        dst_fabric_node_id.mesh_id,
+        dst_fabric_node_id.chip_id);
 
     const auto candidate_eth_chans =
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
@@ -145,13 +159,15 @@ void append_fabric_connection_rt_args(
         candidate_eth_chans.size());
 
     const auto forwarding_links =
-        get_forwarding_link_indices_in_direction(src_chip_id, dst_chip_id, forwarding_direction.value());
+        get_forwarding_link_indices_in_direction(src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
     TT_FATAL(
         std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
-        "requested link idx {}, cannot be used for forwarding b/w src {} and dst {}",
+        "requested link idx {}, cannot be used for forwarding b/w src (M {} D {}) and dst  (M {} D {})",
         link_idx,
-        src_chip_id,
-        dst_chip_id);
+        src_fabric_node_id.mesh_id,
+        src_fabric_node_id.chip_id,
+        dst_fabric_node_id.mesh_id,
+        dst_fabric_node_id.chip_id);
 
     const auto fabric_router_channel = candidate_eth_chans[link_idx];
     const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
