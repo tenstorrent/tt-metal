@@ -31,6 +31,8 @@ void MAIN {
             uint32_t cb_mul = enable_reload ? cb_intermed : cb_one;
             cb_wait_front(cb_in, ONE_TILE);
 
+            // multiplying tiles along the first dimension,
+            // data is not dependent on itself within tiles
             mul_tiles_init(cb_in, cb_mul);
             mul_tiles(cb_in, cb_mul, FIRST_TILE, FIRST_TILE, WORKING_REG);
 
