@@ -45,6 +45,7 @@ on:
       - "Blackhole post-commit tests"
       - "(Blackhole) Blackhole nightly tests"
       - "(Blackhole) Demo tests"
+      - "(Blackhole) LLMBox unit tests"
       - "PR Gate"
       - "Merge Gate"
       - "Nightly tt-metal L2 tests"
