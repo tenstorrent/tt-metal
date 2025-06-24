@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import re
 
 import torch
 from loguru import logger
@@ -502,6 +503,12 @@ def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
 
     padded_x = torch.nn.functional.pad(x, pad, mode="constant", value=0)
     return padded_x
+
+
+def get_base_model_name(model_name: str) -> str:
+    # Remove the suffix after B- (case insensitive), e.g. "Llama-3.1-70B-Instruct" -> "Llama-3.1-70B"
+    match = re.search(r"(.*?\d+[bB])-", model_name)
+    return match.group(1) if match else model_name
 
 
 def create_tt_model(
