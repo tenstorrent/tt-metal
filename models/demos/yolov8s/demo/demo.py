@@ -13,7 +13,7 @@ from ultralytics import YOLO
 
 import ttnn
 from models.demos.yolov8s.demo.demo_utils import LoadImages, load_coco_class_names, postprocess, preprocess
-from models.demos.yolov8s.tests.yolov8s_e2e_performant import Yolov8sTrace2CQ
+from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
 from models.utility_functions import disable_persistent_kernel_cache
 
 
@@ -72,14 +72,11 @@ def test_demo(device, source, model_type, res, use_weights_from_ultralytics, use
         torch_model = YOLO("yolov8s.pt")
         torch_model = torch_model.model
         model = torch_model.eval()
-    else:
-        model = yolov8s.DetectionModel()
 
     if model_type == "tt_model":
-        yolov8s_trace_2cq = Yolov8sTrace2CQ()
-        yolov8s_trace_2cq.initialize_yolov8s_trace_2cqs_inference(
+        performant_runner = YOLOv8sPerformantRunner(
             device,
-            1,
+            use_program_cache,
         )
 
     save_dir = "models/demos/yolov8s/demo/runs"
@@ -108,13 +105,13 @@ def test_demo(device, source, model_type, res, use_weights_from_ultralytics, use
                 ttnn.ShardStrategy.HEIGHT,
             )
 
-            preds = yolov8s_trace_2cq.run(ttnn_im)
+            preds = performant_runner.run(ttnn_im)
             preds = ttnn.to_torch(preds, dtype=torch.float32)
         results = postprocess(preds, im, im0s, batch, names)[0]
 
         save_yolo_predictions_by_model(results, save_dir, source, model_type)
 
     if model_type == "tt_model":
-        yolov8s_trace_2cq.release_yolov8s_trace_2cqs_inference()
+        performant_runner.release()
 
     logger.info("Inference done")
