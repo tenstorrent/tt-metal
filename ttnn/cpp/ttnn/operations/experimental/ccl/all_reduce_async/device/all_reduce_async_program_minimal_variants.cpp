@@ -406,7 +406,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             mcast_end_y.push_back(end_core.y);
         }
 
-        uint32_t out_ready_sem_wait_value = dynamic_alternate ? (ring_size + 1) : ring_size;
+        uint32_t out_ready_sem_wait_value = dynamic_alternate ? (ring_size + 1) : (ring_size - 1);
         std::vector<uint32_t> writer_rt_args = {
             reduction_cb_index,                   // tensor_address0
             semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
@@ -454,6 +454,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             has_work,
             reduction_semaphore_ids[link],  // reduction_semaphore_id
             semaphore.address(),            // gloabal semaphore_address
+            out_ready_sem_wait_value,       // out_ready_sem_wait_value
         };
         tt::tt_metal::SetRuntimeArgs(
             program, reduction_reader_kernel_id, output_corerangeset_per_link[link], reduction_reader_rt_args);
