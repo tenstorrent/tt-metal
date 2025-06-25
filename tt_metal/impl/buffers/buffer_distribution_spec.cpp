@@ -5,6 +5,8 @@
 #include "buffer_distribution_spec.hpp"
 #include "assert.hpp"
 
+#include <algorithm>
+
 namespace tt::tt_metal {
 
 namespace {
@@ -93,6 +95,48 @@ tt::tt_metal::Shape convert_shape_to_pages(tt::tt_metal::Shape shape, const tt::
     return shape;
 }
 
+std::pair<Shape, Shape> minimize_shape_ranks(const Shape& tensor_shape, const Shape& shard_shape) {
+    TT_FATAL(
+        tensor_shape.rank() >= shard_shape.rank(),
+        "Tensor shape rank ({}) can't be less than shard shape rank ({})!",
+        tensor_shape.rank(),
+        shard_shape.rank());
+
+    tt::stl::SmallVector<uint32_t> new_tensor_shape;
+    tt::stl::SmallVector<uint32_t> new_shard_shape;
+
+    bool last_dim_identical = false;
+    bool last_dim_divisible = false;
+    for (int dim = -1; dim >= -static_cast<int>(shard_shape.rank()); dim--) {
+        auto tensor_size = tensor_shape[dim];
+        auto shard_size = shard_shape[dim];
+
+        bool should_merge_dims = false;
+        if (dim < -2) {
+            should_merge_dims = last_dim_identical || (shard_size == 1 && last_dim_divisible);
+        }
+
+        if (should_merge_dims) {
+            new_tensor_shape.back() *= tensor_size;
+            new_shard_shape.back() *= shard_size;
+        } else {
+            new_tensor_shape.push_back(tensor_size);
+            new_shard_shape.push_back(shard_size);
+        }
+
+        last_dim_identical = tensor_size == shard_size;
+        last_dim_divisible = tensor_size % shard_size == 0;
+    }
+
+    for (int dim = -static_cast<int>(shard_shape.rank()) - 1; dim >= -static_cast<int>(tensor_shape.rank()); dim--) {
+        new_tensor_shape.back() *= tensor_shape[dim];
+    }
+
+    std::reverse(new_tensor_shape.begin(), new_tensor_shape.end());
+    std::reverse(new_shard_shape.begin(), new_shard_shape.end());
+    return {Shape(std::move(new_tensor_shape)), Shape(std::move(new_shard_shape))};
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -112,21 +156,17 @@ BufferDistributionSpec::BufferDistributionSpec(
     tt::tt_metal::Shape shard_shape_in_pages,
     CoreRangeSet core_range_set,
     ShardOrientation shard_orientation) :
-    tensor_shape_in_pages_(std::move(tensor_shape_in_pages)),
-    shard_shape_in_pages_(std::move(shard_shape_in_pages)),
     shard_orientation_(shard_orientation) {
     cores_ = corerange_to_cores(
         core_range_set, core_range_set.num_cores(), shard_orientation_ == ShardOrientation::ROW_MAJOR);
-    TT_FATAL(
-        tensor_shape_in_pages_.rank() == shard_shape_in_pages_.rank(),
-        "Tensor shape rank ({}) must be same as shard shape rank ({})!",
-        tensor_shape_in_pages_.rank(),
-        shard_shape_in_pages_.rank());
-    TT_FATAL(tensor_shape_in_pages_.rank() >= 1, "Tensor rank must be at least 1!");
-    TT_FATAL(shard_shape_in_pages_.volume() != 0, "Shard shape must have non zero volume!");
-    if (tensor_shape_in_pages_.volume() != 0) {
+    TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
+    TT_FATAL(shard_shape_in_pages.rank() >= 1, "Shard rank must be at least 1!");
+    TT_FATAL(shard_shape_in_pages.volume() != 0, "Shard shape must have non zero volume!");
+    if (tensor_shape_in_pages.volume() != 0) {
         TT_FATAL(cores_.size() != 0, "Can't distribute non zero volume tensor over an empty set of cores");
     }
+    std::tie(tensor_shape_in_pages_, shard_shape_in_pages_) =
+        CMAKE_UNIQUE_NAMESPACE::minimize_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
 }
 
 size_t BufferDistributionSpec::num_shards() const {
