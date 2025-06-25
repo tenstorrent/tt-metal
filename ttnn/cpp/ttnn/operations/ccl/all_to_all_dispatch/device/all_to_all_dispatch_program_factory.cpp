@@ -43,40 +43,11 @@ std::string stringify_array(const std::array<bool, 4>& arr) {
     return result;
 }
 
-tt::tt_metal::Shape2D get_physical_size(const ttnn::Tensor& tensor) {
-    auto memory_config = tensor.memory_config();
-    auto tensor_spec = tensor.tensor_spec();
-    auto page_config = tensor_spec.page_config();
-    if (tensor.layout() == tt::tt_metal::Layout::TILE) {
-        return page_config.get_tile().get_tile_shape();
-    } else if (tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-        if (memory_config.shard_spec().has_value()) {
-            return {1, memory_config.shard_spec().value().shape[1]};
-        } else {
-            return {1, tensor.padded_shape()[-1]};
-        }
-    } else {
-        TT_FATAL(false, "Invalid layout: neither tile nor row major");
-        // Fallback return to satisfy compiler; execution never reaches here due to TT_FATAL abort.
-        return {0, 0};
-    }
-}
+uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
 
-uint32_t get_num_pages(const ttnn::Tensor& tensor) {
-    const auto& shape = tensor.padded_shape();
-    auto physical_size = get_physical_size(tensor);
-    auto num_pages = shape.volume() / (physical_size.height() * physical_size.width());
-    return num_pages;
-}
+uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
 
-uint32_t get_page_size(const ttnn::Tensor& tensor) { return tensor.tensor_spec().compute_page_size_bytes(); }
-
-uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) {
-    auto BUFFER_ALIGNMENT = tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                ? tt::tt_metal::hal::get_dram_alignment()
-                                : tt::tt_metal::hal::get_l1_alignment();
-    return tt::round_up(get_page_size(tensor), BUFFER_ALIGNMENT);
-}
+uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
 
 uint32_t get_num_rows(const ttnn::Tensor& tensor) {
     auto logical_volume = tensor.logical_shape().volume();
