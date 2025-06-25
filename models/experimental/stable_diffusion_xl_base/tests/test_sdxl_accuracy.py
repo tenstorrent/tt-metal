@@ -98,6 +98,7 @@ def test_accuracy_sdxl(
     print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
 
     data = {
+        "model": "sdxl",  # ← Add this line for ForgeFe compatibility
         "metadata": {
             "device": "N150",
             "device_vae": vae_on_device,
