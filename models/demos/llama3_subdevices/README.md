@@ -122,7 +122,7 @@ Input prompts should be provided as a JSON file, with each entry containing a pr
 
 ## Serving the model from vLLM
 
-1. Ensure that tt-metal is installed and set up correctly. Optional check: `python -c "import tt_lib"`.
+1. **Ensure that tt-metal is installed and set up correctly. Optional check: `python -c "import tt_lib"`.**
 
 2. **Install vLLM**
 
@@ -134,7 +134,7 @@ Input prompts should be provided as a JSON file, with each entry containing a pr
     VLLM_USE_PRECOMPILED=1 pip install -e .
     ```
 
-3. Ensure weights are downloaded and repacked as described above, and that the environment variables are set.
+3. **Ensure weights are downloaded and repacked as described above, and that the environment variables are set.**
 
     ```bash
     export VLLM_TARGET_DEVICE="tt"
