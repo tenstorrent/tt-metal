@@ -11,7 +11,7 @@ import os
 @pytest.mark.parametrize(
     "shape",
     [
-        (2**6, 2**13, 2**13 + 32),  # (4Gb + 32) * 2 (sizeof(bfloat16))
+        (2**6, 2**13, 2**13 + 32),  # 8Gb + 16Mb
         (96 * 96, 1, 32 * 228),  # 4Gb + 8Mb after padding
     ],
 )

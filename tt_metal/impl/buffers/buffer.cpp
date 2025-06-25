@@ -508,13 +508,6 @@ uint32_t Buffer::address() const {
     return address_;
 }
 
-DeviceAddr Buffer::address_u64() const {
-    TT_FATAL(
-        allocation_status_ != AllocationStatus::ALLOCATION_REQUESTED,
-        "Can only query the address of a buffer that has been allocated");
-    return address_;
-}
-
 DeviceAddr Buffer::page_size() const { return page_size_; }
 
 void Buffer::set_page_size(DeviceAddr page_size) {
@@ -526,7 +519,6 @@ void Buffer::set_page_size(DeviceAddr page_size) {
 }
 
 uint32_t Buffer::num_pages() const { return page_size() == 0 ? 0 : size() / page_size(); }
-DeviceAddr Buffer::num_pages_u64() const { return DeviceAddr(page_size() == 0 ? 0 : size() / page_size()); }
 
 uint32_t Buffer::num_dev_pages() const {
     if (!is_sharded(this->buffer_layout_)) {

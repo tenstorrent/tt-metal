@@ -164,8 +164,8 @@ struct ShardedBufferConfig {
 bool is_sharded(const TensorMemoryLayout& layout);
 
 struct BufferRegion {
-    DeviceAddr offset = DeviceAddr(0);
-    DeviceAddr size = DeviceAddr(0);
+    DeviceAddr offset = 0;
+    DeviceAddr size = 0;
 
     BufferRegion() = delete;
     BufferRegion(DeviceAddr offset, DeviceAddr size) : offset(offset), size(size) {}
@@ -226,13 +226,11 @@ public:
 
     // Returns address of buffer in the first bank
     uint32_t address() const;
-    DeviceAddr address_u64() const;
 
     DeviceAddr page_size() const;
     void set_page_size(DeviceAddr page_size);
 
     uint32_t num_pages() const;
-    DeviceAddr num_pages_u64() const;
     uint32_t num_dev_pages() const;
 
     BufferType buffer_type() const { return buffer_type_; }
