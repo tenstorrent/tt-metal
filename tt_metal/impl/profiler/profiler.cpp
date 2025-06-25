@@ -769,6 +769,12 @@ void DeviceProfiler::logNocTracePacketDataToJson(
                 {"timestamp", timestamp},
             };
 
+            // For scatter write operations, include additional scatter information
+            if (ev_md.noc_xfer_type == EMD::NocEventType::FABRIC_UNICAST_SCATTER_WRITE) {
+                data["scatter_address_index"] = fabric_noc_event.mcast_end_dst_x;
+                data["scatter_total_addresses"] = fabric_noc_event.mcast_end_dst_y;
+            }
+
             // handle dst coordinates correctly for different NocEventType
             if (KernelProfilerNocEventMetadata::isFabricUnicastEventType(ev_md.noc_xfer_type)) {
                 auto phys_coord =
@@ -970,9 +976,7 @@ void DeviceProfiler::serializeJsonNocTraces(
                 modified_write_event["dx"] = fabric_event.at("dx").get<int>();
                 modified_write_event["dy"] = fabric_event.at("dy").get<int>();
             } else {
-                log_error(
-                    tt::LogMetal,
-                    "[profiler noc tracing] Noc multicasts in fabric events are not supported!");
+                log_error(tt::LogMetal, "[profiler noc tracing] Noc multicasts in fabric events are not supported!");
                 return std::nullopt;
             }
 
