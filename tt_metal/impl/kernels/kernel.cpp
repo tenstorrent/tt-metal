@@ -39,10 +39,13 @@ HalProgrammableCoreType get_programmable_core_type_from_riscv(RISCV riscv_proces
     switch (riscv_processor) {
         case RISCV::BRISC:
         case RISCV::NCRISC:
-        case RISCV::COMPUTE: return HalProgrammableCoreType::TENSIX;
+        case RISCV::COMPUTE: {
+            return HalProgrammableCoreType::TENSIX;
+        }
         case RISCV::ERISC0:
-        case RISCV::ERISC1:
+        case RISCV::ERISC1: {
             return is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
+        }
         default: TT_ASSERT(false, "Unsupported kernel processor {}", magic_enum::enum_name(riscv_processor));
     }
     return HalProgrammableCoreType::TENSIX;
@@ -52,9 +55,13 @@ CoreType get_core_type_from_riscv(RISCV riscv_processor) {
     switch (riscv_processor) {
         case RISCV::BRISC:
         case RISCV::NCRISC:
-        case RISCV::COMPUTE: return CoreType::WORKER;
+        case RISCV::COMPUTE: {
+            return CoreType::WORKER;
+        }
         case RISCV::ERISC0:
-        case RISCV::ERISC1: return CoreType::ETH;
+        case RISCV::ERISC1: {
+            return CoreType::ETH;
+        }
         default: TT_ASSERT(false, "Unsupported kernel processor {}", magic_enum::enum_name(riscv_processor));
     }
     return CoreType::WORKER;
