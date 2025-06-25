@@ -338,7 +338,6 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureFinish, cq, sub_device_ids);
     detail::DispatchStateCheck(true);
-    // log_info(tt::LogMetal, "Calling function to cq finish");
     cq.finish(sub_device_ids);
     // If in testing mode, don't need to check dprint/watcher errors, since the tests will induce/handle them.
     if (!MetalContext::instance().rtoptions().get_test_mode_enabled()) {
@@ -350,7 +349,6 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
             "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
             tt::watcher_get_log_file_name());
     }
-    // log_info(tt::LogMetal, "Finished command queue {}", cq.id());
 }
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {

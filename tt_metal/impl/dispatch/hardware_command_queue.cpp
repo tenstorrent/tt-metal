@@ -554,7 +554,6 @@ void HWCommandQueue::enqueue_record_event(
     event->ready = true;
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-    // log_info(tt::LogMetal, "Issuing record event commands for command queue {}", this->id_);
     event_dispatch::issue_record_event_commands(
         device_,
         event->event_id,
@@ -563,7 +562,6 @@ void HWCommandQueue::enqueue_record_event(
         this->manager_,
         sub_device_ids,
         this->expected_num_workers_completed_);
-    // log_info(tt::LogMetal, "Pushing completion queue read for command queue {}", this->id_);
     this->issued_completion_q_reads_.push(
         std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadEventDescriptor>, event->event_id));
     this->increment_num_entries_in_completion_q();
@@ -573,7 +571,6 @@ void HWCommandQueue::enqueue_record_event(
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
         sub_device_entry.recorded_event(event->event_id, event->cq_id);
     }
-    // log_info(tt::LogMetal, "Recorded event for command queue {}", this->id_);
 }
 
 void HWCommandQueue::enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event) {
@@ -707,9 +704,7 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_finish");
     log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
     std::shared_ptr<Event> event = std::make_shared<Event>();
-    // log_info(tt::LogMetal, "Enqueuing record event for command queue {}", this->id_);
     this->enqueue_record_event(event, sub_device_ids);
-    // log_info(tt::LogMetal, "Enqueued record event for command queue {}", this->id_);
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
         while (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
             if (DPrintServerHangDetected()) {
@@ -727,13 +722,11 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
         this->reads_processed_cv_.wait(
             lock, [this] { return this->num_entries_in_completion_q_ == this->num_completed_completion_q_reads_; });
     }
-    // log_info(tt::LogMetal, "Iterating over sub devices to finish");
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids)) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
         sub_device_entry.finished(this->id_);
     }
-    // log_info(tt::LogMetal, "Finished command queue {}", this->id_);
 }
 
 const CoreCoord& HWCommandQueue::virtual_enqueue_program_dispatch_core() const {
