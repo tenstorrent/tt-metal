@@ -203,9 +203,6 @@ void kernel_main() {
 
     constexpr uint32_t src_mesh_id = get_compile_time_arg_val(28);
     constexpr uint32_t src_chip_id = get_compile_time_arg_val(29);
-    // if (!(src_chip_id == 1 || src_chip_id == 5)) {
-    //     return;
-    // }
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(30);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(31);  // ew_dim
     constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(32);
