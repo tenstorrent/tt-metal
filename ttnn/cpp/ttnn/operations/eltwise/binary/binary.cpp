@@ -338,8 +338,9 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binar
             return true;
         }
 
-        if ((a.is_sharded() or b.is_sharded()) and (a.dtype() == DataType::FLOAT32 or b.dtype() == DataType::FLOAT32 or
-                                                    a.dtype() == DataType::INT32 or b.dtype() == DataType::INT32)) {
+        if ((a.is_sharded() or b.is_sharded()) and
+            (/*a.dtype() == DataType::FLOAT32 or b.dtype() == DataType::FLOAT32 or*/
+             a.dtype() == DataType::INT32 or b.dtype() == DataType::INT32)) {
             return true;
         }
 
