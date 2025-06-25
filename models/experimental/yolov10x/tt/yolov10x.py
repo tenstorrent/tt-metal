@@ -25,9 +25,7 @@ class TtnnYolov10:
         self.c2f_2 = TtnnC2f(
             shortcut=True, n=6, device=self.device, parameters=parameters.conv_args[4], conv_pt=conv_pt.model[4]
         )
-        self.scdown_1 = TtnnSCDown(
-            device=device, parameters=parameters.conv_args[5], conv_pt=conv_pt.model[5], auto_shard=True
-        )
+        self.scdown_1 = TtnnSCDown(device=device, parameters=parameters.conv_args[5], conv_pt=conv_pt.model[5])
         self.c2fcib_1 = TtnnC2fCIB(device=device, parameters=parameters.conv_args[6], n=6, conv_pt=conv_pt.model[6])
         self.scdown_2 = TtnnSCDown(device=device, parameters=parameters.conv_args[7], conv_pt=conv_pt.model[7])
         self.c2fcib_2 = TtnnC2fCIB(device=device, parameters=parameters.conv_args[8], conv_pt=conv_pt.model[8])
