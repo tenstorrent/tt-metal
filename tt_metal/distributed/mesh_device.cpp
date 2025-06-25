@@ -393,6 +393,11 @@ IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
 
 IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return view_->get_device(coord); }
 
+tt_fabric::FabricNodeId MeshDevice::get_device_fabric_node_id(const MeshCoordinate& coord) const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    return control_plane.get_fabric_node_id_from_physical_chip_id(view_->get_device(coord)->id());
+}
+
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
     TT_FATAL(cq_id < mesh_command_queues_.size(), "cq_id {} is out of range", cq_id);
     return *(mesh_command_queues_[cq_id]);
