@@ -38,8 +38,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     std::optional<bool> share_cache) {
     /*
     Q: 1 x B x PNH x DH
-    K: 1 x B x S x DH
-    V: 1 x B x S x DH
+    K: B x NKV x S x DH
+    V: B x NKV x S x DH
     */
 
     /*
@@ -352,7 +352,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t im_tile_size = im_tile.get_tile_size(im_df);
     uint32_t stats_tile_size = stats_tile.get_tile_size(stats_df);
 
-    uint32_t intermed_output_tiles = (out0_t + 2 * PNHt) * (num_cores_per_batch - 1);
+    uint32_t intermed_output_tiles = (out0_t + 2 * PNHt) * (num_cores_per_head - 1);
 
     uint32_t pos_tensor_tile_size = 0;
     uint32_t log2_page_size = 0;
