@@ -75,8 +75,7 @@ struct ReduceScatterFusedOpSignaler {
     void init_reduce_scatter(
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
-        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
-        FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::SINGLE);
+        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal);
 
     void init_fused_op();
 
@@ -129,7 +128,7 @@ struct MatmulFusedOpSignaler {
     void init_reduce_scatter(
         const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
         const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
-        FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::SINGLE);
+        FusedOpSignalerMode fused_op_signaler_mode);
 
     void init_fused_op(
         tt::tt_metal::Program& program,
