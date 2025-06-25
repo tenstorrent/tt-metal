@@ -6,8 +6,8 @@ import time
 import os
 import json
 import pandas as pd
-import argparse
 import copy
+import pytest
 
 TARGET_JSON_PATH = "models/demos/llama3_subdevices/tests/decoder_perf_targets_4u.json"
 
@@ -110,7 +110,6 @@ def generate_perf_json(decoder_csv="out.csv", dispatch_csv="out-non-dispatched.c
         except KeyError:
             print(f"[WARN] Missing data for model tail op: {op}, skipping.")
 
-    # Load and update existing file
     if os.path.exists(TARGET_JSON_PATH):
         with open(TARGET_JSON_PATH, "r") as f:
             existing_data = json.load(f)
@@ -123,7 +122,7 @@ def generate_perf_json(decoder_csv="out.csv", dispatch_csv="out-non-dispatched.c
     for op, new_vals in decoder_ops_combined.items():
         updated_data["decoder"].setdefault(op, {})
         for key, val in new_vals.items():
-            updated_data["decoder"][op][key] = val  # Overwrite only performance values
+            updated_data["decoder"][op][key] = val
 
     for op, new_vals in model_tail_combined.items():
         updated_data["model_tail"].setdefault(op, {})
@@ -136,7 +135,8 @@ def generate_perf_json(decoder_csv="out.csv", dispatch_csv="out-non-dispatched.c
     print(f"Updated performance targets written to {TARGET_JSON_PATH}")
 
 
-def automate_perf_collection(num_runs: int = 5):
+@pytest.mark.parametrize("num_runs", [5])
+def test_automate_perf_collection(num_runs):
     decoder_test = "models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device"
     dispatch_test = "models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch"
 
@@ -153,11 +153,3 @@ def automate_perf_collection(num_runs: int = 5):
         run_test(dispatch_test)
 
     generate_perf_json()
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Automate LLaMA performance data collection")
-    parser.add_argument("--runs", type=int, default=5, help="Number of times to repeat each test")
-    args = parser.parse_args()
-
-    automate_perf_collection(num_runs=args.runs)
