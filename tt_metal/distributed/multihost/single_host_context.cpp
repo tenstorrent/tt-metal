@@ -29,6 +29,8 @@ void SingleHostContext::set_current_world(const ContextPtr& ctx) {
     SingleHostContext::current_world_ = ctx;
 }
 
+bool SingleHostContext::is_initialized() { return current_world_ != nullptr; }
+
 // basic info
 Rank SingleHostContext::rank() const { return Rank(rank_); }
 Size SingleHostContext::size() const { return Size(size_); }

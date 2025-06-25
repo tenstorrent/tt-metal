@@ -14,6 +14,7 @@
 #include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.h>
 
@@ -299,7 +300,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         // Infer the remaining dispatch cores from the idle eth core list (this is device dependent).
         if (dispatch_core_config.get_core_type() == CoreType::ETH) {
             for (const auto& idle_eth_core :
-                 tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id)) {
+                 tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
                 add_dispatch_core_to_device(device_id, idle_eth_core);
             }
         }

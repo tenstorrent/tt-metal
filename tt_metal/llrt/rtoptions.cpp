@@ -202,6 +202,7 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
         this->erisc_iram_enabled = true;
     }
+    this->fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
 
     if (getenv("TT_METAL_DISABLE_RELAXED_MEM_ORDERING")) {
         this->disable_relaxed_memory_ordering = true;
@@ -314,8 +315,6 @@ void RunTimeOptions::ParseInspectorEnv() {
     } else {
         inspector_settings.log_path = std::filesystem::path(get_root_dir()) / "generated/inspector";
     }
-    std::filesystem::remove_all(inspector_settings.log_path);
-    std::filesystem::create_directories(inspector_settings.log_path);
 
     const char* inspector_initialization_is_important_str = getenv("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT");
     if (inspector_initialization_is_important_str != nullptr) {
