@@ -128,6 +128,7 @@
 | Model                                               | Batch | Hardware                                           | sen/sec | Target sen/sec | Release |
 |-----------------------------------------------------|-------|----------------------------------------------------|---------|----------------|---------|
 | [BERT-Large](./models/demos/metal_BERT_large_11/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 270     | 400            |         |
+| [Sentence-Bert](./models/experimental/sentence_bert/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 419     | 800            |         |
 
 ## Model Updates
 
