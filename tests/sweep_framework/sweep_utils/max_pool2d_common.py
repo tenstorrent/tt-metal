@@ -65,9 +65,6 @@ def run_max_pool2d(
     padding = [pad_h, pad_w]
     dilation = [dilation_h, dilation_w]
 
-    out_h = math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-    out_w = math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
-
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
@@ -98,14 +95,11 @@ def run_max_pool2d(
         applied_shard_scheme=sharding,
         in_place_halo=in_place,
     )
-    print("Output shape: ", output.shape)
-    print("output: ", output)
 
     output_host = output.cpu()
     output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
     output_pytorch = output_pytorch_padded[:, :, :, :in_c]
     e2e_perf = stop_measuring_time(start_time)
-    print("output_pytorch shape: ", output_pytorch.shape)
 
     ## reference
     golden_pytorch = torch.nn.MaxPool2d(
@@ -125,8 +119,6 @@ def run_max_pool2d(
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
-    print("ttnn output channels: ", output_pytorch.shape[1])
-    print("torch output channels: ", output_pytorch.shape[1])
     ## test for equivalance
     allclose = torch.allclose(output_pytorch, golden_pytorch, atol=atol)
     isequal = torch.equal(output_pytorch, golden_pytorch)
