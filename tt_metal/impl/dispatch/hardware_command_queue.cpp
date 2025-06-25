@@ -783,14 +783,23 @@ void HWCommandQueue::allocate_trace_programs() {
         if (program.runs_on_noc_unicast_only_cores()) {
             num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
         }
+
+        const auto updated_worker_counts =
+            program_dispatch::get_expected_num_workers_completed_updates(expected_workers_completed, num_workers);
+        bool must_reset_worker_counts = updated_worker_counts.wrapped;
+        if (must_reset_worker_counts) {
+            node.dispatch_metadata.reset_worker_counts_before_program = true;
+            get_config_buffer_mgr(sub_device_index).mark_completely_full(0);
+        }
+
         program_dispatch::ProgramDispatchMetadata dispatch_metadata;
-        // Reserve space for this program in the kernel config ring buffer
+        // Reserve space for this program in the kernel config ring buffer, potentially after a wrap and reset aboe
         program_dispatch::reserve_space_in_kernel_config_buffer(
-            this->config_buffer_mgr_[sub_device_index],
+            get_config_buffer_mgr(sub_device_index),
             program.get_program_config_sizes(),
             program.get_program_binary_status(device_->id()),
             num_workers,
-            expected_workers_completed,
+            updated_worker_counts.previous,
             dispatch_metadata);
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         ProgramConfig& program_config = program.get_program_config(index);
@@ -805,7 +814,7 @@ void HWCommandQueue::allocate_trace_programs() {
         // addresses don't need adjustment.
         node.dispatch_metadata.binary_kernel_config_addrs[index].addr += program_config.kernel_text_offset;
 
-        expected_workers_completed += num_workers;
+        expected_workers_completed = updated_worker_counts.current;
     }
 }
 
@@ -828,6 +837,7 @@ void HWCommandQueue::record_end() {
             this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_unicast++;
             num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
         }
+        // May be changed below if clear count is needed
         this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores += num_workers;
 
         RecordProgramRun(program.get_id());
@@ -859,6 +869,15 @@ void HWCommandQueue::record_end() {
                 // prefetcher cache will be overwritten, reset for next program
                 this->reset_prefetcher_cache_manager();
             }
+        }
+
+        if (node.dispatch_metadata.reset_worker_counts_before_program) {
+            // Wait for the previous node to complete and then clear count
+            program_dispatch::reset_expected_num_workers_completed_on_device(
+                device_, node.sub_device_id, expected_workers_completed, id());
+            // Clean state as workers are done and counter is reset to 0
+            this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores = expected_workers_completed;
+            expected_workers_completed = 0;
         }
         // Update the generated dispatch commands based on the state of the CQ and the ring buffer
         program_dispatch::update_traced_program_dispatch_commands(
