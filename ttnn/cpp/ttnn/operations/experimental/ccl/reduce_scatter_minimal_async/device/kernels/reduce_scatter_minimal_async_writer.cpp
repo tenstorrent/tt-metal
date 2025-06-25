@@ -144,7 +144,6 @@ void kernel_main() {
                         switch (tiles_to_put_in_current_packet) {
                             case 2: {
                                 uint32_t tile_one_id = input_tile_id_start + row_offset + pages_read_in_row;
-                                tiles_read++;
                                 pages_read_in_row++;
                                 if (pages_read_in_row >= slice_Wt) {
                                     row_offset += stride_Wt;
@@ -152,7 +151,6 @@ void kernel_main() {
                                 }
 
                                 uint32_t tile_two_id = input_tile_id_start + row_offset + pages_read_in_row;
-                                tiles_read++;
                                 pages_read_in_row++;
                                 if (pages_read_in_row >= slice_Wt) {
                                     row_offset += stride_Wt;
@@ -188,7 +186,6 @@ void kernel_main() {
                             case 1:
                             default: {
                                 uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
-                                tiles_read++;
                                 pages_read_in_row++;
                                 if (pages_read_in_row >= slice_Wt) {
                                     row_offset += stride_Wt;
@@ -216,6 +213,7 @@ void kernel_main() {
                                 break;
                             }
                         }
+                        tiles_read += tiles_to_put_in_current_packet;
                         tiles_read_in_current_direction += tiles_to_put_in_current_packet;
                     }
                     cb_pop_front(cb_output_id, tile_granularity);

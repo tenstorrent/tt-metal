@@ -70,7 +70,7 @@ void kernel_main() {
             uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
             uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-            cb_reserve_back(cb_output_id, num_tiles_to_read);
+            cb_reserve_back(cb_output_id, num_tiles_to_write_per_packet);
             size_t l1_write_addr = get_write_ptr(cb_output_id);
             for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                 uint32_t tile_id = output_tile_id_start + tiles_read;
@@ -81,7 +81,7 @@ void kernel_main() {
             }
 
             noc_async_read_barrier();
-            cb_push_back(cb_output_id, num_tiles_to_read);
+            cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
         }
         tiles_read = input_tile_id_start;
         tiles_to_read = input_tile_id_end;
@@ -167,7 +167,7 @@ void kernel_main() {
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                     uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-                    cb_reserve_back(cb_output_id, num_tiles_to_read);
+                    cb_reserve_back(cb_output_id, num_tiles_to_write_per_packet);
                     size_t l1_write_addr = get_write_ptr(cb_output_id);
                     for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                         uint32_t tile_id = output_tile_id_start + row_offset + pages_read_in_row;
@@ -184,7 +184,7 @@ void kernel_main() {
                     }
 
                     noc_async_read_barrier();
-                    cb_push_back(cb_output_id, num_tiles_to_read);
+                    cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
                 }
                 pages_read_in_row = start_pages_read_in_row;
                 row_offset = start_row_offset;
