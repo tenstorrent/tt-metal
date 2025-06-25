@@ -634,9 +634,8 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
         ]
 
         # Aggregate data across all runtime_host_ids for the current Test id
-        riscv_1_durations = [entry["duration_cycles"] for entry in riscv_1_filtered]
-        riscv_0_durations = [entry["duration_cycles"] for entry in riscv_0_filtered]
-
+        riscv_1_durations = []
+        riscv_0_durations = []
         riscv_1_data_sizes = []
         riscv_0_data_sizes = []
         riscv_1_bandwidths = []
@@ -645,47 +644,63 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
         riscv_0_transactions = []
 
         for entry in riscv_1_filtered:
+            duration = entry["duration_cycles"]
             runtime_host_id = entry["duration_type"][0]["run_host_id"]
             attributes = dm_stats["riscv_1"]["attributes"][runtime_host_id]
             transaction_size = attributes["Transaction size in bytes"]
             num_transactions = attributes["Number of transactions"]
-            bandwidth = num_transactions * transaction_size / entry["duration_cycles"]
+            bandwidth = num_transactions * transaction_size / duration
+            riscv_1_durations.append(duration)
             riscv_1_data_sizes.append(transaction_size)
             riscv_1_bandwidths.append(bandwidth)
             riscv_1_transactions.append(num_transactions)
 
         for entry in riscv_0_filtered:
+            duration = entry["duration_cycles"]
             runtime_host_id = entry["duration_type"][0]["run_host_id"]
             attributes = dm_stats["riscv_0"]["attributes"][runtime_host_id]
             transaction_size = attributes["Transaction size in bytes"]
             num_transactions = attributes["Number of transactions"]
             bandwidth = num_transactions * transaction_size / entry["duration_cycles"]
+            riscv_0_durations.append(duration)
             riscv_0_data_sizes.append(transaction_size)
             riscv_0_bandwidths.append(bandwidth)
             riscv_0_transactions.append(num_transactions)
 
         # Plot durations
         ax = axes[0]
-        lines = []
-        labels = []
-        if riscv_1_durations:
-            (line1,) = ax.plot(riscv_1_durations, label="Receiver Duration (cycles)", marker="o")
-            lines.append(line1)
-            labels.append("Receiver Duration (cycles)")
-        if riscv_0_durations:
-            (line0,) = ax.plot(riscv_0_durations, label="Sender Duration (cycles)", marker="o")
-            lines.append(line0)
-            labels.append("Sender Duration (cycles)")
-        ax.set_xlabel("Index")
+        unique_transactions = sorted(set(riscv_1_transactions + riscv_0_transactions))  # Ensure ascending order
+        for num_transactions in unique_transactions:
+            # Group and plot RISCV 1 data
+            riscv_1_grouped = [
+                (sizes, durations)
+                for sizes, durations, trans in zip(riscv_1_data_sizes, riscv_1_durations, riscv_1_transactions)
+                if trans == num_transactions
+            ]
+            if riscv_1_grouped:
+                sizes, durations = zip(*riscv_1_grouped)
+                ax.plot(sizes, durations, label=f"Receiver (Number of Transactions={num_transactions})", marker="o")
+
+            # Group and plot RISCV 0 data
+            riscv_0_grouped = [
+                (sizes, durations)
+                for sizes, durations, trans in zip(riscv_0_data_sizes, riscv_0_durations, riscv_0_transactions)
+                if trans == num_transactions
+            ]
+            if riscv_0_grouped:
+                sizes, durations = zip(*riscv_0_grouped)
+                ax.plot(sizes, durations, label=f"Sender (Number of Transactions={num_transactions})", marker="o")
+
+        ax.set_xlabel("Transaction Size (bytes)")
         ax.set_ylabel("Duration (cycles)")
-        ax.set_title("Kernel Durations")
-        if lines:
-            ax.legend(lines, labels)
+        ax.set_title("Transaction Size vs Duration")
+        ax.set_xscale("log", base=2)
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x)}"))
+        ax.legend()
         ax.grid()
 
         # Plot size of data transferred vs bandwidth
         ax = axes[1]
-        unique_transactions = sorted(set(riscv_1_transactions + riscv_0_transactions))  # Ensure ascending order
         for num_transactions in unique_transactions:
             # Group and plot RISCV 1 data
             riscv_1_grouped = [
@@ -712,11 +727,11 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
         max_bandwidths = [noc_width * ((size / noc_width) / ((size / noc_width) + 1)) for size in transaction_sizes]
         ax.plot(transaction_sizes, max_bandwidths, label="Theoretical Max BW", linestyle="--", color="black")
 
-        ax.set_xlabel("Log2 of Transaction Size (bytes)")
+        ax.set_xlabel("Transaction Size (bytes)")
         ax.set_ylabel("Bandwidth (bytes/cycle)")
-        ax.set_title("Data Size vs Bandwidth")
+        ax.set_title("Transaction Size vs Bandwidth")
         ax.set_xscale("log", base=2)
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(np.log2(x))}" if x > 0 else ""))
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x)}"))
         ax.legend()
         ax.grid()
 
