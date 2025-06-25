@@ -65,13 +65,45 @@ struct DisptachMetaData {
 };
 
 struct ZoneDetails {
+    enum class ZoneNameKeyword : uint16_t {
+        BRISC_FW,
+        ERISC_FW,
+        SYNC_ZONE,
+        PROFILER,
+        DISPATCH,
+        PROCESS_CMD,
+        RUNTIME_HOST_ID_DISPATCH,
+        PACKED_DATA_DISPATCH,
+        PACKED_LARGE_DATA_DISPATCH,
+        COUNT
+    };
+
+    static inline std::unordered_map<std::string, ZoneNameKeyword> zone_name_keywords_map = {
+        {"BRISC-FW", ZoneNameKeyword::BRISC_FW},
+        {"ERISC-FW", ZoneNameKeyword::ERISC_FW},
+        {"SYNC-ZONE", ZoneNameKeyword::SYNC_ZONE},
+        {"PROFILER", ZoneNameKeyword::PROFILER},
+        {"DISPATCH", ZoneNameKeyword::DISPATCH},
+        {"process_cmd", ZoneNameKeyword::PROCESS_CMD},
+        {"runtime_host_id_dispatch", ZoneNameKeyword::RUNTIME_HOST_ID_DISPATCH},
+        {"packed_data_dispatch", ZoneNameKeyword::PACKED_DATA_DISPATCH},
+        {"packed_large_data_dispatch", ZoneNameKeyword::PACKED_LARGE_DATA_DISPATCH},
+    };
+
     std::string zone_name;
     std::string source_file;
     uint64_t source_line_num;
-    uint16_t zone_name_keywords_mask;
+    std::array<bool, static_cast<uint16_t>(ZoneNameKeyword::COUNT)> zone_name_keyword_flags;
+
+    ZoneDetails(const std::string& zone_name, const std::string& source_file, uint64_t source_line_num) :
+        zone_name(zone_name), source_file(source_file), source_line_num(source_line_num) {
+        for (const auto& [keyword_str, keyword] : zone_name_keywords_map) {
+            zone_name_keyword_flags[static_cast<uint16_t>(keyword)] = zone_name.find(keyword_str) != std::string::npos;
+        }
+    }
 };
 
-const ZoneDetails UnidentifiedZoneDetails = ZoneDetails{"", "", 0, 0};
+const ZoneDetails UnidentifiedZoneDetails = ZoneDetails("", "", 0);
 
 struct SyncInfo {
     double cpu_time = 0.0;
@@ -147,8 +179,6 @@ private:
 
     // translates potentially-virtual coordinates recorded on Device into physical coordinates
     CoreCoord getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const;
-
-    ZoneDetails getZoneDetails(uint16_t timer_id) const;
 
     // Read all control buffers
     void readControlBuffers(
@@ -307,6 +337,9 @@ public:
 
     // Update sync info for this device
     void setSyncInfo(const SyncInfo& sync_info);
+
+    // Get zone details for the zone corresponding to the given timer id
+    ZoneDetails getZoneDetails(uint16_t timer_id) const;
 };
 
 bool useFastDispatchForControlBuffers(ProfilerDumpState state);

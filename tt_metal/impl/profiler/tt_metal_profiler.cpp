@@ -325,17 +325,19 @@ void peekDeviceData(IDevice* device, std::vector<CoreCoord>& worker_cores) {
     auto device_id = device->id();
     std::string zoneName = fmt::format("peek {}", device_id);
     ZoneName(zoneName.c_str(), zoneName.size());
-    if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
-        tt_metal_device_profiler_map.at(device_id).device_sync_new_events.clear();
-        tt_metal_device_profiler_map.at(device_id).dumpResults(
+    const auto& device_profiler_it = tt_metal_device_profiler_map.find(device_id);
+    if (device_profiler_it != tt_metal_device_profiler_map.end()) {
+        DeviceProfiler& device_profiler = device_profiler_it->second;
+        device_profiler.device_sync_new_events.clear();
+        device_profiler.dumpResults(
             device, worker_cores, ProfilerDumpState::FORCE_UMD_READ, ProfilerDataBufferSource::L1);
-        for (auto& event : tt_metal_device_profiler_map.at(device_id).device_events) {
-            if (tracy::hasZoneNameKeyword(
-                    event.zone_name_keywords_mask, tracy::TTDeviceEventZoneNameKeyword::SYNC_ZONE)) {
+        for (auto& event : device_profiler.device_events) {
+            const ZoneDetails zone_details = device_profiler.getZoneDetails(event.timer_id);
+            if (zone_details.zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::SYNC_ZONE)]) {
                 ZoneScopedN("Adding_device_sync_event");
-                auto ret = tt_metal_device_profiler_map.at(device_id).device_sync_events.insert(event);
+                auto ret = device_profiler.device_sync_events.insert(event);
                 if (ret.second) {
-                    tt_metal_device_profiler_map.at(device_id).device_sync_new_events.insert(event);
+                    device_profiler.device_sync_new_events.insert(event);
                 }
             }
         }
