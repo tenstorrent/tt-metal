@@ -22,7 +22,7 @@ on:
       with-retries:
         default: false
         type: boolean
-        description: "Re-run failed jobs (max 3)"
+        description: "Re-run failed jobs (max 3). NOTE: Will not re-run jobs if test failures are detected."
   push:
     branches: ["main"]
 
