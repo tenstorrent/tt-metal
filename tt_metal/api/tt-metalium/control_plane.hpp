@@ -12,6 +12,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/multi_mesh_types.hpp>
 
 #include <map>
 #include <unordered_map>
@@ -131,6 +132,13 @@ public:
     std::unordered_set<CoreCoord> get_active_ethernet_cores(chip_id_t chip_id, bool skip_reserved_cores = false) const;
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
 
+    // Query the local intermesh link table containing the local to remote link mapping
+    const IntermeshLinkTable& get_local_intermesh_link_table() const;
+
+    // Get the ASIC ID for a chip (the ASIC ID is unique per chip, even in multi-host systems and is programmed
+    // by SPI-ROM firmware)
+    uint64_t get_asic_id(chip_id_t chip_id) const;
+
 private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
@@ -150,7 +158,9 @@ private:
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
     // map[phys_chip_id] has a vector of (eth_core, channel) pairs used for intermesh routing
     std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>> intermesh_eth_links_;
-
+    // Stores a table of all local intermesh links (board_id, chan_id) and the corresponding remote intermesh links
+    IntermeshLinkTable intermesh_link_table_;
+    std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
     // custom logic to order eth channels
     void order_ethernet_channels();
 
@@ -187,6 +197,9 @@ private:
     void convert_fabric_routing_table_to_chip_routing_table();
 
     void write_routing_tables_to_chip(MeshId mesh_id, chip_id_t chip_id) const;
+
+    // Populate the local intermesh link to remote intermesh link table
+    void generate_local_intermesh_link_table();
 
     // Initialize internal map of physical chip_id to intermesh ethernet links
     void initialize_intermesh_eth_links();
