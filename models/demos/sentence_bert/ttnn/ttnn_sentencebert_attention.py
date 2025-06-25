@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.sentence_bert.ttnn.ttnn_sentencebert_self_attention import TtnnSentenceBertSelfAttention
-from models.experimental.sentence_bert.ttnn.ttnn_sentencebert_self_output import TtnnSentenceBertSelfOutput
+from models.demos.sentence_bert.ttnn.ttnn_sentencebert_self_attention import TtnnSentenceBertSelfAttention
+from models.demos.sentence_bert.ttnn.ttnn_sentencebert_self_output import TtnnSentenceBertSelfOutput
 
 
 class TtnnSentenceBertAttention:

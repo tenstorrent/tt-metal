@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.sentence_bert.ttnn.common import (
-    query_key_value_matmul_program_config,
+from models.demos.sentence_bert.ttnn.common import (
     pre_softmax_config,
+    query_key_value_matmul_program_config,
     softmax_config,
 )
 
