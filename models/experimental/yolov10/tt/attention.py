@@ -24,7 +24,15 @@ class TtnnAttention:
             device, parameters.proj, self.conv_pt.proj, enable_identity=True, activation_dtype=ttnn.bfloat16
         )
 
-        self.pe = Conv(device, parameters.pe, self.conv_pt.pe, enable_identity=True, use_1d_systolic_array=False)
+        self.pe = Conv(
+            device,
+            parameters.pe,
+            self.conv_pt.pe,
+            enable_identity=True,
+            use_1d_systolic_array=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+        )
 
     def __call__(self, input_tensor):
         B, C, H, W = (

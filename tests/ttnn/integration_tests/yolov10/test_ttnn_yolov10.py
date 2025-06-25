@@ -528,7 +528,7 @@ def test_yolov10x_v10Detect(
     "use_weights_from_ultralytics",
     [True],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_yolov10x(use_weights_from_ultralytics, device, reset_seeds):
     torch_input, ttnn_input = create_yolov10x_input_tensors(device)
     state_dict = None

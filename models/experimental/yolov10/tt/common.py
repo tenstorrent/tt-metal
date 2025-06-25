@@ -39,6 +39,8 @@ class TtYolov10Conv2D:
         auto_shard=False,
         deallocate_activation=False,
         act_block_h_override=0,
+        enable_act_double_buffer=False,
+        enable_weights_double_buffer=False,
     ):
         self.is_detect = is_detect
         self.is_dfl = is_dfl
@@ -78,6 +80,8 @@ class TtYolov10Conv2D:
             enable_subblock_padding=False,
             output_layout=ttnn.TILE_LAYOUT,
             act_block_h_override=act_block_h_override,
+            enable_act_double_buffer=enable_act_double_buffer,
+            enable_weights_double_buffer=enable_weights_double_buffer,
         )
         if auto_shard:
             self.conv_config.shard_layout = None
@@ -147,6 +151,8 @@ class Conv:
         activation="",
         deallocate_activation=False,
         activation_dtype=ttnn.bfloat8_b,
+        enable_act_double_buffer=False,
+        enable_weights_double_buffer=False,
     ):
         self.enable_identity = enable_identity
         self.enable_act = enable_act
@@ -165,6 +171,8 @@ class Conv:
             activation=activation,
             deallocate_activation=deallocate_activation,
             activation_dtype=activation_dtype,
+            enable_act_double_buffer=enable_act_double_buffer,
+            enable_weights_double_buffer=enable_weights_double_buffer,
         )
 
     def __call__(self, x):
