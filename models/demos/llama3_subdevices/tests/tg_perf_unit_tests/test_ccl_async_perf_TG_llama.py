@@ -233,12 +233,6 @@ def test_rms_perf(
 
 
 @pytest.mark.parametrize(
-    "ar_type, warmup_iters, perf_target_us",
-    [
-        ("rms", 10, 25),
-    ],
-)
-@pytest.mark.parametrize(
     "warmup_iters, perf_target_us",
     [
         (5, 17),
