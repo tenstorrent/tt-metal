@@ -77,7 +77,8 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             # This ensures that back to back matmuls (for eg. in MLP) can run
             # without stalling on the weight prefetch
             # To fit entire MLP we'd need ~742 * 1088 but using block-wise prefetching and 732 tiles this is sufficient for now
-            self.global_cb_size = 732 * 1088
+            # self.global_cb_size = 732 * 1088  # 732 *1088 enough to prefetch FF2 weights before FF2 start; running OOM TODO: revert when topk is fixed
+            self.global_cb_size = 600 * 1088
             self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
             # self.global_circular_buffer = ttnn.create_global_circular_buffer(
             #     self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
