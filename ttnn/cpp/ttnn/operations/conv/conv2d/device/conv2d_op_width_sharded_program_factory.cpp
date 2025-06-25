@@ -383,7 +383,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     }
 
     Conv2dConfig conv_config = Conv2dConfig{
-        .dtype = output.dtype(),
         .weights_dtype = b.dtype(),
         .shard_layout = a.memory_config().memory_layout(),
         .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
@@ -397,6 +396,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         {filter_h, filter_w},
         conv_config,
         a.dtype(),
+        output.dtype(),
         a.memory_config().shard_spec().value().shape,
         has_bias,
         false);

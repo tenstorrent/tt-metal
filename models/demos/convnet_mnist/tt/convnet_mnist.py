@@ -18,7 +18,6 @@ def convnet_mnist(
     torch_maxpool = True
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         activation="",
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -60,11 +59,17 @@ def convnet_mnist(
             input_layout=x.get_layout(),
             has_bias=True,
             **conv_kwargs,
+            input_dtype=ttnn.bfloat16,
         )
         tt_weight = ttnn.to_device(tt_weight, device)
 
     x = ttnn.conv2d(
-        input_tensor=x, weight_tensor=tt_weight, bias_tensor=tt_bias, **conv_kwargs, compute_config=compute_config
+        input_tensor=x,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        **conv_kwargs,
+        compute_config=compute_config,
+        dtype=ttnn.bfloat16,
     )
     x = ttnn.relu(x)
 
@@ -116,6 +121,7 @@ def convnet_mnist(
             input_layout=x.get_layout(),
             has_bias=True,
             **conv_kwargs,
+            input_dtype=ttnn.bfloat16,
         )
         tt_weight = ttnn.to_device(tt_weight, device)
 
@@ -126,6 +132,7 @@ def convnet_mnist(
         **conv_kwargs,
         return_output_dim=True,
         return_weights_and_bias=False,
+        dtype=ttnn.bfloat16,
     )
 
     x = ttnn.relu(x)

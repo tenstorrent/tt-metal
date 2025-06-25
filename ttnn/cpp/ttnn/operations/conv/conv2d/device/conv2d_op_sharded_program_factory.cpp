@@ -646,7 +646,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
 
     Conv2dConfig conv_config = Conv2dConfig{
-        .dtype = output.dtype(),
         .weights_dtype = b.dtype(),
         .shard_layout = a.memory_config().memory_layout(),
         .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
@@ -661,6 +660,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         {filter_h, filter_w},
         conv_config,
         a.dtype(),
+        output.dtype(),
         a.memory_config().shard_spec().value().shape,
         has_bias,
         is_conv_1d_depthwise_conv);

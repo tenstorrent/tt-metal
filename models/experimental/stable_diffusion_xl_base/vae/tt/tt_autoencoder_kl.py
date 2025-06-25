@@ -39,6 +39,7 @@ class TtAutoencoderKL(nn.Module):
             math_fidelity=ttnn.MathFidelity.LoFi,
         )
         self.conv_config = model_config.get_conv_config(conv_path="decoder.post_quant_conv")
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, hidden_states, input_shape):
         B, C, H, W = input_shape
@@ -64,6 +65,7 @@ class TtAutoencoderKL(nn.Module):
             memory_config=None,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv_params["output_channels"]
         ttnn.deallocate(pre_conv_hidden_states)
