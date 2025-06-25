@@ -10,7 +10,39 @@ permissions:
   contents: write
   packages: write
 
+
+# Some explanation:
+# is-release-candidate is always true, unless the workflow is manually dispatched on a tag
+# should-create-release is used to avoid creating a duplicate release
+# if we are running on main branch, don't upload any artifacts or create a gh release
+
 jobs:
+  get-params:
+    runs-on: ubuntu-latest
+    outputs:
+      is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Get is-release-candidate
+        id: get-is-release-candidate
+        run: |
+          # A workflow dispatch on a tag is considered a release run for us.
+          isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
+          echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
+      - name: Get should-create-release
+        id: get-should-create-release
+        run: |
+          # Run once to check for errors
+          ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }}
+          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }})
+          if [ "$shouldCreateRelease" != "true" ]; then
+            echo "should-create-release is false, no release needed. Exiting workflow."
+            exit 1
+          fi
+          echo "should-create-release is true, proceeding with release workflow."
   build-artifact:
     needs: create-tag
     uses: ./.github/workflows/build-artifact.yaml
@@ -88,29 +120,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  get-params:
-    runs-on: ubuntu-latest
-    outputs:
-      is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
-      should-create-release: ${{ steps.get-should-create-release.outputs.should-create-release }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Get is-release-candidate
-        id: get-is-release-candidate
-        run: |
-          # A workflow dispatch on a tag is considered a release run for us.
-          isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
-          echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
-      - name: Get should-create-release
-        id: get-should-create-release
-        run: |
-          # Run once to check for errors
-          ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }}
-          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }})
-          echo "should-create-release=$shouldCreateRelease" >> "$GITHUB_OUTPUT"
   create-tag:
     needs: get-params
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
@@ -174,6 +183,7 @@ jobs:
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
+    if: github.ref != 'refs/heads/main'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -226,10 +236,11 @@ jobs:
     ]
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
+    if: github.ref != 'refs/heads/main'
     with:
       base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       version: ${{ needs.create-tag.outputs.version }}
-      is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
+      is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' }}
   release-docs:
     needs: [
       build-artifact,
@@ -237,7 +248,7 @@ jobs:
       create-tag,
       create-and-upload-draft-release
     ]
-    if: ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
+    if: ${{ needs.get-params.outputs.is-release-candidate !='true' }}
     uses: ./.github/workflows/docs-latest-public.yaml
     with:
       version: ${{ needs.create-tag.outputs.version }}
@@ -250,6 +261,7 @@ jobs:
       Publish Python 🐍 distribution 📦 to PyPI
     needs: [build-artifact, test-wheels]
     runs-on: ubuntu-latest
+    if: github.ref != 'refs/heads/main'
     environment:
       name: pypi
       url: https://pypi.org/project/ttnn/
