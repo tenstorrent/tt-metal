@@ -15,7 +15,7 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace {
+namespace detail {
 
 struct GlobalSemaphoreArg {
     // allows semaphore arguments to be passed as a single semaphore or a vector of semaphores
@@ -139,10 +139,10 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("subdevice_id") = std::nullopt});
 }
 
-}  // namespace
+}  // namespace detail
 
 void py_bind_all_gather_async(pybind11::module& module) {
-    bind_all_gather_async(
+    detail::bind_all_gather_async(
         module,
         ttnn::experimental::all_gather_async,
         R"doc(
