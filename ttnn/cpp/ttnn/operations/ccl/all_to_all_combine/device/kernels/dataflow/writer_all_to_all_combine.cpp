@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,16 +13,7 @@ using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
 using tt::tt_fabric::NocUnicastCommandHeader;
 using tt::tt_fabric::WorkerToFabricEdmSender;
 
-inline void print_uint16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
-            DPRINT << *ptr << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
+namespace detail {
 
 // Batch is shared among all devices, or replicated along each row or each column.
 enum class ReplicateGroup : int {
@@ -165,8 +156,6 @@ inline void dispatch_input_remote_device(
     while (size_bytes > 0) {
         uint32_t curr_packet_size = std::min(MaxPacketSzBytes, size_bytes);
 
-        DPRINT<< " curr_packet_size: " <<curr_packet_size << " input_token_read_addr: " <<input_token_read_addr<< " output_token_write_addr "<<output_token_write_addr<<"\n";
-
         token_unicast_packet_header->to_noc_unicast_write(
             NocUnicastCommandHeader{output_token_write_addr}, align(curr_packet_size, alignment));
 
@@ -183,8 +172,11 @@ inline void dispatch_input_remote_device(
         size_bytes -= curr_packet_size;
     }
 }
+}  // namespace detail
 
 void kernel_main() {
+    using detail::ReplicateGroup;
+
     constexpr uint32_t metadata_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t local_experts_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(2);
@@ -221,7 +213,7 @@ void kernel_main() {
 
     const uint32_t rt_arg_count = 2;
     std::array<WorkerToFabricEdmSender, Num_Directions> fabric_connections;
-    open_direction_connections(directions,fabric_connections,rt_arg_count);
+    detail::open_direction_connections(directions, fabric_connections, rt_arg_count);
 
     InterleavedAddrGen<output_is_dram> output_addrgen{
         .bank_base_address = output_base_addr, .page_size = data_size_bytes};
@@ -252,11 +244,11 @@ void kernel_main() {
 
                 // figure out output page index, noc address.
                 const uint32_t output_page_idx =
-                    get_output_page_idx<batch_size, mesh_cols, mesh_rows, replicate_axis>(b, k);
+                    detail::get_output_page_idx<batch_size, mesh_cols, mesh_rows, replicate_axis>(b, k);
                 const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
 
                 // figure out which device to send data to and routing
-                const auto dest_device_idx =
+                const auto dest_device_idx = detail::
                     get_device_idx_from_batch_idx<src_chip_id, batch_size, mesh_cols, mesh_rows, replicate_axis>(b);
                 const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
 
@@ -264,17 +256,18 @@ void kernel_main() {
                     noc_async_write(src_data_l1_ptr,output_noc_addr,data_size_bytes);
                     noc_async_write_barrier();
                 } else {
-                    const auto route = get_direction<src_chip_id, mesh_cols, mesh_rows>(dest_chip_id);
+                    const auto route = detail::get_direction<src_chip_id, mesh_cols, mesh_rows>(dest_chip_id);
                     const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
-                    dispatch_input_remote_device<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size_bytes>(
-                        dest_chip_id,
-                        dest_mesh_id,
-                        alignment,
-                        data_size_bytes,
-                        src_data_l1_ptr,
-                        output_noc_addr,
-                        fabric_connections,
-                        packet_headers[0]);
+                    detail::
+                        dispatch_input_remote_device<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size_bytes>(
+                            dest_chip_id,
+                            dest_mesh_id,
+                            alignment,
+                            data_size_bytes,
+                            src_data_l1_ptr,
+                            output_noc_addr,
+                            fabric_connections,
+                            packet_headers[0]);
                 }
                 cb_pop_front(data_cb_id,1);
             }
@@ -282,8 +275,6 @@ void kernel_main() {
         cb_pop_front(metadata_cb_id, 1);
     }
     cb_pop_front(local_experts_cb_id, 1);
-
-    DPRINT << "WRITER 5: " << "\n";
 
     const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr);
     // "multicast" semaphore increment to let other devices know we are done
@@ -293,9 +284,9 @@ void kernel_main() {
         if (dest_chip_id == src_chip_id) {
             noc_semaphore_inc(get_noc_addr(global_semaphore_addr), 1);
             noc_async_atomic_barrier();
-        } else if (is_configured_target<src_chip_id, mesh_cols, mesh_rows, replicate_axis>(dest_chip_id)) {
+        } else if (detail::is_configured_target<src_chip_id, mesh_cols, mesh_rows, replicate_axis>(dest_chip_id)) {
             const auto & dest_mesh_id = dest_mesh_ids[device_idx];
-            const auto route = get_direction<src_chip_id, mesh_cols, mesh_rows>(dest_chip_id);
+            const auto route = detail::get_direction<src_chip_id, mesh_cols, mesh_rows>(dest_chip_id);
 
             packet_headers[1]->to_noc_unicast_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{global_noc_semaphore_addr, 1, 32, true});
@@ -314,7 +305,7 @@ void kernel_main() {
         }
     }
 
-    close_direction_connections(directions, fabric_connections);
+    detail::close_direction_connections(directions, fabric_connections);
 
     auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
     noc_semaphore_wait(semaphore_ptr, replicate_group_devices);

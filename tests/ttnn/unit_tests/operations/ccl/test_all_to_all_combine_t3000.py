@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -202,12 +202,6 @@ def run_all_to_all_combine_test(
             batch, experts, select_experts_k, hidden_size, mesh_shape, axis, devices, scheme=scheme
         )
 
-        # print(f"{expert_mapping=}")
-        # print(f"{metadata_tensor=}")
-        #
-        #         for d in range(devices):
-        #             print(f"{input_contrib[d,:,:,:]}")
-
         output_tensor_goldens_list.append((output_contrib_tensor, data_map))
 
         tt_input_contribs = ttnn.from_torch(
@@ -216,7 +210,7 @@ def run_all_to_all_combine_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=dtype,
             memory_config=input_memory_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 0), mesh_shape=mesh_shape),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
         )
 
         tt_expert_mapping = ttnn.from_torch(
