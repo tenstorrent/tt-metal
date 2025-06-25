@@ -6,6 +6,9 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
+import os
+
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 from models.utility_functions import skip_for_grayskull
 
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
@@ -173,6 +176,8 @@ def test_all_gather_6u_llama(
 ):
     if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
+    if not is_RING_6U:
+        pytest.skip("This test is only for 6U TG devices")
     if input_shard_grid is not None and input_shard_shape is not None:
         input_shard_spec = ttnn.ShardSpec(
             input_shard_grid,
@@ -521,6 +526,8 @@ def test_all_reduce_6U_llama(
     use_program_cache,
     function_level_defaults,
 ):
+    if not is_RING_6U:
+        pytest.skip("This test is only for 6U TG devices")
     profiler = BenchmarkProfiler()
 
     run_all_reduce_impl(

@@ -6,6 +6,9 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
+import os
+
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 from models.demos.llama3_subdevices.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
@@ -463,6 +466,8 @@ def test_6u_trace_rms_fuse(
     use_new_version,
     fused_add,
 ):
+    if not is_RING_6U:
+        pytest.skip("This test is only for 6U TG devices")
     profiler = BenchmarkProfiler()
     run_rms_trace(
         mesh_device,
@@ -768,6 +773,8 @@ def test_concat_fuse_6u(
     tensor_mem_layout,
     trace_mode,
 ):
+    if not is_RING_6U:
+        pytest.skip("This test is only for 6U TG devices")
     profiler = BenchmarkProfiler()
     run_concat_fuse_impl(
         mesh_device,

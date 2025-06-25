@@ -6,6 +6,9 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
+import os
+
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -410,6 +413,8 @@ def test_rs_create_heads_6u_trace(mesh_device, trace_mode, dtype, use_program_ca
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
         pytest.skip("Not TG!")
+    if not is_RING_6U:
+        pytest.skip("This test is only for 6U TG devices")
 
     dim = 3
     shard_height = 32

@@ -8,6 +8,9 @@ import math
 from time import time
 from loguru import logger
 import ttnn
+import os
+
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
@@ -545,6 +548,8 @@ def test_all_reduce_qkv_heads_fuse_perf_6U(
 ):
     if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
+    if not is_RING_6U:
+        pytest.skip("This test is only for 6U TG devices")
     profiler = BenchmarkProfiler()
     run_all_reduce_qkv_heads_fuse_perf_impl(
         mesh_device,
