@@ -74,7 +74,6 @@ OUTPUT_ARCH(riscv)
 #endif
 
 #elif defined(COMPILE_FOR_AERISC)
-/* Yes, using IERISC sizes.  */
 #define DATA_START MEM_LOCAL_BASE
 #define DATA_SIZE MEM_AERISC_LOCAL_SIZE
 #define STACK_MIN_SIZE MEM_AERISC_STACK_MIN_SIZE
@@ -214,7 +213,7 @@ SECTIONS
 #ifdef TYPE_FIRMWARE
   __fw_export_ldm_end = ABSOLUTE(.);
 #endif
-#if !defined(COMPILE_FOR_AERISC)
+#if !defined(COMPILE_FOR_AERISC) && !defined(COMPILE_FOR_SUBORDINATE_AERISC)
 #ifdef TYPE_FIRMWARE
   __stack_top = DATA_START + DATA_SIZE;
 #else
