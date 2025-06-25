@@ -516,13 +516,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     auto output_shape = output_tensor.padded_shape();
     log_debug(tt::LogOp, "Slice Write Output Shape: {}", output_shape);
 
-    TT_FATAL(
-        input_tensor.element_size() == output_tensor.element_size(),
-        "Input & output should have the same element size");
-    TT_FATAL(input_tensor.dtype() == output_tensor.dtype(), "Input & output should have the same dtype");
-
-    TT_FATAL(input_tensor.shard_spec().has_value(), "Input tensor should be sharded");
-
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
@@ -768,6 +761,7 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
 
     uint32_t num_tiles_height_per_core = shard_spec.shape[0] / TILE_HEIGHT;
     uint32_t num_tiles_channel_per_core = shard_spec.shape[1] / TILE_HEIGHT;
+
     uint32_t num_cores_channels = 1;
     if (is_block_sharded) {
         if (rm_orientation) {
