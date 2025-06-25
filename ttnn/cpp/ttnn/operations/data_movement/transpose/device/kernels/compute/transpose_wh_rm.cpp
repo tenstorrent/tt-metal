@@ -119,15 +119,17 @@ void MAIN {
     constexpr uint32_t pack_num_pages_last_col = get_compile_time_arg_val(6);
     constexpr uint32_t pack_num_pages_last_row = get_compile_time_arg_val(7);
     constexpr uint32_t pack_num_pages_last_row_col = get_compile_time_arg_val(8);
-// In order to support full_ct_dim > block_ct_dim, we need to have this architecture
-// dependency for now. Should be addressed in tt-metal#24095
-#ifdef ARCH_BLACKHOLE
-    constexpr bool use_narrow_row = last_output_row_num_datums < FACE_WIDTH ? true : false;
-    constexpr uint32_t row_size = last_output_row_num_datums < FACE_WIDTH ? last_output_row_num_datums : TILE_WIDTH;
-#else
+    // In order to support full_ct_dim > block_ct_dim, we would need to change use_narrow_row and row_size conditions to
+    // be:
+    //
+    //     constexpr bool use_narrow_row = last_output_row_num_datums < FACE_WIDTH ? true : false;
+    //     constexpr uint32_t row_size = last_output_row_num_datums < FACE_WIDTH ? last_output_row_num_datums :
+    //     TILE_WIDTH;
+    //
+    // However, changing these conditions makes yolov4 and transpose tests fail with a PCC error. For the error to be
+    // present in BH, it needs to be run in the full model sweep, but for WH_B0 it can be seen in isolation.
     constexpr bool use_narrow_row = last_output_row_num_datums < TILE_WIDTH ? true : false;
     constexpr uint32_t row_size = last_output_row_num_datums < TILE_WIDTH ? last_output_row_num_datums : TILE_WIDTH;
-#endif  // ARCH_BLACKHOLE
 
 #else
     uint32_t num_hw_blocks_per_core = get_arg_val<uint32_t>(0);
