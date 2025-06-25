@@ -325,12 +325,12 @@ inline void RunPersistent1dFabricLatencyTest(
                 }
             } else {
                 if (is_connected_in_direction) {
-                    const auto& device_fabric_node_id =
+                    const auto device_fabric_node_id =
                         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
                     chip_id_t connected_chip_id = direction == ttnn::ccl::EdmLineFabricOpInterface::FORWARD
                                                       ? forward_device->id()
                                                       : backward_device->id();
-                    const auto& connected_device_fabric_node_id =
+                    const auto connected_device_fabric_node_id =
                         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_chip_id);
                     tt::tt_fabric::append_fabric_connection_rt_args(
                         device_fabric_node_id,
