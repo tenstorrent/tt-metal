@@ -299,7 +299,7 @@ struct ReceiverChannelPointers {
         cached_routing_fields = {routing_fields, true};
     }
 
-    FORCE_INLINE void clear_cached_routing_fields() { cached_routing_fields = {ROUTING_FIELDS_TYPE{}, false}; }
+    FORCE_INLINE void clear_cached_routing_fields() { cached_routing_fields.second = false; }
 
     FORCE_INLINE bool is_cached() const { return cached_routing_fields.second; }
 
