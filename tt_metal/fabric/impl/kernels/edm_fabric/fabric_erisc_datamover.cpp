@@ -293,6 +293,17 @@ struct ReceiverChannelPointers {
     ChannelCounter<RECEIVER_NUM_BUFFERS> ack_counter;
     ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
     std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
+    std::pair<ROUTING_FIELDS_TYPE, bool> cached_routing_fields;
+
+    FORCE_INLINE void cache_routing_fields(ROUTING_FIELDS_TYPE routing_fields) {
+        cached_routing_fields = {routing_fields, true};
+    }
+
+    FORCE_INLINE void clear_cached_routing_fields() { cached_routing_fields = {ROUTING_FIELDS_TYPE{}, false}; }
+
+    FORCE_INLINE bool is_cached() const { return cached_routing_fields.second; }
+
+    FORCE_INLINE ROUTING_FIELDS_TYPE get_cached_routing_fields() { return cached_routing_fields.first; }
 
     FORCE_INLINE void set_src_chan_id(BufferIndex buffer_index, uint8_t src_chan_id) {
         src_chan_ids[buffer_index.get()] = src_chan_id;
@@ -305,6 +316,7 @@ struct ReceiverChannelPointers {
         wr_flush_counter.reset();
         ack_counter.reset();
         completion_counter.reset();
+        cached_routing_fields = {ROUTING_FIELDS_TYPE{}, false};
     }
 };
 
@@ -1008,9 +1020,12 @@ void run_receiver_channel_step_impl(
 
         ROUTING_FIELDS_TYPE cached_routing_fields;
 #if !defined(FABRIC_2D) || !defined(DYNAMIC_ROUTING_ENABLED)
-        cached_routing_fields = packet_header->routing_fields;
+        if (!receiver_channel_pointers.is_cached()) {
+            cached_routing_fields = packet_header->routing_fields;
+        } else {
+            cached_routing_fields = receiver_channel_pointers.get_cached_routing_fields();
+        }
 #endif
-
         receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         uint32_t hop_cmd;
         bool can_send_to_all_local_chip_receivers;
@@ -1065,6 +1080,10 @@ void run_receiver_channel_step_impl(
             wr_sent_counter.increment();
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+            // clear the cached packet header
+            receiver_channel_pointers.clear_cached_routing_fields();
+        } else {  // cannot process packet, need to cache it
+            receiver_channel_pointers.cache_routing_fields(cached_routing_fields);
         }
     }
 
