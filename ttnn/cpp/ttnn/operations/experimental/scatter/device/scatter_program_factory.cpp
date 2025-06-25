@@ -5,6 +5,7 @@
 #include "scatter_program_factory.hpp"
 
 #include "scatter_device_operation_types.hpp"
+#include "tt-metalium/device.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -21,6 +22,14 @@ uint64_t ceil32(const uint64_t& number) {
 
 bool is_pow2_min32(const uint64_t& number) { return ((number & (number - 1)) == 0) && number >= 32; }
 }  // namespace
+
+// maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
+// BH available L1 mem size of nearly 1.5 MB...
+// ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
+// tensors)
+// ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
+// ... minimized by ~20% to account for reserved memory
+uint32_t calculate_optimal_chunk_size(IDevice* device) { return ceil32(device->l1_size_per_core() / 4 / 4 * 0.8 - 32); }
 
 ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
@@ -99,13 +108,13 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t output_stick_size_bytes_log2 =
         is_output_stick_size_bytes_pow2_min_32 ? std::log2(output_stick_size_bytes) : 0;
 
-    // maximal input chunk size, divisible by 32, calculated as follows:
+    // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
     // BH available L1 mem size of nearly 1.5 MB...
     // ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
     // tensors)
     // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
     // ... minimized by ~20% to account for reserved memory
-    const uint32_t input_and_output_max_chunk_size = 76800;
+    const uint32_t input_and_output_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
     const uint32_t index_and_source_max_chunk_size = input_and_output_max_chunk_size;
     const uint32_t input_and_output_chunk_size = std::min(input_stick_size, input_and_output_max_chunk_size);
     const uint32_t index_and_source_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);

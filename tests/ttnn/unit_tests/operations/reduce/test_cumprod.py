@@ -21,7 +21,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 def test_cumprod_normal(dim, shape, device, use_program_cache):
-    torch.manual_seed(22041997)
+    torch.manual_seed(0)
     if dim < len(shape) and -len(shape) <= dim:
         for _ in range(2):
             torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
@@ -39,7 +39,7 @@ def test_cumprod_normal(dim, shape, device, use_program_cache):
             assert torch_result_tensor.shape == ttnn_result_tensor.shape
 
             # assert values with pcc
-            assert_with_pcc(ttnn.to_torch(ttnn_result_tensor), torch_result_tensor, -0.1)
+            assert_with_pcc(ttnn.to_torch(ttnn_result_tensor), torch_result_tensor, 0.99)
 
 
 @pytest.mark.parametrize("dim", [0, 2, -1])
@@ -52,7 +52,7 @@ def test_cumprod_normal(dim, shape, device, use_program_cache):
     ],
 )
 def test_cumprod_preallocated(dim, shape, device, use_program_cache):
-    torch.manual_seed(22041997)
+    torch.manual_seed(0)
     if dim < len(shape) and -len(shape) <= dim:
         for _ in range(2):
             torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
@@ -74,8 +74,8 @@ def test_cumprod_preallocated(dim, shape, device, use_program_cache):
             assert torch_result_tensor.shape == ttnn_result_tensor.shape
 
             # assert values with pcc
-            assert_with_pcc(ttnn.to_torch(ttnn_result_tensor), torch_result_tensor, -0.1)
-            assert_with_pcc(ttnn.to_torch(ttnn_preallocated_tensor), torch_preallocated_tensor, -0.1)
+            assert_with_pcc(ttnn.to_torch(ttnn_result_tensor), torch_result_tensor, 0.99)
+            assert_with_pcc(ttnn.to_torch(ttnn_preallocated_tensor), torch_preallocated_tensor, 0.98)
 
 
 @pytest.mark.parametrize(
@@ -165,6 +165,7 @@ def test_cumprod_failing_cases(
     device,
     use_program_cache,
 ):
+    torch.manual_seed(0)
     torch_input_tensor = torch.randn(input_shape, dtype=torch_dtype)
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, layout=layout, device=device, memory_config=memory_config

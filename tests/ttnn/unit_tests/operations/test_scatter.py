@@ -52,10 +52,10 @@ def select_torch_dtype(ttnn_dtype):
         # ([2, 10, 151936], -1, [2, 10, 151936], ttnn.float32, ttnn.uint32, ttnn.Layout.TILE),
     ],
 )
-def test_scatter_normal(input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, device):
-    torch.manual_seed(22052025)
-    # https://github.com/tenstorrent/tt-metal/issues/23205
-    device.disable_and_clear_program_cache()
+def test_scatter_normal(
+    input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, device, use_program_cache
+):
+    torch.manual_seed(0)
     torch_dtype = select_torch_dtype(input_dtype)
     torch_index_dtype = select_torch_dtype(index_dtype)
     ##
@@ -165,7 +165,7 @@ def test_scatter_failing_cases(
     device,
     use_program_cache,
 ):
-    torch.manual_seed(18062025)
+    torch.manual_seed(0)
     torch_index_dtype = select_torch_dtype(index_dtype)
     torch_source_dtype = select_torch_dtype(source_dtype)
     ##
