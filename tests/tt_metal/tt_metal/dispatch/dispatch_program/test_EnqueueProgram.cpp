@@ -226,46 +226,6 @@ bool cb_config_successful(std::shared_ptr<distributed::MeshDevice> mesh_device, 
 }
 
 
-bool cb_config_successful(IDevice* device, Program& program, const DummyProgramMultiCBConfig& program_config) {
-    bool pass = true;
-
-    // Need to use old APIs to read since we cannot allocate a buffer in the reserved space we're trying
-    // to read from
-    vector<uint32_t> cb_config_vector;
-    uint32_t cb_config_buffer_size =
-        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-
-    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    for (const CoreRange& core_range : program_config.cr_set.ranges()) {
-        for (const CoreCoord& core_coord : core_range) {
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device,
-                core_coord,
-                program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
-                cb_config_buffer_size,
-                cb_config_vector);
-
-            uint32_t cb_addr = l1_unreserved_base;
-            for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i++) {
-                const uint32_t index = program_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
-                const uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
-                const uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
-                const bool addr_match = cb_config_vector.at(index) == cb_addr;
-                const bool size_match = cb_config_vector.at(index + 1) == cb_size;
-                const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
-                pass &= (addr_match and size_match and num_pages_match);
-
-                cb_addr += cb_size;
-            }
-        }
-    }
-
-    return pass;
-}
-
-
-
-
 void test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoord& eth_core_coord) {
     Program program;
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
@@ -305,8 +265,7 @@ bool test_dummy_EnqueueProgram_with_cbs(std::shared_ptr<distributed::MeshDevice>
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program;
-    
+    Program program;    
 
     initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
     initialize_dummy_kernels(program, program_config.cr_set);
