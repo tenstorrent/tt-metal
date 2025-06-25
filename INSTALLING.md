@@ -209,7 +209,7 @@ source python_env/bin/activate
   export PYTHONPATH=$(pwd)
   ```
 
-- For more programming examples to try, visit Tenstorrent's [TT-NN Basic Examples Page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [Simple Kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html)
+- For programming examples to try, visit Tenstorrent's [TT-NN Basic Examples Page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [Simple Kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html)
 
 ---
 
@@ -257,32 +257,9 @@ To try our pre-built models in `models/`, you must:
   sudo apt-get install cpufrequtils
   sudo cpupower frequency-set -g performance
   ```
-
-<<<<<<< bbeggsTT-patch-4
+  
   - You are all set! See which models you can bring-up at the [TT-Metal GitHub repository](https://github.com/tenstorrent/tt-metal/tree/main?tab=readme-ov-file#llms) next.
   
-=======
----
-
-### You are All Set!
-
-#### To verify your installation (for source or wheel installation only), try executing a programming example:
-
-- First, set the following environment variables:
-
-  ```
-  export TT_METAL_HOME=</path/to/your/tt-metal>
-  export PYTHONPATH="${TT_METAL_HOME}" # Same path
-  ```
-
-- Then, try running a programming example:
-  ```
-  python3 -m ttnn.examples.usage.run_op_on_device
-  ```
-
-- For more programming examples to try, visit Tenstorrent's [TT-NN Basic Examples Page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [Simple Kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html)
-
->>>>>>> main
 ---
 
 ### Interested in Contributing?
