@@ -389,7 +389,7 @@ def run_reduce_scatter_test(
     "device_params",
     [
         {
-            "trace_region_size": 241664,
+            "trace_region_size": 269312,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
