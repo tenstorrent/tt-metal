@@ -132,9 +132,8 @@ void kernel_main() {
                         tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                     }
 
-                    cb_wait_front(cb_output_id, tiles_to_read_in_current_direction);
+                    cb_wait_front(cb_output_id, tile_granularity);
                     size_t l1_read_addr = get_read_ptr(cb_output_id);
-
                     while (tiles_read_in_current_direction < tiles_to_read_in_current_direction) {
                         uint32_t tiles_remaining_to_read_in_current_direction =
                             tiles_to_read_in_current_direction - tiles_read_in_current_direction;
@@ -145,6 +144,7 @@ void kernel_main() {
                         switch (tiles_to_put_in_current_packet) {
                             case 2: {
                                 uint32_t tile_one_id = input_tile_id_start + row_offset + pages_read_in_row;
+                                tiles_read++;
                                 pages_read_in_row++;
                                 if (pages_read_in_row >= slice_Wt) {
                                     row_offset += stride_Wt;
@@ -152,6 +152,7 @@ void kernel_main() {
                                 }
 
                                 uint32_t tile_two_id = input_tile_id_start + row_offset + pages_read_in_row;
+                                tiles_read++;
                                 pages_read_in_row++;
                                 if (pages_read_in_row >= slice_Wt) {
                                     row_offset += stride_Wt;
@@ -187,6 +188,7 @@ void kernel_main() {
                             case 1:
                             default: {
                                 uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
+                                tiles_read++;
                                 pages_read_in_row++;
                                 if (pages_read_in_row >= slice_Wt) {
                                     row_offset += stride_Wt;
@@ -216,9 +218,7 @@ void kernel_main() {
                         }
                         tiles_read_in_current_direction += tiles_to_put_in_current_packet;
                     }
-                    cb_pop_front(cb_output_id, tiles_to_read_in_current_direction);
-
-                    tiles_read += tiles_to_read_in_current_direction;
+                    cb_pop_front(cb_output_id, tile_granularity);
 
                     // Skip the tiles going the other direction
                     tiles_remaining_to_read = tiles_to_read - tiles_read;
@@ -234,7 +234,7 @@ void kernel_main() {
                         pages_read_in_row += tiles_to_read_in_other_direction;
                         if (pages_read_in_row >= slice_Wt) {
                             row_offset += stride_Wt;
-                            pages_read_in_row = pages_read_in_row % slice_Wt;
+                            pages_read_in_row = pages_read_in_row - slice_Wt;
                         }
                     }
                 }
@@ -277,9 +277,9 @@ void kernel_main() {
                         tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                     }
 
-                    cb_wait_front(cb_output_id, tiles_to_read_in_current_direction);
+                    cb_wait_front(cb_output_id, tile_granularity);
                     size_t l1_read_addr = get_read_ptr(cb_output_id);
-                    for (uint32_t j = 0; j < num_pages_to_read; j++) {
+                    for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t tile_id = tile_id_start + tiles_read;
                         noc_async_write_tile(tile_id, output_addrgen, l1_read_addr);
                         l1_read_addr += intermediate_page_size;
@@ -287,7 +287,7 @@ void kernel_main() {
                     }
 
                     noc_async_write_barrier();
-                    cb_pop_front(cb_output_id, tiles_to_read_in_current_direction);
+                    cb_pop_front(cb_output_id, tile_granularity);
 
                     // Skip the tiles going the other direction
                     tiles_remaining_to_read = tiles_to_read - tiles_read;

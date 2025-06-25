@@ -133,9 +133,8 @@ void kernel_main() {
                     tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                 }
 
-                cb_reserve_back(cb_in0, tiles_to_read_in_current_direction);
+                cb_reserve_back(cb_in0, tile_granularity);
                 uint32_t l1_write_addr = get_write_ptr(cb_in0);
-
                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                     uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
                     noc_async_read_tile(tile_id, input_tensor_addrgen, l1_write_addr);
@@ -151,12 +150,13 @@ void kernel_main() {
 
                 if (do_reduce) {
                     // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
-                    cb_reserve_back(cb_intermediate_id, tiles_to_read_in_current_direction);
-                    size_t intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
+                    cb_reserve_back(cb_intermediate_id, tile_granularity);
+                    uint32_t intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
-                        uint32_t tile_id =
+                        uint32_t intermediate_tile_id =
                             intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
-                        noc_async_read_tile(tile_id, intermediate_tensor_addrgen, intermediate_l1_write_addr);
+                        noc_async_read_tile(
+                            intermediate_tile_id, intermediate_tensor_addrgen, intermediate_l1_write_addr);
                         intermediate_l1_write_addr += input_tensor_page_size;
 
                         intermediate_pages_read_in_row++;
@@ -167,11 +167,11 @@ void kernel_main() {
                     }
 
                     noc_async_read_barrier();
-                    cb_push_back(cb_intermediate_id, tiles_to_read_in_current_direction);
+                    cb_push_back(cb_intermediate_id, tile_granularity);
                 }
 
                 noc_async_read_barrier();
-                cb_push_back(cb_in0, tiles_to_read_in_current_direction);
+                cb_push_back(cb_in0, tile_granularity);
 
                 // Skip the tiles going the other direction
                 tiles_remaining_to_read = tiles_to_read - tiles_read;
