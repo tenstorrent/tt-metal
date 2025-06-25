@@ -2228,7 +2228,7 @@ void py_module(py::module& module) {
 
     // unary composite with float imported into ttnn
     bind_unary_composite_float_with_default(
-        module, ttnn::hardshrink, "lambd", "lambd value", 0.5f, R"doc(BFLOAT16, BFLOAT8_B)doc");
+        module, ttnn::hardshrink, "lambd", "lambd value", 0.5f, R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     bind_unary_composite_float_with_default(
         module, ttnn::softshrink, "lambd", "lambd value", 0.5f, R"doc(BFLOAT16, BFLOAT8_B)doc");

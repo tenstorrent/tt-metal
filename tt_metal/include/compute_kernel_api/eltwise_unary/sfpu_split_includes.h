@@ -132,6 +132,10 @@
 #include "compute_kernel_api/eltwise_unary/log1p.h"
 #endif
 
+#if SFPU_OP_ACTIVATIONS_INCLUDE
+#include "compute_kernel_api/eltwise_unary/activations.h"
+#endif
+
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
 #include "compute_kernel_api.h"
 #endif
