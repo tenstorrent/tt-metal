@@ -66,10 +66,10 @@ def run_device_profiler(command, output_logs_subdir, check_test_return_code=True
     try:
         subprocess.run([profiler_cmd], shell=True, capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError as e:
-        print("CalledProcessError:", e)
-        print("Return code:", e.returncode)
-        print("Stdout:", e.stdout)
-        print("Stderr:", e.stderr)
+        logger.error("CalledProcessError:", e)
+        logger.error("Return code:", e.returncode)
+        logger.error("Stdout:", e.stdout)
+        logger.error("Stderr:", e.stderr)
 
 
 def get_samples_per_s(time_ns, num_samples):
