@@ -401,6 +401,9 @@ Result conv2d_DRAM(
         conv_config_l1.deallocate_activation = true;
         conv_config_l1.reallocate_halo_output = true;
 
+        // Force Conv2d_L1 to always output tiled layout to reduce CB Memory usage.
+        conv_config_l1.output_layout = Layout::TILE;
+
         ttnn::Tensor sliced_output_tensor;
         std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
             conv2d_L1(

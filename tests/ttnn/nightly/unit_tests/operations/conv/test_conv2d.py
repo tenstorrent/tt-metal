@@ -700,15 +700,15 @@ SliceWidth = ttnn.Conv2dSliceWidth
         (56,    64,  1008,   256,   SliceWidth,   2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
         (64,   128,   992,   992,   SliceWidth,   50,  ttnn.bfloat8_b, ttnn.bfloat16, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 4,  ttnn.MathFidelity.LoFi  ),
         (128,  128,  1024,  1024,  SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (128,  3,   1024,  1024,  SliceWidth,     7,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
+        (128,  3,   1024,  1024,  SliceWidth,     8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
         (16,   512,  128,    128,   SliceWidth,    2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
-        (256,  128,  1024,  1024,  SliceWidth,   31,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 4,  ttnn.MathFidelity.LoFi  ),
+        (256,  128,  1024,  1024,  SliceWidth,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 4,  ttnn.MathFidelity.LoFi  ),
         (256,  256,  1024,  1024,  SliceWidth,   37,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 8,  ttnn.MathFidelity.LoFi  ),
         (256,  256,  512,   512,   SliceWidth,    4,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
         (512,  512,  256,   256,   SliceWidth,    2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (512,  256,  512,   512,   SliceWidth,    7,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (512,  512,  512,   512,   SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (56,    64,  1008,  1008,  SliceWidth,    5,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
+        (512,  256,  512,   512,   SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
+        (512,  512,  512,   512,   SliceWidth,    10,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
+        (56,    64,  1008,  1008,  SliceWidth,    6,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
      )
     # fmt: on
 )
@@ -769,6 +769,7 @@ def test_conv_dram(
         fp32_accum=fp32_accum,
         input_dtype=input_dtype,
         input_layout=input_layout,
+        output_layout=input_layout,
         packer_l1_acc=packer_l1_acc,
         run_twice=False,
         fast_compare=True,
