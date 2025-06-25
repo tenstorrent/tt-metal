@@ -125,5 +125,16 @@ TEST_F(MeshDeviceTest, CreateSubmeshes) {
     EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
 }
 
+TEST(GetOptimalDramBankToLogicalWorkerAssignmentAPI, UnitMeshes) {
+    auto num_devices = GetNumAvailableDevices();
+    std::vector<int> device_ids(num_devices);
+    std::iota(device_ids.begin(), device_ids.end(), 0);
+    auto devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
+    for (auto& [_, dev] : devs) {
+        auto assignment = dev->get_optimal_dram_bank_to_logical_worker_assignment();
+        EXPECT_NO_THROW(dev->get_optimal_dram_bank_to_logical_worker_assignment());
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed

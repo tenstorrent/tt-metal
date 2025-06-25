@@ -4,8 +4,8 @@
 
 #include "roll.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
-#include "cpp/ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 

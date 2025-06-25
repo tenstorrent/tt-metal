@@ -11,10 +11,9 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 struct PageMappingIntermData {
-    BufferPageMapping* page_mapping = nullptr;
+    UncompressedBufferPageMapping* page_mapping = nullptr;
 
     const size_t num_cores = 0;
-    const size_t num_shards_per_core = 0;
     const size_t rank = 0;
     const uint32_t* tensor_shape = nullptr;
     const uint32_t* shard_shape = nullptr;
@@ -24,42 +23,29 @@ struct PageMappingIntermData {
     const uint32_t* shard_strides = nullptr;
 
     uint32_t* actual_shard_size = nullptr;
+    size_t core_id = 0;
     size_t shard_id = 0;
 };
 
-void iterate_within_shard(
-    PageMappingIntermData& params,
-    size_t dim,
-    size_t src_offset,
-    size_t core_id,
-    size_t core_offset,
-    size_t dst_offset) {
+void iterate_within_shard(PageMappingIntermData& params, size_t dim, size_t src_offset, size_t dst_offset) {
     if (dim == params.rank) {
-        params.page_mapping->core_host_page_indices[core_id][dst_offset] = src_offset;
-
-        size_t dev_page = core_offset + dst_offset;
-        params.page_mapping->dev_page_to_core_mapping[dev_page] = core_id;
-        params.page_mapping->dev_page_to_host_page_mapping[dev_page] = src_offset;
-        params.page_mapping->host_page_to_dev_page_mapping[src_offset] = dev_page;
-        params.page_mapping->host_page_to_local_shard_page_mapping[src_offset] = dst_offset;
+        params.page_mapping->core_host_page_indices[params.core_id][dst_offset] = src_offset;
         return;
     }
 
     for (size_t i = 0; i < params.actual_shard_size[dim]; i++) {
-        iterate_within_shard(params, dim + 1, src_offset, core_id, core_offset, dst_offset);
+        iterate_within_shard(params, dim + 1, src_offset, dst_offset);
         src_offset += params.tensor_strides[dim];
         dst_offset += params.shard_strides[dim];
     }
 }
 
-void iterate_over_shards(
-    PageMappingIntermData& params, size_t dim, size_t src_offset, std::array<uint32_t, 2> actual_shard_shape_2d) {
+void iterate_over_shards(PageMappingIntermData& params, size_t dim, size_t src_offset) {
     if (dim == params.rank) {
-        size_t core_id = params.shard_id % params.num_cores;
+        params.core_id = params.shard_id % params.num_cores;
         size_t dst_offset = (params.shard_id / params.num_cores) * params.shard_volume;
-        size_t core_offset = core_id * params.num_shards_per_core * params.shard_volume;
 
-        iterate_within_shard(params, 0, src_offset, core_id, core_offset, dst_offset);
+        iterate_within_shard(params, 0, src_offset, dst_offset);
 
         params.shard_id++;
         return;
@@ -67,26 +53,18 @@ void iterate_over_shards(
 
     size_t shard_size = params.shard_shape[dim];
     params.actual_shard_size[dim] = shard_size;
-    actual_shard_shape_2d[0] *= actual_shard_shape_2d[1];
-    actual_shard_shape_2d[1] = shard_size;
 
     for (size_t i = 0; i < params.shard_grid[dim] - 1; i++) {
-        iterate_over_shards(
-            params,
-            dim + 1,
-            src_offset + i * params.shard_shape[dim] * params.tensor_strides[dim],
-            actual_shard_shape_2d);
+        iterate_over_shards(params, dim + 1, src_offset + i * params.shard_shape[dim] * params.tensor_strides[dim]);
     }
 
     // Last shard may be partial, so we need to handle it separately
     size_t partial_shard_size = params.tensor_shape[dim] % shard_size;
-    actual_shard_shape_2d[1] = partial_shard_size == 0 ? shard_size : partial_shard_size;
-    params.actual_shard_size[dim] = actual_shard_shape_2d[1];
+    params.actual_shard_size[dim] = partial_shard_size == 0 ? shard_size : partial_shard_size;
     iterate_over_shards(
         params,
         dim + 1,
-        src_offset + (params.shard_grid[dim] - 1) * params.shard_shape[dim] * params.tensor_strides[dim],
-        actual_shard_shape_2d);
+        src_offset + (params.shard_grid[dim] - 1) * params.shard_shape[dim] * params.tensor_strides[dim]);
 }
 
 tt::tt_metal::Shape convert_shape_to_pages(tt::tt_metal::Shape shape, const tt::tt_metal::Shape2D& page_shape) {
@@ -146,41 +124,73 @@ size_t BufferDistributionSpec::num_shards() const {
     return num_shards;
 }
 
-size_t BufferDistributionSpec::num_shards_per_core() const {
+size_t BufferDistributionSpec::num_cores_with_data() const { return std::min(num_cores(), num_shards()); }
+
+std::vector<CoreCoord> BufferDistributionSpec::get_cores_with_data() const {
+    return std::vector<CoreCoord>(cores_.begin(), cores_.begin() + num_cores_with_data());
+}
+
+size_t BufferDistributionSpec::max_num_shards_per_core() const {
     if (cores_.size() == 0) {
         return 0;
     }
     return (num_shards() + cores_.size() - 1) / cores_.size();
 }
 
-size_t BufferDistributionSpec::num_dev_pages_per_core() const {
-    return num_shards_per_core() * shard_shape_in_pages_.volume();
+size_t BufferDistributionSpec::max_num_dev_pages_per_core() const {
+    return max_num_shards_per_core() * shard_shape_in_pages_.volume();
 }
 
-BufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
-    BufferPageMapping page_mapping;
-    page_mapping.all_cores = cores_;
-    for (size_t i = 0; i < cores_.size(); i++) {
-        page_mapping.core_to_core_id[cores_[i]] = i;
+size_t BufferDistributionSpec::num_shards_per_core(size_t core_idx) const {
+    auto num_shards = this->num_shards();
+    return num_shards / num_cores() + (core_idx < num_shards % num_cores() ? 1 : 0);
+}
+
+size_t BufferDistributionSpec::num_dev_pages_per_core(size_t core_idx) const {
+    return num_shards_per_core(core_idx) * shard_shape_in_pages_.volume();
+}
+
+std::pair<BufferDistributionSpec::CoreGroup, BufferDistributionSpec::CoreGroup>
+BufferDistributionSpec::get_core_groups_by_num_shards() const {
+    auto num_shards = this->num_shards();
+    if (num_shards == 0) {
+        return {CoreGroup{}, CoreGroup{}};
     }
+
+    auto num_cores_with_more_shards = num_shards % num_cores();
+    if (num_cores_with_more_shards == 0) {
+        return {CoreGroup{num_shards / num_cores(), cores_}, CoreGroup{}};
+    }
+
+    std::vector<CoreCoord> cores_with_more_shards(cores_.begin(), cores_.begin() + num_cores_with_more_shards);
+    std::vector<CoreCoord> cores_with_less_shards;
+    if (num_shards / num_cores() != 0) {
+        cores_with_less_shards = std::vector<CoreCoord>(cores_.begin() + num_cores_with_more_shards, cores_.end());
+    }
+    return {
+        CoreGroup{num_shards / num_cores() + 1, std::move(cores_with_more_shards)},
+        CoreGroup{num_shards / num_cores(), std::move(cores_with_less_shards)},
+    };
+}
+
+UncompressedBufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
+    UncompressedBufferPageMapping page_mapping;
+    page_mapping.all_cores = cores_;
 
     if (tensor_shape_in_pages_.volume() == 0) {
         return page_mapping;
     }
 
-    size_t num_shards_per_core = this->num_shards_per_core();
+    size_t num_shards_per_core = this->max_num_shards_per_core();
     size_t shard_pages = shard_shape_in_pages_.volume();
     size_t host_pages = tensor_shape_in_pages_.volume();
     size_t dev_pages = cores_.size() * num_shards_per_core * shard_pages;
 
     page_mapping.core_host_page_indices.resize(cores_.size());
     for (size_t i = 0; i < cores_.size(); i++) {
-        page_mapping.core_host_page_indices[i].resize(num_shards_per_core * shard_pages);
+        page_mapping.core_host_page_indices[i].resize(
+            num_shards_per_core * shard_pages, UncompressedBufferPageMapping::PADDING);
     }
-    page_mapping.dev_page_to_core_mapping.resize(dev_pages);
-    page_mapping.dev_page_to_host_page_mapping.resize(dev_pages);
-    page_mapping.host_page_to_dev_page_mapping.resize(host_pages);
-    page_mapping.host_page_to_local_shard_page_mapping.resize(host_pages);
 
     tt::stl::SmallVector<uint32_t> shard_grid(tensor_shape_in_pages_.rank());
     for (size_t i = 0; i < tensor_shape_in_pages_.rank(); i++) {
@@ -194,7 +204,6 @@ BufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
     CMAKE_UNIQUE_NAMESPACE::PageMappingIntermData params{
         .page_mapping = &page_mapping,
         .num_cores = cores_.size(),
-        .num_shards_per_core = num_shards_per_core,
         .rank = tensor_shape_in_pages_.rank(),
         .tensor_shape = tensor_shape_in_pages_.view().data(),
         .shard_shape = shard_shape_in_pages_.view().data(),
@@ -203,9 +212,10 @@ BufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
         .tensor_strides = tensor_strides.data(),
         .shard_strides = shard_strides.data(),
         .actual_shard_size = actual_shard_size.data(),
+        .core_id = 0,
         .shard_id = 0,
     };
-    CMAKE_UNIQUE_NAMESPACE::iterate_over_shards(params, 0, 0, {1, 1});
+    CMAKE_UNIQUE_NAMESPACE::iterate_over_shards(params, 0, 0);
 
     return page_mapping;
 }

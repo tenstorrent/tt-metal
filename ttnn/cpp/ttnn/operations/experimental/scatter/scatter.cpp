@@ -145,8 +145,7 @@ Tensor pre_scatter_transform_tensor(
     Tensor processed_tensor = input_tensor;
     // if layout is tile, convert to row-major first
     if (processed_tensor.layout() != Layout::ROW_MAJOR) {
-        processed_tensor =
-            ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, input_tensor.device());
+        processed_tensor = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
     }
     // transposing a row-major tensor here
     processed_tensor = reduction_common::perform_transpose(processed_tensor, is_dim_last_idx, dim, -1);
@@ -168,8 +167,7 @@ Tensor pre_scatter_transform_tensor(
     Tensor processed_tensor = input_tensor;
     // if layout is tile, convert to row-major first - this allows for minimized memory usage by transpose (no padding)
     if (processed_tensor.layout() != Layout::ROW_MAJOR) {
-        processed_tensor =
-            ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, input_tensor.device());
+        processed_tensor = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
     }
     // transposing a row-major tensor here
     processed_tensor = reduction_common::perform_transpose(processed_tensor, is_dim_last_idx, dim, -1);
@@ -209,8 +207,7 @@ Tensor post_scatter_transform_tensor(
 
     // if the output tensor's original layout is not row-major, convert the output tensor back
     if (original_layout != Layout::ROW_MAJOR) {
-        output_tensor =
-            ttnn::to_layout(output_tensor, original_layout, std::nullopt, std::nullopt, output_tensor.device());
+        output_tensor = ttnn::to_layout(output_tensor, original_layout);
     }
 
     return output_tensor;
@@ -246,8 +243,7 @@ Tensor post_scatter_transform_tensor(
 
     // if the output tensor's original layout is not row-major, convert the output tensor back
     if (original_layout != Layout::ROW_MAJOR) {
-        output_tensor =
-            ttnn::to_layout(output_tensor, original_layout, std::nullopt, std::nullopt, output_tensor.device());
+        output_tensor = ttnn::to_layout(output_tensor, original_layout);
     }
 
     return output_tensor;
@@ -264,13 +260,13 @@ Tensor ScatterOperation::invoke(
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<scatter::ScatterReductionType>& opt_reduction) {
-    const ttnn::Shape original_input_tensor_lshape = input_tensor.logical_shape();
+    const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.padded_shape().rank();
 
     CMAKE_UNIQUE_NAMESPACE::check_support(input_tensor, index_tensor, source_tensor, dim);
     CMAKE_UNIQUE_NAMESPACE::validate_inputs(input_tensor, index_tensor, source_tensor, dim);
 
-    const auto original_index_tensor_lshape = index_tensor.logical_shape();
+    const auto& original_index_tensor_lshape = index_tensor.logical_shape();
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
         return input_tensor;
     }

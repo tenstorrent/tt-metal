@@ -99,8 +99,7 @@ std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorS
         buffer_size_bytes,
         page_size_bytes,
         memory_config.buffer_type(),
-        memory_config.memory_layout(),
-        tensor_spec.compute_distribution_spec());
+        tensor_spec.compute_buffer_sharding_args());
 }
 
 std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
@@ -110,8 +109,7 @@ std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     distributed::DeviceLocalBufferConfig device_local_buffer_config{
         .page_size = tensor_spec.compute_page_size_bytes(),
         .buffer_type = memory_config.buffer_type(),
-        .buffer_layout = memory_config.memory_layout(),
-        .shard_parameters = tensor_spec.compute_distribution_spec(),
+        .sharding_args = tensor_spec.compute_buffer_sharding_args(),
     };
 
     // Use replicated buffer, which supports both working with individual shards and replicating data across all shards.
@@ -431,7 +429,7 @@ template <typename T>
 std::string to_string(
     const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout) {
     const auto tile = tensor.tensor_spec().tile();
-    const auto shape = tensor.logical_shape();
+    const auto& shape = tensor.logical_shape();
     const auto dtype = original_dtype.value_or(tensor.dtype());
     const auto layout = original_layout.value_or(tensor.layout());
 
@@ -451,11 +449,7 @@ std::string to_string(
                     if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
                         return to_string<float>(ttnn::to_dtype(tensor, DataType::FLOAT32), dtype, layout);
                     }
-                    return to_string<T>(
-                        ttnn::to_layout(
-                            tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, static_cast<IDevice*>(nullptr)),
-                        dtype,
-                        layout);
+                    return to_string<T>(ttnn::to_layout(tensor, Layout::ROW_MAJOR), dtype, layout);
                 }
 
                 const auto strides = tensor.tensor_spec().compute_strides();
@@ -1423,7 +1417,7 @@ Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const
         });
     }
 
-    const auto input_shape = tensor.padded_shape();
+    const auto& input_shape = tensor.padded_shape();
     const auto input_strides = tensor.strides();
 
     // Validate inputs and compute output shape

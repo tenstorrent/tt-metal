@@ -31,12 +31,23 @@ public:
     tt::tt_metal::Shape get_shard_shape_in_pages() const { return shard_shape_in_pages_; }
 
     size_t num_shards() const;
-    size_t num_shards_per_core() const;
-    size_t num_dev_pages_per_core() const;
+    size_t max_num_shards_per_core() const;
+    size_t max_num_dev_pages_per_core() const;
     size_t num_cores() const { return cores_.size(); }
+    size_t num_cores_with_data() const;
     const std::vector<CoreCoord>& get_cores() const { return cores_; }
+    std::vector<CoreCoord> get_cores_with_data() const;
 
-    BufferPageMapping compute_page_mapping() const;
+    size_t num_shards_per_core(size_t core_idx) const;
+    size_t num_dev_pages_per_core(size_t core_idx) const;
+
+    struct CoreGroup {
+        size_t num_shards = 0;
+        std::vector<CoreCoord> cores;
+    };
+    std::pair<CoreGroup, CoreGroup> get_core_groups_by_num_shards() const;
+
+    UncompressedBufferPageMapping compute_page_mapping() const;
 
 private:
     tt::tt_metal::Shape tensor_shape_in_pages_;

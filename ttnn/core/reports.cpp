@@ -69,16 +69,15 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
                 }
             } else {
                 const auto& buffer_page_mapping = *buffer->get_buffer_page_mapping();
-                for (int page_index = 0; page_index < num_pages; page_index++) {
-                    auto dev_page_index = buffer_page_mapping.host_page_to_dev_page_mapping[page_index];
-                    auto core =
-                        buffer_page_mapping.all_cores[buffer_page_mapping.dev_page_to_core_mapping[dev_page_index]];
+                for (size_t core_index = 0; core_index < buffer_page_mapping.all_cores.size(); core_index++) {
+                    auto core = buffer_page_mapping.all_cores[core_index];
                     auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer->buffer_type(), core)[0];
-
-                    if (bank_to_num_pages.find(bank_id) == bank_to_num_pages.end()) {
-                        bank_to_num_pages[bank_id] = 0;
+                    uint32_t bank_num_pages = 0;
+                    for (const auto& core_page_mapping : buffer_page_mapping.core_page_mappings[core_index]) {
+                        bank_num_pages =
+                            std::max(bank_num_pages, core_page_mapping.device_start_page + core_page_mapping.num_pages);
                     }
-                    bank_to_num_pages[bank_id]++;
+                    bank_to_num_pages[bank_id] = bank_num_pages;
                 }
             }
 
@@ -112,36 +111,45 @@ std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::dis
             auto page_size = buffer->page_size();
             auto num_pages = buffer->num_pages();
             auto num_banks = device->allocator()->get_num_banks(buffer->buffer_type());
+            auto buffer_type = buffer->buffer_type();
 
-            uint32_t bank_id = 0;
-            for (int page_index = 0; page_index < num_pages; page_index++) {
-                CoreCoord core;
-                tt::tt_metal::DeviceAddr page_address = 0;
-
-                if (buffer->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
-                    page_address = buffer->page_address(bank_id, page_index);
-                    core = buffer->allocator()->get_logical_core_from_bank_id(bank_id);
-                    bank_id = (bank_id + 1) % num_banks;
-                } else {
-                    const auto& buffer_page_mapping = *buffer->get_buffer_page_mapping();
-                    auto dev_page_index = buffer_page_mapping.host_page_to_dev_page_mapping[page_index];
-                    core = buffer_page_mapping.all_cores[buffer_page_mapping.dev_page_to_core_mapping[dev_page_index]];
-                    bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer->buffer_type(), core)[0];
-                    page_address = buffer->sharded_page_address(bank_id, dev_page_index);
+            if (is_sharded(buffer->buffer_layout())) {
+                const auto& buffer_page_mapping = *buffer->get_buffer_page_mapping();
+                for (auto mapped_page : buffer_page_mapping) {
+                    auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
+                    auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer_type, core)[0];
+                    auto page_address = buffer->address() + mapped_page.device_page * buffer->aligned_page_size();
+                    buffer_page_infos.push_back(BufferPageInfo{
+                        .device_id = device_id,
+                        .address = address,
+                        .core_y = core.y,
+                        .core_x = core.x,
+                        .bank_id = bank_id,
+                        .page_index = mapped_page.host_page,
+                        .page_address = page_address,
+                        .page_size = page_size,
+                        .buffer_type = buffer_type,
+                    });
                 }
+            } else {
+                uint32_t bank_id = 0;
+                for (uint32_t page_index = 0; page_index < num_pages; page_index++) {
+                    auto page_address = buffer->page_address(bank_id, page_index);
+                    CoreCoord core = buffer->allocator()->get_logical_core_from_bank_id(bank_id);
+                    bank_id = (bank_id + 1) % num_banks;
 
-                BufferPageInfo buffer_page_info = {};
-                buffer_page_info.device_id = device_id;
-                buffer_page_info.address = address;
-                buffer_page_info.core_y = core.y;
-                buffer_page_info.core_x = core.x;
-                buffer_page_info.bank_id = bank_id;
-                buffer_page_info.page_index = page_index;
-                buffer_page_info.page_address = page_address;
-                buffer_page_info.page_size = page_size;
-                buffer_page_info.buffer_type = buffer->buffer_type();
-
-                buffer_page_infos.push_back(buffer_page_info);
+                    buffer_page_infos.push_back(BufferPageInfo{
+                        .device_id = device_id,
+                        .address = address,
+                        .core_y = core.y,
+                        .core_x = core.x,
+                        .bank_id = bank_id,
+                        .page_index = page_index,
+                        .page_address = page_address,
+                        .page_size = page_size,
+                        .buffer_type = buffer_type,
+                    });
+                }
             }
         }
     }

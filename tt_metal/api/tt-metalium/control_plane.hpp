@@ -4,12 +4,20 @@
 
 #pragma once
 
+#include <unordered_set>
+
 #include <tt_stl/span.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
 #include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/multi_mesh_types.hpp>
+
+#include <map>
+#include <unordered_map>
+#include <memory>
+#include <vector>
 
 namespace tt::tt_fabric {
 
@@ -26,9 +34,11 @@ public:
     // Printing functions
     void print_routing_tables() const;
     void print_ethernet_channels() const;
+    void print_active_ethernet_connections() const;
+    void print_all_ethernet_connections() const;
 
     // Converts chip level routing tables to per ethernet channel
-    void configure_routing_tables_for_fabric_ethernet_channels();
+    void configure_routing_tables_for_fabric_ethernet_channels(tt_metal::FabricReliabilityMode reliability_mode);
     void write_routing_tables_to_all_chips() const;
 
     // Return mesh_id, chip_id from physical chip id
@@ -67,7 +77,15 @@ public:
 
     size_t get_num_active_fabric_routers(FabricNodeId fabric_node_id) const;
 
+    // Number of active ethernet channels, but these may not be participating in active routing planes
+    // (in other words, they are not participating in fabric traffic)
     std::vector<chan_id_t> get_active_fabric_eth_channels_in_direction(
+        FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
+    // Return the active routing planes in a given direction.
+    std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
+        FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
+
+    size_t get_num_available_routing_planes_in_direction(
         FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
 
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(
@@ -80,7 +98,7 @@ public:
     void set_routing_mode(uint16_t mode);
     uint16_t get_routing_mode() const;
 
-    void initialize_fabric_context(tt_metal::FabricConfig fabric_config);
+    void initialize_fabric_context(tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
 
     FabricContext& get_fabric_context() const;
 
@@ -98,14 +116,28 @@ public:
 
     // Get all intermesh ethernet links in the system
     // Returns: map of chip_id -> vector of (eth_core, channel)
-    const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>& get_all_intermesh_eth_links()
-        const;
+    const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>& get_all_intermesh_eth_links() const;
 
     // Check if a specific ethernet core is an intermesh link
     bool is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) const;
 
     // If the ethernet core is an intermesh link, probe to see if it is trained
     bool is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const;
+
+    // Returns set of logical active ethernet coordinates on chip
+    // If skip_reserved_cores is true, will return cores that dispatch is not using,
+    // intended for users to grab available eth cores for testing
+    // `skip_reserved_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
+    // tunneling
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(chip_id_t chip_id, bool skip_reserved_cores = false) const;
+    std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
+
+    // Query the local intermesh link table containing the local to remote link mapping
+    const IntermeshLinkTable& get_local_intermesh_link_table() const;
+
+    // Get the ASIC ID for a chip (the ASIC ID is unique per chip, even in multi-host systems and is programmed
+    // by SPI-ROM firmware)
+    uint64_t get_asic_id(chip_id_t chip_id) const;
 
 private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
@@ -116,6 +148,9 @@ private:
     // map[mesh_fabric_id][direction] has a vector of ethernet channels in that direction
     std::map<FabricNodeId, std::unordered_map<RoutingDirection, std::vector<chan_id_t>>>
         router_port_directions_to_physical_eth_chan_map_;
+    // map[mesh_fabric_id][direction] has the number of live routing planes in that direction
+    std::map<FabricNodeId, std::unordered_map<RoutingDirection, size_t>>
+        router_port_directions_to_num_routing_planes_map_;
     // tables[mesh_fabric_id][eth_chan]
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         intra_mesh_routing_tables_;  // table that will be written to each ethernet core
@@ -123,7 +158,9 @@ private:
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
     // map[phys_chip_id] has a vector of (eth_core, channel) pairs used for intermesh routing
     std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>> intermesh_eth_links_;
-
+    // Stores a table of all local intermesh links (board_id, chan_id) and the corresponding remote intermesh links
+    IntermeshLinkTable intermesh_link_table_;
+    std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
     // custom logic to order eth channels
     void order_ethernet_channels();
 
@@ -142,6 +179,10 @@ private:
 
     void load_physical_chip_mapping(
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+    size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
+    void initialize_dynamic_routing_plane_counts(
+        const IntraMeshConnectivity& intra_mesh_connectivity, tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
+    void trim_ethernet_channels_not_mapped_to_live_routing_planes();
 
     void validate_mesh_connections(MeshId mesh_id) const;
     void validate_mesh_connections() const;
@@ -156,6 +197,9 @@ private:
     void convert_fabric_routing_table_to_chip_routing_table();
 
     void write_routing_tables_to_chip(MeshId mesh_id, chip_id_t chip_id) const;
+
+    // Populate the local intermesh link to remote intermesh link table
+    void generate_local_intermesh_link_table();
 
     // Initialize internal map of physical chip_id to intermesh ethernet links
     void initialize_intermesh_eth_links();

@@ -91,9 +91,9 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         // NOTE: fabric events should be contiguous to allow quick range check!
         FABRIC_UNICAST_WRITE = 28,
         FABRIC_UNICAST_INLINE_WRITE = 29,
-        FABRIC_MULTICAST_WRITE = 30,
-        FABRIC_UNICAST_ATOMIC_INC = 31,
-        FABRIC_FUSED_UNICAST_ATOMIC_INC = 32,
+        FABRIC_UNICAST_ATOMIC_INC = 30,
+        FABRIC_FUSED_UNICAST_ATOMIC_INC = 31,
+        FABRIC_MULTICAST_WRITE = 32,
         FABRIC_MULTICAST_ATOMIC_INC = 33,
         FABRIC_ROUTING_FIELDS = 34,
 
@@ -108,15 +108,20 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         std::memcpy(this, &raw_data, sizeof(KernelProfilerNocEventMetadata));
     }
 
-    bool isFabricEventType() const {
-        return noc_xfer_type >= NocEventType::FABRIC_UNICAST_WRITE &&
-               noc_xfer_type <= NocEventType::FABRIC_MULTICAST_ATOMIC_INC;
+    static bool isFabricEventType(NocEventType event_type) {
+        return event_type >= NocEventType::FABRIC_UNICAST_WRITE &&
+               event_type <= NocEventType::FABRIC_MULTICAST_ATOMIC_INC;
     }
     bool isFabricRoutingFields() const { return noc_xfer_type == NocEventType::FABRIC_ROUTING_FIELDS; }
 
+    static bool isFabricUnicastEventType(NocEventType event_type) {
+        return event_type >= NocEventType::FABRIC_UNICAST_WRITE &&
+               event_type <= NocEventType::FABRIC_FUSED_UNICAST_ATOMIC_INC;
+    }
+
     // Getter to return the correct variant based on the tag
     std::variant<LocalNocEvent, FabricNoCEvent, FabricRoutingFields> getContents() const {
-        if (isFabricEventType()) {
+        if (isFabricEventType(noc_xfer_type)) {
             return data.fabric_event;
         } else if (isFabricRoutingFields()) {
             return data.fabric_routing_fields;
