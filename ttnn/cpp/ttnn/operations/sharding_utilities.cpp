@@ -9,6 +9,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+#include "ttnn/tensor/types.hpp"
 #include "sharding_utilities.hpp"
 
 namespace tt::tt_metal {
@@ -809,15 +810,21 @@ ShardedAccessorArgs get_sharded_accessor_args(
     auto shard_shape_rt = args_config.test(ArgConfig::ShardShapeCRTA);
     auto bank_coords_rt = args_config.test(ArgConfig::BankCoordsCRTA);
 
+    size_t rank = tensor_shape.size();
+    size_t n_banks = bank_coords.size();
+    TT_FATAL(
+        rank <= tt::tt_metal::MAX_NUM_DIMENSIONS,
+        "Rank must be less than or equal to {} for rank",
+        tt::tt_metal::MAX_NUM_DIMENSIONS);
     TT_FATAL(
         !rank_rt || (tensor_shape_rt && shard_shape_rt),
         "If rank is runtime, tensor_shape and shard_shape must also be runtime");
     TT_FATAL(!num_banks_rt || bank_coords_rt, "If num_banks is runtime, bank_coords must also be runtime");
-    size_t n_compile_time_args = 1 + !rank_rt + !num_banks_rt + tensor_shape.size() * !tensor_shape_rt +
-                                 shard_shape.size() * !shard_shape_rt +
-                                 bank_coords.size() * !bank_coords_rt;  // +1 for the crta config
-    size_t n_runtime_args = rank_rt + num_banks_rt + tensor_shape.size() * tensor_shape_rt +
-                            shard_shape.size() * shard_shape_rt + bank_coords.size() * bank_coords_rt;
+
+    size_t n_compile_time_args = 1 + !rank_rt + !num_banks_rt + rank * !tensor_shape_rt + rank * !shard_shape_rt +
+                                 n_banks * !bank_coords_rt;  // +1 for the crta config
+    size_t n_runtime_args =
+        rank_rt + num_banks_rt + rank * tensor_shape_rt + rank * shard_shape_rt + n_banks * bank_coords_rt;
     std::vector<uint32_t> compile_time_args;
     std::vector<uint32_t> runtime_args;
     compile_time_args.reserve(n_compile_time_args);
@@ -828,19 +835,16 @@ ShardedAccessorArgs get_sharded_accessor_args(
     auto& shard_shape_args = shard_shape_rt ? runtime_args : compile_time_args;
     auto& bank_coords_args = bank_coords_rt ? runtime_args : compile_time_args;
 
-    size_t rank = tensor_shape.size();
-    TT_FATAL(!rank_rt || rank <= 10, "Rank must be less than or equal to 10 for runtime rank");
-
     compile_time_args.push_back(args_config.raw());
-    rank_args.push_back(tensor_shape.size());
-    num_banks_args.push_back(bank_coords.size());
+    rank_args.push_back(rank);
+    num_banks_args.push_back(n_banks);
     tensor_shape_args.insert(tensor_shape_args.end(), tensor_shape.cbegin(), tensor_shape.cend());
     shard_shape_args.insert(shard_shape_args.end(), shard_shape.cbegin(), shard_shape.cend());
 
-    for (size_t i = 0; i < bank_coords.size(); i += 2) {
+    for (size_t i = 0; i < n_banks; i += 2) {
         const auto virtual_coord1 = mesh_device.virtual_core_from_logical_core(bank_coords[i], bank_type);
 
-        if (i + 1 < bank_coords.size()) {
+        if (i + 1 < n_banks) {
             // Pack two coordinates into one uint32_t if we have a pair
             const auto virtual_coord2 = mesh_device.virtual_core_from_logical_core(bank_coords[i + 1], bank_type);
             bank_coords_args.push_back(
