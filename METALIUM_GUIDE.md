@@ -20,23 +20,25 @@
 
 ## Executive Summary
 
-This guide introduces developers to Tenstorrent's AI processor architecture and the TT-Metalium™ programming model. Unlike traditional GPUs that rely on massive thread parallelism, Tenstorrent chips use a grid of specialized compute nodes called Tensix cores. Each Tensix contains five small RISC-V CPUs for control and instruction dispatch, dedicated hardware units for matrix operations (FPU) and vector operations (SFPU), data packing/unpacking units, and 1.5MB of local SRAM.
+This guide introduces developers to Tenstorrent's AI accelerator (called the Tensix Processor) architecture and the TT-Metalium™ programming model. Unlike traditional GPUs that rely on massive thread parallelism, Tensix Processors use a grid of specialized compute nodes called Tensix cores. Each Tensix core contains five small RISC-V CPUs for control and instruction dispatch, dedicated hardware units for matrix operations (FPU) and vector operations (SFPU), data packing/unpacking units, and 1.5MB of local SRAM.
 
-The typical data flow uses Network-on-Chip (NoC) interfaces to bring data into a Tensix, where it gets unpacked, processed by the compute units, packed, and sent out via the NoC to DRAM or other Tensix cores. This design prioritizes efficient data movement and local SRAM usage, reducing frequent DRAM access.
+The typical data flow uses Network-on-Chip (NoC) interfaces to bring data into a Tensix core, where it gets unpacked, processed by the compute units, packed, and sent out via the NoC to DRAM or other Tensix cores. This design prioritizes efficient data movement and local SRAM usage, reducing frequent DRAM access.
 
-Programming with Metalium typically requires three kernel types per Tensix: a **reader kernel** for data input, a **compute kernel** for calculations, and a **writer kernel** for data output. These kernels coordinate through circular buffers in SRAM. The architecture natively operates on 32×32 tiles, optimized for deep learning operations. Metalium provides APIs and abstractions (including compute and data movement) to simplify development, manage hardware resources, and ensure kernel compatibility across hardware generations.
+Programming with Metalium typically requires three kernel types per Tensix core: a **reader kernel** for data input, a **compute kernel** for calculations, and a **writer kernel** for data output. These kernels coordinate through circular buffers in SRAM. The architecture natively operates on 32×32 tiles, optimized for deep learning operations. Metalium provides APIs and abstractions (including compute and data movement) to simplify development, manage hardware resources, and ensure kernel compatibility across hardware generations.
 
 This document covers these concepts in detail to help you develop efficient applications on Tenstorrent hardware.
 
 ## Tenstorrent Architecture Overview
 
-The Tenstorrent architecture is a different kind of AI processor. Unlike GPUs where the processor provides a massive pool of threads and parallelize across them. Tenstorrent chips are a grid of different nodes. Most are compute nodes called a Tensix core ("core" is overloaded in computer architecture, thus will be dropped from this point onwards) sprinkled with some memory, chip management and Ethernet nodes to facilitate the computation.
+The architecture Tenstorrent proposed is a different kind of AI accelerator. Unlike GPUs where the processor provides a massive pool of threads and parallelize across them. Tenstorrent chips are a grid of different nodes. Most are compute nodes called a Tensix core sprinkled with some memory, chip management and Ethernet nodes to facilitate the computation. The overall chip is then called a Tensix processor. The following image shows the logical layout of a Tensix processor, with the different nodes and their functions.
+
+The following sections focus on the individual compute units. For precision, 'Tensix' refers specifically to Tensix cores rather than the complete Tensix processor.
 
 The following image shows the NoC grid of the Tenstorrent Wormhole™ processor (D = DRAM, T = Tensix, E = Ethernet, A = ARC/management, P = PCIe).
 
 <img width="900" alt="image" src="docs/source/common/images/tenstorrent-wormhole-logical-noc-diagram.webp">
 
-Each Tensix contains 5 "Baby" RISC-V CPUs (Data Movement 0, Data Movement 1, Unpack, Math and Pack), 2 NoC interfaces, a vector unit (SFPU), a matrix unit (FPU) and a pack and unpacker, as well as 1.5MB of SRAM (called L1 in the archicture) to hold transient data and facilitates data exchange between local components. The following image is a rough block diagram of a Tensix (blue arrow = instruction dispatch, brown arrow = data transfer)
+Each Tensix contains 5 "Baby" RISC-V CPUs (Data Movement 0, Data Movement 1, Unpack, Math and Pack), 2 NoC interfaces, a vector unit (SFPU), a matrix unit (FPU) and a pack and unpacker, as well as 1.5MB of SRAM (called L1 in the architecture) to hold transient data and facilitates data exchange between local components. The following image is a rough block diagram of a Tensix (blue arrow = instruction dispatch, brown arrow = data transfer)
 
 <img width="900" alt="image" src="docs/source/common/images/tenstorrent-tensix-rough-block-diagram.webp">
 
@@ -234,7 +236,7 @@ Please refer to the [tt-Fabric technical report](tech_reports/TT-Fabric/TT-Fabri
 
 ## TT-Metalium
 
-TT-Metalium™ (also shorthanded as Metalium, tt-Metal, or just Metal) is Tenstorrent's SDK for developing applications on Tenstorrent processors. The API design resembles OpenCL, providing C++ interfaces for both high-level operations and direct hardware control. The kernels shown in previous sections are written using Metalium.
+Metalium is Tenstorrent's SDK for developing applications on the Tensix Processor. The full product name is TT-Metalium™, also abbreviated as tt-Metal or Metal. The API design resembles OpenCL, providing C++ interfaces for both high-level operations and direct hardware control. The kernels shown in previous sections are written using Metalium.
 
 Metalium functions as the base layer for Tenstorrent's software stack. Higher-level tools like TTNN, tt-MLIR, and tt-Forge are built on top of Metalium. Applications can range from simple single-kernel programs running on one core to complex distributed computations spanning multiple chips.
 
