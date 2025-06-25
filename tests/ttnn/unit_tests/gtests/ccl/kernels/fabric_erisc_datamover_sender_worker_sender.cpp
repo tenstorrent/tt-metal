@@ -30,12 +30,18 @@ void kernel_main() {
     // Test doesn't support multiple pages per send yet since we are writing
     // to interleaved which will never have subsequent pages on the same core
     // (and hence, able to share a packet header)
-    constexpr uint32_t num_pages_per_send = 1;  // get_compile_time_arg_val(0);
     constexpr uint32_t total_pages_to_send = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(3);
     constexpr bool dest_is_dram = get_compile_time_arg_val(4) != 0;
     constexpr bool mcast_mode = get_compile_time_arg_val(5) == 1;
+    constexpr bool write_scatter_mode = get_compile_time_arg_val(6) == 1;
+    constexpr uint32_t num_pages_per_send = (write_scatter_mode ? 2 : 1);
+
+    DPRINT << "sws: args " << "\n\tnum_pages_to_send=" << total_pages_to_send << "\n\tpage_size=" << page_size
+           << "\n\tnum_buffers_per_channel=" << num_buffers_per_channel
+           << "\n\tdest_is_dram=" << (dest_is_dram ? "T" : "F") << "\n\tmcast_mode=" << (mcast_mode ? "T" : "F")
+           << "\n\twrite_scatter_mode=" << (write_scatter_mode ? "T" : "F") << "\n";
 
     size_t arg_idx = 0;
     // Nearly all of the following arguments are needed to establish a connection with
@@ -140,9 +146,21 @@ void kernel_main() {
                 ->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
         } else {
-            packet_header->to_chip_unicast(config.unicast.distance)
-                ->to_noc_unicast_write(
-                    tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
+#ifdef ARCH_WORMHOLE
+            if (write_scatter_mode && pages_to_send == 2) {
+                uint64_t dest_noc_address2 = get_noc_addr(p + 1, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
+                packet_header->to_chip_unicast(config.unicast.distance)
+                    ->to_noc_unicast_scatter_write(
+                        tt::tt_fabric::NocUnicastScatterCommandHeader{
+                            {dest_noc_address, dest_noc_address2}, (uint16_t)page_size},
+                        (pages_to_send * page_size));
+            } else
+#endif
+            {
+                packet_header->to_chip_unicast(config.unicast.distance)
+                    ->to_noc_unicast_write(
+                        tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
+            }
         }
 
         sender.send_payload_without_header_non_blocking_from_address(payload_addr, pages_to_send * page_size);
