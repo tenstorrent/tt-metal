@@ -54,7 +54,7 @@ void append_fabric_connection_rt_args(
     }
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_any_any(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved(
     const Tensor& input_tensor,
     IDevice* sender_device,
     std::optional<IDevice*> forward_device,
@@ -69,7 +69,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
-    return all_gather_async_minimal_interleaved_dim3_1_1_any_any_helper(
+    return all_gather_async_minimal_interleaved_helper(
         program,
         input_tensor,
         sender_device,
@@ -86,7 +86,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         empty_fused_op_signaler);
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_any_any_helper(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     IDevice* sender_device,
