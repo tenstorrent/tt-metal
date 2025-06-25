@@ -138,7 +138,6 @@ def sd_spatial_attn_block(
     scale: ttnn.Tensor,
     shift: ttnn.Tensor,
 ) -> ttnn.Tensor:
-    # assert self._spatial_attn is not None
     assert parameters.spatial_attn is not None
     scaled = inp * (1 + scale) + shift
     attn, _ = sd_joint_attention(
@@ -146,8 +145,6 @@ def sd_spatial_attn_block(
     )
 
     result = gate * attn
-    ttnn.deallocate(scaled)
-    ttnn.deallocate(attn)
     return result
 
 
@@ -202,8 +199,6 @@ def sd_dual_attn_block(
     )
     spatial_attn_scaled = spatial_gate * spatial_attn
     prompt_attn_scaled = prompt_gate * prompt_attn if prompt_gate is not None else None
-    ttnn.deallocate(spatial_attn)
-    ttnn.deallocate(prompt_attn)
     return spatial_attn_scaled, prompt_attn_scaled
 
 
@@ -235,7 +230,6 @@ def sd_gated_ff_block(
         parallel_manager=parallel_manager,
         cfg_index=cfg_index,
     )
-    ttnn.deallocate(scaled)
     return result
 
 
@@ -254,7 +248,6 @@ def sd_transformer_block(  # noqa: PLR0915
     t = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     spatial_time = sd_linear(t, parameters.spatial_time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     prompt_time = sd_linear(t, parameters.prompt_time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(t)
     if parameters.spatial_attn is not None:
         [
             spatial_shift_dual_attn,
@@ -326,17 +319,8 @@ def sd_transformer_block(  # noqa: PLR0915
         L=L,
         cfg_index=cfg_index,
     )
-    ttnn.deallocate(prompt_normed)
-    ttnn.deallocate(spatial_gate_dual_attn)
-    if prompt_gate_attn is not None:
-        ttnn.deallocate(prompt_gate_attn)
-    ttnn.deallocate(prompt_scale_attn)
-    ttnn.deallocate(prompt_shift_attn)
-    ttnn.deallocate(spatial_scale_dual_attn)
-    ttnn.deallocate(spatial_shift_dual_attn)
 
     spatial += spatial_attn
-    ttnn.deallocate(spatial_attn)
 
     if parameters.spatial_attn is not None:
         assert False, "Not supporting right now on Colman's branch"
@@ -352,10 +336,6 @@ def sd_transformer_block(  # noqa: PLR0915
             scale=spatial_scale_attn,
             shift=spatial_shift_attn,
         )
-        ttnn.deallocate(spatial_normed)
-        ttnn.deallocate(spatial_gate_attn)
-        ttnn.deallocate(spatial_scale_attn)
-        ttnn.deallocate(spatial_shift_attn)
 
     spatial_normed = sd_layer_norm(
         spatial, parameters.spatial_norm_2, parallel_manager=parallel_manager, cfg_index=cfg_index
@@ -369,10 +349,6 @@ def sd_transformer_block(  # noqa: PLR0915
         scale=spatial_scale_ff,
         shift=spatial_shift_ff,
     )
-    ttnn.deallocate(spatial_normed)
-    ttnn.deallocate(spatial_gate_ff)
-    ttnn.deallocate(spatial_scale_ff)
-    ttnn.deallocate(spatial_shift_ff)
 
     if context_pre_only:
         return spatial, None
@@ -382,7 +358,6 @@ def sd_transformer_block(  # noqa: PLR0915
     assert prompt_gate_ff is not None
 
     prompt += prompt_attn
-    ttnn.deallocate(prompt_attn)
     prompt_normed = sd_layer_norm(
         prompt, parameters.prompt_norm_2, parallel_manager=parallel_manager, cfg_index=cfg_index
     )
@@ -395,10 +370,6 @@ def sd_transformer_block(  # noqa: PLR0915
         scale=prompt_scale_ff,
         shift=prompt_shift_ff,
     )
-    ttnn.deallocate(prompt_normed)
-    ttnn.deallocate(prompt_gate_ff)
-    ttnn.deallocate(prompt_scale_ff)
-    ttnn.deallocate(prompt_shift_ff)
 
     return spatial, prompt
 

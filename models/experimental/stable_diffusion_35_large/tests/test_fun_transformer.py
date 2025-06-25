@@ -36,12 +36,26 @@ TILE_SIZE = 32
         [(2, 4), (1, 0), (2, 0), (4, 1), ttnn.Topology.Linear],
         [(2, 4), (1, 0), (4, 1), (2, 0), ttnn.Topology.Linear],
         [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear],
+        [(8, 4), (4, 0), (2, 0), (4, 1), ttnn.Topology.Linear],
+        [(8, 4), (4, 0), (4, 1), (2, 0), ttnn.Topology.Linear],
+        [(8, 4), (2, 1), (8, 0), (2, 1), ttnn.Topology.Linear],
+        [(8, 4), (2, 1), (2, 1), (8, 0), ttnn.Topology.Linear],
+        [(8, 4), (8, 0), (1, 0), (4, 1), ttnn.Topology.Linear],
+        [(8, 4), (8, 0), (4, 1), (1, 0), ttnn.Topology.Linear],
+        [(8, 4), (4, 1), (1, 1), (8, 0), ttnn.Topology.Linear],
     ],
     ids=[
         "t3k_cfg2_sp2_tp2",
         "t3k_cfg1_sp2_tp4",
         "t3k_cfg1_sp4_tp2",
         "tg_cfg2_sp4_tp4",
+        "tg_cfg4_sp2_tp4",
+        "tg_cfg4_sp4_tp2",
+        "tg_cfg2_sp8_tp2",
+        "tg_cfg2_sp2_tp8",
+        "tg_cfg8_sp1_tp4",
+        "tg_cfg8_sp4_tp1",
+        "tg_cfg4_sp1_tp8",
     ],
     indirect=["mesh_device"],
 )
@@ -91,14 +105,14 @@ def test_transformer(
         torch_dtype=torch_dtype,
         local_files_only=True,
     )
-    # torch_model.transformer_blocks = torch_model.transformer_blocks[:1]
     embedding_dim = 1536 if model_name == "medium" else 2432
 
     torch_model.eval()
 
     ## heads padding
     assert not embedding_dim % torch_model.config.num_attention_heads, "Embedding_dim % num_heads != 0"
-    pad_embedding_dim = (bool)(torch_model.config.num_attention_heads) % tp_factor
+    pad_embedding_dim = ((torch_model.config.num_attention_heads) % tp_factor) != 0
+    hidden_dim_padding = 0
     if pad_embedding_dim:
         head_size = embedding_dim // torch_model.config.num_attention_heads
         num_heads = math.ceil(torch_model.config.num_attention_heads / tp_factor) * tp_factor
@@ -193,26 +207,4 @@ def test_transformer(
         cfg_index=0,
     )
 
-    ttnn.synchronize_device(submesh)
-
-    # num_measurement_iterations=1
-    # profiler.clear()
-    # profiler.start(f"run")
-    # for i in range(num_measurement_iterations):
-    #     tt_output = tt_model(
-    #         spatial=tt_spatial,
-    #         prompt=tt_prompt,
-    #         pooled_projection=tt_pooled_projection,
-    #         timestep=tt_timestep,
-    #         N=spatial_sequence_length,
-    #         L=prompt_sequence_length,
-    #     )
-    # profiler.end(f"run")
-    # devices = mesh_device.get_devices()
-    # ttnn.DumpDeviceProfiler(devices[0])
-    # total_time = profiler.get("run")
-    # avg_time = total_time / num_measurement_iterations
-    # print(f" TOTAL TIME: {total_time} AVG TIME: {avg_time}\n")
-
-    torch_output = torch.unsqueeze(torch_output, 1)
     assert_quality(torch_output, tt_output, pcc=0.997, mse=0.06, shard_dim=0, num_devices=submesh.get_num_devices())
