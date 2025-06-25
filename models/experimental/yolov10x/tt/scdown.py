@@ -7,7 +7,7 @@ import ttnn
 
 
 class TtnnSCDown:
-    def __init__(self, device=None, parameters=None, conv_pt=None, auto_shard=False):
+    def __init__(self, device=None, parameters=None, conv_pt=None):
         self.device = device
         self.parameters = parameters
         self.conv_pt = conv_pt
@@ -24,7 +24,6 @@ class TtnnSCDown:
             self.conv_pt.cv2,
             enable_identity=True,
             use_1d_systolic_array=False,
-            auto_shard=auto_shard,
             deallocate_activation=True,
         )
 

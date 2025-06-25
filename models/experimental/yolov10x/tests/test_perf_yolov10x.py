@@ -98,7 +98,7 @@ def test_perf(device, use_weights_from_ultralytics):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 41],
+        [1, 43],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

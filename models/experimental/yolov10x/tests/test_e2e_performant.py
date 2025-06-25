@@ -15,7 +15,9 @@ from models.utility_functions import run_for_wormhole_b0
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": 10 * 1024, "trace_region_size": 23887872, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype",

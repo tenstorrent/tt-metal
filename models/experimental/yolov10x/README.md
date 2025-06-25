@@ -7,10 +7,10 @@
 #### Batch size: 1
 
 ## Introduction:
-YOLOv10 introduces a new approach to real-time object detection, addressing both the post-processing and model architecture deficiencies found in previous YOLO versions. By eliminating non-maximum suppression (NMS) and optimizing various model components, YOLOv10 achieves state-of-the-art performance with significantly reduced computational overhead. Extensive experiments demonstrate its superior accuracy-latency trade-offs across multiple model scales.
+YOLOv10x introduces a new approach to real-time object detection, addressing both the post-processing and model architecture deficiencies found in previous YOLO versions. By eliminating non-maximum suppression (NMS) and optimizing various model components, YOLOv10x achieves state-of-the-art performance with significantly reduced computational overhead. Extensive experiments demonstrate its superior accuracy-latency trade-offs across multiple model scales.
 
 ## Details
-The entry point to yolov10x model is YoloV10 in `models/experimental/yolov10x/tt/ttnn_yolov10x.py`. The
+The entry point to yolov10x model is YoloV10x in `models/experimental/yolov10x/tt/ttnn_yolov10x.py`. The
 model picks up certain configs and weights from Ultralytics pretrained model. We've used weights available [here](https://docs.ultralytics.com/models/yolov10x/#performance) under YOLOV10x
 
 ## How to Run: (640x640 resolution)
@@ -30,7 +30,7 @@ pytest --disable-warnings tests/ttnn/integration_tests/yolov10x/test_ttnn_yolov1
 ```
 
 ## Model performant running with Trace+2CQ
-- end-2-end perf is 33 FPS <br>
+- end-2-end perf is 38 FPS <br>
 
 Use the following command to run Model performant running with Trace+2CQ
 
