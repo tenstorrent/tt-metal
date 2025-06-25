@@ -9,12 +9,12 @@ import math
 
 # SET TO 1 IF YOU USE ANY RING, TO SET RING FABRIC
 is_RING_6U = os.environ.get("RING_6U", "0") == "1"
-# SET TO 1 TO USE RING FOR RS
-RING_RS = os.environ.get("RING_RS", "0") == "1"
-# SET TO 1 TO USE RING FOR ANY AG
-RING_AG = os.environ.get("RING_AG", "0") == "1"
+# SET TO 1 TO USE LINE FOR RS
+LINE_RS = os.environ.get("LINE_RS", "0") == "1"
+# SET TO 1 TO USE LINE FOR ANY AG
+LINE_AG = os.environ.get("LINE_AG", "0") == "1"
 
-assert not (RING_RS or RING_AG) or is_RING_6U, "RING_RS and RING_AG supported only if RING_6U=1"
+assert not (LINE_RS or LINE_AG) or is_RING_6U, "LINE_RS and LINE_AG supported only if RING_6U=1"
 
 # AG KEYS THAT SHOULD USE LINE WHEN RING_AG IS 1
 USE_LINE_AG = {
@@ -50,8 +50,8 @@ class TT_CCL:
         self.all_gather_concat_inter_tensor = self.get_all_gather_concat_inter_buffer()
 
         self.use_ring_prefill = is_RING_6U and mode == "prefill"
-        self.use_ring_ag_prefill = (is_RING_6U and RING_AG) and mode == "prefill"
-        self.use_ring_rs_prefill = (is_RING_6U and RING_RS) and mode == "prefill"
+        self.use_ring_ag_prefill = (is_RING_6U and not LINE_AG) and mode == "prefill"
+        self.use_ring_rs_prefill = (is_RING_6U and not LINE_RS) and mode == "prefill"
         self.max_top_k = model_args.max_top_k
         self.max_batch_size = model_args.max_batch_size
         self.cluster_shape = model_args.cluster_shape
@@ -992,9 +992,9 @@ class TT_CCL:
             cluster_axis=cluster_axis,
             mesh_device=self.mesh_device,
             topology=topology,
-            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]]
-            if self.mode == "decode"
-            else self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0],
+            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0]
+            if self.use_ring_ag_prefill
+            else self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             persistent_output_tensor=persistent_buffer,
             num_links=num_links,
             memory_config=memory_config,
