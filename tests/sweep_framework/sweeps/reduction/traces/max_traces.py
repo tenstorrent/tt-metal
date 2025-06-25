@@ -9,7 +9,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import profile_ttnn_call
 from models.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
@@ -359,10 +359,8 @@ def run_max(device, params, dtype, layout):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=layout, device=device)
 
-    start_time = start_measuring_time()
-    op_output_tensor = ttnn.max(input_tensor, dim=dim, keepdim=keepdim)
+    op_output_tensor, e2e_perf = profile_ttnn_call(ttnn.max, input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(op_output_tensor)
-    e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999
     tensors = [input_tensor, op_output_tensor]
     return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)

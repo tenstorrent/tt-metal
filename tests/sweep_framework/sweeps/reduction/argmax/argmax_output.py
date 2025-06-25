@@ -11,7 +11,7 @@ import ttnn
 from tests.sweep_framework.framework.permutations import *
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import profile_ttnn_call
 from models.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 from loguru import logger
@@ -105,10 +105,8 @@ def run_argmax(
         memory_config=output_memory_config,
     )
 
-    start_time = start_measuring_time()
-    op_output_tensor = ttnn.argmax(input_tensor_a, dim=dim, output_tensor=output_tensor)
+    op_output_tensor, e2e_perf = profile_ttnn_call(ttnn.argmax, input_tensor_a, dim=dim, output_tensor=output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999
     tensors = [input_tensor_a, op_output_tensor]
     return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)

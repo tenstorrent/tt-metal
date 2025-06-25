@@ -10,11 +10,8 @@ import torch
 import random
 import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, gen_pytest_parametrize_args
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.reduction_common import run_sum
 
 # Override the default timeout in seconds for hang detection.

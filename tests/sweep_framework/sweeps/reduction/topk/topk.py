@@ -12,7 +12,7 @@ from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_topk_simmilarity
-from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import profile_ttnn_call
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
@@ -157,9 +157,9 @@ def run(
         memory_config=input_a_memory_config,
     )
 
-    start_time = start_measuring_time()
-    output_values, output_indices = ttnn.topk(input_tensor_a, k=k, dim=dim, largest=largest, sorted=True)
-    e2e_perf = stop_measuring_time(start_time)
+    (output_values, output_indices), e2e_perf = profile_ttnn_call(
+        ttnn.topk, input_tensor_a, k=k, dim=dim, largest=largest, sorted=True
+    )
 
     output_values, output_indices = ttnn.to_torch(output_values), ttnn.to_torch(output_indices).to(torch.int64)
     output_gathered_values = torch.gather(torch_input_tensor_a, dim, output_indices)
