@@ -2694,9 +2694,10 @@ int validate_1d_fabric_packet_send_test_config(
         !(params.num_fabric_rows > 0 && params.num_fabric_cols > 0),
         "Only one of num_fabric_rows and num_fabric_cols may be greater than 0. Test support for both axes live at the "
         "same time is not yet supported");
-    if (use_device_init_fabric && params.num_fabric_rows == 0 && params.num_fabric_cols == 0) {
+    if (use_device_init_fabric && params.num_fabric_rows == 0 && params.num_fabric_cols == 0 &&
+        params.fabric_mode != FabricTestMode::Linear) {
         if (!use_t3k) {
-            log_info(tt::LogTest, "Using the full mesh as one ring topoplogy is only supported for T3K");
+            log_info(tt::LogTest, "Using the full mesh as one ring topoplogy is only supported for T3000 systems");
             return -1;
         }
     }
@@ -2705,11 +2706,6 @@ int validate_1d_fabric_packet_send_test_config(
             tt::LogTest,
             "The total number of devices in the fabric must be less than or equal to the number of devices in the "
             "system");
-        return -1;
-    }
-    if (num_devices == 2 && (params.num_links > 1 || params.fabric_mode != FabricTestMode::Linear) &&
-        tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0) {
-        log_info(tt::LogTest, "Bandwidth tests not enabled on N300 yet");
         return -1;
     }
     return 0;
@@ -2737,7 +2733,10 @@ int Run1DFabricPacketSendTest(
     bool use_galaxy = num_devices == 32;
     bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
     bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
-    if (num_devices < params.line_size) {
+    bool unsupported_on_this_machine =
+        num_devices < 4 || (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
+                            num_devices < params.line_size);
+    if (unsupported_on_this_machine) {
         log_info(
             tt::LogTest, "This test is requesting {} devices but only {} are available", params.line_size, num_devices);
         return -1;
