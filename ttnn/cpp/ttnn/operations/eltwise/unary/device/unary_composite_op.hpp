@@ -15,7 +15,6 @@
 namespace ttnn::operations::unary {
 
 enum class UnaryCompositeOpType {
-    ASINH,
     ATANH,
     CBRT,
     COSH,
@@ -49,7 +48,6 @@ enum class UnaryCompositeOpType {
     NORMALIZE_GLOBAL,
     FRAC,
 };
-Tensor _asinh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _atanh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _cbrt(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _cosh(const Tensor&, const std::optional<MemoryConfig>&);
@@ -104,11 +102,6 @@ Tensor _frac(const Tensor&, const std::optional<MemoryConfig>&);
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
 struct OpHandler;
-
-template <>
-struct OpHandler<UnaryCompositeOpType::ASINH> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _asinh(t1, mem_cfg); }
-};
 
 template <>
 struct OpHandler<UnaryCompositeOpType::ATANH> {
