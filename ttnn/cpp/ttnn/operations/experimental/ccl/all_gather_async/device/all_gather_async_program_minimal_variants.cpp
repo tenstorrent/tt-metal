@@ -397,7 +397,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto reserved_packet_header_forward_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
     auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
+    tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_forward_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_forward_CB_index, tt::DataFormat::RawUInt32}})
