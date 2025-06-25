@@ -38,12 +38,11 @@ void MAIN {
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
 
     constexpr uint32_t face_r_dim = window_size_hw < 16 ? window_size_hw : 16;
-    constexpr bool is_partial_tile = in_c < 32;
-    static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile                                           ? 1
-                                                 : (max_sticks_for_reduction < 32 || window_size_hw <= 16) ? 2
+    constexpr bool last_tile_is_partial = in_c % 32 != 0 && in_c % 32 < 16;
+    constexpr uint32_t num_faces_in_input_tile = 
+                                                (max_sticks_for_reduction < 32 || window_size_hw <= 16) ? 2
                                                                                                            : 4;
-    constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
+    constexpr uint32_t num_faces_in_output_tile = last_tile_is_partial ? 1 : 2;
     constexpr uint32_t num_out_sticks = 1;
 
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::SUM;
