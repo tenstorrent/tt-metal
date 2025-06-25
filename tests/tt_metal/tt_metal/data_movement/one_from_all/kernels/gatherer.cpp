@@ -22,7 +22,7 @@ void kernel_main() {
     }
 
     DeviceTimestampedData("Number of transactions", num_of_transactions);
-    DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
+    DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes * total_subordinate_cores);
     DeviceTimestampedData("Test id", test_id);
 
     {
