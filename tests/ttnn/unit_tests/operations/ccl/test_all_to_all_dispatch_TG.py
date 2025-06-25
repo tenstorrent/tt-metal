@@ -27,7 +27,7 @@ from tracy import signpost
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -48,7 +48,7 @@ def test_all_to_all_dispatch_no_trace(
     mesh_device,
     trace_mode,
     mesh_shape,
-    axis,
+    cluster_axis,
     batches_per_device,
     experts_per_device,
     select_experts_k,
@@ -62,10 +62,10 @@ def test_all_to_all_dispatch_no_trace(
     input_memory_config,
     output_memory_config,
 ):
-    if axis is None:
+    if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
     else:
-        dispatch_devices = mesh_shape[axis]
+        dispatch_devices = mesh_shape[cluster_axis]
 
     batch = batches_per_device * dispatch_devices
     experts = experts_per_device * dispatch_devices
@@ -87,7 +87,7 @@ def test_all_to_all_dispatch_no_trace(
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,
-        axis=axis,
+        cluster_axis=cluster_axis,
     )
 
 
@@ -106,7 +106,7 @@ def test_all_to_all_dispatch_no_trace(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -128,7 +128,7 @@ def test_all_to_all_dispatch_trace(
     mesh_device,
     trace_mode,
     mesh_shape,
-    axis,
+    cluster_axis,
     batches_per_device,
     experts_per_device,
     select_experts_k,
@@ -142,10 +142,10 @@ def test_all_to_all_dispatch_trace(
     input_memory_config,
     output_memory_config,
 ):
-    if axis is None:
+    if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
     else:
-        dispatch_devices = mesh_shape[axis]
+        dispatch_devices = mesh_shape[cluster_axis]
 
     batch = batches_per_device * dispatch_devices
     experts = experts_per_device * dispatch_devices
@@ -167,5 +167,5 @@ def test_all_to_all_dispatch_trace(
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,
-        axis=axis,
+        cluster_axis=cluster_axis,
     )

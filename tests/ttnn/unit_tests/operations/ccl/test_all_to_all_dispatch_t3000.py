@@ -200,7 +200,7 @@ def run_all_to_all_dispatch_test(
     topology=ttnn.Topology.Linear,
     input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    axis=1,
+    cluster_axis=1,
 ):
     mesh_device.enable_program_cache()
     devices = mesh_shape[0] * mesh_shape[1]
@@ -226,14 +226,14 @@ def run_all_to_all_dispatch_test(
 
     output_tensor_goldens_list = []
     output_metadata_goldens_list = []
-    if axis is None:
+    if cluster_axis is None:
         mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
-    elif axis == 1:
+    elif cluster_axis == 1:
         mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=mesh_shape)
-    elif axis == 0:
+    elif cluster_axis == 0:
         mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape)
     else:
-        raise ValueError(f"Invalid axis: {axis}")
+        raise ValueError(f"Invalid cluster_axis: {cluster_axis}")
 
     for iter in range(num_iters):
         input_tokens, expert_indices, expert_mapping, sparse_output_token_tensor, metadata_tensor = gen_tensors(
@@ -344,7 +344,7 @@ def run_all_to_all_dispatch_test(
                 input_tensors[buffer_index],
                 expert_indices_tensors[buffer_index],
                 expert_mapping_tensors[buffer_index],
-                axis=axis,
+                cluster_axis=cluster_axis,
                 num_links=num_links,
                 topology=topology,
                 memory_config=output_memory_config,
@@ -521,7 +521,7 @@ def run_all_to_all_dispatch_test(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -542,7 +542,7 @@ def test_all_to_all_dispatch_no_trace(
     mesh_device,
     trace_mode,
     mesh_shape,
-    axis,
+    cluster_axis,
     batches_per_device,
     experts_per_device,
     select_experts_k,
@@ -556,10 +556,10 @@ def test_all_to_all_dispatch_no_trace(
     input_memory_config,
     output_memory_config,
 ):
-    if axis is None:
+    if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
     else:
-        dispatch_devices = mesh_shape[axis]
+        dispatch_devices = mesh_shape[cluster_axis]
 
     batch = batches_per_device * dispatch_devices
     experts = experts_per_device * dispatch_devices
@@ -581,7 +581,7 @@ def test_all_to_all_dispatch_no_trace(
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,
-        axis=axis,
+        cluster_axis=cluster_axis,
     )
 
 
@@ -600,7 +600,7 @@ def test_all_to_all_dispatch_no_trace(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -622,7 +622,7 @@ def test_all_to_all_dispatch_trace(
     mesh_device,
     trace_mode,
     mesh_shape,
-    axis,
+    cluster_axis,
     batches_per_device,
     experts_per_device,
     select_experts_k,
@@ -636,10 +636,10 @@ def test_all_to_all_dispatch_trace(
     input_memory_config,
     output_memory_config,
 ):
-    if axis is None:
+    if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
     else:
-        dispatch_devices = mesh_shape[axis]
+        dispatch_devices = mesh_shape[cluster_axis]
 
     batch = batches_per_device * dispatch_devices
     experts = experts_per_device * dispatch_devices
@@ -661,7 +661,7 @@ def test_all_to_all_dispatch_trace(
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,
-        axis=axis,
+        cluster_axis=cluster_axis,
     )
 
 
