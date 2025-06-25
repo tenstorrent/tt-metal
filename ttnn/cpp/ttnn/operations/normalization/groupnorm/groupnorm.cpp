@@ -86,9 +86,11 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     const MemoryConfig& output_mem_config = memory_config.value_or(dram_memory_config);
 
     // Initialize compute kernel config
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE
-                    ? input_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    TT_FATAL(
+        input_tensor.storage_type() == StorageType::DEVICE,
+        "Invalid input tensor storage type: Input tensor must be on device. (storage type={})",
+        input_tensor.storage_type());
+    const auto arch = input_tensor.device()->arch();
     const auto default_math_fidelity = MathFidelity::HiFi4;
     const auto default_approx_mode = true;
     const auto default_fp32_acc = false;
