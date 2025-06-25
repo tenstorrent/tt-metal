@@ -425,6 +425,7 @@ std::map<chip_id_t, IDevice*> CreateDevices(
 
 void CloseDevices(const std::map<chip_id_t, IDevice*>& devices) {
     std::vector<IDevice*> devices_to_close;
+    devices_to_close.reserve(devices.size());
     for (auto& [id, device] : devices) {
         devices_to_close.push_back(device);
     }
@@ -539,8 +540,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
 
 void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     ZoneScoped;
-    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
-        buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
+    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED) {
         WriteToDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
         WriteToDeviceSharded(buffer, host_buffer);
@@ -642,8 +642,7 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer) {
 
 void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer) {
     ZoneScoped;
-    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
-        buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
+    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED) {
         ReadFromDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
         ReadFromDeviceSharded(buffer, host_buffer);
@@ -972,7 +971,8 @@ IDevice* CreateDevice(
 IDevice* CreateDeviceMinimal(
     chip_id_t device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     ZoneScoped;
-    tt::tt_metal::MetalContext::instance().initialize(dispatch_core_config, num_hw_cqs, {});
+    tt::tt_metal::MetalContext::instance().initialize(
+        dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
     auto dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
@@ -1207,37 +1207,14 @@ GlobalSemaphore CreateGlobalSemaphore(
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
-    return Buffer::create(
-        config.device,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        config.buffer_layout,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt);
+    return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);
 }
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, DeviceAddr address) {
-    return Buffer::create(
-        config.device,
-        address,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        config.buffer_layout,
-        std::nullopt,
-        std::nullopt);
+    return Buffer::create(config.device, address, config.size, config.page_size, config.buffer_type);
 }
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubDeviceId sub_device_id) {
     return Buffer::create(
-        config.device,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        config.buffer_layout,
-        std::nullopt,
-        std::nullopt,
-        sub_device_id);
+        config.device, config.size, config.page_size, config.buffer_type, std::nullopt, std::nullopt, sub_device_id);
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config) {
     return Buffer::create(
@@ -1245,10 +1222,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config) {
         config.size,
         config.page_size,
         config.buffer_type,
-        config.buffer_layout,
-        config.shard_parameters,
-        std::nullopt,
-        std::nullopt);
+        BufferShardingArgs(config.shard_parameters, config.buffer_layout));
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAddr address) {
     return Buffer::create(
@@ -1257,10 +1231,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAd
         config.size,
         config.page_size,
         config.buffer_type,
-        config.buffer_layout,
-        config.shard_parameters,
-        std::nullopt,
-        std::nullopt);
+        BufferShardingArgs(config.shard_parameters, config.buffer_layout));
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDeviceId sub_device_id) {
     return Buffer::create(
@@ -1268,8 +1239,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
         config.size,
         config.page_size,
         config.buffer_type,
-        config.buffer_layout,
-        config.shard_parameters,
+        BufferShardingArgs(config.shard_parameters, config.buffer_layout),
         std::nullopt,
         sub_device_id);
 }

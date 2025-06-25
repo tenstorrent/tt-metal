@@ -4,12 +4,15 @@
 
 #pragma once
 
+#include <unordered_set>
+
 #include <tt_stl/span.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
 #include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/multi_mesh_types.hpp>
 
 #include <map>
 #include <unordered_map>
@@ -113,14 +116,28 @@ public:
 
     // Get all intermesh ethernet links in the system
     // Returns: map of chip_id -> vector of (eth_core, channel)
-    const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>& get_all_intermesh_eth_links()
-        const;
+    const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>& get_all_intermesh_eth_links() const;
 
     // Check if a specific ethernet core is an intermesh link
     bool is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) const;
 
     // If the ethernet core is an intermesh link, probe to see if it is trained
     bool is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const;
+
+    // Returns set of logical active ethernet coordinates on chip
+    // If skip_reserved_cores is true, will return cores that dispatch is not using,
+    // intended for users to grab available eth cores for testing
+    // `skip_reserved_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
+    // tunneling
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(chip_id_t chip_id, bool skip_reserved_cores = false) const;
+    std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
+
+    // Query the local intermesh link table containing the local to remote link mapping
+    const IntermeshLinkTable& get_local_intermesh_link_table() const;
+
+    // Get the ASIC ID for a chip (the ASIC ID is unique per chip, even in multi-host systems and is programmed
+    // by SPI-ROM firmware)
+    uint64_t get_asic_id(chip_id_t chip_id) const;
 
 private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
@@ -141,7 +158,9 @@ private:
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
     // map[phys_chip_id] has a vector of (eth_core, channel) pairs used for intermesh routing
     std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>> intermesh_eth_links_;
-
+    // Stores a table of all local intermesh links (board_id, chan_id) and the corresponding remote intermesh links
+    IntermeshLinkTable intermesh_link_table_;
+    std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
     // custom logic to order eth channels
     void order_ethernet_channels();
 
@@ -178,6 +197,9 @@ private:
     void convert_fabric_routing_table_to_chip_routing_table();
 
     void write_routing_tables_to_chip(MeshId mesh_id, chip_id_t chip_id) const;
+
+    // Populate the local intermesh link to remote intermesh link table
+    void generate_local_intermesh_link_table();
 
     // Initialize internal map of physical chip_id to intermesh ethernet links
     void initialize_intermesh_eth_links();

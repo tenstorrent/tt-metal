@@ -140,6 +140,7 @@ protected:
         }
 
         std::vector<int> devices_to_open;
+        devices_to_open.reserve(tt::tt_metal::GetNumAvailableDevices());
         for (int i = 0; i < tt::tt_metal::GetNumAvailableDevices(); ++i) {
             devices_to_open.push_back(i);
         }

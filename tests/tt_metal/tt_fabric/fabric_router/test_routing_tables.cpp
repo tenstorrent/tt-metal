@@ -204,18 +204,18 @@ INSTANTIATE_TEST_SUITE_P(
     T3kCustomMeshGraphControlPlaneFixture,
     ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
 
-TEST_F(ControlPlaneFixture, TestQuantaGalaxyControlPlaneInit) {
-    const std::filesystem::path quanta_galaxy_mesh_graph_desc_path =
+TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
+    const std::filesystem::path single_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/quanta_galaxy_mesh_graph_descriptor.yaml";
-    auto control_plane = std::make_unique<ControlPlane>(quanta_galaxy_mesh_graph_desc_path.string());
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml";
+    auto control_plane = std::make_unique<ControlPlane>(single_galaxy_mesh_graph_desc_path.string());
     control_plane->initialize_fabric_context(
         tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
         tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
-TEST_F(ControlPlaneFixture, TestQuantaGalaxyMeshAPIs) {
+TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);
@@ -368,6 +368,16 @@ TEST(MeshGraphValidation, TestGetHostRankForChip) {
     // Test invalid chip IDs for 2x2 configuration
     EXPECT_EQ(mesh_graph_2x2->get_host_rank_for_chip(MeshId{0}, 4), std::nullopt);
     EXPECT_EQ(mesh_graph_2x2->get_host_rank_for_chip(MeshId{1}, 4), std::nullopt);
+}
+
+TEST(MeshGraphValidation, TestExplicitShapeValidationNegative) {
+    // Test that invalid shapes are properly rejected
+    const std::filesystem::path invalid_shape_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_invalid_shape_mesh_graph_descriptor.yaml";
+
+    // This should throw an exception due to incompatible shape
+    EXPECT_THROW(std::make_unique<tt_fabric::MeshGraph>(invalid_shape_mesh_graph_desc_path.string()), std::exception);
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

@@ -395,7 +395,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     log_debug(tt::LogOp, "dest_mesh_id: {}", detail::stringify_vector(dest_mesh_id));
     log_debug(tt::LogOp, "directions: {}", detail::stringify_array(directions));
 
-    auto fabric_max_packet_size = tt::tt_fabric::get_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor.buffer()->is_dram(),

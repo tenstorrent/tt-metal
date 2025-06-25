@@ -21,7 +21,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::select_program_factory(
 void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
-    auto input_spec = input_tensor.tensor_spec();
 
     TT_FATAL(attributes.dim == 3, "dim must be 3, got {}", attributes.dim);
     TT_FATAL(attributes.cluster_axis == 1, "cluster_axis must be 1, got {}", attributes.cluster_axis);
@@ -143,7 +142,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::invoke(
     const uint32_t head_dim,
     const uint32_t slice_size,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::MemoryConfig>& qkv_memory_config) {
+    const std::optional<ttnn::MemoryConfig>& qkv_memory_config,
+    bool use_noc1_only) {
     return {
         operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
@@ -159,6 +159,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::invoke(
             .head_dim = head_dim,
             .slice_size = slice_size,
             .qkv_memory_config = qkv_memory_config,
+            .use_noc1_only = use_noc1_only,
         },
         tensor_args_t{.input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer}};
 }

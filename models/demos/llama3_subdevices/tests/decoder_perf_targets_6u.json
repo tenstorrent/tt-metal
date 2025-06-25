@@ -2,7 +2,7 @@
     "decoder": {
         "RMSAllGather_0": {
             "op_name": "RMS_0",
-            "kernel_duration": 17369.133101851854,
+            "kernel_duration": 16767.84375,
             "op_to_op": 764.3703703703704,
             "first_to_last_start": 2484.1111111111113,
             "non-overlapped-dispatch-time": 7594.6,
@@ -13,8 +13,8 @@
         },
         "RMSAllGather_1": {
             "op_name": "RMS_1",
-            "kernel_duration": 17112.199074074077,
-            "op_to_op": 735.4074074074074,
+            "kernel_duration": 16586.149305555555,
+            "op_to_op": 800.1111111111111,
             "first_to_last_start": 2509.6666666666665,
             "non-overlapped-dispatch-time": 7278.0,
             "kernel_duration_relative_margin": 0.05,
@@ -24,8 +24,8 @@
         },
         "AllGatherConcat_0": {
             "op_name": "AllGatherConcat",
-            "kernel_duration": 11501.984953703703,
-            "op_to_op": 794.7777777777778,
+            "kernel_duration": 9470.010416666666,
+            "op_to_op": 812.1111111111111,
             "first_to_last_start": 1866.0,
             "non-overlapped-dispatch-time": 10806.3,
             "kernel_duration_relative_margin": 0.05,
@@ -35,8 +35,8 @@
         },
         "AllGatherAsync_0": {
             "op_name": "AllGatherAsync_Binary_Mult",
-            "kernel_duration": 10005.356481481482,
-            "op_to_op": 911.8148148148148,
+            "kernel_duration": 7394.454861111111,
+            "op_to_op": 823.4444444444445,
             "first_to_last_start": 1565.888888888889,
             "non-overlapped-dispatch-time": 3782.7,
             "kernel_duration_relative_margin": 0.05,
@@ -90,8 +90,8 @@
         },
         "LlamaReduceScatterCreateHeadsDeviceOperation_0": {
             "op_name": "LlamaReduceScatterCreateHeads",
-            "kernel_duration": 9801.145,
-            "op_to_op": 966.0,
+            "kernel_duration": 8745.277777777777,
+            "op_to_op": 834.4444444444445,
             "first_to_last_start": 1843.22,
             "non-overlapped-dispatch-time": 6101.6,
             "kernel_duration_relative_margin": 0.1,
@@ -101,8 +101,8 @@
         },
         "AllReduceAsync_0": {
             "op_name": "AllReduceAsync_DO",
-            "kernel_duration": 21349.306712962964,
-            "op_to_op": 687.1481481481482,
+            "kernel_duration": 15764.229166666666,
+            "op_to_op": 648.1111111111111,
             "first_to_last_start": 1660.7777777777778,
             "non-overlapped-dispatch-time": 6197.5,
             "kernel_duration_relative_margin": 0.05,
@@ -112,8 +112,8 @@
         },
         "AllReduceAsync_1": {
             "op_name": "AllReduceAsync_FF2",
-            "kernel_duration": 21700.127314814814,
-            "op_to_op": 600.7037037037038,
+            "kernel_duration": 15030.892361111111 ,
+            "op_to_op": 658.7777777777778,
             "first_to_last_start": 1785.2222222222222,
             "non-overlapped-dispatch-time": 6209.8,
             "kernel_duration_relative_margin": 0.05,
@@ -123,8 +123,8 @@
         },
         "Matmul_RS_0": {
             "op_name": "Matmul_FF3_ReduceScatter_FF1",
-            "kernel_duration": 9228.53125,
-            "op_to_op": 673.8148148148148,
+            "kernel_duration": 9468.402777777777,
+            "op_to_op": 693.6666666666666,
             "first_to_last_start": 1993.7777777777778,
             "non-overlapped-dispatch-time": 5982.8,
             "kernel_duration_relative_margin": 0.05,
@@ -134,8 +134,8 @@
         },
         "LlamaReduceScatterDeviceOperation_0": {
             "op_name": "ReduceScatter_FF3",
-            "kernel_duration": 9211.711805555557,
-            "op_to_op": 756.3703703703704,
+            "kernel_duration": 8017.559027777777,
+            "op_to_op": 929.2222222222222,
             "first_to_last_start": 2018.2222222222222,
             "non-overlapped-dispatch-time": 5989.0,
             "kernel_duration_relative_margin": 0.05,
@@ -156,8 +156,8 @@
         },
         "PagedUpdateCacheDeviceOperation_0": {
             "op_name": "PagedUpdateCache",
-            "kernel_duration": 5233.0,
-            "op_to_op": 882.4074074074074,
+            "kernel_duration": 4475.465277777777,
+            "op_to_op": 737.2222222222222,
             "first_to_last_start": 102,
             "non-overlapped-dispatch-time": 4295.2,
             "kernel_duration_relative_margin": 0.2,
@@ -191,8 +191,8 @@
     "model_tail": {
         "InterleavedToShardedDeviceOperation_0": {
             "op_name": "InterleavedToSharded_0",
-            "kernel_duration": 23410.0,
-            "op_to_op": 651.0,
+            "kernel_duration": 21712.65625,
+            "op_to_op": 586.0,
             "non-overlapped-dispatch-time": 5172.0,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
@@ -209,7 +209,7 @@
         },
         "InterleavedToShardedDeviceOperation_2": {
             "op_name": "InterleavedToSharded_2",
-            "kernel_duration": 1348.0,
+            "kernel_duration": 1746.34375,
             "op_to_op": 693.0,
             "non-overlapped-dispatch-time": 2590.0,
             "kernel_duration_relative_margin": 0.2,
@@ -254,8 +254,8 @@
         },
         "AllReduceAsync_0": {
             "op_name": "AllReduceAsync_0",
-            "kernel_duration": 57651.9375,
-            "op_to_op": 683.0,
+            "kernel_duration": 31107.09375,
+            "op_to_op": 634.0,
             "non-overlapped-dispatch-time": 8644.0,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
@@ -272,7 +272,7 @@
         },
         "ShardedToInterleavedDeviceOperation_1": {
             "op_name": "ShardedToInterleavedDeviceOperation_1",
-            "kernel_duration": 1165.0,
+            "kernel_duration": 1434.34375,
             "op_to_op": 653.0,
             "non-overlapped-dispatch-time": 1944.0,
             "kernel_duration_relative_margin": 0.2,
@@ -281,7 +281,7 @@
         },
         "TopK_0": {
             "op_name": "TopK_0",
-            "kernel_duration": 560574.0,
+            "kernel_duration": 553289.8125,
             "op_to_op": 668.0,
             "non-overlapped-dispatch-time": 4645.0,
             "kernel_duration_relative_margin": 0.2,
@@ -290,8 +290,8 @@
         },
         "AllGatherAsync_0": {
             "op_name": "AllGatherAsync_0",
-            "kernel_duration": 9878.3125,
-            "op_to_op": 623.0,
+            "kernel_duration": 7936.65625,
+            "op_to_op": 644.0,
             "non-overlapped-dispatch-time": 2801.0,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
@@ -299,14 +299,23 @@
         },
         "AllGatherAsync_1": {
             "op_name": "AllGatherAsync_1",
-            "kernel_duration": 11106.25,
-            "op_to_op": 660.0,
+            "kernel_duration": 9880.90625,
+            "op_to_op": 689.0,
             "non-overlapped-dispatch-time": 3166.0,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
         "TypecastDeviceOperation_0": {
+            "op_name": "TypecastDeviceOperation_input_bf16",
+            "kernel_duration": 22953.0,
+            "op_to_op": 707.0,
+            "non-overlapped-dispatch-time": 3992.0,
+            "kernel_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.2,
+            "dispatch_duration_relative_margin": 0.5
+        },
+        "TypecastDeviceOperation_1": {
             "op_name": "TypecastDeviceOperation_0",
             "kernel_duration": 2058.0,
             "op_to_op": 639.0,
@@ -315,7 +324,7 @@
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
-        "TypecastDeviceOperation_1": {
+        "TypecastDeviceOperation_2": {
             "op_name": "TypecastDeviceOperation_1",
             "kernel_duration": 2039.0,
             "op_to_op": 661.0,
@@ -334,8 +343,17 @@
             "dispatch_duration_relative_margin": 0.5
         },
         "BinaryDeviceOperation_1": {
+            "op_name": "BinaryDeviceOperation_Temerature_Scaling",
+            "kernel_duration": 871,
+            "op_to_op": 651.0,
+            "non-overlapped-dispatch-time": 5664.0,
+            "kernel_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.2,
+            "dispatch_duration_relative_margin": 0.5
+        },
+        "BinaryDeviceOperation_2": {
             "op_name": "BinaryDeviceOperation_Indices_Correction",
-            "kernel_duration": 3183.0,
+            "kernel_duration": 4956.5,
             "op_to_op": 655.0,
             "non-overlapped-dispatch-time": 6577.0,
             "kernel_duration_relative_margin": 0.2,
@@ -353,7 +371,7 @@
         },
         "Sampling_0": {
             "op_name": "Sampling_0",
-            "kernel_duration": 68179.0,
+            "kernel_duration": 129438.9375,
             "op_to_op": 58097.0,
             "non-overlapped-dispatch-time": 82101.0,
             "kernel_duration_relative_margin": 0.2,

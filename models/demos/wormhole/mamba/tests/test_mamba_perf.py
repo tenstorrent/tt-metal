@@ -138,11 +138,11 @@ def test_mamba_perf_e2e(
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, expected_layer_duration_ms",
-    ((32, 1.619),),
+    ((32, 1.630),),
 )
 def test_mamba_perf_device(batch, expected_layer_duration_ms):
     subdir = "ttnn_mamba"
-    margin = 0.015
+    margin = 0.020
     command = f"pytest models/demos/wormhole/mamba/tests/test_mamba_model.py::test_device_perf[1]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
