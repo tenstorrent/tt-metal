@@ -480,7 +480,7 @@ uint32_t Buffer::num_dev_pages() const {
     if (shard_spec_.has_value()) {
         return shard_spec_->num_pages() * this->num_cores().value();
     }
-    return buffer_distribution_spec_.value().num_dev_pages_per_core() * num_cores().value();
+    return buffer_distribution_spec_.value().max_num_dev_pages_per_core() * num_cores().value();
 }
 
 HalMemType Buffer::memory_type() const {

@@ -98,6 +98,7 @@ def test_accuracy_sdxl(
     print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
 
     data = {
+        "model": "sdxl",  # For compatibility with current processes
         "metadata": {
             "device": "N150",
             "device_vae": vae_on_device,
@@ -105,11 +106,15 @@ def test_accuracy_sdxl(
             "num_prompts": num_prompts,
             "model_name": "sdxl",
         },
-        "metrics": {
-            "average_clip": average_clip_score,
-            "deviation_clip": deviation_clip_score,
-            "fid_score": fid_score,
-        },
+        "benchmarks_summary": [
+            {
+                "device": "N150",
+                "model": "sdxl",
+                "average_clip": average_clip_score,
+                "deviation_clip": deviation_clip_score,
+                "fid_score": fid_score,
+            }
+        ],
     }
 
     out_root, file_name = "test_reports", "sdxl_test_results.json"
