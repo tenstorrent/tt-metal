@@ -17,7 +17,7 @@ from ultralytics import YOLO
 
 import ttnn
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import (
+from models.experimental.yolo_eval.utils import (
     LoadImages,
     postprocess,
     preprocess,
