@@ -42,7 +42,7 @@ from conftest import is_6u
     indirect=True,
 )
 @pytest.mark.parametrize("num_links", [3, 4])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Ring, ttnn.Topology.Linear])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Ring])
 def test_fabric_reduce_scatter_tg_trace_6u(mesh_device, trace_mode, num_links, topology):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)

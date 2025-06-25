@@ -186,6 +186,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     # New all-gather-async and persistent fabric params
     use_all_gather_async=False,
     use_persistent_output=False,
+    linear=True,
 ):
     if use_persistent_output and not use_all_gather_async:
         pytest.skip("Persistent output tensor requires all-gather-async")
@@ -239,8 +240,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn_tensor = ttnn.to_memory_config(ttnn_tensor, input_mem_config)
-    # TODO: Take as an arg
-    linear = True
     if linear:
         all_gather_topology = ttnn.Topology.Linear
         wrap_mesh = False
