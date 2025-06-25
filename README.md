@@ -108,14 +108,19 @@
 ### Object Detection
 | Model                                                                       | Batch | Hardware                                                 | fps     | Target fps | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
-| [YOLOv4 (320x320)](./models/demos/yolov4)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 120     | 300        |             |
+| [YOLOv4 (320x320)](./models/demos/yolov4)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 120     | 420        |             |
 | [YOLOv4 (640x640)](./models/demos/yolov4)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 50      | 100        |             |
+| [YOLOv8x (640x640)](./models/demos/yolov8x)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 40      | 100        |             |
+| [YOLOv9c (640x640)](./models/demos/yolov9c)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 57      | 300        |             |
+| [YOLOv10x (640x640)](./models/demos/yolov10x)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 30      | 200        |             |
+| [YOLOv8s_world (640x640)](./models/demos/yolov8s_world)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 40      | 320        |             |
 
 
 ### Segmentation
 | Model                                                                       | Batch | Hardware                                                 | fps     | Target fps | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
 | [SegFormer Semantic Segmentation (512x512)](./models/demos/segformer)       | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 90      | 300        |             |
+| [YOLOv9c (640x640)](./models/demos/yolov9c)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 55      | 270        |             |
 
 
 ## NLPs
