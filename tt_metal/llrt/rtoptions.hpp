@@ -90,7 +90,7 @@ struct WatcherSettings {
 
 struct InspectorSettings {
     bool enabled = true;
-    bool initialization_is_important = true;
+    bool initialization_is_important = false;
     bool warn_on_write_exceptions = true;
     std::filesystem::path log_path;
 };
@@ -105,6 +105,9 @@ class RunTimeOptions {
     bool is_kernel_dir_env_var_set = false;
     std::string kernel_dir;
     std::string system_kernel_dir;
+
+    bool is_visible_device_env_var_set = false;
+    uint32_t visible_device;
 
     bool build_map_enabled = false;
 
@@ -142,7 +145,8 @@ class RunTimeOptions {
     bool validate_kernel_binaries = false;
     unsigned num_hw_cqs = 1;
 
-    bool fb_fabric_en = false;
+    bool fd_fabric_en = false;
+    bool using_slow_dispatch = false;
 
     bool enable_dispatch_data_collection = false;
 
@@ -158,6 +162,8 @@ class RunTimeOptions {
     std::filesystem::path simulator_path = "";
 
     bool erisc_iram_enabled = false;
+
+    bool fast_dispatch = true;
 
     bool skip_eth_cores_with_retrain = false;
 
@@ -190,6 +196,9 @@ public:
     const std::string& get_kernel_dir() const;
     // Location where kernels are installed via package manager.
     const std::string& get_system_kernel_dir() const;
+
+    inline bool is_visible_device_specified() const { return this->is_visible_device_env_var_set; }
+    inline uint32_t get_visible_device() const { return this->visible_device; }
 
     inline bool get_build_map_enabled() const { return build_map_enabled; }
 
@@ -371,7 +380,8 @@ public:
     inline unsigned get_num_hw_cqs() const { return num_hw_cqs; }
     inline void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
 
-    inline bool get_fd_fabric() const { return fb_fabric_en; }
+    inline bool get_fd_fabric() const { return fd_fabric_en && !using_slow_dispatch; }
+    inline void set_fd_fabric(bool enable) { fd_fabric_en = enable; }
 
     inline uint32_t get_watcher_debug_delay() const { return watcher_debug_delay; }
     inline void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
@@ -392,6 +402,7 @@ public:
     inline const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
     inline bool get_erisc_iram_enabled() const { return erisc_iram_enabled; }
+    inline bool get_fast_dispatch() const { return fast_dispatch; }
 
     inline bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 

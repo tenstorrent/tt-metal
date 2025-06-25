@@ -18,13 +18,13 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
+#include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 #include <sstream>
 #include <type_traits>
 #include <ranges>
@@ -73,10 +73,11 @@ auto create_sender_buffers(
     auto cb_src0_handle = CreateCircularBuffer(program, sender_core_range, cb_src0_config);
 
     // Packet header buffer
-    auto header_buffer_config = tt::tt_metal::CircularBufferConfig(
-                                    PACKET_HEADER_BUFFER_SIZE * sizeof(tt::tt_fabric::PacketHeader) * 2,
-                                    {{tt::CB::c_in1, tt::DataFormat::RawUInt32}})
-                                    .set_page_size(tt::CB::c_in1, sizeof(tt::tt_fabric::PacketHeader));
+    auto header_buffer_config =
+        tt::tt_metal::CircularBufferConfig(
+            PACKET_HEADER_BUFFER_SIZE * tt::tt_fabric::get_tt_fabric_packet_header_size_bytes() * 2,
+            {{tt::CB::c_in1, tt::DataFormat::RawUInt32}})
+            .set_page_size(tt::CB::c_in1, tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
 
     auto header_buffer_handle = CreateCircularBuffer(program, sender_core_range, header_buffer_config);
 
@@ -379,7 +380,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         receiver_reader_kernel_config);
 
     // Determine output shape and fracturing
-    const auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     const auto in_row_tiles = input_shape[2] / tt::constants::TILE_HEIGHT;
     const auto in_col_tiles = input_shape[3] / tt::constants::TILE_WIDTH;
     auto output_shape = output_buffer.padded_shape();

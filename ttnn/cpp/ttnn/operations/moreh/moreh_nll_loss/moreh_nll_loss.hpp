@@ -18,7 +18,7 @@ struct MorehNllLoss {
         const std::optional<Tensor>& weight_tensor,
         const std::optional<Tensor>& divisor_tensor,
         const std::optional<Tensor>& output_tensor,
-        const int32_t ignore_index,
+        int32_t ignore_index,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };

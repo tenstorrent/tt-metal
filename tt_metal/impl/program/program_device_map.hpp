@@ -22,7 +22,7 @@ struct multicast_transfer_info {
 };
 
 std::vector<multicast_transfer_info> extract_dst_noc_multicast_info(
-    IDevice* device, const std::vector<CoreRange>& ranges, const CoreType core_type);
+    IDevice* device, const std::vector<CoreRange>& ranges, CoreType core_type);
 struct transfer_info {
     std::uint32_t dst_base_addr;
     std::vector<std::pair<transfer_info_cores, std::uint32_t>> dst_noc_info;  // noc_encoding, num_mcast_dests

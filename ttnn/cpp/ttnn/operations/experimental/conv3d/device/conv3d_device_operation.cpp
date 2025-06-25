@@ -174,7 +174,7 @@ std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>
 
     ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
 
-    auto memory_config = input_tensor_a.memory_config();
+    const auto& memory_config = input_tensor_a.memory_config();
     auto dtype = input_tensor_a.dtype();
 
     return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), memory_config))};

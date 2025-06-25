@@ -135,6 +135,17 @@ def run_llama3_demo(
     assert batch_size <= 32, "Max batch size currently supported is 32"
     assert max_seq_len <= 128 * 1024, "Max sequence length must be less than 128k tokens"
 
+    top_k = sampling_params["top_k"]
+    if isinstance(top_k, int):
+        top_k = [top_k] * batch_size
+    top_p = sampling_params["top_p"]
+    if isinstance(top_p, float):
+        top_p = [top_p] * batch_size
+    temperature = sampling_params["temperature"]
+    if isinstance(temperature, float):
+        temperature = [temperature] * batch_size
+    seed = sampling_params["seed"]
+
     dummy_weights = weights == "random"
 
     # We disregard any warmup iteration for profiling, in favour of just measuring compile time on the first iteration
@@ -178,8 +189,8 @@ def run_llama3_demo(
     tt_device_name = model_args.device_name  # ["N150", "N300", "T3K", "TG"]
 
     if llama_model_name == "3.1-70B":
-        assert tt_device_name in ["TG"], "Llama3.1-70B is only supported on TG"
-        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama3.1-70B"
+        assert tt_device_name in ["TG"], "Llama-3.1-70B is only supported on TG"
+        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama-3.1-70B"
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
@@ -216,7 +227,7 @@ def run_llama3_demo(
         )
         logger.info("Page table tensor done")
 
-    # Load TTNN Llama3.1 model
+    # Load TTNN Llama-3.1 model
     logger.info("Loading weights to device...")
     profiler.start("loading_weights_to_device")
     tt_model = TtTransformer(
@@ -238,7 +249,7 @@ def run_llama3_demo(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        sampling_params=sampling_params,
+        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     profiler.end("loading_weights_to_device")
@@ -322,7 +333,7 @@ def run_llama3_demo(
         )
 
         # Sampling
-        _ = tt_sampling(tt_out[0], tt_out_tok)
+        _ = tt_sampling(tt_out[0], top_k, top_p, seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
         logger.info(f"Sampling done")
 
     if not stress_test:
@@ -334,7 +345,10 @@ def run_llama3_demo(
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
-    # profiler.end(f"plus one position done")
+
+    _ = tt_sampling(
+        tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok
+    )  # Compile again without seed to obtain random sampling; at this position to simplify test_decoder_device_perf.py
 
     # Capture Trace
     logger.info(f"Capturing model trace...")
@@ -356,7 +370,7 @@ def run_llama3_demo(
     )
 
     # Sampling
-    _ = tt_sampling(tt_out[0], tt_out_tok)
+    _ = tt_sampling(tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok)
 
     if not stress_test:
         ttnn.plus_one(
@@ -419,7 +433,7 @@ def run_llama3_demo(
     # Tracks the number of iterations where throughput falls below `tsu_threshold`
     tsu_failures = 0
     all_tokens_per_second_per_user = []
-
+    failed_tokens_per_second_per_user = []
     read_events = []
     tt_out_toks_cpu = []
     iteration_time_start = time()
@@ -503,11 +517,12 @@ def run_llama3_demo(
 
                 if not stress_test:
                     # Increment failure count if throughput is too low
-                    if iteration < 200 and (
+                    if decode_iteration in range(1, 200) and (
                         tokens_per_second_per_user < tsu_thresholds["min"]
                         or tokens_per_second_per_user > tsu_thresholds["max"]
                     ):
                         tsu_failures += 1
+                        failed_tokens_per_second_per_user.append((decode_iteration, tokens_per_second_per_user))
 
                 iteration_time_start = time()
 
@@ -562,17 +577,13 @@ def run_llama3_demo(
 
         # print before assertion
         out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
-        tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * iteration / 100
+        tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * decode_iteration / 100
         if tsu_failures > tsu_perf_drop_limit:
             logger.info(out_of_targets_msg)
             logger.info(f"Failing iterations sorted by t/s/u")
-            sorted_tokens_per_second_per_user = sorted(all_tokens_per_second_per_user)
-            for i in range(len(sorted_tokens_per_second_per_user)):
-                if (
-                    sorted_tokens_per_second_per_user[i] < tsu_thresholds["min"]
-                    or sorted_tokens_per_second_per_user[i] > tsu_thresholds["max"]
-                ):
-                    logger.info(f"Iteration {i}: {sorted_tokens_per_second_per_user[i]}")
+            sorted_tokens_per_second_per_user = sorted(failed_tokens_per_second_per_user, key=lambda x: x[1])
+            for iteration, tsu in sorted_tokens_per_second_per_user:
+                logger.info(f"Iteration {iteration}: {tsu}")
         # Assert at the end of test to check if the throughput recuperated
         assert tsu_failures <= tsu_perf_drop_limit, out_of_targets_msg
 
@@ -585,7 +596,7 @@ def run_llama3_demo(
 # input_prompts (string): input json file with prompts to process. See models/demos/llama3/demo/*.json for list of input files
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
-# max_seq_len (int): Maximum context length supported by the model (Llama3.1 and Llama3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
+# max_seq_len (int): Maximum context length supported by the model (Llama-3.1 and Llama-3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
 # batch_size (int): Number of users in a batch (Supports 1/2/4/8/16/32 batches)
 # max_generated_tokens (int): Maximum number of tokens to generate for each user (Note that the users will stop generation before this limit if they reach a EoS token)
 # paged_attention (bool): Whether to use paged attention or default attention (vLLM requires paged attention)
@@ -608,7 +619,7 @@ def run_llama3_demo(
             2000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 32, "top_p": 0.9, "temperature": 0.7, "seed": 42},  # sampling_params
             False,  # stress_test
             0,  # start_pos
         ),
@@ -623,7 +634,7 @@ def run_llama3_demo(
             2000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             0,  # start_pos
         ),
@@ -638,7 +649,7 @@ def run_llama3_demo(
             500000,  # max_generated_tokens (same index for stress test)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.0, "temperature": 1.0, "seed": 42},  # sampling_params
             True,  # stress_test
             0,  # start_pos
         ),
@@ -653,7 +664,7 @@ def run_llama3_demo(
             2048,  # max_generated_tokens (same index for stress test)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
         ),
@@ -668,7 +679,7 @@ def run_llama3_demo(
             1,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos
         ),
@@ -683,7 +694,7 @@ def run_llama3_demo(
             20000,  # experimentally established as large enough to catch ND hangs
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
         ),
@@ -751,7 +762,6 @@ def test_llama_demo(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
-
     if galaxy_type != "6U" and galaxy_type != "4U":
         raise Exception("Not running on TG nor on 6U, you must run on those systems for this test")
 
