@@ -19,7 +19,6 @@
 #include <set>
 #include <vector>
 
-#include "distributed/mesh_socket_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.h>
 
@@ -197,9 +196,8 @@ size_t get_number_of_available_routing_planes(
     size_t row_idx = cluster_axis == 0 ? 0 : row_or_col;
     size_t col_idx = cluster_axis == 0 ? row_or_col : 0;
     auto* first_chip = mesh_device.get_device(row_idx, col_idx);
-    chip_id_t first_chip_id = mesh_device.get_device(row_idx, col_idx)->id();
-    auto mesh_id = tt::tt_metal::distributed::get_physical_mesh_id(&mesh_device, MeshCoordinate{row_idx, col_idx});
-    auto fabric_node_in_row_or_col = FabricNodeId{MeshId{mesh_id}, first_chip_id};
+    chip_id_t first_chip_id = first_chip->id();
+    auto fabric_node_in_row_or_col = control_plane.get_fabric_node_id_from_physical_chip_id(first_chip_id);
 
     // Map cluster axis to routing directions
     constexpr std::array<std::array<RoutingDirection, 2>, 2> cluster_axis_directions_to_check = {
