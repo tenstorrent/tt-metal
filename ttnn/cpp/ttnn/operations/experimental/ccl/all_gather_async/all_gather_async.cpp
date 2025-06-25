@@ -24,7 +24,6 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
 
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::Tensor& input_tensor,
-    ttnn::Tensor& persistent_intermediate_buffer,
     ttnn::Tensor& persistent_output_buffer,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -35,7 +34,6 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     std::optional<uint32_t> cluster_axis) {
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensor,
-        persistent_intermediate_buffer,
         persistent_output_buffer,
         dim,
         multi_device_global_semaphore,
