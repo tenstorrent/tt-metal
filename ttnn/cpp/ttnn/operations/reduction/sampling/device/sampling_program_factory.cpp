@@ -17,11 +17,12 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     const Tensor& input_indices_tensor,
     const std::vector<uint16_t>& k,
     const std::vector<float>& p,
-    const uint32_t seed,
+    const std::optional<uint32_t>& seed,
     const std::optional<CoreRangeSet>& sub_core_grids,
     Tensor& output_tensor) {
     using namespace tt::constants;
     tt::tt_metal::Program program{};
+    uint32_t random_seed = 0;
 
     tt::DataFormat input_values_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.dtype());
@@ -59,6 +60,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
         core_grid = sub_core_grids.value();
     }
     auto cores = corerange_to_cores(core_grid, num_cores, true);
+
+    if (seed.has_value()) {
+        random_seed = seed.value();
+    }
 
     // for streaming in input
     uint32_t num_cb_unit = 2;
@@ -118,7 +123,15 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
         tt::tt_metal::CircularBufferConfig(
             num_cb_unit * input_values_tile_size, {{values_cb_index, input_values_cb_data_format}})
             .set_page_size(values_cb_index, input_values_tile_size);
+
     auto cb_values_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, values_cb_config);
+
+    uint32_t cb_local_vals_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig cb_local_vals_config =
+        tt::tt_metal::CircularBufferConfig(
+            num_cb_unit * input_values_tile_size, {{cb_local_vals_index, input_values_cb_data_format}})
+            .set_page_size(cb_local_vals_index, input_values_tile_size);
+    auto cb_local_vals_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_local_vals_config);
 
     // // Output local indices
     uint32_t output_ind_cb_index = tt::CBIndex::c_8;
@@ -220,7 +233,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
             scale_cb_index,
             packed_identity_scalar,
             final_indices_rm_cb_index,
-            values_cb_index,
+            // values_cb_index,
+            cb_local_vals_index,
             output_ind_cb_index,
             aligned_final_indices_rm_unit_size,
             aligned_out0_unit_size,
@@ -256,7 +270,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
             round_up_to_mul32(k[i]),
             (std::uint32_t)std::log2(round_up_to_mul32(k[i])),
             rand_tile_index,
-            seed};
+            random_seed,
+            cb_local_vals_index};
 
         tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
             program,
