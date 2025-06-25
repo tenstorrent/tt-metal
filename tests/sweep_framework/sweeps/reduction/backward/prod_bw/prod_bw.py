@@ -11,7 +11,7 @@ import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import check_with_pcc, profile_ttnn_call
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
@@ -140,9 +140,9 @@ def run(
         memory_config=input_a_memory_config,
     )
 
-    start_time = start_measuring_time()
-    output_tensor = ttnn.prod_bw(grad_tensor, input_tensor_a, dim=dim, memory_config=output_memory_config)[0]
-    output_tensor = ttnn.to_torch(output_tensor)
-    e2e_perf = stop_measuring_time(start_time)
+    output_tensor, e2e_perf = profile_ttnn_call(
+        ttnn.prod_bw, grad_tensor, input_tensor_a, dim=dim, memory_config=output_memory_config
+    )
+    output_tensor = ttnn.to_torch(output_tensor[0])
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
