@@ -29,35 +29,40 @@ def get_byte_count(tensor):
     return count * get_product(tensor.shape)
 
 
-WH_DRAM_THROUGHPUT = 256  # bytes/ns
+ARCH2DRAM_THROUGHPUT = {
+    "wormhole_b0": 256,  # bytes/ns
+    "blackhole": 512,  # bytes/ns
+}
 
 
-def get_rooofline_message(tensors, throughput=WH_DRAM_THROUGHPUT):
+def get_roofline_metrics(tensors, throughput=None):
+    if throughput is None:
+        throughput = ARCH2DRAM_THROUGHPUT[ttnn.get_arch_name()]
+
     byte_count = 0
     for tensor in tensors:
         byte_count += get_byte_count(tensor)
 
     # bytes / bytes/ns = ns
     roofline = byte_count / throughput
-    return f"ROOFLINE {roofline} BYTECOUNT {byte_count}"
+    return {"ROOFLINE": roofline, "BYTECOUNT": byte_count}
 
 
-def update_check_result(check_result, messages):
+def update_check_result(check_result, metrics):
     status, message = check_result
     if not status:
         return check_result
-    new_message = message
-    for msg in messages:
-        new_message += " " + msg
-    return (status, "PCC " + new_message)
+    metrics.update({"PCC": message})
+    return status, metrics
 
 
 def get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf, flop_counts=None):
     check_result = check_with_pcc(torch_output_tensor, output_tensor, expected_pcc)
-    messages = [get_rooofline_message(tensors)]
+    metrics = get_roofline_metrics(tensors)
+    metrics.update({"E2E_PERF": e2e_perf})
     if flop_counts:
-        messages.append(f"FLOP_COUNT {get_product(flop_counts)}")
-    updated_check_result = update_check_result(check_result, messages)
+        metrics.update({"FLOP_COUNT": get_product(flop_counts)})
+    updated_check_result = update_check_result(check_result, metrics)
     return [updated_check_result, e2e_perf]
 
 
