@@ -25,10 +25,10 @@ void MAIN {
 
     constexpr uint32_t split_reader = get_compile_time_arg_val(2);
 
-    constexpr uint32_t nsticks_per_core_by_nblocks = get_compile_time_arg_val(3);
-    constexpr uint32_t in_c = get_compile_time_arg_val(4);
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(5);
-    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(6);
+    constexpr uint32_t nsticks_per_core_by_nblocks = get_compile_time_arg_val(6);
+    constexpr uint32_t in_c = get_compile_time_arg_val(7);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(8);
+    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(9);
 
     constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(7);
     constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(8);  // for split reader
@@ -37,10 +37,10 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
 
-    constexpr bool is_partial_tile = in_c < 32;
-    static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : max_rows_for_reduction < 32 ? 2 : 4;
-    constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
+    constexpr bool last_tile_is_partial = in_c % 32 != 0 && in_c % 32 < 16;
+    constexpr uint32_t num_faces_in_input_tile = max_rows_for_reduction < 32 ? 2 : 4;
+    constexpr uint32_t num_faces_in_output_tile = 2;
+    constexpr uint32_t num_faces_in_last_output_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::SUM;

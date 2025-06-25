@@ -42,12 +42,8 @@ inline void reduce_h_fused(
     const uint32_t out_cb_id) {
     constexpr uint32_t num_out_rows = 1;
     constexpr uint32_t num_output_faces = (is_partial_tile ? 1 : 2);
-    DPRINT << "num_output tiles " << num_output_tiles << ENDL();
-    DPRINT << "num_faces_in_tile " << num_faces_in_tile << ENDL();
-    DPRINT << "num_output_faces " << num_output_faces << ENDL();
     cb_reserve_back(out_cb_id, num_output_tiles);
     const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
-    cb_wait_front(curr_in_cb_id, 1);
 
     tile_regs_acquire();
     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
@@ -55,7 +51,6 @@ inline void reduce_h_fused(
     for (uint32_t c_i = 0; c_i < num_output_tiles; ++c_i) {
         reduce_tile_math(c_i, num_faces_in_tile);
     }
-    cb_pop_front(curr_in_cb_id, 1);
     tile_regs_wait();
     tile_regs_commit();
     pack_untilize_dst<num_output_tiles>(
@@ -84,9 +79,8 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
 
-    constexpr bool last_tile_is_partial = in_c % 32 != 0;
+    constexpr bool last_tile_is_partial = in_c % 32 != 0 && in_c % 32 < 17;
     constexpr uint32_t num_faces_in_tile = window_size_hw > 16 ? 4 : 2;
-    constexpr uint32_t num_faces_in_last_tile = last_tile_is_partial ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
@@ -119,18 +113,16 @@ void MAIN {
     for (uint32_t i = 0; i < nsticks_per_core; ++i) {
         const uint32_t curr_scalar_cb_id =
             (split_reader && (i & 0x1) && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+        const uint32_t curr_in_cb_id = (split_reader && (i & 0x1)) ? in_cb_id_1 : in_cb_id_0;
 
         if constexpr (!one_scalar_per_core) {
             cb_wait_front(curr_scalar_cb_id, 1);
         }
         // perform the reduction over the first N - 1 whole chunks
-        // if constexpr (tilize_reconfig_needed) {
         UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
             in_cb_id_0, curr_scalar_cb_id, max_tiles_per_iter, num_faces_in_tile, face_r_dim, 1)));
-        //}
-        // pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
-        DPRINT << "in_blocks_c: " << in_nblocks_c << ENDL();
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; ++b_i) {
+            cb_wait_front(curr_in_cb_id, 1);
             reduce_h_fused<
                 max_tiles_per_iter,
                 false,
@@ -139,52 +131,17 @@ void MAIN {
                 num_faces_in_tile,
                 neginf_srca_maxpool,
                 zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, out_cb_id);
+            cb_pop_front(curr_in_cb_id, 1);
         }
 
-        // if constexpr (tilize_reconfig_needed) {
-        UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-            in_cb_id_0, curr_scalar_cb_id, partial_iter_output_tiles, num_faces_in_tile, face_r_dim, 1)));
-        pack_untilize_dst_init_short<partial_iter_output_tiles>(out_cb_id, num_out_rows, num_faces_in_tile);
-        //}
-        if (last_tile_is_partial) {
-            DPRINT << "Last tile is partial" << ENDL();
-            if (partial_iter_output_tiles > 1) {
-                DPRINT << "There are some tiles before the partial" << ENDL();
-                DPRINT << "There are some tiles before the partial faces " << num_faces_in_tile << ENDL();
-                // pack_untilize_dst_init_short<partial_iter_output_tiles - 1>(out_cb_id, num_out_rows,
-                // num_faces_in_tile);
-                //  perform the reduction over the either whole or partial chunk N
-                DPRINT << "in_blocks_c: " << partial_iter_output_tiles << ENDL();
-                reduce_h_fused<
-                    partial_iter_output_tiles - 1,
-                    false,
-                    split_reader,
-                    face_r_dim,
-                    num_faces_in_tile,
-                    neginf_srca_maxpool,
-                    zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, out_cb_id);
-            }
-            // if constexpr (tilize_reconfig_needed) {
-            //     DPRINT << "reconfig needed" << ENDL();
-            //     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-            //         in_cb_id_0, curr_scalar_cb_id, 1, num_faces_in_tile, face_r_dim, 1)));
-            // }
-            // pack_untilize_dst_init_short<1>(out_cb_id, num_out_rows, num_faces_in_tile);
+        cb_wait_front(curr_in_cb_id, 1);
+        if (partial_iter_output_tiles > 1) {
+            UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                in_cb_id_0, curr_scalar_cb_id, partial_iter_output_tiles, num_faces_in_tile, face_r_dim, 1)));
+            pack_untilize_dst_init_short<partial_iter_output_tiles>(out_cb_id, num_out_rows, num_faces_in_tile);
             //  perform the reduction over the either whole or partial chunk N
-            DPRINT << "num_faces_in_last_tile: " << num_faces_in_last_tile << ENDL();
             reduce_h_fused<
-                1,
-                last_tile_is_partial,
-                split_reader,
-                face_r_dim,
-                num_faces_in_tile,
-                neginf_srca_maxpool,
-                zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, out_cb_id);
-        } else {
-            // perform the reduction over the either whole or partial chunk N
-            DPRINT << "in_blocks_c: " << partial_iter_output_tiles << ENDL();
-            reduce_h_fused<
-                partial_iter_output_tiles,
+                partial_iter_output_tiles - 1,
                 false,
                 split_reader,
                 face_r_dim,
@@ -192,6 +149,20 @@ void MAIN {
                 neginf_srca_maxpool,
                 zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, out_cb_id);
         }
+
+        pack_untilize_uninit(out_cb_id);
+        UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+            in_cb_id_0, curr_scalar_cb_id, 1, num_faces_in_tile, face_r_dim, 1)));
+        pack_untilize_dst_init_short<1>(out_cb_id, num_out_rows, num_faces_in_tile);
+        reduce_h_fused<
+            1,
+            last_tile_is_partial,
+            split_reader,
+            face_r_dim,
+            num_faces_in_tile,
+            neginf_srca_maxpool,
+            zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, out_cb_id);
+        cb_pop_front(curr_in_cb_id, 1);
 
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);
