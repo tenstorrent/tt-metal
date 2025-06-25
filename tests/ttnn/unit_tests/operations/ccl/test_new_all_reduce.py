@@ -67,6 +67,7 @@ def run_all_reduce_impl(
     trace_mode=False,
     validate_all=True,
     profiler=BenchmarkProfiler(),
+    linear=True,
 ):
     cluster_shape = (8, 4)
 
@@ -79,8 +80,6 @@ def run_all_reduce_impl(
     ##################################
     ##### Set up fabric stuff
     ##################################
-
-    linear = True
     if linear:
         all_reduce_topology = ttnn.Topology.Linear
         wrap_mesh = False
