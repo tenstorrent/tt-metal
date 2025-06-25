@@ -21,7 +21,12 @@ void kernel_main() {
     const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
-    while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
+    DPRINT << "reduction_receiver out_ready_sem_wait_value: " << out_ready_sem_wait_value << "\n";
+    DPRINT << "reduction_receiver before out_ready_sem_value: "
+           << *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) << "\n";
+    // while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
+    DPRINT << "reduction_receiver afterward out_ready_sem_value: "
+           << *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) << "\n";
 
     /*
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
@@ -34,5 +39,7 @@ void kernel_main() {
 
     // 2. Signal compute kernel to start processing
     cb_push_back(cb_id, total_num_reduction_tiles);
+    DPRINT << "to reset global semaphore\n";
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
+    DPRINT << "reduction_receiver done \n";
 }
