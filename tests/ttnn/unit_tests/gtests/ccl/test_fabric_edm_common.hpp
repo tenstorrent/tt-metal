@@ -2707,7 +2707,7 @@ int validate_1d_fabric_packet_send_test_config(
             "system");
         return -1;
     }
-    if (num_devices == 2 && params.num_links > 1 &&
+    if (num_devices == 2 && (params.num_links > 1 || params.fabric_mode != FabricTestMode::Linear) &&
         tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0) {
         log_info(tt::LogTest, "Bandwidth tests not enabled on N300 yet");
         return -1;
