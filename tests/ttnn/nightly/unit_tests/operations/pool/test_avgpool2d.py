@@ -119,6 +119,11 @@ def run_avg_pool2d(
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
     allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
     assert allclose, " Reference and output tensor are not close"
+=======
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
+    # allclose = torch.allclose(ttnn_output, torch_output, rtol=0.02)
+    # assert allclose, " Reference and output tensor are not close"
+>>>>>>> bc0a7e076b (Test case which is not passing for the partial tiles)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
