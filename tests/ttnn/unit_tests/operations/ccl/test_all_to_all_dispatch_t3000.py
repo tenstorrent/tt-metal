@@ -59,17 +59,19 @@ def gen_expert_mapping(experts, devices, scheme="random"):
     expert_mapping = torch.zeros(1, 1, experts, devices, dtype=torch.int16)
     device_id = 0
     experts_per_devices = experts // devices
-    device_expert_count = {d:0 for d in range(devices)}
+    device_expert_count = {d: 0 for d in range(devices)}
     for i in range(experts):
         if scheme == "sequential":
             if i > 0 and i % experts_per_devices == 0:
                 device_id += 1
             expert_mapping[0, 0, i, device_id] = 1
         elif scheme == "random":
-            device_id = random.choice([d for d,_ in filter(lambda kv: kv[1] <experts_per_devices,  device_expert_count.items())])
+            device_id = random.choice(
+                [d for d, _ in filter(lambda kv: kv[1] < experts_per_devices, device_expert_count.items())]
+            )
             expert_mapping[0, 0, i, device_id] = 1
-            device_expert_count[device_id] +=1
-            
+            device_expert_count[device_id] += 1
+
         else:
             raise ValueError(f"Invalid scheme: {scheme}")
 
@@ -100,7 +102,9 @@ def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, 
                 elif scheme == "random":
                     # need to ensure a set of unique indices
                     current_indices = expert_indices[b, 0, s, :].tolist()
-                    expert_indices[b, 0, s, k] = random.choice(list(filter(lambda e: e not in current_indices, range(experts))))
+                    expert_indices[b, 0, s, k] = random.choice(
+                        list(filter(lambda e: e not in current_indices, range(experts)))
+                    )
                 else:
                     raise ValueError(f"Invalid scheme: {scheme}")
     return expert_indices

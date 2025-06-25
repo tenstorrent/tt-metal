@@ -38,6 +38,7 @@ struct AllToAllCombineDeviceOperation {
         const ttnn::Tensor input_tensor;
         const ttnn::Tensor mapping_tensor;
         const ttnn::Tensor metadata_tensor;
+        const std::optional<ttnn::Tensor> optional_output_tensor;
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
@@ -101,7 +102,8 @@ struct AllToAllCombineDeviceOperation {
         const ttnn::MemoryConfig& memory_config,
         // tt::tt_metal::SubDeviceId subdevice_id,
         const GlobalSemaphore& global_semaphore,
-        const std::optional<uint32_t>& axis);
+        const std::optional<uint32_t>& axis,
+        const std::optional<ttnn::Tensor>& optional_output_tensor);
 };
 }  // namespace ttnn::operations::ccl
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -97,7 +97,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto input_page_size_bytes = input_spec.compute_page_size_bytes();
     const auto mapping_page_size_bytes = mapping_spec.compute_page_size_bytes();
     const auto metadata_page_size_bytes = metadata_spec.compute_page_size_bytes();
-    
+
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
@@ -128,7 +128,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     // scratch space to store and share indices of per device experts
     const auto local_experts_cb_id = tt::CBIndex::c_2;
     using local_experts_t = uint16_t;
-    const auto aligned_local_expert_page_size_bytes = tt::align(experts_per_device * sizeof(local_experts_t),l1_alignment); 
+    const auto aligned_local_expert_page_size_bytes =
+        tt::align(experts_per_device * sizeof(local_experts_t), l1_alignment);
     const auto local_experts_dataformat = datatype_to_dataformat_converter(convert_to_data_type<local_experts_t>());
     tt::tt_metal::CircularBufferConfig cb_local_experts_config =
         tt::tt_metal::CircularBufferConfig(
@@ -297,10 +298,9 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        
         const auto & coord = range.start_coord();
         TT_FATAL(coord == range.end_coord(), "Expected single coordinate per program but got range of {} to {}", coord, range.end_coord());
-        
+
         const auto& shared_variables = cached_workload.shared_variables.at(range);
         auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
         auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
@@ -308,11 +308,11 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
 
         auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
         auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
-        
+
         reader_runtime_args.at(0) = tensor_args.mapping_tensor.mesh_buffer()->get_device_buffer(coord)->address();
         reader_runtime_args.at(1) = tensor_args.metadata_tensor.mesh_buffer()->get_device_buffer(coord)->address();
         reader_runtime_args.at(2) = tensor_args.input_tensor.mesh_buffer()->get_device_buffer(coord)->address();
-        
+
         writer_runtime_args.at(0) = tensor_return_value.mesh_buffer()->get_device_buffer(coord)->address();
         writer_runtime_args.at(1) = operation_attributes.cross_device_semaphore.address();
     }

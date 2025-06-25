@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,10 +23,9 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
     const uint32_t num_links,
     const tt::tt_fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<uint32_t>& axis) {
+    const std::optional<uint32_t>& axis,
+    const std::optional<ttnn::Tensor>& optional_output_tensor) {
     // const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
-    // auto mesh_device = input_tensor.mesh_device();
-    // auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
 
     return ttnn::prim::all_to_all_combine(
         input_tensor,
@@ -36,7 +35,8 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
         topology,
         memory_config.value_or(input_tensor.memory_config()),
         global_semaphore,
-        axis);
+        axis,
+        optional_output_tensor);
 }
 
 }  // namespace ttnn::operations::ccl
