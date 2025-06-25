@@ -171,7 +171,7 @@ def run_test_distributed_layernorm_with_program_cache_and_checks(
 @pytest.mark.parametrize("n_devices", [8])
 @pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
 def test_distributed_layernorm_with_program_cache(
-    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, t3k_mesh_device, use_program_cache
+    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, t3k_mesh_device
 ):
     run_test_distributed_layernorm_with_program_cache_and_checks(
         inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, t3k_mesh_device, iterations=iterations

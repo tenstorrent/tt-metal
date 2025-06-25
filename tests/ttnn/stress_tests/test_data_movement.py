@@ -80,7 +80,7 @@ def sharding_input_shape():
 
 
 @pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
-def test_stress_reshard(mesh_device, use_program_cache):
+def test_stress_reshard(mesh_device):
     input_tensor_shape = sharding_input_shape()
     core_grid = get_device_core_grid(mesh_device)
 

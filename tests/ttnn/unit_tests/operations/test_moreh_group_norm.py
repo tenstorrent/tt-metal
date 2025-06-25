@@ -325,7 +325,7 @@ def test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, d
         True,
     ],
 )
-def test_moreh_group_norm_callback(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device, use_program_cache):
+def test_moreh_group_norm_callback(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device):
     torch.manual_seed(2024)
     num_program_cache_entries_list = []
     for i in range(2):

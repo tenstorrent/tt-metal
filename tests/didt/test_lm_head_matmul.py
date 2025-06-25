@@ -152,7 +152,7 @@ def test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check
     indirect=["mesh_device"],
 )
 def test_specific_chip_lm_head_matmul(
-    mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval, use_program_cache
+    mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval
 ):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
@@ -172,7 +172,7 @@ def test_specific_chip_lm_head_matmul(
     indirect=["t3k_single_board_mesh_device"],
 )
 def test_specific_board_lm_head_matmul(
-    t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache
+    t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval
 ):
     test_lm_head_matmul(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, False)
 
@@ -193,9 +193,7 @@ def test_specific_board_lm_head_matmul(
     ],
     indirect=["mesh_device"],
 )
-def test_grid_size_lm_head_matmul(
-    mesh_device, grid_size, didt_workload_iterations, determinism_check_interval, use_program_cache
-):
+def test_grid_size_lm_head_matmul(mesh_device, grid_size, didt_workload_iterations, determinism_check_interval):
     test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval, False, grid_size=grid_size)
 
 
@@ -217,6 +215,6 @@ def test_grid_size_lm_head_matmul(
     indirect=["mesh_device"],
 )
 def test_blackhole_grid_size_lm_head_matmul(
-    mesh_device, grid_size, didt_workload_iterations, determinism_check_interval, use_program_cache
+    mesh_device, grid_size, didt_workload_iterations, determinism_check_interval
 ):
     test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval, False, grid_size=grid_size)

@@ -248,7 +248,7 @@ def test_specific_board_ff1_matmul(
     indirect=["mesh_device"],
 )
 def test_grid_size_ff1_matmul(
-    mesh_device, gelu, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval, use_program_cache
+    mesh_device, gelu, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval
 ):
     test_ff1_matmul(
         mesh_device,
@@ -284,7 +284,7 @@ def test_grid_size_ff1_matmul(
     indirect=["mesh_device"],
 )
 def test_blackhole_grid_size_ff1_matmul(
-    mesh_device, gelu, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval, use_program_cache
+    mesh_device, gelu, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval
 ):
     test_ff1_matmul(
         mesh_device,

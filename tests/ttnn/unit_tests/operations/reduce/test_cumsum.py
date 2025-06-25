@@ -229,7 +229,7 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
         (torch.int32, ttnn.int32),
     ],
 )
-def test_cumsum_callback(size, dim, dtypes, device, use_program_cache):
+def test_cumsum_callback(size, dim, dtypes, device):
     torch.manual_seed(29112024)
 
     (torch_dtype, ttnn_dtype) = dtypes

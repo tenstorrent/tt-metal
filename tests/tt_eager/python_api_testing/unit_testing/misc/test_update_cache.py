@@ -20,9 +20,7 @@ from models.utility_functions import is_grayskull, skip_for_blackhole
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 class TestUpdateCache:
     @pytest.mark.parametrize("seq_len", [32, 512, 2048])
-    def test_fill_cache(
-        self, seq_len, head_dim, max_seq_len, num_users, num_heads, in_sharded, input_dtype, device, use_program_cache
-    ):
+    def test_fill_cache(self, seq_len, head_dim, max_seq_len, num_users, num_heads, in_sharded, input_dtype, device):
         if not in_sharded and num_heads > 1 and seq_len == 2048:
             pytest.skip(
                 "For interleaved, each core can only have 1 tile along seq_len if num_heads > 1, so there is a restriction on max seq_len!"
@@ -151,7 +149,7 @@ class TestUpdateCache:
 class TestUpdateCacheFP32:
     @pytest.mark.parametrize("seq_len", [32, 512, 1024])
     def test_fill_cache_fp32(
-        self, seq_len, head_dim, max_seq_len, num_users, num_heads, in_sharded, input_dtype, device, use_program_cache
+        self, seq_len, head_dim, max_seq_len, num_users, num_heads, in_sharded, input_dtype, device
     ):
         if is_grayskull() and input_dtype == ttnn.float32:
             pytest.skip("Skipping float32 tests on Grayskull")

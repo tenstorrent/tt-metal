@@ -442,7 +442,7 @@ def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device):
     ((1),),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_audio_classification(input_path, ttnn_model, device, num_inputs, use_program_cache):
+def test_demo_for_audio_classification(input_path, ttnn_model, device, num_inputs):
     return run_demo_whisper_for_audio_classification_inference(input_path, ttnn_model, device, num_inputs)
 
 

@@ -154,7 +154,7 @@ class ResnetConvTest(OpTestBase):
     ],
     indirect=["mesh_device"],
 )
-def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache):
+def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_interval):
     groups = 1
     dilation = 1
     pad_w = 0
@@ -266,9 +266,7 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_specific_chip_resnet_conv(
-    mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval, use_program_cache
-):
+def test_specific_chip_resnet_conv(mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
     test_resnet_conv(
@@ -287,7 +285,5 @@ def test_specific_chip_resnet_conv(
     indirect=["t3k_single_board_mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_specific_board_resnet_conv(
-    t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache
-):
+def test_specific_board_resnet_conv(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval):
     test_resnet_conv(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, False)

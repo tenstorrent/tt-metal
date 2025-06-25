@@ -30,9 +30,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         CROSS_DOWN_BLOCKS_HIDDEN_STATES_INFO[2] + (2,),
     ),
 )
-def test_downsample_512x512(
-    reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, block_index, use_program_cache
-):
+def test_downsample_512x512(reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, block_index):
     # Initialize PyTorch component
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
