@@ -608,7 +608,7 @@ def ulp(x: Union[ttnn.Tensor, torch.Tensor]) -> Union[ttnn.Tensor, torch.Tensor]
     return ulp_value
 
 
-def comp_ulp(golden, calculated, ulp_threshold):
+def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
     """
     Compute absolute error between two tensors in Units of Least Precision (ULP)
     """
@@ -617,9 +617,11 @@ def comp_ulp(golden, calculated, ulp_threshold):
     if torch.numel(golden) == 0 and torch.numel(calculated) == 0:
         return True, "Both tensors are empty"
 
+    if not allow_nonfinite and not torch.all(torch.isfinite(calculated)):
+        return False, "Calculated tensor contains non-finite values"
+
     if not _comp_finite(golden, calculated):
         return False, "Tensors are not finite at the same positions"
-
     # nonfinite elments can intefere with ULP error calculation
     # To avoid this, replace nan, +inf, -inf with 0
     # (we have already checked that both tensors have the same nonfinite elements)
