@@ -23,13 +23,6 @@ from models.demos.llama3_subdevices.tt.model_config import (
 )
 from models.demos.llama3_subdevices.tt.model_config import set_tg_attention_config
 
-LINEAR_TOPOLOGY = True
-if LINEAR_TOPOLOGY:
-    ALL_GATHER_TOPOLOGY = ttnn.Topology.Linear
-    WRAP_MESH = False
-else:
-    ALL_GATHER_TOPOLOGY = ttnn.Topology.Ring
-    WRAP_MESH = True
 
 RING_CRS = ttnn.CoreRangeSet(
     [
@@ -57,7 +50,14 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
     trace_mode=True,
     validate_all=True,
     profiler=BenchmarkProfiler(),
+    linear=True,
 ):
+    if linear:
+        ALL_GATHER_TOPOLOGY = ttnn.Topology.Linear
+        WRAP_MESH = False
+    else:
+        ALL_GATHER_TOPOLOGY = ttnn.Topology.Ring
+        WRAP_MESH = True
     cluster_shape = (8, 4)
 
     if num_iters < 1:
@@ -484,4 +484,82 @@ def test_all_reduce_qkv_heads_fuse_perf(
         trace_mode=trace_mode,
         profiler=profiler,
         validate_all=validate_all,
+    )
+
+
+# Test 2: test_all_reduce_create_qkv_heads_fuse_perf
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("num_iters, warmup_iters", [[30, 10]])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("validate_all", [True])
+@pytest.mark.parametrize(
+    "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores",
+    [
+        ([1, 1, 32, 1280], 1, 3, 24, 10),  # QKV all reduce
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "output_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (8, 4),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
+    indirect=True,
+)
+def test_all_reduce_qkv_heads_fuse_perf_6U(
+    mesh_device,
+    output_shape,
+    cluster_axis,
+    input_dtype,
+    output_dtype,
+    num_links,
+    input_num_cores,
+    output_num_cores,
+    use_program_cache,
+    num_iters,
+    warmup_iters,
+    trace_mode,
+    validate_all,
+):
+    if mesh_device.get_num_devices() != 32:
+        pytest.skip("Not TG!")
+    profiler = BenchmarkProfiler()
+    run_all_reduce_qkv_heads_fuse_perf_impl(
+        mesh_device,
+        output_shape,
+        cluster_axis,
+        input_dtype,
+        output_dtype,
+        num_links,
+        input_num_cores,
+        output_num_cores,
+        use_program_cache,
+        num_iters=num_iters,
+        warmup_iters=warmup_iters,
+        trace_mode=trace_mode,
+        profiler=profiler,
+        validate_all=validate_all,
+        linear=False,
     )

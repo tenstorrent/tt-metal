@@ -405,6 +405,59 @@ def run_reduce_scatter_test(
     ],
     indirect=True,
 )
+def test_rs_create_heads_6u_trace(mesh_device, trace_mode, dtype, use_program_cache):
+    # Only run these tests on unharvested TG
+    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
+    if device_grid != (7, 10):
+        pytest.skip("Not TG!")
+
+    dim = 3
+    shard_height = 32
+    shard_width = 64
+    num_devices_scatter = 4
+    num_devices_fracture = 8
+    num_cores = 20
+    num_iters = 75
+    warmup_iters = 10
+    trace_mode = trace_mode
+
+    run_reduce_scatter_test(
+        mesh_device,
+        dim,
+        shard_height,
+        shard_width,
+        num_devices_scatter,
+        num_devices_fracture,
+        num_cores,
+        num_iters,
+        warmup_iters,
+        trace_mode,
+        num_links=4,
+        scheme="random",
+        dtype=dtype,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 241664,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (8, 4),
+    ],
+    indirect=True,
+)
 def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype, use_program_cache):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)

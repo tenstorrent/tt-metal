@@ -29,9 +29,10 @@ def test_ag_tg_llama_perf(
     step_name = f"all_gather_{ag_type}"
 
     subdir = "llama_ccl_perf"
-    command = (
-        f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_gather_tg_llama -k {ag_type}"
-    )
+    if is_RING_6U:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_gather_6u_llama -k {ag_type}"
+    else:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_gather_tg_llama -k {ag_type}"
     cols = ["DEVICE KERNEL"]
     op_name = "AllGatherAsync"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
@@ -84,9 +85,10 @@ def test_ar_tg_llama_perf(
     step_name = f"all_reduce_{ar_type}"
 
     subdir = "llama_ccl_perf"
-    command = (
-        f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_reduce_tg_llama -k {ar_type}"
-    )
+    if is_RING_6U:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_reduce_6U_llama -k {ar_type}"
+    else:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_reduce_tg_llama -k {ar_type}"
     cols = ["DEVICE KERNEL"]
     op_name = "AllReduceAsync"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
@@ -252,7 +254,10 @@ def test_fused_all_gather_concat_perf(
     step_name = f"all_gather_concat_heads"
 
     subdir = "llama_ccl_perf"
-    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_concat_fuse"
+    if is_RING_6U:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_concat_fuse_6u"
+    else:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_concat_fuse"
     cols = ["DEVICE KERNEL"]
     op_name = "AllGatherConcat"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
@@ -302,7 +307,10 @@ def test_fused_all_reduce_create_heads_perf(
     step_name = f"all_reduce_create_heads"
 
     subdir = "llama_ccl_perf"
-    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py::test_all_reduce_qkv_heads_fuse_perf"
+    if is_RING_6U:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py::test_all_reduce_qkv_heads_fuse_perf_6U"
+    else:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py::test_all_reduce_qkv_heads_fuse_perf"
     cols = ["DEVICE KERNEL"]
     op_name = "AllReduceCreateQkvHeads"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
@@ -352,7 +360,10 @@ def test_reduce_scatter_perf(
     step_name = f"reduce_scatter_perf"
 
     subdir = "llama_ccl_perf"
-    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_async_TG.py::test_fabric_reduce_scatter_tg_trace"
+    if is_RING_6U:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_async_6U.py::test_fabric_reduce_scatter_tg_trace_6u"
+    else:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_async_TG.py::test_fabric_reduce_scatter_tg_trace"
     cols = ["DEVICE KERNEL"]
     op_name = "LlamaReduceScatterDeviceOperation"
 
