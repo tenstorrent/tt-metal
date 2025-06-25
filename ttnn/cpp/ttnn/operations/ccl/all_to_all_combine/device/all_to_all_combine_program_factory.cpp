@@ -81,30 +81,33 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const uint32_t selected_experts_k = metadata_shape[-1];
     const uint32_t experts = mapping_shape[-2];
 
-    // straightforward to lift this assumption
     TT_ASSERT(experts % num_devices == 0, "Currently assuming that experts are evenly split among devices");
     const uint32_t experts_per_device = experts / num_devices;
-    // std::cout<<mapping_shape<<std::endl;
-    // std::cout<<"NUM_EXPERTS: "<< experts<<" EXPERTS/DEVICE: "<<experts_per_device<<std::endl;
 
     auto input_spec = input_tensor.get_tensor_spec();
     auto mapping_spec = mapping_tensor.get_tensor_spec();
     auto output_spec = output_tensor.get_tensor_spec();
     auto metadata_spec = metadata_tensor.get_tensor_spec();
 
-    auto input_page_size_bytes = input_spec.compute_page_size_bytes();
-    auto mapping_page_size_bytes = mapping_spec.compute_page_size_bytes();
-    auto output_page_size_bytes = output_spec.compute_page_size_bytes();
-    auto metadata_page_size_bytes = metadata_spec.compute_page_size_bytes();
+    const bool input_is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const bool mapping_is_dram = mapping_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const bool metadata_is_dram = metadata_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+
+    const auto input_page_size_bytes = input_spec.compute_page_size_bytes();
+    const auto mapping_page_size_bytes = mapping_spec.compute_page_size_bytes();
+    const auto metadata_page_size_bytes = metadata_spec.compute_page_size_bytes();
+    
+    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+
+    const auto aligned_input_page_size_bytes = tt::align(input_page_size_bytes, input_is_dram? dram_alignment:l1_alignment);
+    const auto aligned_mapping_page_size_bytes = tt::align(mapping_page_size_bytes, l1_alignment);
+    const auto aligned_metadata_page_size_bytes = tt::align(metadata_page_size_bytes, l1_alignment);
 
     auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     auto mapping_data_format = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.get_dtype());
     auto metadata_data_format = tt::tt_metal::datatype_to_dataformat_converter(metadata_tensor.get_dtype());
-
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool mapping_is_dram = mapping_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool metadata_is_dram = metadata_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // Anything less will lead to deadlocks. It's clear why, TODO fix it.
     const uint32_t buffering_factor = experts_per_device;
@@ -112,30 +115,31 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     // input sharded buffer
     const auto data_cb_id = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_data_config =
-        tt::tt_metal::CircularBufferConfig(buffering_factor * input_page_size_bytes, {{data_cb_id, input_data_format}})
-            .set_page_size(data_cb_id, input_page_size_bytes);
+        tt::tt_metal::CircularBufferConfig(buffering_factor * aligned_input_page_size_bytes, {{data_cb_id, input_data_format}})
+            .set_page_size(data_cb_id, aligned_input_page_size_bytes);
 
     // full mapping buffer
     const auto mapping_tensor_cb_id = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig cb_mapping_tensor_config =
         tt::tt_metal::CircularBufferConfig(
-            mapping_spec.compute_packed_buffer_size_bytes(), {{mapping_tensor_cb_id, mapping_data_format}})
-            .set_page_size(mapping_tensor_cb_id, mapping_page_size_bytes);
+            aligned_mapping_page_size_bytes, {{mapping_tensor_cb_id, mapping_data_format}})
+            .set_page_size(mapping_tensor_cb_id, aligned_mapping_page_size_bytes);
 
     // scratch space to store and share indices of per device experts
     const auto local_experts_cb_id = tt::CBIndex::c_2;
     using local_experts_t = uint16_t;
+    const auto aligned_local_expert_page_size_bytes = tt::align(experts_per_device * sizeof(local_experts_t),l1_alignment); 
     const auto local_experts_dataformat = datatype_to_dataformat_converter(convert_to_data_type<local_experts_t>());
     tt::tt_metal::CircularBufferConfig cb_local_experts_config =
         tt::tt_metal::CircularBufferConfig(
-            experts_per_device * sizeof(local_experts_t), {{local_experts_cb_id, local_experts_dataformat}})
-            .set_page_size(local_experts_cb_id, experts_per_device * sizeof(local_experts_t));
+            aligned_local_expert_page_size_bytes, {{local_experts_cb_id, local_experts_dataformat}})
+            .set_page_size(local_experts_cb_id, aligned_local_expert_page_size_bytes);
 
     // metadata page buffer
     const auto metadata_cb_id = tt::CBIndex::c_3;
     tt::tt_metal::CircularBufferConfig cb_metadata_config =
-        tt::tt_metal::CircularBufferConfig(metadata_page_size_bytes, {{metadata_cb_id, metadata_data_format}})
-            .set_page_size(metadata_cb_id, metadata_page_size_bytes);
+        tt::tt_metal::CircularBufferConfig(aligned_metadata_page_size_bytes, {{metadata_cb_id, metadata_data_format}})
+            .set_page_size(metadata_cb_id, aligned_metadata_page_size_bytes);
 
     // client interface
     constexpr auto num_headers = 2;  // data unicast headers and atomic inc "multicast" headers
@@ -221,6 +225,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         num_devices,
         src_chip_id,
         input_page_size_bytes,
+        l1_alignment,
         output_is_dram,
         mesh_view.num_rows(),
         mesh_view.num_cols(),
@@ -237,20 +242,13 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     }
     const auto [neighbors, directions] = detail::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
 
-    std::cout << "DIRECTIONS pyid: " << src_physical_device_id << " fabid: " << src_chip_id
-              << " COORD: " << mesh_coordinate[0] << "," << mesh_coordinate[1] << std::endl;
-    for (auto d : directions) {
-        std::cout << d << " ";
-    }
-    std::cout << std::endl;
-
     std::map<std::string, std::string> writer_defines = {
         {"DEST_CHIP_ID", detail::stringify_vector(dest_chip_id)},
         {"DEST_MESH_ID", detail::stringify_vector(dest_mesh_id)},
         {"DIRECTIONS", detail::stringify_array(directions)}};
 
     if (axis.has_value()) {
-        writer_defines["REPLICATE_AXIS"] = std::to_string(axis.value());
+        writer_defines["REPLICATE_GROUP_AXIS"] = std::to_string(axis.value());
     }
 
     const tt::tt_metal::DataMovementConfig writer_config{
@@ -299,6 +297,10 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        
+        const auto & coord = range.start_coord();
+        TT_FATAL(coord == range.end_coord(), "Expected single coordinate per program but got range of {} to {}", coord, range.end_coord());
+        
         const auto& shared_variables = cached_workload.shared_variables.at(range);
         auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
         auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
@@ -306,10 +308,13 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
 
         auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
         auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
-
-        // !TODO probably update tensor addresses
-
-        writer_runtime_args[1] = operation_attributes.cross_device_semaphore.address();
+        
+        reader_runtime_args.at(0) = tensor_args.mapping_tensor.mesh_buffer()->get_device_buffer(coord)->address();
+        reader_runtime_args.at(1) = tensor_args.metadata_tensor.mesh_buffer()->get_device_buffer(coord)->address();
+        reader_runtime_args.at(2) = tensor_args.input_tensor.mesh_buffer()->get_device_buffer(coord)->address();
+        
+        writer_runtime_args.at(0) = tensor_return_value.mesh_buffer()->get_device_buffer(coord)->address();
+        writer_runtime_args.at(1) = operation_attributes.cross_device_semaphore.address();
     }
 }
 

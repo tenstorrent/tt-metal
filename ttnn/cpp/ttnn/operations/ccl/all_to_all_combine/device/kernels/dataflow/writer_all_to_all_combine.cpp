@@ -2,16 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-
-#include "dprint_pages.h"
 
 #include "../common.hpp"
 
@@ -65,16 +59,9 @@ inline uint32_t get_device_idx_from_batch_idx(const uint32_t b) {
     if constexpr (Axis == ReplicateGroup::NONE) {
         return device_in_group;
     } else if (Axis == ReplicateGroup::ROWS) {
-        auto device_idx = (SourceChipId / MeshCols) * MeshCols + device_in_group;
-        // DPRINT<<"Src ID "<<SourceChipId<<" b: "<< b<<" Batch_Per_Device: "<<Batch_Per_Device<<" device_in_group:
-        // "<<device_in_group<< " device idx: "<<device_idx<<"\n";
-        return device_idx;
+        return (SourceChipId / MeshCols) * MeshCols + device_in_group;
     } else {
-        auto device_idx = device_in_group * MeshCols + SourceChipId % MeshCols;
-        // DPRINT<<"MeshCols: "<<MeshCols<<" mesh rows: "<<MeshRows<<"\n";
-        //         DPRINT<<"chip_id "<<SourceChipId<<" b: "<< b<<" Batch_Per_Device: "<<Batch_Per_Device<<"
-        //         device_in_group: " <<device_in_group<< " device idx: "<<device_idx<<"\n";
-        return device_idx;
+        return device_in_group * MeshCols + SourceChipId % MeshCols;
     }
 }
 
@@ -155,6 +142,7 @@ template <uint32_t SrcChipId, uint32_t MeshCols, uint32_t MeshRows, int32_t MaxP
 inline void dispatch_input_remote_device(
     const uint32_t dest_chip_id,
     const uint32_t dest_mesh_id,
+    const uint32_t alignment,
     int32_t size_bytes,
     uint32_t input_token_read_addr,
     uint64_t output_token_write_addr,
@@ -177,8 +165,10 @@ inline void dispatch_input_remote_device(
     while (size_bytes > 0) {
         uint32_t curr_packet_size = std::min(MaxPacketSzBytes, size_bytes);
 
+        DPRINT<< " curr_packet_size: " <<curr_packet_size << " input_token_read_addr: " <<input_token_read_addr<< " output_token_write_addr "<<output_token_write_addr<<"\n";
+
         token_unicast_packet_header->to_noc_unicast_write(
-            NocUnicastCommandHeader{output_token_write_addr}, curr_packet_size);
+            NocUnicastCommandHeader{output_token_write_addr}, align(curr_packet_size, alignment));
 
         fabric_connections[route].wait_for_empty_write_slot();
 
@@ -206,13 +196,14 @@ void kernel_main() {
     constexpr uint32_t num_devices = get_compile_time_arg_val(7);
     constexpr uint32_t src_chip_id = get_compile_time_arg_val(8);
     constexpr uint32_t data_size_bytes = get_compile_time_arg_val(9);  // hidden dim * datum size
-    constexpr uint32_t output_is_dram = get_compile_time_arg_val(10);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(11);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(12);  // ew_dim
-    constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(13);
+    constexpr uint32_t alignment = get_compile_time_arg_val(10);
+    constexpr uint32_t output_is_dram = get_compile_time_arg_val(11);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(12);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(13);  // ew_dim
+    constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(14);
 
-#ifdef REPLICATE_AXIS
-    constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_AXIS);
+#ifdef REPLICATE_GROUP_AXIS
+    constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
     constexpr uint8_t replicate_group_devices =
         num_devices / (replicate_axis == ReplicateGroup::COLS ? mesh_cols : mesh_rows);
 #else
@@ -269,35 +260,22 @@ void kernel_main() {
                     get_device_idx_from_batch_idx<src_chip_id, batch_size, mesh_cols, mesh_rows, replicate_axis>(b);
                 const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
 
-                DPRINT << " b: " << b << " k: " << k << " output_page_idx: " << output_page_idx
-                       << " src chip: " << src_chip_id << "dest_chip " << (uint32_t)dest_chip_id << "\n";
-                // tt::data_movement::common::print_bf16_pages(src_data_l1_ptr, data_size_bytes / 2, 1);
-
-                if(dest_chip_id==src_chip_id){
+                if (dest_chip_id == src_chip_id) {
                     noc_async_write(src_data_l1_ptr,output_noc_addr,data_size_bytes);
                     noc_async_write_barrier();
                 } else {
                     const auto route = get_direction<src_chip_id, mesh_cols, mesh_rows>(dest_chip_id);
-
-                    if (!directions[route]) {
-                        DPRINT << "BAD DIRECTION: src " << src_chip_id << " dest: " << (uint32_t)dest_chip_id
-                               << " dest index: " << dest_device_idx << " b: " << b << "\n";
-                        continue;
-                    }
-
                     const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
                     dispatch_input_remote_device<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size_bytes>(
                         dest_chip_id,
                         dest_mesh_id,
+                        alignment,
                         data_size_bytes,
                         src_data_l1_ptr,
                         output_noc_addr,
                         fabric_connections,
                         packet_headers[0]);
-
-                    // DPRINT<<"WRITER 4 b: "<< b <<" e:" <<e <<"\n";
                 }
-                // DPRINT<<"WRITER POP b: "<< b <<"\n";
                 cb_pop_front(data_cb_id,1);
             }
         }
@@ -322,11 +300,6 @@ void kernel_main() {
             packet_headers[1]->to_noc_unicast_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{global_noc_semaphore_addr, 1, 32, true});
 
-            if (!directions[route]) {
-                DPRINT << "BAD DIRECTION: src " << src_chip_id << " dest: " << (uint32_t)dest_chip_id << "\n";
-                continue;
-            }
-
             fabric_set_unicast_route(
                 const_cast<LowLatencyMeshPacketHeader*>(packet_headers[1]),
                 static_cast<eth_chan_directions>(fabric_connections[route].direction),
@@ -345,6 +318,5 @@ void kernel_main() {
 
     auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
     noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
-
-    DPRINT << "WRITER DONE: " << "\n";
+    noc_semaphore_set(semaphore_ptr, 0);
 }
