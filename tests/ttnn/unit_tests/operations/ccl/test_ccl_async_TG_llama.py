@@ -99,7 +99,7 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
             (32, 160),
             get_core_range_set(PREFETCHER_NOC1_GRID),
             ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
+            ttnn.bfloat8_b,
         ),
         (  # AllGather for layernorm
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
