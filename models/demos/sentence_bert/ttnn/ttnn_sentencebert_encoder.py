@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.sentence_bert.ttnn.ttnn_sentencebert_layer import TtnnSentenceBertLayer
+from models.demos.sentence_bert.ttnn.ttnn_sentencebert_layer import TtnnSentenceBertLayer
 
 
 class TtnnSentenceBertEncoder:
@@ -18,7 +18,13 @@ class TtnnSentenceBertEncoder:
         attention_mask: ttnn.Tensor,
         device=None,
     ):
+        if attention_mask.is_sharded():
+            attention_mask_interleaved = ttnn.sharded_to_interleaved(attention_mask, ttnn.L1_MEMORY_CONFIG)
+            attention_mask_interleaved = ttnn.to_layout(attention_mask_interleaved, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(attention_mask)
+        else:
+            attention_mask_interleaved = attention_mask
         for i in range(len(self.layers)):
-            layer_outputs = self.layers[i](hidden_states, attention_mask, device=device)
+            layer_outputs = self.layers[i](hidden_states, attention_mask_interleaved, device=device)
             hidden_states = layer_outputs
         return hidden_states

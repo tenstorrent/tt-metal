@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.sentence_bert.ttnn.common import ff1_matmul_program_config
+from models.demos.sentence_bert.ttnn.common import ff1_matmul_program_config
 
 
 class TtnnSentenceBertIntermediate:

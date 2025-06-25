@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.sentence_bert.ttnn.ttnn_sentencebert_embeddings import TtnnSentenceBertEmbeddings
-from models.experimental.sentence_bert.ttnn.ttnn_sentencebert_encoder import TtnnSentenceBertEncoder
-from models.experimental.sentence_bert.ttnn.ttnn_sentencebert_pooler import TtnnSentenceBertPooler
+from models.demos.sentence_bert.ttnn.ttnn_sentencebert_embeddings import TtnnSentenceBertEmbeddings
+from models.demos.sentence_bert.ttnn.ttnn_sentencebert_encoder import TtnnSentenceBertEncoder
+from models.demos.sentence_bert.ttnn.ttnn_sentencebert_pooler import TtnnSentenceBertPooler
 
 
 class TtnnSentenceBertModel:
