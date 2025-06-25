@@ -47,8 +47,10 @@ void validate_mesh_buffer_config(const MeshBufferConfig& config, const MeshDevic
     } else if (height_replicated or width_replicated) {
         // Replication along row or column dim.
         num_shards *=
-            ((sharded_config.shard_orientation == ShardOrientation::ROW_MAJOR) * (mesh_device.num_rows()) +
-             (sharded_config.shard_orientation == ShardOrientation::COL_MAJOR) * (mesh_device.num_cols()));
+            (static_cast<size_t>(sharded_config.shard_orientation == ShardOrientation::ROW_MAJOR) *
+                 (mesh_device.num_rows()) +
+             static_cast<size_t>(sharded_config.shard_orientation == ShardOrientation::COL_MAJOR) *
+                 (mesh_device.num_cols()));
     }
     TT_FATAL(
         num_shards <= mesh_device.num_devices(),

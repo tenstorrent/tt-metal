@@ -778,15 +778,15 @@ int main(int argc, char** argv) {
             TestInfo test_info{};
             test_info.kernel_size = std::uniform_int_distribution(0, 12288)(gen);
             test_info.workers = CoreRange({0, 0}, {core_count_x - 1, core_count_y - 1});
-            bool has_cbs = std::uniform_int_distribution(0, 1)(gen);
+            bool has_cbs = std::uniform_int_distribution(0, 1)(gen) != 0;
             if (has_cbs) {
                 test_info.n_cbs = std::uniform_int_distribution(0, 32)(gen);
             }
-            bool has_args = std::uniform_int_distribution(0, 1)(gen);
+            bool has_args = std::uniform_int_distribution(0, 1)(gen) != 0;
             if (has_args) {
                 test_info.n_args = std::uniform_int_distribution(0, 128)(gen);
             }
-            bool has_sems = std::uniform_int_distribution(0, 1)(gen);
+            bool has_sems = std::uniform_int_distribution(0, 1)(gen) != 0;
             if (has_sems) {
                 test_info.n_sems = std::uniform_int_distribution(0, 4)(gen);
             }
@@ -794,9 +794,9 @@ int main(int argc, char** argv) {
             test_info.n_cb_gs = std::uniform_int_distribution(1u, core_count_x)(gen);
             // Ensure 1 core is enabled.
             uint32_t cores_enabled = std::uniform_int_distribution(1, 7)(gen);
-            test_info.brisc_enabled = cores_enabled & 1;
-            test_info.ncrisc_enabled = cores_enabled & 2;
-            test_info.trisc_enabled = cores_enabled & 4;
+            test_info.brisc_enabled = ((cores_enabled & 1) != 0u);
+            test_info.ncrisc_enabled = ((cores_enabled & 2) != 0u);
+            test_info.trisc_enabled = ((cores_enabled & 4) != 0u);
             test_info.use_trace = true;
             benchmark::RegisterBenchmark(
                 "BM_pgm_dispatch_random/" + std::to_string(i), BM_pgm_dispatch_random, test_info)

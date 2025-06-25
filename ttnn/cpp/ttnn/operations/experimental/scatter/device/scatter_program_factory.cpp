@@ -50,10 +50,11 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     auto src_buffer = src_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
 
-    const uint32_t input_tensor_is_dram = input_buffer->buffer_type() == BufferType::DRAM;
-    const uint32_t index_tensor_is_dram = index_buffer->buffer_type() == BufferType::DRAM;
-    const uint32_t src_tensor_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
-    const uint32_t output_tensor_is_dram = output_buffer->buffer_type() == BufferType::DRAM;
+    const uint32_t input_tensor_is_dram = static_cast<const uint32_t>(input_buffer->buffer_type() == BufferType::DRAM);
+    const uint32_t index_tensor_is_dram = static_cast<const uint32_t>(index_buffer->buffer_type() == BufferType::DRAM);
+    const uint32_t src_tensor_is_dram = static_cast<const uint32_t>(src_buffer->buffer_type() == BufferType::DRAM);
+    const uint32_t output_tensor_is_dram =
+        static_cast<const uint32_t>(output_buffer->buffer_type() == BufferType::DRAM);
 
     const int32_t dim{(args.dim >= 0) ? args.dim : (input_rank + args.dim)};
 
@@ -81,10 +82,14 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t& source_stick_size_bytes = source_stick_size * source_datum_size;
     const uint32_t& output_stick_size_bytes = output_stick_size * output_datum_size;
 
-    const uint32_t is_input_stick_size_bytes_pow2_min_32 = is_pow2_min32(input_stick_size_bytes);
-    const uint32_t is_index_stick_size_bytes_pow2_min_32 = is_pow2_min32(index_stick_size_bytes);
-    const uint32_t is_source_stick_size_bytes_pow2_min_32 = is_pow2_min32(source_stick_size_bytes);
-    const uint32_t is_output_stick_size_bytes_pow2_min_32 = is_pow2_min32(output_stick_size_bytes);
+    const uint32_t is_input_stick_size_bytes_pow2_min_32 =
+        static_cast<const uint32_t>(is_pow2_min32(input_stick_size_bytes));
+    const uint32_t is_index_stick_size_bytes_pow2_min_32 =
+        static_cast<const uint32_t>(is_pow2_min32(index_stick_size_bytes));
+    const uint32_t is_source_stick_size_bytes_pow2_min_32 =
+        static_cast<const uint32_t>(is_pow2_min32(source_stick_size_bytes));
+    const uint32_t is_output_stick_size_bytes_pow2_min_32 =
+        static_cast<const uint32_t>(is_pow2_min32(output_stick_size_bytes));
 
     const uint32_t input_stick_size_bytes_log2 =
         is_input_stick_size_bytes_pow2_min_32 ? std::log2(input_stick_size_bytes) : 0;

@@ -433,7 +433,7 @@ KernelGroup::KernelGroup(
     }
     this->launch_msg.kernel_config.ncrisc_kernel_size16 = 0;
 
-    this->launch_msg.kernel_config.exit_erisc_kernel = false;
+    this->launch_msg.kernel_config.exit_erisc_kernel = 0u;
     this->launch_msg.kernel_config.max_local_cb_end_index = max_local_cb_end_index;
     this->launch_msg.kernel_config.min_remote_cb_start_index = min_remote_cb_start_index;
     this->go_msg.signal = RUN_MSG_GO;
@@ -1267,7 +1267,7 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
     // Allocate the DRAM kernel binary buffer for this program on the specified device, if not previously allocated.
     // We allocate program binaries top down to minimize fragmentation with other buffers in DRAM, which are typically allocated bottom up
     std::size_t binary_data_size_bytes = this->program_transfer_info.binary_data.size() * sizeof(uint32_t);
-    if (this->kernels_buffer_.find(device->id()) == this->kernels_buffer_.end() and binary_data_size_bytes) {
+    if (this->kernels_buffer_.find(device->id()) == this->kernels_buffer_.end() and (binary_data_size_bytes != 0u)) {
         std::shared_ptr<Buffer> kernel_bin_buf = Buffer::create(
             device,
             binary_data_size_bytes,
@@ -1701,8 +1701,10 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
 }
 
 void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
-    program_config_sizes_[programmable_core_count_] = runs_on_noc_multicast_only_cores();
-    program_config_sizes_[programmable_core_count_ + 1] = runs_on_noc_unicast_only_cores();
+    program_config_sizes_[programmable_core_count_] =
+        static_cast<decltype(program_config_sizes_)::value_type>(runs_on_noc_multicast_only_cores());
+    program_config_sizes_[programmable_core_count_ + 1] =
+        static_cast<decltype(program_config_sizes_)::value_type>(runs_on_noc_unicast_only_cores());
     set_launch_msg_sem_offsets();
     // TODO: This check is wrong - it populates dispatch data for dispatch kernels
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {

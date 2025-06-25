@@ -111,7 +111,7 @@ private:
         // advantage of the (a) fact that sections cannot straddle
         // segment boundaries -- they're either wholey inside or
         // wholey outside, and (b) unsigned arithmetic.
-        return shdr.sh_flags & SHF_ALLOC && shdr.sh_addr + shdr.sh_size - segment.address <= segment.membytes;
+        return ((shdr.sh_flags & SHF_ALLOC) != 0u) && shdr.sh_addr + shdr.sh_size - segment.address <= segment.membytes;
     }
     [[nodiscard]] bool IsInSegment(unsigned _ix, Elf32_Shdr const& shdr) const {
         return IsInSegment(GetSegments()[_ix], shdr);
@@ -236,7 +236,7 @@ void ElfFile::Impl::LoadImage() {
         TT_THROW("{}: sections are missing or malformed", path_);
     }
     shdrs_ = std::span(ByteOffset<Elf32_Shdr>(GetContents().data(), hdr.e_shoff), hdr.e_shnum);
-    if (!hdr.e_shstrndx || hdr.e_shstrndx >= GetShdrs().size()) {
+    if ((hdr.e_shstrndx == 0u) || hdr.e_shstrndx >= GetShdrs().size()) {
         TT_THROW("{}: string table is missing or malformed", path_);
     }
 
@@ -540,7 +540,7 @@ void ElfFile::Impl::XIPify() {
 
         auto symbols = GetSymbols(GetShdr(relocHdr.sh_link));
         auto relocs = GetRelocations(relocHdr);
-        bool is_from_text = !segment_ix;
+        bool is_from_text = segment_ix == 0;
 
         // ADD32/SUB32 pairs are used for switch tables. Make sure
         // they're consistent.

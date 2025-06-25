@@ -255,12 +255,12 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         pad_val,
         input_npages,
         out_stick_nbytes,
-        is_block_sharded,
-        remote_read,
+        static_cast<const unsigned int>(is_block_sharded),
+        static_cast<const unsigned int>(remote_read),
         (uint32_t)(transpose_mcast ? 1 : 0),
-        is_width_sharded,
+        static_cast<const unsigned int>(is_width_sharded),
         aligned_input_nstick_nbytes,
-        skip_untilize,
+        static_cast<const unsigned int>(skip_untilize),
         clamped_block_size_height,  // Block size in sticks
         ntiles_per_block,
         0,            // Block start offset
@@ -580,8 +580,8 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
 
     // reader kernel
     std::vector<uint32_t> reader_ct_args = {
-        true,  // main thread
-        padding_exists,
+        1u,  // main thread
+        static_cast<const unsigned int>(padding_exists),
         cb_indices.padding_config_cb_id,
         cb_indices.local_config_cb_id,
         cb_indices.remote_config_cb_id,
@@ -593,11 +593,11 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
         pad_val,
         input_npages,
         out_stick_nbytes,
-        is_block_sharded,
+        static_cast<const unsigned int>(is_block_sharded),
         (uint32_t)(transpose_mcast ? 1 : 0),
-        is_width_sharded,
+        static_cast<const unsigned int>(is_width_sharded),
         aligned_input_nstick_nbytes,
-        remote_read,
+        static_cast<const unsigned int>(remote_read),
         num_active_cores,
         noc_TL.x,
         noc_TL.y,
@@ -621,7 +621,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
-    reader_ct_args[0] = false;  // secondary thread
+    reader_ct_args[0] = 0u;  // secondary thread
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp",

@@ -811,17 +811,17 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->wait_for_host_signal ? 1 : 0,
 
         this->firmware_context_switch_interval,
-        this->enable_first_level_ack,
-        this->fuse_receiver_flush_and_completion_ptr,
-        config.topology == Topology::Ring,
-        this->dateline_connection,
-        is_handshake_master,
+        static_cast<const unsigned int>(this->enable_first_level_ack),
+        static_cast<const unsigned int>(this->fuse_receiver_flush_and_completion_ptr),
+        static_cast<const unsigned int>(config.topology == Topology::Ring),
+        static_cast<const unsigned int>(this->dateline_connection),
+        static_cast<const unsigned int>(is_handshake_master),
         this->handshake_address,
         this->channel_buffer_size,
 
-        config.skip_receiver_channel_1_connection,
-        config.skip_sender_channel_1_connection,
-        config.skip_sender_vc1_channel_connection,
+        static_cast<const unsigned int>(config.skip_receiver_channel_1_connection),
+        static_cast<const unsigned int>(config.skip_sender_channel_1_connection),
+        static_cast<const unsigned int>(config.skip_sender_vc1_channel_connection),
 
         config.sender_channels_base_address[0],
         config.sender_channels_worker_conn_info_base_address[0],
@@ -850,7 +850,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->edm_status_ptr,
 
         // fabric counters
-        FabricEriscDatamoverConfig::enable_fabric_counters,
+        static_cast<const unsigned int>(FabricEriscDatamoverConfig::enable_fabric_counters),
         config.receiver_channels_counters_address[0],
         config.receiver_channels_counters_address[1],
         config.sender_channels_counters_address[0],
@@ -860,7 +860,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.sender_channels_counters_address[4],
 
         // fabric pkt header recording
-        FabricEriscDatamoverConfig::enable_fabric_pkt_header_recording,
+        static_cast<const unsigned int>(FabricEriscDatamoverConfig::enable_fabric_pkt_header_recording),
 
         config.receivers_completed_packet_header_cb_address[0],
         FabricEriscDatamoverConfig::receiver_completed_packet_header_cb_size_headers,
@@ -876,25 +876,25 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
         config.senders_completed_packet_header_cb_address[4],
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
-        config.risc_configs[risc_id].is_sender_channel_serviced(0),
-        config.risc_configs[risc_id].is_sender_channel_serviced(1),
-        config.risc_configs[risc_id].is_sender_channel_serviced(2),
-        config.risc_configs[risc_id].is_sender_channel_serviced(3),
-        config.risc_configs[risc_id].is_sender_channel_serviced(4),
-        config.risc_configs[risc_id].is_receiver_channel_serviced(0),
-        config.risc_configs[risc_id].is_receiver_channel_serviced(1),
-        config.risc_configs[risc_id].enable_handshake(),
-        config.risc_configs[risc_id].enable_context_switch(),
-        config.risc_configs[risc_id].enable_interrupts(),
+        static_cast<const unsigned int>(config.risc_configs[risc_id].is_sender_channel_serviced(0)),
+        static_cast<const unsigned int>(config.risc_configs[risc_id].is_sender_channel_serviced(1)),
+        static_cast<const unsigned int>(config.risc_configs[risc_id].is_sender_channel_serviced(2)),
+        static_cast<const unsigned int>(config.risc_configs[risc_id].is_sender_channel_serviced(3)),
+        static_cast<const unsigned int>(config.risc_configs[risc_id].is_sender_channel_serviced(4)),
+        static_cast<const unsigned int>(config.risc_configs[risc_id].is_receiver_channel_serviced(0)),
+        static_cast<const unsigned int>(config.risc_configs[risc_id].is_receiver_channel_serviced(1)),
+        static_cast<const unsigned int>(config.risc_configs[risc_id].enable_handshake()),
+        static_cast<const unsigned int>(config.risc_configs[risc_id].enable_context_switch()),
+        static_cast<const unsigned int>(config.risc_configs[risc_id].enable_interrupts()),
         config.sender_txq_id,
         config.receiver_txq_id,
         config.risc_configs[risc_id].iterations_between_ctx_switch_and_teardown_checks(),
-        config.topology == Topology::Mesh,
+        static_cast<const unsigned int>(config.topology == Topology::Mesh),
         this->direction,
         soc_desc.get_num_eth_channels(),
 
-        eth_txq_spin_wait_send_next_data,
-        eth_txq_spin_wait_receiver_send_completion_ack,
+        static_cast<const unsigned int>(eth_txq_spin_wait_send_next_data),
+        static_cast<const unsigned int>(eth_txq_spin_wait_receiver_send_completion_ack),
         default_num_eth_txq_data_packet_accept_ahead,
 
         default_handshake_context_switch_timeout,
@@ -928,7 +928,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->downstream_sender_channels_num_buffers.begin() + config.num_fwd_paths);
 
     for (size_t i = 0; i < num_sender_channels; i++) {
-        ct_args.push_back(this->sender_channel_connection_liveness_check_disable_array[i]);
+        ct_args.push_back(static_cast<decltype(ct_args)::value_type>(
+            this->sender_channel_connection_liveness_check_disable_array[i]));
     }
 
     // Sender channel args
@@ -994,7 +995,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->downstream_edm_vcs_worker_location_info_address[1].value_or(0),
         this->receiver_channels_local_buffer_index_address[0],  // extend the following 3 for 2D. need 3 each for 2D.
 
-        this->downstream_edm_vcs_buffer_base_address[2] != std::nullopt,
+        static_cast<const unsigned int>(this->downstream_edm_vcs_buffer_base_address[2] != std::nullopt),
         this->downstream_edm_vcs_buffer_base_address[2].value_or(0),
         this->downstream_edm_vcs_noc_x[2].value_or(0),
         this->downstream_edm_vcs_noc_y[2].value_or(0),

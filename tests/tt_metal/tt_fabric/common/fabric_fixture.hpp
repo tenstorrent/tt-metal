@@ -47,7 +47,7 @@ public:
 
     const std::vector<tt::tt_metal::IDevice*>& get_devices() const { return devices_; }
     void SetUpDevices(tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt) {
-        slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        slow_dispatch_ = (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr);
         if (slow_dispatch_) {
             log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
         } else {

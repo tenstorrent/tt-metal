@@ -30,7 +30,7 @@ std::vector<std::pair<size_t, size_t>> compute_evenly_split_sizes(size_t size, s
     const int64_t num_larger_slices_total = size % num_slices;
     const bool evenly_divisible = num_larger_slices_total == 0;
     const int64_t smaller_slice_size = size / num_slices;
-    const int64_t larger_slice_size = smaller_slice_size + !evenly_divisible;
+    const int64_t larger_slice_size = smaller_slice_size + static_cast<int64_t>(!evenly_divisible);
 
     auto compute_slice_dim_size =
         [larger_slice_size, smaller_slice_size, num_larger_slices_total](int64_t slice_index) {

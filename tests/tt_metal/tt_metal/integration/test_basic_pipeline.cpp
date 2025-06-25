@@ -276,7 +276,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
     test_config.num_tiles = 64 * 1024;
     test_config.block_size_tiles = 16;
     test_config.num_blocks_in_CB = 2;
-    test_config.IO_data_in_dram = true;
+    test_config.IO_data_in_dram = 1u;
     test_config.num_repetitions = 1;
     unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
 
@@ -285,7 +285,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 16;
     test_config.num_blocks_in_CB = 2;
-    test_config.IO_data_in_dram = false;
+    test_config.IO_data_in_dram = 0u;
     test_config.num_repetitions = 64;
     unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
 
@@ -294,7 +294,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 1;
     test_config.num_blocks_in_CB = 16;
-    test_config.IO_data_in_dram = false;
+    test_config.IO_data_in_dram = 0u;
     test_config.num_repetitions = 128;
     unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
 
@@ -303,7 +303,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 2;
     test_config.num_blocks_in_CB = 16;
-    test_config.IO_data_in_dram = false;
+    test_config.IO_data_in_dram = 0u;
     test_config.num_repetitions = 128;
     unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
 
@@ -312,7 +312,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 4;
     test_config.num_blocks_in_CB = 16;
-    test_config.IO_data_in_dram = false;
+    test_config.IO_data_in_dram = 0u;
     test_config.num_repetitions = 128;
     unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
 
@@ -321,7 +321,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 8;
     test_config.num_blocks_in_CB = 8;
-    test_config.IO_data_in_dram = false;
+    test_config.IO_data_in_dram = 0u;
     test_config.num_repetitions = 128;
     unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
 
@@ -330,7 +330,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 16;
     test_config.num_blocks_in_CB = 4;
-    test_config.IO_data_in_dram = false;
+    test_config.IO_data_in_dram = 0u;
     test_config.num_repetitions = 128;
     unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
 
@@ -339,7 +339,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 32;
     test_config.num_blocks_in_CB = 4;
-    test_config.IO_data_in_dram = false;
+    test_config.IO_data_in_dram = 0u;
     test_config.num_repetitions = 128;
     unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
 
@@ -348,7 +348,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 64;
     test_config.num_blocks_in_CB = 4;
-    test_config.IO_data_in_dram = false;
+    test_config.IO_data_in_dram = 0u;
     test_config.num_repetitions = 128;
     unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
 }

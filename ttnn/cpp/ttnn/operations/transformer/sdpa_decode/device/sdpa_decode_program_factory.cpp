@@ -620,7 +620,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         DHt,
         Sk_chunk_t,
         num_active_cores,
-        is_q_sharded,
+        static_cast<const unsigned int>(is_q_sharded),
         num_cores_per_batch,
         k_chunk_size,
         index_stick_size,
@@ -631,10 +631,10 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         num_cores_per_head,
         num_heads_per_core,
         num_output_cores,
-        is_causal,
-        use_attention_mask,
+        static_cast<const unsigned int>(is_causal),
+        static_cast<const unsigned int>(use_attention_mask),
         max_dynamic_chunk_size,
-        tilize_q,
+        static_cast<const unsigned int>(tilize_q),
     };
 
     std::vector<uint32_t> writer_compile_time_args_common = {
@@ -649,7 +649,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         num_active_cores,
         reducer_semaphore_id,
         output_semaphore_id,
-        is_output_sharded,
+        static_cast<const unsigned int>(is_output_sharded),
         k_chunk_size,
         num_q_heads,
         num_kv_heads,
@@ -658,7 +658,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         num_reducer_cores,
         num_output_cores,
         output_tensor.element_size(),
-        is_causal,
+        static_cast<const unsigned int>(is_causal),
         max_dynamic_chunk_size,
     };
 
@@ -683,10 +683,10 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         k_chunk_size,
         num_cores_per_head,
         num_heads_per_core,
-        is_causal,
-        use_attention_mask,
+        static_cast<const unsigned int>(is_causal),
+        static_cast<const unsigned int>(use_attention_mask),
         max_dynamic_chunk_size,
-        tilize_q,
+        static_cast<const unsigned int>(tilize_q),
     };
 
     // Determine granularity for compute loops
@@ -713,7 +713,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     } else {
         compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
     }
-    compute_defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    compute_defines["EXP_APPROX_MODE"] = std::to_string(static_cast<int>(exp_approx_mode));
 
     // Compute
     auto compute_kernels_id = CreateKernel(
@@ -784,8 +784,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             page_table_addr,
             attn_mask_addr,
             page_table_stick_size,
-            do_reduce,
-            do_output,
+            static_cast<const unsigned int>(do_reduce),
+            static_cast<const unsigned int>(do_output),
             cur_head,
             cur_batch,
             core_num_in_reduce,
@@ -799,8 +799,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             out_addr,
             worker_id_for_reduce,
             worker_id_for_output,
-            do_reduce,
-            do_output,
+            static_cast<const unsigned int>(do_reduce),
+            static_cast<const unsigned int>(do_output),
             cur_head,
             cur_batch,
             core_num_in_reduce,
@@ -813,7 +813,13 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
         // compute runtime args
         std::vector<uint32_t> compute_rt_args = {
-            do_reduce, do_output, cur_head, cur_batch, core_num_in_reduce, core_num_in_output, cur_pos};
+            static_cast<const unsigned int>(do_reduce),
+            static_cast<const unsigned int>(do_output),
+            cur_head,
+            cur_batch,
+            core_num_in_reduce,
+            core_num_in_output,
+            cur_pos};
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_rt_args);
         SetRuntimeArgs(program, writer_kernels_id, core, writer_rt_args);
@@ -907,8 +913,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                 reader_args[arg_idx++] = page_table_addr;
                 reader_args[arg_idx++] = attn_mask_addr;
                 reader_args[arg_idx++] = page_table_stick_size;
-                reader_args[arg_idx++] = do_reduce;
-                reader_args[arg_idx++] = do_output;
+                reader_args[arg_idx++] = static_cast<std::uint32_t>(do_reduce);
+                reader_args[arg_idx++] = static_cast<std::uint32_t>(do_output);
                 reader_args[arg_idx++] = cur_head;
                 reader_args[arg_idx++] = cur_batch;
                 reader_args[arg_idx++] = core_num_in_reduce;
@@ -920,8 +926,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                 writer_args[arg_idx++] = out_addr;
                 writer_args[arg_idx++] = worker_id_for_reduce;
                 writer_args[arg_idx++] = worker_id_for_output;
-                writer_args[arg_idx++] = do_reduce;
-                writer_args[arg_idx++] = do_output;
+                writer_args[arg_idx++] = static_cast<std::uint32_t>(do_reduce);
+                writer_args[arg_idx++] = static_cast<std::uint32_t>(do_output);
                 writer_args[arg_idx++] = cur_head;
                 writer_args[arg_idx++] = cur_batch;
                 writer_args[arg_idx++] = core_num_in_reduce;
@@ -930,8 +936,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
                 // compute runtime args
                 arg_idx = 0;
-                compute_args[arg_idx++] = do_reduce;
-                compute_args[arg_idx++] = do_output;
+                compute_args[arg_idx++] = static_cast<std::uint32_t>(do_reduce);
+                compute_args[arg_idx++] = static_cast<std::uint32_t>(do_output);
                 compute_args[arg_idx++] = cur_head;
                 compute_args[arg_idx++] = cur_batch;
                 compute_args[arg_idx++] = core_num_in_reduce;

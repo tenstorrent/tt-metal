@@ -852,8 +852,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         out_subblock_w_ntiles,
         out_subblock_num_tiles,
 
-        height_sharded,
-        untilize_out,
+        static_cast<const unsigned int>(height_sharded),
+        static_cast<const unsigned int>(untilize_out),
 
         bias_ntiles_per_core,
 
@@ -867,7 +867,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
         get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
         get_cb_info_by_name(cb_info, Conv2dCb::TEMP_SUM).index,
-        partials_cb_uses_output};
+        static_cast<const unsigned int>(partials_cb_uses_output)};
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     const tt::tt_metal::NOC reader_noc =

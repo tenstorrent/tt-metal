@@ -806,7 +806,8 @@ uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, 
     // For ops running on device, the MSB is 0. For host-fallback ops, the MSB is 1. This avoids aliasing.
     constexpr uint32_t DEVICE_ID_NUM_BITS = 10;
     constexpr uint32_t DEVICE_OP_ID_NUM_BITS = 31;
-    return (is_host_fallback_op << DEVICE_OP_ID_NUM_BITS) | (base_program_id << DEVICE_ID_NUM_BITS) | device_id;
+    return (static_cast<int>(is_host_fallback_op) << DEVICE_OP_ID_NUM_BITS) | (base_program_id << DEVICE_ID_NUM_BITS) |
+           device_id;
 }
 
 }  // namespace detail

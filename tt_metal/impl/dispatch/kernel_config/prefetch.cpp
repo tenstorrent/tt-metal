@@ -466,8 +466,8 @@ void PrefetchKernel::CreateKernel() {
         dependent_config_.to_dev_id.value_or(0),
         dependent_config_.router_direction.value_or(0),
 
-        static_config_.is_d_variant.value(),
-        static_config_.is_h_variant.value(),
+        static_cast<const unsigned int>(static_config_.is_d_variant.value()),
+        static_cast<const unsigned int>(static_config_.is_h_variant.value()),
     };
 
     auto my_virtual_core = get_virtual_core_coord(logical_core_, GetCoreType());
@@ -514,7 +514,7 @@ void PrefetchKernel::CreateKernel() {
         // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
         // respect code space
         tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-            (not tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noinline()),
+            (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noinline() == 0),
         optimization_level);
 }
 

@@ -412,7 +412,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
                 edm_buffer_addrs_per_link.at(link).push_back(edm_buffer_addr);
                 edm_buffer_addr +=
                     ((all_gather_config.get_eth_buffer_size() +
-                      (all_gather_config.is_payload_and_channel_sync_merged() > 0
+                      (static_cast<int>(all_gather_config.is_payload_and_channel_sync_merged()) > 0
                            ? EriscDatamoverConfig::get_eth_word_size()
                            : 0)) *
                      all_gather_config.get_num_buffers_per_channel());
@@ -604,7 +604,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
             static_cast<uint32_t>(sender_worker_reader_semaphore_id),
             static_cast<uint32_t>(max_pages_per_chunk),
             static_cast<uint32_t>(ring_size),
-            static_cast<bool>(fuse_op),
+            static_cast<const unsigned int>(static_cast<bool>(fuse_op)),
             static_cast<uint32_t>(output_tensor_config->get_tile_size())};
 
         if (is_sharded) {
@@ -1041,7 +1041,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
                             static_cast<uint32_t>(tensor_slicer.num_cols),
                             static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).x),
                             static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).y),
-                            static_cast<bool>(fuse_op && direction == 1)};
+                            static_cast<const unsigned int>(static_cast<bool>(fuse_op && direction == 1))};
 
                         if (is_sharded) {
                             emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_sender_rt_args);

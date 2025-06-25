@@ -287,7 +287,7 @@ void JitBuildEnv::init(
 JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     env_(env),
     core_id_(build_config.processor_id),
-    is_fw_(build_config.is_fw),
+    is_fw_(static_cast<int>(build_config.is_fw)),
     dispatch_message_addr_(build_config.dispatch_message_addr) {}
 
 // Fill in common state derived from the default state set up in the constructors

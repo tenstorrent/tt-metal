@@ -120,7 +120,7 @@ void build_and_run_program(
                 (std::uint32_t)neighbour_core_physical.x,
                 (std::uint32_t)neighbour_core_physical.y,
                 // mcast
-                core_idx_x == 0 && core_idx_y == 0,
+                static_cast<const unsigned int>(core_idx_x == 0 && core_idx_y == 0),
                 top_left_core_physical.x,
                 top_left_core_physical.y,
                 bottom_right_core_physical.x,

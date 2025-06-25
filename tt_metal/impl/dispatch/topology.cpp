@@ -1410,7 +1410,7 @@ void build_tt_fabric_program(
 
         // 1D fabric only supports intramesh connections apart from TG gateways
         if (!is_2D_routing) {
-            uint32_t has_inter_mesh_connections = intra_chip_neighbors == neighbors.end();
+            uint32_t has_inter_mesh_connections = static_cast<uint32_t>(intra_chip_neighbors == neighbors.end());
             if (is_TG && has_inter_mesh_connections) {
                 // if active eth channels are found but no neighbor on the same mesh, then the neighbor should be the
                 // gateway
@@ -1569,7 +1569,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
             std::vector<uint32_t> ct_args = edm_builder.get_compile_time_args(risc_id);
 
             const auto is_master_risc_core = eth_chan == master_router_chan && (risc_id == 0);
-            ct_args.push_back(is_master_risc_core);
+            ct_args.push_back(static_cast<decltype(ct_args)::value_type>(is_master_risc_core));
             ct_args.push_back(master_router_chan);
             ct_args.push_back(num_local_fabric_routers);
             ct_args.push_back(router_channels_mask);

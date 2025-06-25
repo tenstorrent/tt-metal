@@ -458,7 +458,7 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
             q_base_addr,
             q_start_addr,
             0,
-            read_kv_heads,
+            static_cast<const unsigned int>(read_kv_heads),
             per_core_out_kv_heads,
             per_core_in_kv_heads,
             remote_kv_head_start_idx,

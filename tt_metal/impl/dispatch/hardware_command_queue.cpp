@@ -437,7 +437,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     // Values in these commands will get updated based on kernel config ring
     // buffer state at runtime.
     auto program_sizeB = program.impl().kernel_bins_sizeB;
-    bool use_prefetcher_cache = program_sizeB and program_sizeB <= this->prefetcher_cache_sizeB_;
+    bool use_prefetcher_cache = (program_sizeB != 0u) and program_sizeB <= this->prefetcher_cache_sizeB_;
     program.generate_dispatch_commands(device_, use_prefetcher_cache);
     program.set_last_used_command_queue_for_testing(this);
 
@@ -862,8 +862,8 @@ void HWCommandQueue::record_end() {
             this->manager_,
             this->id_,
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
-            node.dispatch_metadata.stall_first,
-            node.dispatch_metadata.stall_before_program,
+            node.dispatch_metadata.stall_first != 0u,
+            node.dispatch_metadata.stall_before_program != 0u,
             node.dispatch_metadata.send_binary);
 
         // Update wptrs for tensix and eth launch message in the device class

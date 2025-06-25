@@ -17,8 +17,8 @@ struct TraceDispatchMetadata {
     // Addresses to write a contiguous chunk containing RTAs, CBs, and semaphores.
     std::vector<ConfigBufferEntry> nonbinary_kernel_config_addrs;
     uint32_t sync_count = 0;
-    uint32_t stall_first = false;
-    uint32_t stall_before_program = false;
+    uint32_t stall_first = 0u;
+    uint32_t stall_before_program = 0u;
 
     struct {
         uint32_t mesh_max_program_kernels_sizeB;  // TBD: max program size across all programs in a mesh

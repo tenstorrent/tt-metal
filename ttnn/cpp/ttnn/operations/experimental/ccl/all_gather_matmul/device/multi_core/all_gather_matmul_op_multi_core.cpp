@@ -121,7 +121,7 @@ DatacopyParams setup_datacopy(
         static_cast<uint32_t>(num_rows),                                                // tnesor slice height in tiles
         static_cast<uint32_t>(tensor_slicer.output_page_offset),
         static_cast<uint32_t>(last_output_page_offset),
-        static_cast<bool>(is_clockwise_dir),
+        static_cast<const unsigned int>(static_cast<bool>(is_clockwise_dir)),
         static_cast<uint32_t>(datacopy_signal_semaphore_id_dir0),
         static_cast<uint32_t>(datacopy_signal_semaphore_id_dir1),
         static_cast<uint32_t>(datacopy_buffer_size),

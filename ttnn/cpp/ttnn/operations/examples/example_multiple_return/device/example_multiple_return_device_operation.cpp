@@ -61,7 +61,9 @@ std::tuple<
     ExampleMultipleReturnDeviceOperation::operation_attributes_t,
     ExampleMultipleReturnDeviceOperation::tensor_args_t>
 ExampleMultipleReturnDeviceOperation::invoke(const Tensor& input_tensor, bool return_output1, bool return_output2) {
-    return {operation_attributes_t{true, 42, return_output1, return_output2}, tensor_args_t{input_tensor}};
+    return {
+        operation_attributes_t{true, 42, static_cast<uint32_t>(return_output1), static_cast<uint32_t>(return_output2)},
+        tensor_args_t{input_tensor}};
 }
 
 }  // namespace ttnn::operations::examples

@@ -242,8 +242,8 @@ void create_worker_kernel(
         mux_kernel_config->get_flow_control_address(channel_type, worker_id),
         mux_kernel_config->get_buffer_index_address(channel_type, worker_id),
         mux_kernel_config->get_status_address(),
-        worker_test_config.mcast_encoding.has_value(),
-        channel_type == tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+        static_cast<const unsigned int>(worker_test_config.mcast_encoding.has_value()),
+        static_cast<const unsigned int>(channel_type == tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL),
         mux_kernel_config->get_channel_credits_stream_id(channel_type, worker_id)};
 
     auto worker_memory_map = worker_test_config.memory_map;

@@ -335,7 +335,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     uint32_t block_ht = per_core_Mt / num_batches_per_core;
     uint32_t subblock_wt = get_max_subblock(block_wt, 8);
     uint32_t num_subblocks_w = block_wt / subblock_wt;
-    bool block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
+    bool block_wt_last = ((per_core_Nt + num_groups_per_core - 1) / num_groups_per_core) != 0u;
 
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
     log_debug(tt::LogOp, "num_rows_per_batch_per_core: {}", per_core_M / num_batches_per_core);
@@ -747,8 +747,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)per_core_Mt * per_core_Nt / num_batches_per_core,
         (std::uint32_t)num_groups_per_core * block_wt,
         (std::uint32_t)block_wt_last,
-        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
-        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        static_cast<const unsigned int>(
+            (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
+        static_cast<const unsigned int>((std::uint32_t)num_datum_row_per_group < TILE_WIDTH),
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH
 
     };
@@ -779,8 +780,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)per_core_Mt * per_core_Nt / num_batches_per_core,
         (std::uint32_t)num_groups_per_core * block_wt,
         (std::uint32_t)block_wt_last,
-        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
-        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        static_cast<const unsigned int>(
+            (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
+        static_cast<const unsigned int>((std::uint32_t)num_datum_row_per_group < TILE_WIDTH),
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH};
     // compute kernel
     bool fp32_dest_acc_en = false;
@@ -988,8 +990,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
                     std::swap(mcast_start, mcast_end);
                 }
                 std::vector<uint32_t> mcast_sender_args;
-                mcast_sender_args.push_back(not mcast_group_first.empty());
-                mcast_sender_args.push_back(not mcast_group_last.empty());
+                mcast_sender_args.push_back(
+                    static_cast<decltype(mcast_sender_args)::value_type>(not mcast_group_first.empty()));
+                mcast_sender_args.push_back(
+                    static_cast<decltype(mcast_sender_args)::value_type>(not mcast_group_last.empty()));
                 mcast_sender_args.push_back(mcast_start.x);
                 mcast_sender_args.push_back(mcast_start.y);
                 mcast_sender_args.push_back(mcast_end.x);
@@ -1256,7 +1260,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t block_ht_group_2 = 0;
     uint32_t subblock_wt = get_max_subblock(block_wt, 8);
     uint32_t num_subblocks_w = block_wt / subblock_wt;
-    bool block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
+    bool block_wt_last = ((per_core_Nt + num_groups_per_core - 1) / num_groups_per_core) != 0u;
 
     // support for uneven batches across rows
     bool equal_batches_per_core = true;
@@ -1685,8 +1689,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
         (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,
         (std::uint32_t)block_wt_last,
-        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
-        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        static_cast<const unsigned int>(
+            (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
+        static_cast<const unsigned int>((std::uint32_t)num_datum_row_per_group < TILE_WIDTH),
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args_group_1 = {
@@ -1707,8 +1712,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
         (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,
         (std::uint32_t)block_wt_last,
-        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
-        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        static_cast<const unsigned int>(
+            (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
+        static_cast<const unsigned int>((std::uint32_t)num_datum_row_per_group < TILE_WIDTH),
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks};
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_2 = {
@@ -1731,8 +1737,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
         (std::uint32_t)per_core_Mt_group_2 * Wt / num_batches_per_core_group_2,
         (std::uint32_t)block_wt_last,
-        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
-        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        static_cast<const unsigned int>(
+            (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
+        static_cast<const unsigned int>((std::uint32_t)num_datum_row_per_group < TILE_WIDTH),
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args_group_2 = {
@@ -1753,8 +1760,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
         (std::uint32_t)per_core_Mt_group_2 * Wt / num_batches_per_core_group_2,
         (std::uint32_t)block_wt_last,
-        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
-        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        static_cast<const unsigned int>(
+            (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
+        static_cast<const unsigned int>((std::uint32_t)num_datum_row_per_group < TILE_WIDTH),
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks};
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
@@ -1827,8 +1835,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
         (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,
         (std::uint32_t)block_wt_last,
-        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
-        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        static_cast<const unsigned int>(
+            (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
+        static_cast<const unsigned int>((std::uint32_t)num_datum_row_per_group < TILE_WIDTH),
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)block_ht_group_1,
@@ -1852,8 +1861,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
         (std::uint32_t)per_core_Mt_group_2 * Wt / num_batches_per_core_group_2,
         (std::uint32_t)block_wt_last,
-        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
-        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        static_cast<const unsigned int>(
+            (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
+        static_cast<const unsigned int>((std::uint32_t)num_datum_row_per_group < TILE_WIDTH),
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)block_ht_group_2,
@@ -1939,8 +1949,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_groups_per_core * block_wt,
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
         (std::uint32_t)block_wt_last,
-        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
-        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        static_cast<const unsigned int>(
+            (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
+        static_cast<const unsigned int>((std::uint32_t)num_datum_row_per_group < TILE_WIDTH),
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
     };
@@ -1970,8 +1981,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_groups_per_core * block_wt,
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
         (std::uint32_t)block_wt_last,
-        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
-        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        static_cast<const unsigned int>(
+            (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
+        static_cast<const unsigned int>((std::uint32_t)num_datum_row_per_group < TILE_WIDTH),
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
     };
@@ -2002,8 +2014,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_groups_per_core * block_wt,
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
         (std::uint32_t)block_wt_last,
-        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
-        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        static_cast<const unsigned int>(
+            (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
+        static_cast<const unsigned int>((std::uint32_t)num_datum_row_per_group < TILE_WIDTH),
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
     };
@@ -2033,8 +2046,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_groups_per_core * block_wt,
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
         (std::uint32_t)block_wt_last,
-        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
-        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        static_cast<const unsigned int>(
+            (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
+        static_cast<const unsigned int>((std::uint32_t)num_datum_row_per_group < TILE_WIDTH),
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
     };
@@ -2336,8 +2350,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                 mcast_sender_args.push_back(in0_start_id);
                 mcast_sender_args.push_back(out_tile_start_id);
                 mcast_sender_args.push_back(Wt);
-                mcast_sender_args.push_back(not mcast_group_first.empty());
-                mcast_sender_args.push_back(not mcast_group_last.empty());
+                mcast_sender_args.push_back(
+                    static_cast<decltype(mcast_sender_args)::value_type>(not mcast_group_first.empty()));
+                mcast_sender_args.push_back(
+                    static_cast<decltype(mcast_sender_args)::value_type>(not mcast_group_last.empty()));
                 mcast_sender_args.push_back(mcast_start.x);
                 mcast_sender_args.push_back(mcast_start.y);
                 mcast_sender_args.push_back(mcast_end.x);

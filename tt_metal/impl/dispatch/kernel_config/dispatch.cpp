@@ -467,7 +467,7 @@ void DispatchKernel::CreateKernel() {
 
         static_config_.first_stream_used.value(),
 
-        virtualize_num_eth_cores,
+        static_cast<const unsigned int>(virtualize_num_eth_cores),
         num_virtual_active_eth_cores,
         num_physical_active_eth_cores,
 
@@ -500,8 +500,8 @@ void DispatchKernel::CreateKernel() {
         dependent_config_.to_dev_id.value_or(0),
         dependent_config_.router_direction.value_or(0),
 
-        static_config_.is_d_variant.value(),
-        static_config_.is_h_variant.value(),
+        static_cast<const unsigned int>(static_config_.is_d_variant.value()),
+        static_cast<const unsigned int>(static_config_.is_h_variant.value()),
     };
 
     auto my_virtual_core = get_virtual_core_coord(logical_core_, GetCoreType());

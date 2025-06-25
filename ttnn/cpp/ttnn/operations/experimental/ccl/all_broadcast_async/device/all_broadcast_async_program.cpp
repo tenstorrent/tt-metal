@@ -154,15 +154,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
 
     std::vector<uint32_t> writer_compile_args = {
-        reserved_packet_header_CB_index,                   // reserved_packet_header_cb_id
-        num_packet_headers_storable,                       // num_packet_headers_storable
-        static_cast<uint32_t>(output_tensor_buffer_type),  // buffer0_type
-        src0_cb_index,                                     // cb0_id
-        num_pages_per_packet,                              // packet_size_in_pages
-        op_config.get_page_size(),                         // tensor0_page_size
-        num_targets_forward,                               // num_targets_forward_direction
-        num_targets_backward,                              // num_targets_backward_direction
-        dynamic_alternate                                  // alternate
+        reserved_packet_header_CB_index,                    // reserved_packet_header_cb_id
+        num_packet_headers_storable,                        // num_packet_headers_storable
+        static_cast<uint32_t>(output_tensor_buffer_type),   // buffer0_type
+        src0_cb_index,                                      // cb0_id
+        num_pages_per_packet,                               // packet_size_in_pages
+        op_config.get_page_size(),                          // tensor0_page_size
+        num_targets_forward,                                // num_targets_forward_direction
+        num_targets_backward,                               // num_targets_backward_direction
+        static_cast<const unsigned int>(dynamic_alternate)  // alternate
 
     };
 
@@ -175,10 +175,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             num_width_shards > 1 ? buffer_page_size : page_size,
             row_size,
             max_packet_size,
-            num_packets_per_row,   // num_packets_per_row
-            num_targets_forward,   // num_targets_forward_direction
-            num_targets_backward,  // num_targets_backward_direction
-            dynamic_alternate,     // alternate
+            num_packets_per_row,                                 // num_packets_per_row
+            num_targets_forward,                                 // num_targets_forward_direction
+            num_targets_backward,                                // num_targets_backward_direction
+            static_cast<const unsigned int>(dynamic_alternate),  // alternate
         };
     }
     std::map<string, string> kernel_defines;
@@ -242,26 +242,26 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         uint32_t output_tile_id_start = input_tile_id_start;
         uint32_t output_tile_id_end = input_tile_id_end;
         std::vector<uint32_t> writer_rt_args = {
-            output_tensors[ring_index].buffer()->address(),  // tensor_address0  //HERE
-            semaphore.address(),                             // out_ready_sem_bank_addr (absolute address)
-            output_tile_id_start * num_width_shards,         // tile_id_start
-            output_tile_id_end * num_width_shards,           // tile_id_end
-            wait_output_semaphore,                           // wait_output_semaphore
-            reset_global_semaphore,                          // reset_global_semaphore
-            drain_sync_core.x,                               // out_ready_sem_noc0_x
-            drain_sync_core.y,                               // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,                        // out_ready_sem_wait_value
+            output_tensors[ring_index].buffer()->address(),           // tensor_address0  //HERE
+            semaphore.address(),                                      // out_ready_sem_bank_addr (absolute address)
+            output_tile_id_start * num_width_shards,                  // tile_id_start
+            output_tile_id_end * num_width_shards,                    // tile_id_end
+            static_cast<const unsigned int>(wait_output_semaphore),   // wait_output_semaphore
+            static_cast<const unsigned int>(reset_global_semaphore),  // reset_global_semaphore
+            drain_sync_core.x,                                        // out_ready_sem_noc0_x
+            drain_sync_core.y,                                        // out_ready_sem_noc0_y
+            out_ready_sem_wait_value,                                 // out_ready_sem_wait_value
         };
         if (sharded) {
             shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
         }
 
-        writer_rt_args.push_back(forward_device.has_value());
+        writer_rt_args.push_back(static_cast<decltype(writer_rt_args)::value_type>(forward_device.has_value()));
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
-        writer_rt_args.push_back(backward_device.has_value());
+        writer_rt_args.push_back(static_cast<decltype(writer_rt_args)::value_type>(backward_device.has_value()));
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);

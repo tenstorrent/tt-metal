@@ -212,7 +212,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             batch_slice_num_pages,                                   // batch_slice_num_pages
             ring_size,                                               // ring_size
             num_batches,                                             // num_batches
-            fuse_op,                                                 // fused op
+            static_cast<const unsigned int>(fuse_op),                // fused op
             tiles_to_write_per_packet,                               // contig_pages_advanced
             core_idx % num_senders_per_link,                         // direction
         };
@@ -319,15 +319,16 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
                 (link * batch_slice_num_pages / num_links),       // tiles_read
                 (link + 1) * batch_slice_num_pages / num_links};  // tiles_to_read
             if (core_idx % num_senders_per_link) {  // forward
-                writer_rt_args.push_back(forward_device.has_value());
+                writer_rt_args.push_back(static_cast<decltype(writer_rt_args)::value_type>(forward_device.has_value()));
                 if (forward_device.has_value()) {
                     tt::tt_fabric::append_fabric_connection_rt_args(
                         sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
                 }
-                writer_rt_args.push_back(false);
+                writer_rt_args.push_back(0u);
             } else {
-                writer_rt_args.push_back(false);
-                writer_rt_args.push_back(backward_device.has_value());
+                writer_rt_args.push_back(0u);
+                writer_rt_args.push_back(
+                    static_cast<decltype(writer_rt_args)::value_type>(backward_device.has_value()));
                 if (backward_device.has_value()) {
                     tt::tt_fabric::append_fabric_connection_rt_args(
                         sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);

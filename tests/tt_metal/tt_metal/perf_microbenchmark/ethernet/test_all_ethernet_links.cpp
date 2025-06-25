@@ -626,8 +626,8 @@ int main(int argc, char** argv) {
     std::size_t packet_size = std::stoi(argv[arg_idx++]);
     std::size_t num_buffer_slots = std::stoi(argv[arg_idx++]);
 
-    bool test_latency = std::stoi(argv[arg_idx++]);
-    bool disable_trid = std::stoi(argv[arg_idx++]);
+    bool test_latency = std::stoi(argv[arg_idx++]) != 0;
+    bool disable_trid = std::stoi(argv[arg_idx++]) != 0;
     uint32_t num_iterations = std::stoi(argv[arg_idx++]);
 
     TestParams params{

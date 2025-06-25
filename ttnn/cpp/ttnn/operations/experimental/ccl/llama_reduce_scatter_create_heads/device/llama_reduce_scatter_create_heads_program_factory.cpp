@@ -729,7 +729,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     uint32_t local_page = 0;
 
     std::vector<uint32_t> reader_runtime_args = {
-        cross_device_semaphore->address(), local_semaphore, false, false, 0, 0, false, 0, 0, 0, 0, 0, 0};
+        cross_device_semaphore->address(), local_semaphore, 0u, 0u, 0, 0, 0u, 0, 0, 0, 0, 0, 0};
     uint32_t is_reader_sender_core_idx = 2;
     uint32_t is_reader_worker_core_idx = 3;
     uint32_t is_linear_output_page_start_idx = 4;
@@ -769,7 +769,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     for (auto core : all_cores) {
         std::vector<uint32_t> writer_runtime_args = {
-            cross_device_semaphore->address(), local_semaphore, false, false, 0, 0, 0, 0, 0, 0, 0};
+            cross_device_semaphore->address(), local_semaphore, 0u, 0u, 0, 0, 0, 0, 0, 0, 0};
 
         uint32_t num_shards_to_read_per_worker = schedule[sender_core_idx].size();
 
@@ -777,16 +777,16 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
             auto sender_total_num_pages =
                 detail::rs_heads_fusion::get_total_num_pages_in_schedule(schedule[sender_core_idx]);
 
-            reader_runtime_args[is_reader_sender_core_idx] = true;
-            reader_runtime_args[is_reader_worker_core_idx] = false;
-            reader_runtime_args[is_reader_receiver_core_idx] = false;
+            reader_runtime_args[is_reader_sender_core_idx] = 1u;
+            reader_runtime_args[is_reader_worker_core_idx] = 0u;
+            reader_runtime_args[is_reader_receiver_core_idx] = 0u;
             reader_runtime_args[reader_sender_packet_start_idx] = reader_sender_packet_start;
             reader_runtime_args[reader_sender_packet_end_idx] =
                 reader_sender_packet_start + num_shards_to_read_per_worker;
             reader_runtime_args[reader_sender_total_num_pages_idx] = sender_total_num_pages;
 
-            writer_runtime_args[is_writer_sender_core_idx] = true;
-            writer_runtime_args[is_writer_worker_core_idx] = false;
+            writer_runtime_args[is_writer_sender_core_idx] = 1u;
+            writer_runtime_args[is_writer_worker_core_idx] = 0u;
             writer_runtime_args[writer_sender_packet_start_idx] = writer_sender_packet_start;
             writer_runtime_args[writer_sender_packet_end_idx] =
                 writer_sender_packet_start + sender_total_num_pages / num_blocks_per_packet;
@@ -797,13 +797,15 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
             writer_sender_packet_start += sender_total_num_pages / num_blocks_per_packet;
             sender_core_idx++;
 
-            writer_runtime_args.push_back(forward_fabric_connection);
+            writer_runtime_args.push_back(
+                static_cast<decltype(writer_runtime_args)::value_type>(forward_fabric_connection));
             if (forward_fabric_connection) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     target_device->id(), forward_device.value()->id(), link_idx, program, core, writer_runtime_args);
             }
 
-            writer_runtime_args.push_back(backward_fabric_connection);
+            writer_runtime_args.push_back(
+                static_cast<decltype(writer_runtime_args)::value_type>(backward_fabric_connection));
             if (backward_fabric_connection) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     target_device->id(), backward_device.value()->id(), link_idx, program, core, writer_runtime_args);
@@ -811,16 +813,16 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
             link_idx++;
         } else if (packet_worker_cores_grid.contains(core)) {
-            reader_runtime_args[is_reader_sender_core_idx] = false;
-            reader_runtime_args[is_reader_worker_core_idx] = true;
+            reader_runtime_args[is_reader_sender_core_idx] = 0u;
+            reader_runtime_args[is_reader_worker_core_idx] = 1u;
             reader_runtime_args[is_linear_output_page_start_idx] = local_page;
             reader_runtime_args[is_linear_input_packet_start_idx] = local_page + offset_for_input;
             reader_runtime_args[reader_q_base_addr_idx] = q_base_addr;
             reader_runtime_args[reader_k_base_addr_idx] = k_base_addr;
             reader_runtime_args[reader_v_base_addr_idx] = v_base_addr;
 
-            writer_runtime_args[is_writer_sender_core_idx] = false;
-            writer_runtime_args[is_writer_worker_core_idx] = true;
+            writer_runtime_args[is_writer_sender_core_idx] = 0u;
+            writer_runtime_args[is_writer_worker_core_idx] = 1u;
             writer_runtime_args[is_linear_output_page_start_idx] = local_page;
             writer_runtime_args[writer_q_base_addr_idx] = q_base_addr;
             writer_runtime_args[writer_k_base_addr_idx] = k_base_addr;
@@ -828,16 +830,16 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
             local_page += num_blocks_per_packet;
             if (core == packet_receiver_core) {
-                reader_runtime_args[is_reader_receiver_core_idx] = true;
+                reader_runtime_args[is_reader_receiver_core_idx] = 1u;
             } else {
-                reader_runtime_args[is_reader_receiver_core_idx] = false;
+                reader_runtime_args[is_reader_receiver_core_idx] = 0u;
             }
         } else {
-            reader_runtime_args[is_reader_sender_core_idx] = false;
-            reader_runtime_args[is_reader_worker_core_idx] = false;
-            reader_runtime_args[is_reader_receiver_core_idx] = false;
-            writer_runtime_args[is_writer_sender_core_idx] = false;
-            writer_runtime_args[is_writer_worker_core_idx] = false;
+            reader_runtime_args[is_reader_sender_core_idx] = 0u;
+            reader_runtime_args[is_reader_worker_core_idx] = 0u;
+            reader_runtime_args[is_reader_receiver_core_idx] = 0u;
+            writer_runtime_args[is_writer_sender_core_idx] = 0u;
+            writer_runtime_args[is_writer_worker_core_idx] = 0u;
         }
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);

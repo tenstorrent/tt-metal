@@ -205,7 +205,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         in_row_size_bytes,
         C_in_block_bytes,
         out_row_size_bytes,
-        is_padding_zeros,
+        static_cast<const unsigned int>(is_padding_zeros),
         semaphore_id,
     };
 

@@ -59,10 +59,10 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
 
     bool dst_is_dram1 = output_tensor1.has_value()
-                            ? (output_tensor1.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0)
+                            ? (output_tensor1.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM)
                             : false;
     bool dst_is_dram2 = output_tensor2.has_value()
-                            ? (output_tensor2.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0)
+                            ? (output_tensor2.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM)
                             : false;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram1, (std::uint32_t)dst_is_dram2};

@@ -53,7 +53,7 @@ void throttle_mm_perf(const tt::ARCH arch, const int num_cores, std::map<std::st
     // Limit matmul compute throughput by inserting NOP instructions between MVMUL instructions of matmul kernel
     // This will slow down the OP if UNPACK/PACK threads are capable of feeding data sufficiently fast (MATH compute
     // bound)
-    const bool enable_throttle_mm_perf = std::getenv("TT_MM_THROTTLE_PERF");
+    const bool enable_throttle_mm_perf = std::getenv("TT_MM_THROTTLE_PERF") != nullptr;
     const uint32_t throttle_level = enable_throttle_mm_perf ? std::stoi(std::getenv("TT_MM_THROTTLE_PERF")) : 0;
     if (throttle_level && mm_throttle_needed) {
         mm_kernel_defines["MM_THROTTLE"] = std::to_string(throttle_level);
@@ -78,14 +78,14 @@ void throttle_mm_perf(const tt::ARCH arch, const int num_cores, std::map<std::st
 
 void add_dram_skip_defines_if_needed(
     const tt::ARCH arch, std::map<std::string, std::string>& mm_in1_sender_writer_defines) {
-    const bool skip_in1_dram = std::getenv("TT_MM_SKIP_IN1_DRAM");
+    const bool skip_in1_dram = std::getenv("TT_MM_SKIP_IN1_DRAM") != nullptr;
     if (skip_in1_dram && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE)) {
         mm_in1_sender_writer_defines["SKIP_IN1_DRAM"] = "1";
     }
 }
 
 bool should_sync_after_in1_dram(const tt::ARCH arch) {
-    const bool sync_in1_dram = std::getenv("TT_MM_SYNC_AFTER_IN1_DRAM");
+    const bool sync_in1_dram = std::getenv("TT_MM_SYNC_AFTER_IN1_DRAM") != nullptr;
     return sync_in1_dram && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE);
 }
 

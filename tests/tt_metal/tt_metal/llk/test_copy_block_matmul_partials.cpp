@@ -171,7 +171,7 @@ void run_single_core_copy_block_matmul_partials(
          num_tiles,
          src0_cb_index,
          test_config.reader_ublock,
-         false});
+         0u});
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -182,7 +182,7 @@ void run_single_core_copy_block_matmul_partials(
          num_tiles,
          ouput_cb_index,
          test_config.writer_ublock,
-         false});
+         0u});
 
     tt_metal::detail::LaunchProgram(device, program);
 

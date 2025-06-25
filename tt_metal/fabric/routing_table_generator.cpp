@@ -121,7 +121,7 @@ std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> RoutingTable
     // TODO: add more tests for this
     std::uint32_t num_meshes = inter_mesh_connectivity.size();
     // avoid vector<bool> specialization
-    std::vector<std::uint8_t> visited(num_meshes, false);
+    std::vector<std::uint8_t> visited(num_meshes, 0u);
 
     // paths[target_mesh_id][path_count][next_chip and next_mesh];
     std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> paths;
@@ -133,7 +133,7 @@ std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> RoutingTable
 
     std::queue<MeshId> q;
     q.push(src);
-    visited[*src] = true;
+    visited[*src] = 1u;
     // BFS
     while (!q.empty()) {
         MeshId current_mesh_id = q.front();
@@ -145,7 +145,7 @@ std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> RoutingTable
             for (const auto& [connected_mesh_id, edge] : inter_mesh_connectivity[*current_mesh_id][chip_in_mesh]) {
                 if (!visited[*connected_mesh_id]) {
                     q.push(connected_mesh_id);
-                    visited[*connected_mesh_id] = true;
+                    visited[*connected_mesh_id] = 1u;
                 }
                 if (dist[*connected_mesh_id] > dist[*current_mesh_id] + 1) {
                     dist[*connected_mesh_id] = dist[*current_mesh_id] + 1;

@@ -88,7 +88,7 @@ TEST(Host, ExtractPackBitArray) {
         // If the bit length of src is not evenly divisible by num_pack_bits
         // then the last element after packing back won't equal the original.
         bool has_partial = (num_pack_bits * num_dest_elements) % 32 != 0;
-        for (int i = 0; i < 4 - has_partial; i++) {
+        for (int i = 0; i < 4 - static_cast<int>(has_partial); i++) {
             EXPECT_EQ(src[i], packed[i]);
         }
     }

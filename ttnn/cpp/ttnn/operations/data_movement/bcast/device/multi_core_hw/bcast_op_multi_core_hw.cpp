@@ -38,7 +38,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
 
     uint32_t num_tensor_tiles = NC * Ht * Wt;
 
-    uint32_t bnc1 = (bN * bC == 1);
+    uint32_t bnc1 = static_cast<uint32_t>(bN * bC == 1);
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -255,7 +255,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
         uint32_t HtWt = Ht * Wt;
 
         uint32_t num_tensor_tiles = NC * Ht * Wt;
-        uint32_t bnc1 = (bN * bC == 1);
+        uint32_t bnc1 = static_cast<uint32_t>(bN * bC == 1);
 
         auto
             [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =

@@ -90,7 +90,7 @@ TestResult mem_bench_page_sizing(benchmark::State& state) {
     auto src_data = generate_random_src_data(ctx.total_size);
     auto hugepage = get_hugepage(k_DeviceId, 0);
     auto hugepage_size = get_hugepage_size(k_DeviceId);
-    bool cached = state.range(2);
+    bool cached = state.range(2) != 0;
 
     for (auto _ : state) {
         const double iteration_time =
@@ -160,13 +160,13 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     IDevice* device = (*(devices.begin())).second;
     Context ctx{
         devices,
-        state.range(0),  // Total size
-        state.range(1),  // Page size
-        0,               // Threads
-        state.range(2),  // Readers
-        state.range(3),  // Writers
-        state.range(4),  // Enable host copy
-        0,               // Iterations is managed by the benchmark framework
+        state.range(0),       // Total size
+        state.range(1),       // Page size
+        0,                    // Threads
+        state.range(2),       // Readers
+        state.range(3),       // Writers
+        state.range(4) != 0,  // Enable host copy
+        0,                    // Iterations is managed by the benchmark framework
     };
     if (ctx.number_reader_kernels && ctx.number_writer_kernels) {
         TT_THROW(
@@ -384,13 +384,13 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
     IDevice* device = (*(devices.begin())).second;
     Context ctx{
         devices,
-        state.range(0),  // Total size
-        state.range(1),  // Page size
-        0,               // Threads
-        state.range(2),  // Readers
-        state.range(3),  // Writers
-        state.range(4),  // Enable host copy
-        0,               // Iterations is managed by the benchmark framework
+        state.range(0),       // Total size
+        state.range(1),       // Page size
+        0,                    // Threads
+        state.range(2),       // Readers
+        state.range(3),       // Writers
+        state.range(4) != 0,  // Enable host copy
+        0,                    // Iterations is managed by the benchmark framework
     };
 
     auto src_data = generate_random_src_data(ctx.total_size);
@@ -451,7 +451,7 @@ void register_basic_benchmark_suite() {
         ->ArgsProduct({
             {1_GB},
             {16, 8_KB, 16_KB, 32_KB},
-            {true},
+            {1},
         });
     // N cores reading the hugepage on the host
     ::benchmark::RegisterBenchmark("Device Reading Host", mem_bench_copy_with_active_kernel)
@@ -461,7 +461,7 @@ void register_basic_benchmark_suite() {
             {32_KB},
             {1, 2, 3, 4},
             {0},
-            {false},
+            {0},
         });
     // N cores writing the hugepage on the host
     ::benchmark::RegisterBenchmark("Device Writing Host", mem_bench_copy_with_active_kernel)
@@ -471,7 +471,7 @@ void register_basic_benchmark_suite() {
             {32_KB},
             {0},
             {1, 2, 3, 4},
-            {false},
+            {0},
         });
 }
 
@@ -481,7 +481,7 @@ void register_full_benchmark_suite() {
         ->ArgsProduct({
             {1_GB},
             {16, 8_KB, 16_KB, 32_KB},
-            {false},
+            {0},
         });
     ::benchmark::RegisterBenchmark("Host Copy Saturation", mem_bench_copy_multithread)
         ->Apply(global_bench_args)
@@ -506,7 +506,7 @@ void register_full_benchmark_suite() {
             {32_KB},
             {1, 2},
             {1, 2},
-            {true},
+            {1},
         });
     ::benchmark::RegisterBenchmark(
         "Multiple MMIO Devices Reading (Same NUMA node)", mem_bench_multi_mmio_devices_reading_same_node)
@@ -554,10 +554,10 @@ int main(int argc, char* argv[]) {
     }
 
     // Force TT_METAL options
-    setenv("TT_METAL_SLOW_DISPATCH_MODE", "true", true);
-    setenv("TT_METAL_CLEAR_L1", "1", true);
+    setenv("TT_METAL_SLOW_DISPATCH_MODE", "true", 1);
+    setenv("TT_METAL_CLEAR_L1", "1", 1);
     // May be overridden by the user
-    setenv("TT_LOGGER_LEVEL", "FATAL", false);
+    setenv("TT_LOGGER_LEVEL", "FATAL", 0);
 
     char arg0_default[] = "benchmark";
     char* args_default = arg0_default;

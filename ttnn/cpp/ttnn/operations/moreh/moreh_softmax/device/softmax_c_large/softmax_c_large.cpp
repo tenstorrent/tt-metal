@@ -71,13 +71,13 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_c_large.cpp",
         all_cores,
-        {src_is_dram},
+        {static_cast<const unsigned int>(src_is_dram)},
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_c_large.cpp",
         all_cores,
-        {dst_is_dram},
+        {static_cast<const unsigned int>(dst_is_dram)},
         writer_defines);
 
     auto outer_stride = Ht * Wt;

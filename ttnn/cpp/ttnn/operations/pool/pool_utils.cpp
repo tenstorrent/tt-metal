@@ -282,7 +282,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             orientation,
             false,
             false,
-            0);
+            false);
 
         if (!input_parallel_config.has_value()) {
             return {std::numeric_limits<uint32_t>::max(), input_parallel_config};

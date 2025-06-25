@@ -95,7 +95,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
 
     // Reader compile-time args
     uint32_t src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
+    uint32_t stick_size_is_power_of_two = static_cast<uint32_t>(is_power_of_two_at_least_32(stick_size));
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)std::log2<decltype(stick_size)>(stick_size) : 0;
     std::vector<uint32_t> reader_compile_time_args = {src0_is_dram, stick_size_is_power_of_two, log2_stick_size};
 
@@ -191,7 +191,8 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
          full_cores_per_col] =
             ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
 
-    uint32_t total_tiles_per_row = full_cores_per_row * single_block_size + has_cliff_row * single_block_size_cliff_row;
+    uint32_t total_tiles_per_row =
+        full_cores_per_row * single_block_size + static_cast<uint32_t>(has_cliff_row) * single_block_size_cliff_row;
 
     uint32_t row_size_bytes = a.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
@@ -265,7 +266,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
 
     uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     uint32_t stick_size = row_size_bytes;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
+    uint32_t stick_size_is_power_of_two = static_cast<uint32_t>(is_power_of_two_at_least_32(stick_size));
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
 
     // log2(TILE_WIDTH * data_format_size_in_bytes)
@@ -495,7 +496,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     /** reader
      */
     uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(block_size_nbytes);
+    uint32_t stick_size_is_power_of_two = static_cast<uint32_t>(is_power_of_two_at_least_32(block_size_nbytes));
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)std::log2(block_size_nbytes) : 0;
     std::vector<uint32_t> reader_ct_args = {src0_is_dram, stick_size_is_power_of_two, log2_stick_size};
     KernelHandle unary_reader_kernel_id = CreateKernel(
@@ -538,7 +539,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     // 1D distribution of blocks across cores
     bool has_cliff = core_range_cliff.size() > 0;
 
-    uint32_t ncores_full = ncores - has_cliff;
+    uint32_t ncores_full = ncores - static_cast<uint32_t>(has_cliff);
     uint32_t ncores_x = grid_size.x;
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;

@@ -83,8 +83,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
     const KernelDescriptor::CompileTimeArgs compile_time_args = {
         (uint32_t)src_cb_idx,
         (uint32_t)dst_cb_idx,
-        src_is_dram,
-        dst_is_dram,
+        static_cast<const unsigned int>(src_is_dram),
+        static_cast<const unsigned int>(dst_is_dram),
         src_page_size,
         dst_page_size,
         outer_dim_units,

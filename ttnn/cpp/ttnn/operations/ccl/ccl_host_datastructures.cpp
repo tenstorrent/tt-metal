@@ -37,7 +37,7 @@ uint32_t EriscDatamoverConfig::compute_buffer_size(
     std::size_t num_edm_channels, std::size_t num_buffers_per_channel, uint32_t page_size) {
     page_size = std::max<uint32_t>(page_size, eth_word_size_bytes);
     TT_ASSERT(num_edm_channels > 0);
-    std::size_t channel_sync_bytes_overhead = (enable_merged_payload_and_channel_sync * 16);
+    std::size_t channel_sync_bytes_overhead = (static_cast<int>(enable_merged_payload_and_channel_sync) * 16);
     std::size_t total_usable_space = total_l1_buffer_space - get_buffers_region_start_offset(num_edm_channels);
     std::size_t l1_per_buffer_region =
         (total_usable_space / (num_edm_channels * num_buffers_per_channel)) - channel_sync_bytes_overhead;
@@ -81,7 +81,7 @@ bool CCLOpConfig::is_input_sharded() const { return this->input_sharded; }
 
 bool CCLOpConfig::is_output_sharded() const { return this->output_sharded; }
 
-bool CCLOpConfig::get_shard_grid_size() const { return this->shard_grid_size; }
+bool CCLOpConfig::get_shard_grid_size() const { return this->shard_grid_size != 0u; }
 
 Tensor const& CCLOpConfig::get_input_tensor(std::size_t i) const { return input_tensors->at(i); }
 

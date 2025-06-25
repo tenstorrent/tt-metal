@@ -108,7 +108,7 @@ inline bool RiscEnabled(const CoreDescriptor& core, int risc_index) {
         // logic into HAL?
         risc_index += DPRINT_NRISCVS;
     }
-    return risc_mask & (1 << risc_index);
+    return (risc_mask & (1 << risc_index)) != 0u;
 }
 
 // A null stream for when the print server is muted.

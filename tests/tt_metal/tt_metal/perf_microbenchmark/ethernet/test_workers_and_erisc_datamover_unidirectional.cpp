@@ -323,7 +323,8 @@ bool RunWriteBWTest(
         uint32_t(sender_device->ethernet_core_from_logical_core(eth_sender_core).x),
         uint32_t(sender_device->ethernet_core_from_logical_core(eth_sender_core).y)};
     // TODO
-    std::vector<uint32_t> chip0_sender_worker_reader_compile_args{input_is_dram, num_pages, input_buffer_page_size};
+    std::vector<uint32_t> chip0_sender_worker_reader_compile_args{
+        static_cast<const unsigned int>(input_is_dram), num_pages, input_buffer_page_size};
     // TODO
     std::vector<uint32_t> chip0_sender_worker_reader_runtime_args{dram_input_buf_base_addr};
 
@@ -483,8 +484,8 @@ bool RunWriteBWTest(
 
     tt_metal::SetRuntimeArgs(receiver_program, eth_receiver_kernel, eth_receiver_core, chip1_edm_args);
     std::vector<uint32_t> chip1_receiver_worker_sender_compile_args{
-        dest_is_dram,  //
-        num_pages,     //
+        static_cast<const unsigned int>(dest_is_dram),  //
+        num_pages,                                      //
         input_buffer_page_size};
     std::vector<uint32_t> chip1_receiver_worker_sender_runtime_args{dram_output_buffer_base_addr};
     std::vector<uint32_t> chip1_receiver_worker_receiver_compile_args{

@@ -131,19 +131,19 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_kernels/reader_moreh_getitem.cpp",
         all_cores,
         {
-            src_is_dram,
-            index_info[0].is_dram,
-            index_info[1].is_dram,
-            index_info[2].is_dram,
-            index_info[3].is_dram,
-            index_info[4].is_dram,
+            static_cast<const unsigned int>(src_is_dram),
+            static_cast<const unsigned int>(index_info[0].is_dram),
+            static_cast<const unsigned int>(index_info[1].is_dram),
+            static_cast<const unsigned int>(index_info[2].is_dram),
+            static_cast<const unsigned int>(index_info[3].is_dram),
+            static_cast<const unsigned int>(index_info[4].is_dram),
         },
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_kernels/writer_moreh_getitem.cpp",
         all_cores,
-        {dst_is_dram},
+        {static_cast<const unsigned int>(dst_is_dram)},
         writer_defines);
 
     uint32_t input_stick_idx_stride_h = 1;
@@ -185,11 +185,11 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
             input_5d_shape[4],
 
             // index
-            index_info[0].is_defined,
-            index_info[1].is_defined,
-            index_info[2].is_defined,
-            index_info[3].is_defined,
-            index_info[4].is_defined,
+            static_cast<const unsigned int>(index_info[0].is_defined),
+            static_cast<const unsigned int>(index_info[1].is_defined),
+            static_cast<const unsigned int>(index_info[2].is_defined),
+            static_cast<const unsigned int>(index_info[3].is_defined),
+            static_cast<const unsigned int>(index_info[4].is_defined),
             index_info[0].unit_size,
             index_info[1].unit_size,
             index_info[2].unit_size,

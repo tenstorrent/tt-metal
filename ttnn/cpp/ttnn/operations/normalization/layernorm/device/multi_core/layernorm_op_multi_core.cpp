@@ -355,7 +355,12 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
+    std::vector<uint32_t> compute_args = {
+        Wt,
+        block_size,
+        static_cast<const unsigned int>(gamma.has_value()),
+        static_cast<const unsigned int>(beta.has_value()),
+        static_cast<const unsigned int>(fp32_dest_acc_en)};
 
     auto compute_kernels_id = CreateKernel(
         program,
@@ -1173,10 +1178,18 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         writer_mcast_receiver_compile_time_args.push_back(0);
     }
 
-    writer_mcast_sender_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
-    writer_mcast_sender_compile_time_args.push_back(beta_cb_data_format == tt::DataFormat::Float32);
-    writer_mcast_receiver_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
-    writer_mcast_receiver_compile_time_args.push_back(beta_cb_data_format == tt::DataFormat::Float32);
+    writer_mcast_sender_compile_time_args.push_back(
+        static_cast<decltype(writer_mcast_sender_compile_time_args)::value_type>(
+            gamma_cb_data_format == tt::DataFormat::Float32));
+    writer_mcast_sender_compile_time_args.push_back(
+        static_cast<decltype(writer_mcast_sender_compile_time_args)::value_type>(
+            beta_cb_data_format == tt::DataFormat::Float32));
+    writer_mcast_receiver_compile_time_args.push_back(
+        static_cast<decltype(writer_mcast_receiver_compile_time_args)::value_type>(
+            gamma_cb_data_format == tt::DataFormat::Float32));
+    writer_mcast_receiver_compile_time_args.push_back(
+        static_cast<decltype(writer_mcast_receiver_compile_time_args)::value_type>(
+            beta_cb_data_format == tt::DataFormat::Float32));
 
     // write back compile time args
     writer_mcast_sender_compile_time_args.push_back(block_wt * out_single_tile_size);  // out_tensor_stride_w_bytes
@@ -1237,8 +1250,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // compute kernel compile time args
     std::vector<uint32_t> all_to_all_except_top_compute_compile_time_args = {
         0,
-        gamma.has_value(),
-        beta.has_value(),
+        static_cast<const unsigned int>(gamma.has_value()),
+        static_cast<const unsigned int>(beta.has_value()),
         num_blocks_first_stage,
         block_ht,
         block_wt,
@@ -1246,12 +1259,12 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         num_subblocks_w,
         1,
         block_ht * block_wt,
-        fp32_dest_acc_en,
+        static_cast<const unsigned int>(fp32_dest_acc_en),
         num_blocks_second_stage};
     std::vector<uint32_t> not_all_to_all_compute_compile_time_args = {
         0,
-        gamma.has_value(),
-        beta.has_value(),
+        static_cast<const unsigned int>(gamma.has_value()),
+        static_cast<const unsigned int>(beta.has_value()),
         num_blocks_first_stage,
         block_ht,
         block_wt,
@@ -1259,7 +1272,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         num_subblocks_w,
         0,
         block_ht * block_wt,
-        fp32_dest_acc_en,
+        static_cast<const unsigned int>(fp32_dest_acc_en),
         num_blocks_second_stage};
     // compute kernel
     std::string compute_kernel_file;
@@ -1650,7 +1663,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             } else {
                 is_last_all_to_all_worker = width_index == num_cores_all_to_all - 1;
             }
-            mcast_receiver_args.push_back(is_last_all_to_all_worker);
+            mcast_receiver_args.push_back(
+                static_cast<decltype(mcast_receiver_args)::value_type>(is_last_all_to_all_worker));
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
             bool is_second_stage_reader;
             if (use_two_stage_reduce and width_index < num_cores_all_to_all_first_stage) {
@@ -1685,7 +1699,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         } else {
             std::vector<uint32_t> mcast_receiver_args;
             bool is_last_all_to_all_worker = false;
-            mcast_receiver_args.push_back(is_last_all_to_all_worker);
+            mcast_receiver_args.push_back(
+                static_cast<decltype(mcast_receiver_args)::value_type>(is_last_all_to_all_worker));
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
             mcast_receiver_args.push_back(0);
             mcast_receiver_args.push_back(0);

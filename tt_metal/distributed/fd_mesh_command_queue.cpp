@@ -286,16 +286,16 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             this->capture_program_trace_on_subgrid(
                 device_range,
                 program_cmd_seq,
-                dispatch_metadata.stall_first,
-                dispatch_metadata.stall_before_program,
+                dispatch_metadata.stall_first != 0u,
+                dispatch_metadata.stall_before_program != 0u,
                 program.get_runtime_id());
             active_sub_grids.push_back(device_range);
         } else {
             this->write_program_cmds_to_subgrid(
                 device_range,
                 program_cmd_seq,
-                dispatch_metadata.stall_first,
-                dispatch_metadata.stall_before_program,
+                dispatch_metadata.stall_first != 0u,
+                dispatch_metadata.stall_before_program != 0u,
                 chip_ids_in_workload,
                 program.get_runtime_id());
         }
@@ -617,7 +617,7 @@ void FDMeshCommandQueue::read_completion_queue() {
     while (true) {
         {
             std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);
-            reader_thread_cv_.wait(lock, [this] { return num_outstanding_reads_ or exit_condition_; });
+            reader_thread_cv_.wait(lock, [this] { return (num_outstanding_reads_ != 0u) or exit_condition_; });
         }
         if (exit_condition_) {
             return;

@@ -44,7 +44,7 @@ inline std::string strip(const std::string& s) {
     std::string whitespace = " \t\n";
     std::size_t start = s.find_first_not_of(whitespace);
     std::size_t end = s.find_last_not_of(whitespace);
-    end += bool(end != std::string::npos);
+    end += static_cast<std::size_t>(bool(end != std::string::npos));
     return s.substr(start, end);
 }
 

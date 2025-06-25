@@ -438,8 +438,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         out_subblock_w_ntiles,         // out_sublock_w
         out_subblock_num_tiles,        // out_sublock_num_tiles
 
-        tilize_in0,    // tilize_in0
-        untilize_out,  // untilize_out
+        static_cast<const unsigned int>(tilize_in0),    // tilize_in0
+        static_cast<const unsigned int>(untilize_out),  // untilize_out
 
         bias_ntiles,
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
@@ -452,7 +452,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
         get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
         0,
-        partials_cb_uses_output,
+        static_cast<const unsigned int>(partials_cb_uses_output),
         input_num_cores,  // in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
 
     };
@@ -501,7 +501,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         per_core_num_blocks_act_w,  // this_core_weight_height_blocks
         num_blocks_act_h_per_core,
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
-        bias_in_dram};
+        static_cast<const unsigned int>(bias_in_dram)};
 
     auto act_kernel_id = CreateKernel(
         program,

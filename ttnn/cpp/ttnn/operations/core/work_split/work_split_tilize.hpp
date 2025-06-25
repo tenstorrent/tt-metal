@@ -162,7 +162,8 @@ inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks)
     std::optional<CoreCoord> cliff_core;
 
     // Top non-cliff range (full rows)
-    const uint32_t top_range_end_y = ncores_y - (ncores_x_cliff < ncores_x || nblocks_per_core_cliff > 0);
+    const uint32_t top_range_end_y =
+        ncores_y - static_cast<uint32_t>(ncores_x_cliff < ncores_x || nblocks_per_core_cliff > 0);
 
     if (top_range_end_y > 0) {
         auto range = CoreRange{CoreCoord{0, 0}, CoreCoord{ncores_x - 1, top_range_end_y - 1}};
@@ -227,7 +228,7 @@ struct BlockRep {
 
     bool has_mixed_block() const { return n_mixed > 0; }
 
-    uint32_t single_rep() const { return n_data + has_mixed_block() + n_pads; }
+    uint32_t single_rep() const { return n_data + static_cast<uint32_t>(has_mixed_block()) + n_pads; }
 
     uint32_t block_count() const { return single_rep() * times; }
 
@@ -254,13 +255,13 @@ struct BlockRep {
                 first.emplace_back(n_data, n_mixed, 0, 1);
                 second.emplace_back(0, 0, n_pads, 1);
             } else {
-                within_rep_idx -= n_data + has_mixed_block();
+                within_rep_idx -= n_data + static_cast<uint32_t>(has_mixed_block());
                 first.emplace_back(n_data, n_mixed, within_rep_idx, 1);
                 second.emplace_back(0, 0, n_pads - within_rep_idx, 1);
             }
         }
 
-        int remaining_times = times - rep_idx - is_within_rep;
+        int remaining_times = times - rep_idx - static_cast<uint32_t>(is_within_rep);
         if (remaining_times > 0) {
             second.emplace_back(n_data, n_mixed, n_pads, remaining_times);
         }

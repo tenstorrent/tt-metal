@@ -100,9 +100,9 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
 
     bool output_sharded = is_sharded(output.buffer()->buffer_layout());
 
@@ -398,9 +398,9 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
 
     bool output_sharded = is_sharded(output.buffer()->buffer_layout());
 
@@ -658,9 +658,9 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t input_element_size_bytes = a.element_size();
     uint32_t weights_element_size_bytes = weights.element_size();

@@ -121,7 +121,8 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     const std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(is_dram(param_in)),
         static_cast<uint32_t>(is_dram(grad)),
-        static_cast<uint32_t>(momentum_buffer_in.has_value() ? is_dram(momentum_buffer_in.value()) : 0)};
+        static_cast<uint32_t>(
+            momentum_buffer_in.has_value() ? static_cast<int>(is_dram(momentum_buffer_in.value())) : 0)};
 
     std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(param_out))};
     if (has_momentum_buffer_out) {

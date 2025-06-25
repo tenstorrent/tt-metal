@@ -161,7 +161,7 @@ KernelHandle FDKernel::configure_kernel_variant(
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
     if (force_watcher_no_inline) {
-        defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
+        defines.insert({"WATCHER_NOINLINE", std::to_string(static_cast<int>(force_watcher_no_inline))});
     }
     auto& rt_options = tt::tt_metal::MetalContext::instance().rtoptions();
     if (rt_options.watcher_dispatch_disabled()) {

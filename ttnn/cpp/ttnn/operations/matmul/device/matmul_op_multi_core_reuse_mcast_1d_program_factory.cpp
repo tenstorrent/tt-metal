@@ -575,7 +575,7 @@ process_mcast_in0_program_and_create_override_variables(
         B,                       // batch
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out  // untilize_out
+        static_cast<const unsigned int>(untilize_out)  // untilize_out
     };
 
     // Create compute kernel
@@ -1309,7 +1309,7 @@ process_mcast_in1_program_and_create_override_variables(
         B,                       // batch
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out  // untilize_out
+        static_cast<const unsigned int>(untilize_out)  // untilize_out
     };
 
     // Create compute kernel
@@ -1937,9 +1937,9 @@ process_gather_in0_program_and_create_override_variables(
         batch,                   // batch
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out,             // untilize_out
-        in1_is_dram_interleaved,  // in1_is_dram_interleaved
-        in1_is_dram_sharded,      // in1_is_dram_sharded
+        static_cast<const unsigned int>(untilize_out),             // untilize_out
+        static_cast<const unsigned int>(in1_is_dram_interleaved),  // in1_is_dram_interleaved
+        static_cast<const unsigned int>(in1_is_dram_sharded),      // in1_is_dram_sharded
         src0_cb_index,
         src1_cb_index,
         src2_cb_index,

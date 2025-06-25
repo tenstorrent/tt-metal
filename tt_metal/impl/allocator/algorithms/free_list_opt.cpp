@@ -95,8 +95,8 @@ void FreeListOpt::init() {
     block_size_.push_back(max_size_bytes_);
     block_prev_block_.push_back(-1);
     block_next_block_.push_back(-1);
-    block_is_allocated_.push_back(false);
-    meta_block_is_allocated_.push_back(true);
+    block_is_allocated_.push_back(0u);
+    meta_block_is_allocated_.push_back(1u);
     free_blocks_segregated_by_size_[get_size_segregated_index(max_size_bytes_)].push_back(0);
 }
 
@@ -212,7 +212,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_s
 
 size_t FreeListOpt::allocate_in_block(size_t block_index, DeviceAddr alloc_size, size_t offset) {
     if (block_size_[block_index] == alloc_size && offset == 0) {
-        block_is_allocated_[block_index] = true;
+        block_is_allocated_[block_index] = 1u;
         insert_block_to_alloc_table(block_address_[block_index], block_index);
         return block_index;
     }
@@ -251,7 +251,7 @@ size_t FreeListOpt::allocate_in_block(size_t block_index, DeviceAddr alloc_size,
 
         insert_block_to_segregated_list(new_block_index);
     }
-    block_is_allocated_[block_index] = true;
+    block_is_allocated_[block_index] = 1u;
     insert_block_to_alloc_table(block_address_[block_index], block_index);
 
     return block_index;
@@ -267,7 +267,7 @@ void FreeListOpt::deallocate(DeviceAddr absolute_address) {
         return;
     }
     size_t block_index = *block_index_opt;
-    block_is_allocated_[block_index] = false;
+    block_is_allocated_[block_index] = 0u;
     ssize_t prev_block = block_prev_block_[block_index];
     ssize_t next_block = block_next_block_[block_index];
 
@@ -356,8 +356,8 @@ size_t FreeListOpt::alloc_meta_block(
         block_size_.push_back(size);
         block_prev_block_.push_back(prev_block);
         block_next_block_.push_back(next_block);
-        block_is_allocated_.push_back(is_allocated);
-        meta_block_is_allocated_.push_back(true);
+        block_is_allocated_.push_back(static_cast<decltype(block_is_allocated_)::value_type>(is_allocated));
+        meta_block_is_allocated_.push_back(1u);
     } else {
         idx = free_meta_block_indices_.back();
         free_meta_block_indices_.pop_back();
@@ -365,15 +365,15 @@ size_t FreeListOpt::alloc_meta_block(
         block_size_[idx] = size;
         block_prev_block_[idx] = prev_block;
         block_next_block_[idx] = next_block;
-        block_is_allocated_[idx] = is_allocated;
-        meta_block_is_allocated_[idx] = true;
+        block_is_allocated_[idx] = static_cast<decltype(block_is_allocated_)::value_type>(is_allocated);
+        meta_block_is_allocated_[idx] = 1u;
     }
     return idx;
 }
 
 void FreeListOpt::free_meta_block(size_t block_index) {
     free_meta_block_indices_.push_back(block_index);
-    meta_block_is_allocated_[block_index] = false;
+    meta_block_is_allocated_[block_index] = 0u;
 }
 
 void FreeListOpt::clear() { init(); }

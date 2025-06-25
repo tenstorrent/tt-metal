@@ -40,7 +40,8 @@ void append_fabric_connection_rt_args(
     const CoreCoord& core,
     tt::tt_metal::Program& program,
     std::vector<uint32_t>& writer_rt_args) {
-    writer_rt_args.push_back(connection.has_value());
+    writer_rt_args.push_back(
+        static_cast<std::remove_reference_t<decltype(writer_rt_args)>::value_type>(connection.has_value()));
     if (connection.has_value()) {
         auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
         auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
@@ -147,16 +148,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     // Writer
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     writer_kernel_config.compile_args = {
-        ring_index,                                        // my_chip_id
-        reserved_packet_header_CB_index,                   // reserved_packet_header_cb_id
-        num_packet_headers_storable,                       // num_packet_headers_storable
-        static_cast<uint32_t>(output_tensor_buffer_type),  // buffer0_type
-        src0_cb_index,                                     // cb0_id
-        num_pages_per_packet,                              // packet_size_in_pages
-        op_config.get_page_size(),                         // tensor0_page_size
-        num_targets_forward,                               // num_targets_forward_direction
-        num_targets_backward,                              // num_targets_backward_direction
-        dynamic_alternate                                  // alternate
+        ring_index,                                         // my_chip_id
+        reserved_packet_header_CB_index,                    // reserved_packet_header_cb_id
+        num_packet_headers_storable,                        // num_packet_headers_storable
+        static_cast<uint32_t>(output_tensor_buffer_type),   // buffer0_type
+        src0_cb_index,                                      // cb0_id
+        num_pages_per_packet,                               // packet_size_in_pages
+        op_config.get_page_size(),                          // tensor0_page_size
+        num_targets_forward,                                // num_targets_forward_direction
+        num_targets_backward,                               // num_targets_backward_direction
+        static_cast<const unsigned int>(dynamic_alternate)  // alternate
     };
     for (const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
@@ -201,26 +202,28 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         uint32_t output_tile_id_start = ring_index * input_tensor_num_pages + input_tile_id_start;
         uint32_t output_tile_id_end = ring_index * input_tensor_num_pages + input_tile_id_end;
         std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),  // tensor_address0
-            semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
-            output_tile_id_start,               // tile_id_start
-            output_tile_id_end,                 // tile_id_end
-            wait_output_semaphore,              // wait_output_semaphore
-            reset_global_semaphore,             // reset_global_semaphore
-            drain_sync_core.x,                  // out_ready_sem_noc0_x
-            drain_sync_core.y,                  // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,           // out_ready_sem_wait_value
+            output_tensor.buffer()->address(),                        // tensor_address0
+            semaphore.address(),                                      // out_ready_sem_bank_addr (absolute address)
+            output_tile_id_start,                                     // tile_id_start
+            output_tile_id_end,                                       // tile_id_end
+            static_cast<const unsigned int>(wait_output_semaphore),   // wait_output_semaphore
+            static_cast<const unsigned int>(reset_global_semaphore),  // reset_global_semaphore
+            drain_sync_core.x,                                        // out_ready_sem_noc0_x
+            drain_sync_core.y,                                        // out_ready_sem_noc0_y
+            out_ready_sem_wait_value,                                 // out_ready_sem_wait_value
         };
         log_trace(tt::LogOp, "Writer Runtime Args:");
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        writer_rt_args.push_back(forward_device.has_value());
+        writer_rt_args.push_back(
+            static_cast<std::remove_reference_t<decltype(writer_rt_args)>::value_type>(forward_device.has_value()));
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
-        writer_rt_args.push_back(backward_device.has_value());
+        writer_rt_args.push_back(
+            static_cast<std::remove_reference_t<decltype(writer_rt_args)>::value_type>(backward_device.has_value()));
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
@@ -429,7 +432,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         static_cast<uint32_t>(topology),                   // topology
         tiles_to_write_per_packet,                         // contig_pages_advanced
         1,                                                 // direction
-        fuse_op,                                           // fused op
+        static_cast<const unsigned int>(fuse_op),          // fused op
     };
     auto worker_sender_reader_forward_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -441,20 +444,20 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     // Writer
     auto sender_writer_forward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     sender_writer_forward_kernel_config.compile_args = {
-        ring_index,                                        // my_chip_id
-        reserved_packet_header_forward_CB_index,           // reserved_packet_header_cb_id
-        num_packet_headers_storable,                       // num_packet_headers_storable
-        static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
-        sender_forward_cb_index,                           // cb_forward_id
-        num_pages_per_packet,                              // packet_size_in_pages
-        op_config.get_page_size(),                         // tensor0_page_size
-        num_targets_forward,                               // num_targets_forward_direction
-        num_targets_backward,                              // num_targets_backward_direction
-        dynamic_alternate,                                 // alternate
-        fuse_op,                                           // fused op
-        static_cast<uint32_t>(topology),                   // topology
-        tiles_to_write_per_packet,                         // contig_pages_advanced
-        1,                                                 // direction
+        ring_index,                                          // my_chip_id
+        reserved_packet_header_forward_CB_index,             // reserved_packet_header_cb_id
+        num_packet_headers_storable,                         // num_packet_headers_storable
+        static_cast<uint32_t>(output_tensor_buffer_type),    // output_buffer_type
+        sender_forward_cb_index,                             // cb_forward_id
+        num_pages_per_packet,                                // packet_size_in_pages
+        op_config.get_page_size(),                           // tensor0_page_size
+        num_targets_forward,                                 // num_targets_forward_direction
+        num_targets_backward,                                // num_targets_backward_direction
+        static_cast<const unsigned int>(dynamic_alternate),  // alternate
+        static_cast<const unsigned int>(fuse_op),            // fused op
+        static_cast<uint32_t>(topology),                     // topology
+        tiles_to_write_per_packet,                           // contig_pages_advanced
+        1,                                                   // direction
     };
     auto worker_sender_writer_forward_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -478,7 +481,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         static_cast<uint32_t>(topology),                   // topology
         tiles_to_write_per_packet,                         // contig_pages_advanced
         0,                                                 // direction
-        fuse_op,                                           // fused op
+        static_cast<const unsigned int>(fuse_op),          // fused op
     };
     auto worker_sender_reader_backward_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -490,20 +493,20 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     // Writer
     auto sender_writer_backward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     sender_writer_backward_kernel_config.compile_args = {
-        ring_index,                                        // my_chip_id
-        reserved_packet_header_backward_CB_index,          // reserved_packet_header_cb_id
-        num_packet_headers_storable,                       // num_packet_headers_storable
-        static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
-        sender_backward_cb_index,                          // cb_forward_id
-        num_pages_per_packet,                              // packet_size_in_pages
-        op_config.get_page_size(),                         // tensor0_page_size
-        num_targets_forward,                               // num_targets_forward_direction
-        num_targets_backward,                              // num_targets_backward_direction
-        dynamic_alternate,                                 // alternate
-        fuse_op,                                           // fused op
-        static_cast<uint32_t>(topology),                   // topology
-        tiles_to_write_per_packet,                         // contig_pages_advanced
-        0,                                                 // direction
+        ring_index,                                          // my_chip_id
+        reserved_packet_header_backward_CB_index,            // reserved_packet_header_cb_id
+        num_packet_headers_storable,                         // num_packet_headers_storable
+        static_cast<uint32_t>(output_tensor_buffer_type),    // output_buffer_type
+        sender_backward_cb_index,                            // cb_forward_id
+        num_pages_per_packet,                                // packet_size_in_pages
+        op_config.get_page_size(),                           // tensor0_page_size
+        num_targets_forward,                                 // num_targets_forward_direction
+        num_targets_backward,                                // num_targets_backward_direction
+        static_cast<const unsigned int>(dynamic_alternate),  // alternate
+        static_cast<const unsigned int>(fuse_op),            // fused op
+        static_cast<uint32_t>(topology),                     // topology
+        tiles_to_write_per_packet,                           // contig_pages_advanced
+        0,                                                   // direction
     };
     auto worker_sender_writer_backward_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -614,8 +617,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
             input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
         };
-        writer_forward_rt_args.push_back(false);
-        writer_forward_rt_args.push_back(backward_device.has_value());
+        writer_forward_rt_args.push_back(0u);
+        writer_forward_rt_args.push_back(
+            static_cast<std::remove_reference_t<decltype(writer_forward_rt_args)>::value_type>(
+                backward_device.has_value()));
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 sender_device->id(),
@@ -648,7 +653,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
             input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
         };
-        writer_backward_rt_args.push_back(forward_device.has_value());
+        writer_backward_rt_args.push_back(
+            static_cast<std::remove_reference_t<decltype(writer_backward_rt_args)>::value_type>(
+                forward_device.has_value()));
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 sender_device->id(),
@@ -658,7 +665,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
                 sender_worker_cores[0 + 2 * link],
                 writer_backward_rt_args);
         }
-        writer_backward_rt_args.push_back(false);
+        writer_backward_rt_args.push_back(0u);
         if (fuse_op) {
             fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_backward_rt_args, 1, 0, 0);
         }
@@ -835,15 +842,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     // Writer
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     writer_kernel_config.compile_args = {
-        ring_index,                       // my_chip_id
-        reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
-        num_packet_headers_storable,      // num_packet_headers_storable
-        src0_cb_index,                    // cb0_id
-        num_pages_per_packet,             // packet_size_in_pages
-        op_config.get_page_size(),        // tensor0_page_size
-        num_targets_forward,              // num_targets_forward_direction
-        num_targets_backward,             // num_targets_backward_direction
-        dynamic_alternate                 // dynamic_alternate
+        ring_index,                                         // my_chip_id
+        reserved_packet_header_CB_index,                    // reserved_packet_header_cb_id
+        num_packet_headers_storable,                        // num_packet_headers_storable
+        src0_cb_index,                                      // cb0_id
+        num_pages_per_packet,                               // packet_size_in_pages
+        op_config.get_page_size(),                          // tensor0_page_size
+        num_targets_forward,                                // num_targets_forward_direction
+        num_targets_backward,                               // num_targets_backward_direction
+        static_cast<const unsigned int>(dynamic_alternate)  // dynamic_alternate
     };
     log_trace(tt::LogOp, "Writer Compile Args:");
     for (const auto& arg : writer_kernel_config.compile_args) {
@@ -940,17 +947,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
         uint32_t out_ready_sem_wait_value = (dynamic_alternate ? (ring_size + 1) : ring_size) * num_links;
         std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),    // tensor_address0
-            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
-            output_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,             // num_tiles_to_read
-            output_first_core_tile_start_offset,  // first_core_tile_start_offset
-            output_tensor_cores_x.size(),         // num_cores
-            wait_output_semaphore,                // wait_output_semaphore
-            reset_global_semaphore,               // reset_global_semaphore
-            drain_sync_core.x,                    // out_ready_sem_noc0_x
-            drain_sync_core.y,                    // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,             // out_ready_sem_wait_value
+            output_tensor.buffer()->address(),                        // tensor_address0
+            semaphore.address(),                                      // out_ready_sem_bank_addr (absolute address)
+            output_tensor_shard_num_pages,                            // num_tiles_per_core
+            worker_num_tiles_to_read,                                 // num_tiles_to_read
+            output_first_core_tile_start_offset,                      // first_core_tile_start_offset
+            output_tensor_cores_x.size(),                             // num_cores
+            static_cast<const unsigned int>(wait_output_semaphore),   // wait_output_semaphore
+            static_cast<const unsigned int>(reset_global_semaphore),  // reset_global_semaphore
+            drain_sync_core.x,                                        // out_ready_sem_noc0_x
+            drain_sync_core.y,                                        // out_ready_sem_noc0_y
+            out_ready_sem_wait_value,                                 // out_ready_sem_wait_value
         };
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
@@ -959,12 +966,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
             log_trace(tt::LogOp, "\t{}", arg);
         }
 
-        writer_rt_args.push_back(forward_device.has_value());
+        writer_rt_args.push_back(
+            static_cast<std::remove_reference_t<decltype(writer_rt_args)>::value_type>(forward_device.has_value()));
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
-        writer_rt_args.push_back(backward_device.has_value());
+        writer_rt_args.push_back(
+            static_cast<std::remove_reference_t<decltype(writer_rt_args)>::value_type>(backward_device.has_value()));
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);

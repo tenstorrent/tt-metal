@@ -210,7 +210,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
          output_buf_noc_xy.x,
          output_buf_noc_xy.y,
          buffer_size,
-         use_inline_dw_write});
+         static_cast<const unsigned int>(use_inline_dw_write)});
 
     // Run the kernel, expect an exception here
     try {

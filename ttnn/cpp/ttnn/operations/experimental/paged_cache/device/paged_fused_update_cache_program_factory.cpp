@@ -358,14 +358,14 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
             unary_reader_kernel_id,
             core1,
             {
-                has_work,
-                is_input1,
+                static_cast<const unsigned int>(has_work),
+                static_cast<const unsigned int>(is_input1),
                 dst1_buffer->address(),
                 use_index_tensor ? 0 : cache_start_id,
                 index_buffer_addr,
                 i,
                 is_paged_cache ? page_table.value().buffer()->address() : 0,
-                wait_to_start,
+                static_cast<const unsigned int>(wait_to_start),
             });
 
         // Set runtime args for writer
@@ -374,12 +374,12 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
             unary_writer_kernel_id,
             core1,
             {
-                has_work,
+                static_cast<const unsigned int>(has_work),
                 dst1_buffer->address(),
                 use_index_tensor ? 0 : cache_start_id,
                 use_index_tensor ? 0 : tile_update_offset_B,
                 i,
-                send_signal,
+                static_cast<const unsigned int>(send_signal),
                 send_core1_x,
                 send_core1_y,
             });
@@ -390,8 +390,8 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
             compute_kernel_id,
             core1,
             {
-                has_work,
-                is_input1,
+                static_cast<const unsigned int>(has_work),
+                static_cast<const unsigned int>(is_input1),
             });
 
         // Input2 args
@@ -401,14 +401,14 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
             unary_reader_kernel_id,
             core2,
             {
-                has_work,
-                !is_input1,
+                static_cast<const unsigned int>(has_work),
+                static_cast<const unsigned int>(!is_input1),
                 dst2_buffer->address(),
                 use_index_tensor ? 0 : cache_start_id,
                 index_buffer_addr,
                 i,
                 is_paged_cache ? page_table.value().buffer()->address() : 0,
-                wait_to_start,
+                static_cast<const unsigned int>(wait_to_start),
             });
 
         // Set runtime args for writer
@@ -417,12 +417,12 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
             unary_writer_kernel_id,
             core2,
             {
-                has_work,
+                static_cast<const unsigned int>(has_work),
                 dst2_buffer->address(),
                 use_index_tensor ? 0 : cache_start_id,
                 use_index_tensor ? 0 : tile_update_offset_B,
                 i,
-                send_signal,
+                static_cast<const unsigned int>(send_signal),
                 send_core2_x,
                 send_core2_y,
             });
@@ -433,15 +433,15 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
             compute_kernel_id,
             core2,
             {
-                has_work,
-                !is_input1,
+                static_cast<const unsigned int>(has_work),
+                static_cast<const unsigned int>(!is_input1),
             });
     }
 
     // Set runtime args for unused cores
-    SetRuntimeArgs(program, unary_reader_kernel_id, unused_cores, {!has_work});
-    SetRuntimeArgs(program, unary_writer_kernel_id, unused_cores, {!has_work});
-    SetRuntimeArgs(program, compute_kernel_id, unused_cores, {!has_work});
+    SetRuntimeArgs(program, unary_reader_kernel_id, unused_cores, {static_cast<const unsigned int>(!has_work)});
+    SetRuntimeArgs(program, unary_writer_kernel_id, unused_cores, {static_cast<const unsigned int>(!has_work)});
+    SetRuntimeArgs(program, compute_kernel_id, unused_cores, {static_cast<const unsigned int>(!has_work)});
 
     auto override_runtime_arguments_callback =
         [unary_reader_kernel_id,
@@ -702,45 +702,45 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
     std::vector<uint32_t> reader_compile_time_args = {
         src1_cb_index,
         src2_cb_index,
-        dst_is_dram,
+        static_cast<const unsigned int>(dst_is_dram),
         cache_cb_index,
         // Index tensor args
-        use_index_tensor,
-        index_is_dram,
+        static_cast<const unsigned int>(use_index_tensor),
+        static_cast<const unsigned int>(index_is_dram),
         cb_index_id,
         cache_batch_num_tiles,
         Wt,
         log2_page_size,
         index_stick_size,
         // page_table args
-        is_paged_cache,
+        static_cast<const unsigned int>(is_paged_cache),
         num_heads,
         block_size,
         block_size_t,
         max_blocks_per_seq,
         log2_page_table_stick_size,
         page_table_stick_size,
-        page_table_is_dram,
+        static_cast<const unsigned int>(page_table_is_dram),
         cb_pagetable_id,
         St,
         in0_sequential_mode_semaphore_id,
     };
 
     std::vector<uint32_t> writer_compile_time_args = {
-        dst_is_dram,
+        static_cast<const unsigned int>(dst_is_dram),
         output_cb_index,
         intermed0_cb_index,
         intermed1_cb_index,
         src1_cb_index,
         src2_cb_index,
         // Index tensor args
-        use_index_tensor,
+        static_cast<const unsigned int>(use_index_tensor),
         cb_index_id,
         cache_batch_num_tiles,
         Wt,
         Wbytes,
         // page_table args
-        is_paged_cache,
+        static_cast<const unsigned int>(is_paged_cache),
         num_heads,
         block_size,
         block_size_t,
@@ -827,14 +827,14 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
             unary_reader_kernel_id,
             core1,
             {
-                has_work,
-                is_input1,
+                static_cast<const unsigned int>(has_work),
+                static_cast<const unsigned int>(is_input1),
                 dst1_buffer->address(),
                 use_index_tensor ? 0 : cache_start_id,
                 index_buffer_addr,
                 i,
                 is_paged_cache ? page_table.value().buffer()->address() : 0,
-                wait_to_start,
+                static_cast<const unsigned int>(wait_to_start),
             });
 
         // Set runtime args for writer
@@ -843,15 +843,15 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
             unary_writer_kernel_id,
             core1,
             {
-                has_work,
+                static_cast<const unsigned int>(has_work),
                 dst1_buffer->address(),
                 use_index_tensor ? 0 : cache_start_id,
                 use_index_tensor ? 0 : tile_update_offset_B,
                 i,
-                send_signal,
+                static_cast<const unsigned int>(send_signal),
                 send_core1_x,
                 send_core1_y,
-                is_input1,
+                static_cast<const unsigned int>(is_input1),
             });
 
         // Set runtime args for compute
@@ -860,8 +860,8 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
             compute_kernel_id,
             core1,
             {
-                has_work,
-                is_input1,
+                static_cast<const unsigned int>(has_work),
+                static_cast<const unsigned int>(is_input1),
             });
 
         // Input2 args
@@ -871,14 +871,14 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
             unary_reader_kernel_id,
             core2,
             {
-                has_work,
-                !is_input1,
+                static_cast<const unsigned int>(has_work),
+                static_cast<const unsigned int>(!is_input1),
                 dst2_buffer->address(),
                 use_index_tensor ? 0 : cache_start_id,
                 index_buffer_addr,
                 i,
                 is_paged_cache ? page_table.value().buffer()->address() : 0,
-                wait_to_start,
+                static_cast<const unsigned int>(wait_to_start),
             });
 
         // Set runtime args for writer
@@ -887,15 +887,15 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
             unary_writer_kernel_id,
             core2,
             {
-                has_work,
+                static_cast<const unsigned int>(has_work),
                 dst2_buffer->address(),
                 use_index_tensor ? 0 : cache_start_id,
                 use_index_tensor ? 0 : tile_update_offset_B,
                 i,
-                send_signal,
+                static_cast<const unsigned int>(send_signal),
                 send_core2_x,
                 send_core2_y,
-                !is_input1,
+                static_cast<const unsigned int>(!is_input1),
             });
 
         // Set runtime args for compute
@@ -904,15 +904,15 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
             compute_kernel_id,
             core2,
             {
-                has_work,
-                !is_input1,
+                static_cast<const unsigned int>(has_work),
+                static_cast<const unsigned int>(!is_input1),
             });
     }
 
     // Set runtime args for unused cores
-    SetRuntimeArgs(program, unary_reader_kernel_id, unused_cores, {!has_work});
-    SetRuntimeArgs(program, unary_writer_kernel_id, unused_cores, {!has_work});
-    SetRuntimeArgs(program, compute_kernel_id, unused_cores, {!has_work});
+    SetRuntimeArgs(program, unary_reader_kernel_id, unused_cores, {static_cast<const unsigned int>(!has_work)});
+    SetRuntimeArgs(program, unary_writer_kernel_id, unused_cores, {static_cast<const unsigned int>(!has_work)});
+    SetRuntimeArgs(program, compute_kernel_id, unused_cores, {static_cast<const unsigned int>(!has_work)});
 
     auto override_runtime_arguments_callback =
         [unary_reader_kernel_id,

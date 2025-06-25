@@ -517,11 +517,11 @@ void generate_sender_worker_kernels(
     bool scatter_write) {
     const auto& edm_noc_core = CoreCoord(worker_fabric_connection.edm_noc_x, worker_fabric_connection.edm_noc_y);
     std::vector<uint32_t> sender_worker_reader_compile_args{
-        src_is_dram,      //
-        num_pages_total,  //
+        static_cast<const unsigned int>(src_is_dram),  //
+        num_pages_total,                               //
         page_size,
         num_pages_per_edm_buffer,
-        scatter_write};
+        static_cast<const unsigned int>(scatter_write)};
     std::vector<uint32_t> sender_worker_reader_runtime_args{dram_input_buffer_base_addr};
 
     log_trace(tt::LogTest, "\tSenderReader CT Args");
@@ -538,9 +538,9 @@ void generate_sender_worker_kernels(
         num_pages_total,
         page_size,
         worker_fabric_connection.num_buffers_per_channel,
-        dest_is_dram,
+        static_cast<const unsigned int>(dest_is_dram),
         std::holds_alternative<mcast_send>(mode) ? 1 : 0,
-        scatter_write};
+        static_cast<const unsigned int>(scatter_write)};
     log_trace(tt::LogTest, "worker_fabric_connection.edm_l1_sem_addr: {}", worker_fabric_connection.edm_l1_sem_addr);
     log_trace(tt::LogTest, "worker_buffer_index_semaphore_id: {}", worker_buffer_index_semaphore_id);
     log_trace(tt::LogTest, "last_message_semaphore_address: {}", local_worker_last_message_semaphore_id);
@@ -3398,7 +3398,8 @@ void generate_1d_fabric_on_full_mesh_worker_rt_args(
                                      IDevice* connected_device,
                                      ttnn::ccl::EdmLineFabricOpInterface::Direction direction,
                                      std::vector<uint32_t>& rt_args_out) {
-        rt_args_out.push_back(is_connected_in_direction);
+        rt_args_out.push_back(
+            static_cast<std::remove_reference_t<decltype(rt_args_out)>::value_type>(is_connected_in_direction));
         if (is_connected_in_direction) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 device->id(), connected_device->id(), link, program, {worker_core}, rt_args_out);
@@ -3436,7 +3437,7 @@ void generate_1d_fabric_on_full_mesh_worker_rt_args(
         const size_t dest_noc_y_fwd = device->worker_core_from_logical_core(dest_core_coord[l]).y;
         const size_t dest_noc_x_bwd = device->worker_core_from_logical_core(dest_core_coord[l]).x;
         const size_t dest_noc_y_bwd = device->worker_core_from_logical_core(dest_core_coord[l]).y;
-        size_t num_send_types = !disable_sends_for_worker;
+        size_t num_send_types = static_cast<size_t>(!disable_sends_for_worker);
         std::vector<uint32_t> rt_args = {
             dest_bank_addr,
             dest_noc_x_fwd,

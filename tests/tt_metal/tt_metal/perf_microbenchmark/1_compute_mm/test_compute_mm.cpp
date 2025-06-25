@@ -314,7 +314,7 @@ int main(int argc, char** argv) {
         if (single_core) {
             TT_ASSERT(fast_dispatch_mode, "single core test only supports in fast dispatch mode");
         } else if (!fast_dispatch_mode) {
-            setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
+            setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", 1);
 
 #if !defined(TRACY_ENABLE)
             log_error(
@@ -478,7 +478,7 @@ int main(int argc, char** argv) {
         auto [math_fidelity, fp32_dest_acc_en] = get_compute_params(arch);
         if (single_core) {
             math_fidelity = fidel == 0 ? MathFidelity::LoFi : MathFidelity::HiFi2;
-            fp32_dest_acc_en = fp32 != 0;
+            fp32_dest_acc_en = static_cast<int>(fp32) != 0;
         }
         auto [out_subblock_h, out_subblock_w] = get_out_subblock_params(per_core_Mt, per_core_Nt, subblock_choice);
         auto [in0_cb_addr, in1_cb_addr, in2_cb_addr, out_cb_addr, in0_addr, in1_addr, out_addr] =
@@ -572,7 +572,7 @@ int main(int argc, char** argv) {
                 in0_addr,
                 in1_addr,
                 in2_cb_addr,
-                dtype,
+                dtype != 0u,
                 in0_bfp8_unpack_slice,
                 in1_bfp8_unpack_slice);
         }

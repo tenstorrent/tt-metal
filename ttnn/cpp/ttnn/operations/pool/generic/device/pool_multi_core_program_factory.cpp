@@ -554,7 +554,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_one_cb_id,
         clear_value_cb_id,
         (uint32_t)pool_type,
-        one_scalar_per_core,
+        static_cast<const unsigned int>(one_scalar_per_core),
         config_cb_id,
         multi_buffering_factor,
         sync_cb_id1,
@@ -608,7 +608,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         out_cb_id,
         max_pool_partials_cb_id,
         in_one_cb_id,
-        one_scalar_per_core,
+        static_cast<const unsigned int>(one_scalar_per_core),
         sync_cb_id1,
         sync_cb_id2};
 

@@ -1138,7 +1138,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
     for (Tensor const* t : tensors) {
         if (t) {
             bool rt_args_enabled = true;
-            rt_args.push_back(rt_args_enabled);
+            rt_args.push_back(static_cast<decltype(rt_args)::value_type>(rt_args_enabled));
             if (tensor_device_override.has_value() and
                 tensor_device_override.value().find(t) != tensor_device_override.value().end()) {
                 std::ranges::copy(
@@ -1151,18 +1151,18 @@ void generate_multi_input_command_stream_kernel_rt_args(
             }
         } else {
             bool rt_args_enabled = false;
-            rt_args.push_back(rt_args_enabled);
+            rt_args.push_back(static_cast<decltype(rt_args)::value_type>(rt_args_enabled));
         }
         // else: Interleaved addrgen passes no additional args - we specify interleaved addrgen as the default
     }
 
-    rt_args.push_back(forward_fabric_connections.has_value());
+    rt_args.push_back(static_cast<decltype(rt_args)::value_type>(forward_fabric_connections.has_value()));
     if (forward_fabric_connections.has_value()) {
         const auto new_rt_args =
             generate_edm_connection_rt_args(*forward_fabric_connections, program, worker_core_range);
         std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args));
     }
-    rt_args.push_back(backward_fabric_connections.has_value());
+    rt_args.push_back(static_cast<decltype(rt_args)::value_type>(backward_fabric_connections.has_value()));
     if (backward_fabric_connections.has_value()) {
         const auto new_rt_args =
             generate_edm_connection_rt_args(*backward_fabric_connections, program, worker_core_range);
@@ -1275,7 +1275,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
     for (Tensor const* t : tensors) {
         if (t) {
             bool rt_args_enabled = true;
-            rt_args.push_back(rt_args_enabled);
+            rt_args.push_back(static_cast<decltype(rt_args)::value_type>(rt_args_enabled));
             if (tensor_device_override.has_value() and
                 tensor_device_override.value().find(t) != tensor_device_override.value().end()) {
                 std::ranges::copy(
@@ -1288,17 +1288,17 @@ void generate_multi_input_command_stream_kernel_rt_args(
             }
         } else {
             bool rt_args_enabled = false;
-            rt_args.push_back(rt_args_enabled);
+            rt_args.push_back(static_cast<decltype(rt_args)::value_type>(rt_args_enabled));
         }
         // else: Interleaved addrgen passes no additional args - we specify interleaved addrgen as the default
     }
-    rt_args.push_back(forward_device.has_value() and forward_device.value());
+    rt_args.push_back(static_cast<decltype(rt_args)::value_type>(forward_device.has_value() and (forward_device.value()) != nullptr));
     auto worker_core = corerange_to_cores(worker_core_range).at(0);
     if (forward_device.has_value() and forward_device.value()) {
         tt::tt_fabric::append_fabric_connection_rt_args(device->id(), forward_device.value()->id(), link, program, {worker_core}, rt_args);
     }
 
-    rt_args.push_back(backward_device.has_value() and backward_device.value());
+    rt_args.push_back(static_cast<decltype(rt_args)::value_type>(backward_device.has_value() and (backward_device.value()) != nullptr));
     if (backward_device.has_value() and backward_device.value()) {
         tt::tt_fabric::append_fabric_connection_rt_args(device->id(), backward_device.value()->id(), link, program, {worker_core}, rt_args);
     }
@@ -1366,7 +1366,7 @@ void generate_multi_command_stream_kernel_rt_args(
     }
 
     // TODO: Handle teardown signalling
-    rt_args.push_back(forward_fabric_connections.has_value());
+    rt_args.push_back(static_cast<decltype(rt_args)::value_type>(forward_fabric_connections.has_value()));
     if (forward_fabric_connections.has_value()) {
         auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
@@ -1378,7 +1378,7 @@ void generate_multi_command_stream_kernel_rt_args(
             sender_worker_buffer_index_semaphore_id,
             rt_args);
     }
-    rt_args.push_back(backward_fabric_connections.has_value());
+    rt_args.push_back(static_cast<decltype(rt_args)::value_type>(backward_fabric_connections.has_value()));
     if (backward_fabric_connections.has_value()) {
         auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
@@ -1450,7 +1450,8 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
         // + 1 because we need to wait for our left/backward neighbour to tell us it's safe to teardown (because they
         // are
         // done tearing down - we teardown from first to last)
-        cmd::uops::local_semaphore_wait(local_wait_sem_id, sync_details.wait_counts.at(0) + (line_index != 0)),
+        cmd::uops::local_semaphore_wait(
+            local_wait_sem_id, sync_details.wait_counts.at(0) + static_cast<decltype(sync_details.wait_counts)::value_type>(line_index != 0)),
     };
 
     // If there is a forward connection, notify that neighbour that they can teardown
@@ -1500,11 +1501,12 @@ void build_sync_kernels(
     ccl::SyncModeSpec const& sync_details,
     bool terminate_fabric,
     ccl::EdmLineFabricOpInterface& fabric_interface) {
-    auto const sync_kernel_id = CreateKernel(
+    const auto sync_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_wait_completion.cpp",
         sync_details.core,
-        tt::tt_metal::ReaderDataMovementConfig({sync_details.num_signals, terminate_fabric}));
+        tt::tt_metal::ReaderDataMovementConfig(
+            {sync_details.num_signals, static_cast<const unsigned int>(terminate_fabric)}));
 
     std::vector<uint32_t> rt_args;
     rt_args.reserve(sync_details.num_signals * 2);

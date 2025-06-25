@@ -316,20 +316,20 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     // Writer
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     writer_kernel_config.compile_args = {
-        ring_index,                                        // my_chip_id
-        ring_size,                                         // num_chips
-        tt::CB::c_in1,                                     // reserved_packet_header_cb_id
-        all_to_all_detail::PACKET_HEADER_BUFFER_SIZE,      // num_packet_headers_storable
-        static_cast<uint32_t>(output_tensor_buffer_type),  // buffer0_type
-        tt::CB::c_in0,                                     // cb0_id
-        pages_per_packet,                                  // packet_size_in_pages
-        op_config.get_page_size(),                         // tensor0_page_size
-        num_targets_forward,                               // num_targets_forward_direction
-        num_targets_backward,                              // num_targets_backward_direction
-        dynamic_alternate,                                 // alternate
-        chunk_granularity,                                 // granularity of signaling to receiver
-        contig_pages_advanced,                             // contig_pages_advanced
-        N_DRAM_BANKS                                       // num_dram_banks
+        ring_index,                                          // my_chip_id
+        ring_size,                                           // num_chips
+        tt::CB::c_in1,                                       // reserved_packet_header_cb_id
+        all_to_all_detail::PACKET_HEADER_BUFFER_SIZE,        // num_packet_headers_storable
+        static_cast<uint32_t>(output_tensor_buffer_type),    // buffer0_type
+        tt::CB::c_in0,                                       // cb0_id
+        pages_per_packet,                                    // packet_size_in_pages
+        op_config.get_page_size(),                           // tensor0_page_size
+        num_targets_forward,                                 // num_targets_forward_direction
+        num_targets_backward,                                // num_targets_backward_direction
+        static_cast<const unsigned int>(dynamic_alternate),  // alternate
+        chunk_granularity,                                   // granularity of signaling to receiver
+        contig_pages_advanced,                               // contig_pages_advanced
+        N_DRAM_BANKS                                         // num_dram_banks
     };
     for (const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
@@ -474,8 +474,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
             out_col_start,
             input_shard_row_tiles,
             input_shard_col_tiles,
-            wait_output_semaphore,
-            reset_global_semaphore,
+            static_cast<const unsigned int>(wait_output_semaphore),
+            static_cast<const unsigned int>(reset_global_semaphore),
             receiver_core_x,
             receiver_core_y,
         };
@@ -484,12 +484,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        writer_rt_args.push_back(forward_device.has_value());
+        writer_rt_args.push_back(static_cast<decltype(writer_rt_args)::value_type>(forward_device.has_value()));
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
-        writer_rt_args.push_back(backward_device.has_value());
+        writer_rt_args.push_back(static_cast<decltype(writer_rt_args)::value_type>(backward_device.has_value()));
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);

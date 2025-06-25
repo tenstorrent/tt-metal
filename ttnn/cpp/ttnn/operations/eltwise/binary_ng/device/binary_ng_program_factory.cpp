@@ -605,16 +605,16 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         c_data_format,
         c_sharded ? c_buffer : nullptr);
 
-    uint32_t a_is_dram = a_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    uint32_t b_is_dram = false;
-    uint32_t c_is_dram = c_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    uint32_t a_is_dram = static_cast<uint32_t>(a_buffer->buffer_type() == tt_metal::BufferType::DRAM);
+    uint32_t b_is_dram = 0u;
+    uint32_t c_is_dram = static_cast<uint32_t>(c_buffer->buffer_type() == tt_metal::BufferType::DRAM);
 
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
     // WRITER KERNEL
     auto writer_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::WriterScalar;
     auto compute_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar;
     if (b.has_value()) {
-        b_is_dram = b_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+        b_is_dram = static_cast<uint32_t>(b_buffer->buffer_type() == tt_metal::BufferType::DRAM);
         writer_kernel = kernel_config.writer_kernel;
         compute_kernel = kernel_config.compute_kernel;
     }
@@ -641,7 +641,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         get_kernel_file_path(writer_kernel, is_sfpu_op),
         all_device_cores,
-        tt_metal::WriterDataMovementConfig({b_is_dram, c_is_dram, has_sharding}, std::move(writer_defines)));
+        tt_metal::WriterDataMovementConfig(
+            {b_is_dram, c_is_dram, static_cast<const unsigned int>(has_sharding)}, std::move(writer_defines)));
 
     // READER KERNEL
 
@@ -649,7 +650,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig({a_is_dram, has_sharding, b_is_dram}, std::move(reader_defines)));
+        tt_metal::ReaderDataMovementConfig(
+            {a_is_dram, static_cast<const unsigned int>(has_sharding), b_is_dram}, std::move(reader_defines)));
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||

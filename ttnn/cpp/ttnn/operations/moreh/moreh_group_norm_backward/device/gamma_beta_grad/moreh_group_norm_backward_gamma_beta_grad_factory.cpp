@@ -234,10 +234,10 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
         // writer
         const std::vector<uint32_t> writer_runtime_args{
             gamma_grad_addr,
-            static_cast<uint32_t>(gamma_grad_has_value ? is_dram(gamma_grad.value()) : 1),
+            static_cast<uint32_t>(gamma_grad_has_value ? static_cast<int>(is_dram(gamma_grad.value())) : 1),
             static_cast<uint32_t>(gamma_grad_has_value),
             beta_grad_addr,
-            static_cast<uint32_t>(beta_grad_has_value ? is_dram(beta_grad.value()) : 1),
+            static_cast<uint32_t>(beta_grad_has_value ? static_cast<int>(is_dram(beta_grad.value())) : 1),
             static_cast<uint32_t>(beta_grad_has_value),
             tile_offset,
             num_channels_per_core,

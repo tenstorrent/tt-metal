@@ -99,7 +99,7 @@ AllGatherConfig::AllGatherConfig(
         num_duplicate_directions;  // TODO: Remove this once dedicated semaphore space for user kernels are added
     this->eth_buffers_l1_base_byte_address = this->eth_sems_l1_base_byte_address + this->semaphore_offset;
 
-    std::size_t channel_sync_bytes_overhead = (enable_merged_payload_and_channel_sync * 16);
+    std::size_t channel_sync_bytes_overhead = (static_cast<int>(enable_merged_payload_and_channel_sync) * 16);
     uint32_t const page_size = input_tensor.buffer()->page_size();
     std::size_t l1_per_buffer_region =
         ((total_l1_buffer_space - this->semaphore_offset) /

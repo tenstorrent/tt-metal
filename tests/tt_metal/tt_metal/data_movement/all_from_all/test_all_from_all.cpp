@@ -106,7 +106,7 @@ bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
         log_warning(
             tt::LogTest,
             "Pages requested per transaction per subordinate is 0. Skipping the current set of configurations.");
-        return 1;
+        return true;
     }
     const size_t bytes_requested_per_transaction_per_subordinate =
         pages_requested_per_transaction_per_subordinate * test_config.bytes_per_page;

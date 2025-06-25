@@ -87,13 +87,13 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/reader_moreh_softmax_backward_c.cpp",
         all_cores,
-        {y_is_dram, dy_is_dram},
+        {static_cast<const unsigned int>(y_is_dram), static_cast<const unsigned int>(dy_is_dram)},
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/writer_moreh_softmax_backward_c.cpp",
         all_cores,
-        {dx_is_dram},
+        {static_cast<const unsigned int>(dx_is_dram)},
         writer_defines);
 
     auto outer_stride = Ht * Wt;

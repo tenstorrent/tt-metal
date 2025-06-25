@@ -30,7 +30,7 @@ static inline bool verify_multi_core_cost(
     uint32_t start_split_size = width / largest_power_of_two(max_cores);
     for (uint32_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
         uint32_t rem = width % split_size;
-        uint32_t num_cores = width / split_size + (rem > 0);
+        uint32_t num_cores = width / split_size + static_cast<uint32_t>(rem > 0);
         uint32_t memory_cost_gather =
             2 * num_cores * (value_tile_size + index_tile_size);  // gathering one index and one value tile from each
                                                                   // local core, allocating two CBs for each

@@ -109,14 +109,16 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     uint32_t index_log2_stick_size = index_stick_size_is_power_of_two ? std::log2(index_page_size) : 0;
 
     std::vector<uint32_t> reader_compile_time_args = {
-        grad_is_dram,
-        index_is_dram,
-        out_is_dram,
+        static_cast<const unsigned int>(grad_is_dram),
+        static_cast<const unsigned int>(index_is_dram),
+        static_cast<const unsigned int>(out_is_dram),
         index_page_size,
-        index_stick_size_is_power_of_two,
+        static_cast<const unsigned int>(index_stick_size_is_power_of_two),
         index_log2_stick_size,
-        index_tensor.dtype() == DataType::BFLOAT16,  // TODO: Only supports either BFLOAT16 or UINT32
-        output.dtype() == DataType::BFLOAT16,        // TODO: Only supports either BFLOAT16 or BFLOAT8_B
+        static_cast<const unsigned int>(
+            index_tensor.dtype() == DataType::BFLOAT16),  // TODO: Only supports either BFLOAT16 or UINT32
+        static_cast<const unsigned int>(
+            output.dtype() == DataType::BFLOAT16),  // TODO: Only supports either BFLOAT16 or BFLOAT8_B
         max_tiles_per_core,
         batch_size,
         seq_len_tiles,

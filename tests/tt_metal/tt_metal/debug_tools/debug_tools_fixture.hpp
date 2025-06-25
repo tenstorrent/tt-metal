@@ -154,10 +154,11 @@ protected:
         // Enable watcher for this test, save the previous state so we can restore it later.
         watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
         watcher_previous_interval = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_interval();
-        watcher_previous_dump_all = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_dump_all();
-        watcher_previous_append = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_append();
-        watcher_previous_auto_unpause = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_auto_unpause();
-        watcher_previous_noinline = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noinline();
+        watcher_previous_dump_all = (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_dump_all() != 0);
+        watcher_previous_append = (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_append() != 0);
+        watcher_previous_auto_unpause =
+            (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_auto_unpause() != 0);
+        watcher_previous_noinline = (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noinline() != 0);
         test_mode_previous = tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_interval(interval_ms);

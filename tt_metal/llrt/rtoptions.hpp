@@ -208,15 +208,15 @@ public:
     inline void set_watcher_enabled(bool enabled) { watcher_settings.enabled = enabled; }
     inline int get_watcher_interval() const { return watcher_settings.interval_ms; }
     inline void set_watcher_interval(int interval_ms) { watcher_settings.interval_ms = interval_ms; }
-    inline int get_watcher_dump_all() const { return watcher_settings.dump_all; }
+    inline int get_watcher_dump_all() const { return static_cast<int>(watcher_settings.dump_all); }
     inline void set_watcher_dump_all(bool dump_all) { watcher_settings.dump_all = dump_all; }
-    inline int get_watcher_append() const { return watcher_settings.append; }
+    inline int get_watcher_append() const { return static_cast<int>(watcher_settings.append); }
     inline void set_watcher_append(bool append) { watcher_settings.append = append; }
-    inline int get_watcher_auto_unpause() const { return watcher_settings.auto_unpause; }
+    inline int get_watcher_auto_unpause() const { return static_cast<int>(watcher_settings.auto_unpause); }
     inline void set_watcher_auto_unpause(bool auto_unpause) { watcher_settings.auto_unpause = auto_unpause; }
-    inline int get_watcher_noinline() const { return watcher_settings.noinline; }
+    inline int get_watcher_noinline() const { return static_cast<int>(watcher_settings.noinline); }
     inline void set_watcher_noinline(bool noinline) { watcher_settings.noinline = noinline; }
-    inline int get_watcher_phys_coords() const { return watcher_settings.phys_coords; }
+    inline int get_watcher_phys_coords() const { return static_cast<int>(watcher_settings.phys_coords); }
     inline void set_watcher_phys_coords(bool phys_coords) { watcher_settings.phys_coords = phys_coords; }
     inline bool get_watcher_text_start() const { return watcher_settings.text_start; }
     inline void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
@@ -320,7 +320,7 @@ public:
     // Returns the string representation for hash computation.
     inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) const {
         switch (feature) {
-            case RunTimeDebugFeatureDprint: return std::to_string(get_feature_enabled(feature));
+            case RunTimeDebugFeatureDprint: return std::to_string(static_cast<int>(get_feature_enabled(feature)));
             case RunTimeDebugFeatureReadDebugDelay:
             case RunTimeDebugFeatureWriteDebugDelay:
             case RunTimeDebugFeatureAtomicDebugDelay:
@@ -329,7 +329,8 @@ public:
                 } else {
                     return "false";
                 }
-            case RunTimeDebugFeatureDisableL1DataCache: return std::to_string(get_feature_enabled(feature));
+            case RunTimeDebugFeatureDisableL1DataCache:
+                return std::to_string(static_cast<int>(get_feature_enabled(feature)));
             default: return "";
         }
     }

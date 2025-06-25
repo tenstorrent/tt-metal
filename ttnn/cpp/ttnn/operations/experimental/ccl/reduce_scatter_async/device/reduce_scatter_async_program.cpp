@@ -1393,12 +1393,16 @@ static void create_end_of_line_worker_commands(
 
     auto reader_slices_fwd =
         vslice(reader_in_slices, reader_in_slices.size() - 1, std::min(curr_chip + 1, reader_in_slices.size() - 1));
-    auto reader_slices_bwd =
-        vslice(reader_in_slices, 0, curr_chip - !topology_config.is_first_device_in_line(LineDirection::FORWARD));
+    auto reader_slices_bwd = vslice(
+        reader_in_slices,
+        0,
+        curr_chip - static_cast<size_t>(!topology_config.is_first_device_in_line(LineDirection::FORWARD)));
     auto remote_writer_slices_fwd =
         vslice(reader_in_slices, reader_in_slices.size() - 1, std::min(curr_chip + 1, reader_in_slices.size() - 1));
-    auto remote_writer_slices_bwd =
-        vslice(reader_in_slices, 0, curr_chip - !topology_config.is_first_device_in_line(LineDirection::FORWARD));
+    auto remote_writer_slices_bwd = vslice(
+        reader_in_slices,
+        0,
+        curr_chip - static_cast<size_t>(!topology_config.is_first_device_in_line(LineDirection::FORWARD)));
 
     auto reader_worker_sliced_fwd = split_tensor_slices_across_workers_page_aligned(num_workers, reader_slices_fwd);
     auto reader_worker_sliced_bwd = split_tensor_slices_across_workers_page_aligned(num_workers, reader_slices_bwd);

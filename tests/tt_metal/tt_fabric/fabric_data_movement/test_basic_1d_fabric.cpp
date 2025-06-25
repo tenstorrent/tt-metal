@@ -164,7 +164,7 @@ void RunTestLineMcast(
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
     const auto& edm_config = fabric_context.get_fabric_router_config();
-    uint32_t is_2d_fabric = edm_config.topology == Topology::Mesh;
+    uint32_t is_2d_fabric = static_cast<uint32_t>(edm_config.topology == Topology::Mesh);
 
     auto routers = control_plane.get_forwarding_eth_chans_to_chip(sender_id, mcast_start_id);
     if (routers.size() == 0) {
@@ -320,7 +320,7 @@ void RunTestUnicastRaw(
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
     const auto& edm_config = fabric_context.get_fabric_router_config();
-    uint32_t is_2d_fabric = topology == Topology::Mesh;
+    uint32_t is_2d_fabric = static_cast<uint32_t>(topology == Topology::Mesh);
 
     if (!is_2d_fabric) {
         // Find a device with enough neighbours in the specified directions
@@ -403,8 +403,8 @@ void RunTestUnicastRaw(
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
-        topology == Topology::Mesh,
-        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
+        static_cast<const unsigned int>(topology == Topology::Mesh),
+        static_cast<const unsigned int>(fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC),
         0 /* is_chip_multicast */,
         0 /* additional_dir */};
 
@@ -542,7 +542,7 @@ void run_unicast_test_bw_chips(
 
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
-    uint32_t is_2d_fabric = topology == Topology::Mesh;
+    uint32_t is_2d_fabric = static_cast<uint32_t>(topology == Topology::Mesh);
 
     // test parameters
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
@@ -554,8 +554,8 @@ void run_unicast_test_bw_chips(
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
-        topology == Topology::Mesh,
-        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
+        static_cast<const unsigned int>(topology == Topology::Mesh),
+        static_cast<const unsigned int>(fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC),
         0 /* is_chip_multicast */,
         0 /* additional_dir */};
 
@@ -691,7 +691,7 @@ void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture) {
                               .get_control_plane()
                               .get_fabric_context()
                               .get_fabric_topology();
-    uint32_t is_2d_fabric = topology == Topology::Mesh;
+    uint32_t is_2d_fabric = static_cast<uint32_t>(topology == Topology::Mesh);
     if (!is_2d_fabric) {
         GTEST_SKIP() << "This test is only supported for 2D fabric currently";
     }
@@ -777,7 +777,7 @@ void RunTestMCastConnAPI(
 
     tt::tt_metal::distributed::MeshShape mesh_shape;
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
-    uint32_t is_2d_fabric = topology == Topology::Mesh;
+    uint32_t is_2d_fabric = static_cast<uint32_t>(topology == Topology::Mesh);
 
     // Get the mcast sender device and mcast receiver devices that satisfy the input number of hops in forward and
     // backward directions.
@@ -826,8 +826,8 @@ void RunTestMCastConnAPI(
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
-        topology == Topology::Mesh,
-        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
+        static_cast<const unsigned int>(topology == Topology::Mesh),
+        static_cast<const unsigned int>(fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC),
         1 /* is_chip_multicast */,
         1 /* additional_dir */};
 

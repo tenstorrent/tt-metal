@@ -79,9 +79,9 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);
 
         if (is_tile_dim) {
-            need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
+            need_bcast_dim[i] = static_cast<unsigned int>(output_grad_shape[idx] != input_grad_shape[idx]);
         } else {
-            need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
+            need_bcast_dim[i] = static_cast<unsigned int>(output_grad_shape[idx] != input_grad_shape[idx]);
         }
     }
 

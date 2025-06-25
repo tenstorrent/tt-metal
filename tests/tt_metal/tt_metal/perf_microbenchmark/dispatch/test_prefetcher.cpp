@@ -233,7 +233,7 @@ void init(int argc, char** argv) {
 
     uint32_t seed = test_args::get_command_option_uint32(input_args, "-s", 1);
     std::srand(seed);
-    big_g = test_args::has_command_option(input_args, "-b");
+    big_g = static_cast<uint32_t>(test_args::has_command_option(input_args, "-b"));
     debug_g = test_args::has_command_option(input_args, "-d");
 
     if (debug_g && use_dram_exec_buf_g) {
@@ -326,7 +326,7 @@ void add_prefetcher_paged_read_cmd(
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
 
     cmd.relay_paged.start_page = start_page & CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK;
-    cmd.relay_paged.is_dram_and_length_adjust = (is_dram << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT) |
+    cmd.relay_paged.is_dram_and_length_adjust = (static_cast<int>(is_dram) << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT) |
                                                 (length_adjust & CQ_PREFETCH_RELAY_PAGED_LENGTH_ADJUST_MASK);
     cmd.relay_paged.base_addr = base_addr;
     cmd.relay_paged.page_size = page_size;
@@ -1261,7 +1261,7 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(
     // Hacky, but set it here, on the last cmd_size (FetchQ entry write, later)
     const bool stall_prefetcher = true;
     cmd_sizes[cmd_sizes.size() - 1] |=
-        (stall_prefetcher << ((sizeof(DispatchSettings::prefetch_q_entry_type) * 8) - 1));
+        (static_cast<int>(stall_prefetcher) << ((sizeof(DispatchSettings::prefetch_q_entry_type) * 8) - 1));
 }
 
 void gen_smoke_test(
@@ -2355,7 +2355,7 @@ void configure_for_single_chip(
         0,  // unused on hd, filled in below for h and d
         0,  // unused on hd, filled in below for h and d
         0,  // unused unless tunneler is between h and d
-        split_prefetcher_g,
+        static_cast<const unsigned int>(split_prefetcher_g),
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
         prefetch_downstream_cb_sem,
         prefetch_downstream_buffer_pages,
@@ -3257,7 +3257,7 @@ void configure_for_multi_chip(
         0,  // unused on hd, filled in below for h and d
         0,  // unused on hd, filled in below for h and d
         0,  // unused unless tunneler is between h and d
-        split_prefetcher_g,
+        static_cast<const unsigned int>(split_prefetcher_g),
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
         prefetch_downstream_cb_sem,
         prefetch_downstream_buffer_pages,

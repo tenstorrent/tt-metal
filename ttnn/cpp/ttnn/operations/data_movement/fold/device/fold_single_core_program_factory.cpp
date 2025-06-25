@@ -64,21 +64,21 @@ Fold::SingleCore::cached_program_t fold_single_core(
     std::shared_ptr<tt::tt_metal::Buffer> scratch_buffer = CreateBuffer(l1_config);
 
     // Setup kernels
-    uint32_t src_unit_size_is_power_of_two = is_power_of_two_at_least_32(aligned_pixel_size);
+    uint32_t src_unit_size_is_power_of_two = static_cast<uint32_t>(is_power_of_two_at_least_32(aligned_pixel_size));
     uint32_t src_log2_unit_size = src_unit_size_is_power_of_two ? (std::uint32_t)std::log2(aligned_pixel_size) : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         cb_src0_index,
-        src_is_dram,
+        static_cast<const unsigned int>(src_is_dram),
         src_unit_size_is_power_of_two,
         src_log2_unit_size,
     };
 
-    uint32_t dst_unit_size_is_power_of_two = is_power_of_two_at_least_32(aligned_dst_pixel_size);
+    uint32_t dst_unit_size_is_power_of_two = static_cast<uint32_t>(is_power_of_two_at_least_32(aligned_dst_pixel_size));
     uint32_t dst_log2_unit_size = dst_unit_size_is_power_of_two ? (std::uint32_t)std::log2(aligned_dst_pixel_size) : 0;
 
     std::vector<uint32_t> writer_compile_time_args = {
         cb_dst0_index,
-        dst_is_dram,
+        static_cast<const unsigned int>(dst_is_dram),
         dst_unit_size_is_power_of_two,
         dst_log2_unit_size,
     };

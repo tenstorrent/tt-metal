@@ -133,7 +133,7 @@ void init(int argc, char** argv) {
     iterations_g = test_args::get_command_option_uint32(input_args, "-i", DEFAULT_ITERATIONS);
     hammer_write_reg_g = test_args::has_command_option(input_args, "-hr");
     hammer_pcie_g = test_args::has_command_option(input_args, "-hp");
-    hammer_pcie_type_g = test_args::get_command_option_uint32(input_args, "-hpt", 0);
+    hammer_pcie_type_g = (test_args::get_command_option_uint32(input_args, "-hpt", 0) != 0u);
     time_just_finish_g = test_args::has_command_option(input_args, "-f");
     source_mem_g = test_args::get_command_option_uint32(input_args, "-m", 0);
     uint32_t src_core_x = test_args::get_command_option_uint32(input_args, "-sx", 0);
@@ -304,15 +304,15 @@ int main(int argc, char** argv) {
         std::map<string, string> defines = {
             {"ITERATIONS", std::to_string(iterations_g)},
             {"PAGE_COUNT", std::to_string(page_count_g)},
-            {"LATENCY", std::to_string(latency_g)},
+            {"LATENCY", std::to_string(static_cast<int>(latency_g))},
             {"NOC_ADDR_X", std::to_string(noc_addr_x)},
             {"NOC_ADDR_Y", std::to_string(noc_addr_y)},
             {"NOC_MEM_ADDR", std::to_string(noc_mem_addr)},
-            {"READ_ONE_PACKET", std::to_string(read_one_packet_g)},
+            {"READ_ONE_PACKET", std::to_string(static_cast<int>(read_one_packet_g))},
             {"DRAM_BANKED", std::to_string(dram_banked)},
             {"ISSUE_MCAST", std::to_string(issue_mcast)},
-            {"WRITE", std::to_string(test_write)},
-            {"LINKED", std::to_string(linked)},
+            {"WRITE", std::to_string(static_cast<int>(test_write))},
+            {"LINKED", std::to_string(static_cast<int>(linked))},
             {"NUM_MCAST_DESTS", std::to_string(num_mcast_dests)},
             {"MCAST_NOC_END_ADDR_X", std::to_string(mcast_noc_addr_end_x)},
             {"MCAST_NOC_END_ADDR_Y", std::to_string(mcast_noc_addr_end_y)},
@@ -420,7 +420,7 @@ int main(int argc, char** argv) {
                             offset = 0;
                         }
 
-                        if (hammer_pcie_type_g == 0) {
+                        if (static_cast<int>(hammer_pcie_type_g) == 0) {
                             for (int i = 0; i < page_size_g / sizeof(uint32_t); i++) {
                                 pcie_base[offset++] = 0;
                             }

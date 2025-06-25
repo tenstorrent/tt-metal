@@ -298,7 +298,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(
-            {cb_src0_index, 1, src_stick_size_is_power_of_two, src_log2_stick_size}));
+            {cb_src0_index, 1, static_cast<const unsigned int>(src_stick_size_is_power_of_two), src_log2_stick_size}));
     // Create writer kernel
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -312,7 +312,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
              stride_w,
              stick_nbytes,
              cb_src0_index,
-             src_stick_size_is_power_of_two,
+             static_cast<const unsigned int>(src_stick_size_is_power_of_two),
              src_log2_stick_size}));
 
     // Set runtime arguments for each core

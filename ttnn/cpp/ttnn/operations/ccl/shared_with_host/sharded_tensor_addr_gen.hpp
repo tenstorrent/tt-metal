@@ -186,10 +186,12 @@ struct DeviceWidthShardSpec : public device_shard_spec_t<DeviceWidthShardSpec> {
     }
 
     constexpr uint32_t get_shard_grid_inner_dim() const {
-        return (!transposed_grid * shard_grid_width) + (transposed_grid * shard_grid_height);
+        return (static_cast<int>(!transposed_grid) * shard_grid_width) +
+               (static_cast<int>(transposed_grid) * shard_grid_height);
     }
     constexpr uint32_t get_shard_grid_outer_dim() const {
-        return (!transposed_grid * shard_grid_height) + (transposed_grid * shard_grid_width);
+        return (static_cast<int>(!transposed_grid) * shard_grid_height) +
+               (static_cast<int>(transposed_grid) * shard_grid_width);
     }
 };
 
@@ -323,10 +325,12 @@ struct DeviceHeightShardSpec : public device_shard_spec_t<DeviceHeightShardSpec>
         return pages_per_shard_y * get_shard_grid_num_cores();
     }
     constexpr uint32_t get_shard_grid_inner_dim() const {
-        return (!transposed_grid * shard_grid_height) + (transposed_grid * shard_grid_width);
+        return (static_cast<int>(!transposed_grid) * shard_grid_height) +
+               (static_cast<int>(transposed_grid) * shard_grid_width);
     }
     constexpr uint32_t get_shard_grid_outer_dim() const {
-        return (!transposed_grid * shard_grid_width) + (transposed_grid * shard_grid_height);
+        return (static_cast<int>(!transposed_grid) * shard_grid_width) +
+               (static_cast<int>(transposed_grid) * shard_grid_height);
     }
 };
 
@@ -448,10 +452,12 @@ struct DeviceBlockShardSpec : public device_shard_spec_t<DeviceBlockShardSpec> {
         return pages_per_shard_y * get_shard_grid_height();
     }
     constexpr uint32_t get_shard_grid_inner_dim() const {
-        return (!transposed_grid * shard_grid_width) + (transposed_grid * shard_grid_height);
+        return (static_cast<int>(!transposed_grid) * shard_grid_width) +
+               (static_cast<int>(transposed_grid) * shard_grid_height);
     }
     constexpr uint32_t get_shard_grid_outer_dim() const {
-        return (!transposed_grid * shard_grid_height) + (transposed_grid * shard_grid_width);
+        return (static_cast<int>(!transposed_grid) * shard_grid_height) +
+               (static_cast<int>(transposed_grid) * shard_grid_width);
     }
 };
 

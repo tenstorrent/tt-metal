@@ -265,9 +265,12 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
     // BRISC kernel needs dram info via rtargs, every risc needs to know if data is tilized
     bool is_tilized = (data_format == tt::DataFormat::Bfp8_b) || (data_format == tt::DataFormat::Bfp4_b);
     tt_metal::SetRuntimeArgs(
-        program, brisc_print_kernel_id, core, {dram_buffer_src_addr, (std::uint32_t)0, is_tilized});
-    tt_metal::SetRuntimeArgs(program, ncrisc_print_kernel_id, core, {is_tilized});
-    tt_metal::SetRuntimeArgs(program, trisc_print_kernel_id, core, {is_tilized});
+        program,
+        brisc_print_kernel_id,
+        core,
+        {dram_buffer_src_addr, (std::uint32_t)0, static_cast<const unsigned int>(is_tilized)});
+    tt_metal::SetRuntimeArgs(program, ncrisc_print_kernel_id, core, {static_cast<const unsigned int>(is_tilized)});
+    tt_metal::SetRuntimeArgs(program, trisc_print_kernel_id, core, {static_cast<const unsigned int>(is_tilized)});
 
     // Create input tile
     std::vector<uint32_t> u32_vec = GenerateInputTile(data_format);

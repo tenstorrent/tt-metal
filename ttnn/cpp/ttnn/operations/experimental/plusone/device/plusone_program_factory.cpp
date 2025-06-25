@@ -53,7 +53,7 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
 
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index,
-        src_is_dram,
+        static_cast<const unsigned int>(src_is_dram),
         aligned_input_unit_size,
         W,
         H,

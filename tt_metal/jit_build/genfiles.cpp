@@ -398,7 +398,7 @@ static void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
 
     file_stream.open(dst_accum_format_descriptor);
 
-    if (options.fp32_dest_acc_en == 0) {
+    if (static_cast<int>(options.fp32_dest_acc_en) == 0) {
         file_stream << "constexpr bool DST_ACCUM_MODE = false;" << endl;
     } else {
         file_stream << "constexpr bool DST_ACCUM_MODE = true;" << endl;

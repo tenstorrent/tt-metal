@@ -1146,7 +1146,7 @@ public:
 
                         calculator.add_prefetch_relay_paged();
                         kernel_bins_unicast_cmds.back().add_prefetch_relay_paged(
-                            true,  // is_dram
+                            1u,  // is_dram
                             page_offset,
                             base_address,
                             kernels_buffer->page_size(),
@@ -1650,7 +1650,7 @@ public:
             uint16_t index_bitmask = 0;
             index_bitmask |= 1 << sub_device_index;
             device_command_sequence.add_notify_dispatch_s_go_signal_cmd(
-                program_transfer_info.num_active_cores > 0, index_bitmask);
+                static_cast<uint8_t>(program_transfer_info.num_active_cores > 0), index_bitmask);
             dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
         } else {
             // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
@@ -1819,8 +1819,8 @@ void reserve_space_in_kernel_config_buffer(
     // Determine where a sync (dispatch wait on workers) must be inserted in the program sequence and the number
     // of workers to wait on
     dispatch_md.sync_count = 0;
-    dispatch_md.stall_first = reservation.first.need_sync;
-    dispatch_md.stall_before_program = false;
+    dispatch_md.stall_first = static_cast<uint32_t>(reservation.first.need_sync);
+    dispatch_md.stall_before_program = 0u;
 
     if (reservation.first.need_sync) {
         // TODO: attempt to send RTA only without stalling.
@@ -1835,8 +1835,8 @@ void reserve_space_in_kernel_config_buffer(
         const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> memory_reservation =
             config_buffer_mgr.reserve(config_sizes);
         if (!memory_reservation.first.need_sync) {
-            dispatch_md.stall_first = false;
-            dispatch_md.stall_before_program = true;
+            dispatch_md.stall_first = 0u;
+            dispatch_md.stall_before_program = 1u;
         }
 
         // TODO: config_buffer_mgr is stateful so code below restores original reservation state
@@ -1861,8 +1861,8 @@ void reserve_space_in_kernel_config_buffer(
     // and not needed (just need a barrier on DRAM write)
     if (program_binary_status != ProgramBinaryStatus::Committed) {
         // Insert a stall before writing any program configs when binaries are in flight
-        dispatch_md.stall_first = true;
-        dispatch_md.stall_before_program = false;
+        dispatch_md.stall_first = 1u;
+        dispatch_md.stall_before_program = 0u;
         // Wait on all previous workers before writing kernel binaries to workers
         dispatch_md.sync_count = expected_num_workers_completed;
     }
@@ -1985,7 +1985,8 @@ void update_program_dispatch_commands(
                 "Kernel binary size exceeds prefetcher cache size ({}, {})",
                 program_sizeB,
                 max_program_sizeB);
-            bool wraparound_flag = cache_offset != 0 ? 0 : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
+            bool wraparound_flag =
+                cache_offset != 0 ? false : (CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START != 0);
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
                 .add_prefetch_paged_to_ringbuffer(CQPrefetchPagedToRingbufferCmd{
                     .flags = uint8_t(wraparound_flag),
@@ -2155,7 +2156,8 @@ void update_traced_program_dispatch_commands(
                 "Kernel binary size exceeds prefetcher cache size ({}, {})",
                 program_sizeB,
                 max_program_sizeB);
-            bool wraparound_flag = cache_offset != 0 ? 0 : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
+            bool wraparound_flag =
+                cache_offset != 0 ? false : (CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START != 0);
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
                 .add_prefetch_paged_to_ringbuffer(CQPrefetchPagedToRingbufferCmd{
                     .flags = uint8_t(wraparound_flag),
@@ -2450,7 +2452,7 @@ void reset_worker_dispatch_state_on_device(
             for (uint32_t i = 0; i < num_sub_devices; ++i) {
                 index_bitmask |= 1 << i;
             }
-            command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
+            command_sequence.add_notify_dispatch_s_go_signal_cmd(0u, index_bitmask);
             dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
         }
         go_msg_t reset_launch_message_read_ptr_go_signal;

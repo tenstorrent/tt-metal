@@ -1257,7 +1257,7 @@ ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tens
     const auto b_rank = input_shape_b.rank();
 
     // Rank difference will be used to align batch dimensions
-    const int32_t out_rank = std::max<int32_t>(a_rank, b_rank) - (a_rank == 1 || b_rank == 1);
+    const int32_t out_rank = std::max<int32_t>(a_rank, b_rank) - static_cast<int>(a_rank == 1 || b_rank == 1);
     const int32_t rank_difference = std::max<int32_t>(0, out_rank - a_rank);
 
     // Initialize output shape based on the tensor with higher rank

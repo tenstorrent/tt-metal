@@ -356,15 +356,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     // Writer
     uint32_t out_ready_sem_wait_value = (dynamic_alternate ? (ring_size + 1) : ring_size) * num_links;
     std::vector<uint32_t> all_gather_writer_ct_args = {
-        ring_index,                       // my_chip_id
-        reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
-        num_packet_headers_storable,      // num_packet_headers_storable
-        src0_cb_index,                    // cb0_id
-        num_pages_per_packet,             // packet_size_in_pages
-        op_config.get_page_size(),        // tensor0_page_size
-        num_targets_forward,              // num_targets_forward_direction
-        num_targets_backward,             // num_targets_backward_direction
-        dynamic_alternate,                // alternate
+        ring_index,                                          // my_chip_id
+        reserved_packet_header_CB_index,                     // reserved_packet_header_cb_id
+        num_packet_headers_storable,                         // num_packet_headers_storable
+        src0_cb_index,                                       // cb0_id
+        num_pages_per_packet,                                // packet_size_in_pages
+        op_config.get_page_size(),                           // tensor0_page_size
+        num_targets_forward,                                 // num_targets_forward_direction
+        num_targets_backward,                                // num_targets_backward_direction
+        static_cast<const unsigned int>(dynamic_alternate),  // alternate
         llama_configuration.num_semaphore_ranges,
         out_ready_sem_wait_value};
 
@@ -415,7 +415,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         uint32_t remainder = input_tensor_num_pages % num_links;
         bool add_remainder = link == num_links - 1;
         uint32_t input_tile_id_start = link * base_pages_per_worker;
-        uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + add_remainder * remainder;
+        uint32_t input_tile_id_end =
+            (link + 1) * base_pages_per_worker + static_cast<uint32_t>(add_remainder) * remainder;
 
         uint32_t worker_num_tiles_to_read = input_tile_id_end - input_tile_id_start;
         uint32_t input_first_core_tile_start_offset = input_tile_id_start % input_tensor_shard_num_pages;
@@ -481,11 +482,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             temp_tensor.buffer()->address(),  // tensor_address0
             semaphore.address(),              // out_ready_sem_bank_addr (absolute address)
             input_tensor_shard_num_pages,
-            worker_num_tiles_to_read,             // num_tiles_to_read
-            output_first_core_tile_start_offset,  // first_core_tile_start_offset
-            output_tensor_cores_x.size(),         // num_cores
-            wait_output_semaphore,                // wait_output_semaphore
-            reset_global_semaphore,               // reset_global_semaphore
+            worker_num_tiles_to_read,                                 // num_tiles_to_read
+            output_first_core_tile_start_offset,                      // first_core_tile_start_offset
+            output_tensor_cores_x.size(),                             // num_cores
+            static_cast<const unsigned int>(wait_output_semaphore),   // wait_output_semaphore
+            static_cast<const unsigned int>(reset_global_semaphore),  // reset_global_semaphore
             drain_sync_core.x,
             drain_sync_core.y,
             concat_semaphore_id,
@@ -522,12 +523,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             log_trace(tt::LogOp, "\t{}", arg);
         }
 
-        writer_rt_args.push_back(forward_device.has_value());
+        writer_rt_args.push_back(static_cast<decltype(writer_rt_args)::value_type>(forward_device.has_value()));
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
-        writer_rt_args.push_back(backward_device.has_value());
+        writer_rt_args.push_back(static_cast<decltype(writer_rt_args)::value_type>(backward_device.has_value()));
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
@@ -563,7 +564,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         bool is_worker_core = core.x == 1 && core.y == 0;
         is_worker_core = is_worker_core || (core.x == 2 && core.y == 0);
         is_worker_core = is_worker_core || (core.x == 3 && core.y == 0);
-        if (is_worker_core == 0) {
+        if (static_cast<int>(is_worker_core) == 0) {
             std::vector<uint32_t> reader_runtime_args;
             reader_runtime_args.reserve(6 + 2 * in_num_cores);
             reader_runtime_args = {

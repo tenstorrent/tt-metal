@@ -238,7 +238,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
             rstd_addr,
             static_cast<uint32_t>(is_dram(rstd)),
             gamma_addr,
-            static_cast<uint32_t>(gamma_has_value ? is_dram(gamma) : 1),
+            static_cast<uint32_t>(gamma_has_value ? static_cast<int>(is_dram(gamma)) : 1),
             static_cast<uint32_t>(gamma_has_value),
             tile_offset,
             num_rows_per_core,

@@ -289,7 +289,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
                 index_buffer_addr,
                 i,
                 is_paged_cache ? page_table.value().buffer()->address() : 0,
-                wait_to_start,
+                static_cast<const unsigned int>(wait_to_start),
             });
 
         SetRuntimeArgs(
@@ -301,7 +301,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
                 use_index_tensor ? 0 : cache_start_id,
                 use_index_tensor ? 0 : tile_update_offset_B,
                 i,
-                send_signal,
+                static_cast<const unsigned int>(send_signal),
                 send_core_x,
                 send_core_y,
             });

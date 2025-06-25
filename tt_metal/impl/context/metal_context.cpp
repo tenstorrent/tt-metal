@@ -977,7 +977,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     uint32_t max_along_axis =
         hal_->get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW ? soc_d.grid_size.y : soc_d.grid_size.x;
     for (uint32_t idx = 0; idx < max_along_axis; idx++) {
-        bool harvested_axis = (harvested_noc_coords >> idx) & 0x1;
+        bool harvested_axis = ((harvested_noc_coords >> idx) & 0x1) != 0u;
         if (harvested_axis) {
             harvested_axis_coord.push_back(idx);
         }

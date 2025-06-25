@@ -255,13 +255,13 @@ int main(int argc, char** argv) {
 
     bool pass = true;
     int arg_tile_factor = 1;
-    int arg_use_DRAM = true;
-    int arg_help = false;
+    int arg_use_DRAM = 1;
+    int arg_help = 0;
     update_sfpu_op_to_hlk_op();
 
     if (argc == 1) {
         for (const auto& [op_name, _] : sfpu_op_to_hlk_op_name) {
-            pass &= run_unit_test(op_name, arg_tile_factor, arg_use_DRAM);
+            pass &= run_unit_test(op_name, arg_tile_factor, arg_use_DRAM != 0);
             if (pass) {
                 log_info(LogTest, "PASS-SFPU test {}", op_name);
             } else {
@@ -275,11 +275,11 @@ int main(int argc, char** argv) {
                 idx++;
                 arg_tile_factor = atoi(argv[idx]);
             } else if (strstr(argv[idx], "-use-L1")) {
-                arg_use_DRAM = false;
+                arg_use_DRAM = 0;
             } else if (strstr(argv[idx], "-use-DRAM")) {
-                arg_use_DRAM = true;
+                arg_use_DRAM = 1;
             } else if (strstr(argv[idx], "-help")) {
-                arg_help = true;
+                arg_help = 1;
                 break;
             } else {
                 operators.push_back(std::string(argv[idx]));
@@ -298,7 +298,7 @@ int main(int argc, char** argv) {
             exit(0);
         }
         for (uint32_t idx = 0; idx < operators.size(); idx++) {
-            pass &= run_unit_test(operators[idx], arg_tile_factor, arg_use_DRAM);
+            pass &= run_unit_test(operators[idx], arg_tile_factor, arg_use_DRAM != 0);
         }
     }
 

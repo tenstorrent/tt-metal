@@ -582,13 +582,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
             log_trace(tt::LogOp, "\t{}", arg);
         }
 
-        writer_rt_args.push_back(forward_device.has_value());
+        writer_rt_args.push_back(static_cast<decltype(writer_rt_args)::value_type>(forward_device.has_value()));
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
 
-        writer_rt_args.push_back(backward_device.has_value());
+        writer_rt_args.push_back(static_cast<decltype(writer_rt_args)::value_type>(backward_device.has_value()));
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);

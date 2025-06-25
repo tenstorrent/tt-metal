@@ -651,7 +651,7 @@ struct CclCommandHeader {
         switch (cmd_header.dest_type) {
             case CclCommandDestType::CHIP_UNICAST:
                 encoded |= (cmd_header.command_dest_args.unicast.distance_in_hops << 16);
-                encoded |= (cmd_header.command_dest_args.unicast.is_forward_direction << 24);
+                encoded |= (static_cast<int>(cmd_header.command_dest_args.unicast.is_forward_direction) << 24);
                 break;
             case CclCommandDestType::CHIP_MULTICAST:
                 encoded |= (cmd_header.command_dest_args.multicast.num_targets_forward_direction << 16);

@@ -568,7 +568,8 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
             .set_page_size(src0_cb_index, cb_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
-    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_cb_index, src0_is_dram};
+    std::vector<uint32_t> reader_compile_time_args_vec = {
+        (std::uint32_t)src0_cb_index, static_cast<const unsigned int>(src0_is_dram)};
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(

@@ -156,8 +156,8 @@ std::vector<uint32_t> create_random_binary_vector_of_bfloat16(uint32_t num_bytes
         float num_1_float = rand_float();
         float num_2_float = rand_float();
 
-        num_1_float = (num_1_float > 0.5);
-        num_2_float = (num_2_float > 0.5);
+        num_1_float = static_cast<float>(num_1_float > 0.5);
+        num_2_float = static_cast<float>(num_2_float > 0.5);
 
         bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
         bfloat16 num_2_bfloat16 = bfloat16(num_2_float);

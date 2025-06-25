@@ -139,7 +139,7 @@ void GraphProcessor::track_allocate_cb(
         {kSize, std::to_string(size)},
         {kAddress, std::to_string(addr)},
         {kCoreRangeSet, core_range_set.str()},
-        {kGloballyAllocated, std::to_string(is_globally_allocated)},
+        {kGloballyAllocated, std::to_string(static_cast<int>(is_globally_allocated))},
         {kDeviceId, std::to_string(device->id())}};
     auto counter = graph.size();
     {

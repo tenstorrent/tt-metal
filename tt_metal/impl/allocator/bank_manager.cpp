@@ -29,7 +29,7 @@ void BankManager::init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes
 
 void validate_num_banks(uint32_t num_banks, const BufferType& buffer_type, bool disable_interleaved) {
     bool doesnt_support_interleaved = buffer_type == BufferType::L1_SMALL or disable_interleaved;
-    bool is_pow2_num_banks = num_banks && (!(num_banks & (num_banks - 1)));
+    bool is_pow2_num_banks = (num_banks != 0u) && ((num_banks & (num_banks - 1)) == 0u);
     // Dataflow API does not have a working implementation of generic modulo to determine bank_id for interleaved
     // address gen For non pow2 num banks, special cases need to be added to avoid falling back to generic
     // implementation. See https://github.com/tenstorrent/tt-metal/issues/3321

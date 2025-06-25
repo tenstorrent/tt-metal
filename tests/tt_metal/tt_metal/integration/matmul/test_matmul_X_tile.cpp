@@ -242,7 +242,7 @@ void matmul_tile(
             (std::uint32_t)N,
             (std::uint32_t)(M * single_tile_size_bfp16b),
             (std::uint32_t)(N * single_tile_size_bfp16b),
-            cfg.with_bias};
+            static_cast<const unsigned int>(cfg.with_bias)};
     } else {
         uint32_t num_output_tiles = 2;
         tt_metal::CircularBufferConfig cb_output_config =
@@ -433,7 +433,8 @@ TEST_F(DispatchFixture, TensixMatmulMultiTile) {
                     .reader_kernel =
                         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_with_bias_blocked.cpp",
                     .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_with_bias.cpp",
-                    .compute_kernel_args = {1, M, N, K, M, N, (M * N), matmul_config.with_bias},
+                    .compute_kernel_args =
+                        {1, M, N, K, M, N, (M * N), static_cast<const unsigned int>(matmul_config.with_bias)},
                     .math_fidelity = MathFidelity(i)};
                 MatmulTileStimuli stimuli;
                 create_test_stimuli(stimuli, M, K, N);

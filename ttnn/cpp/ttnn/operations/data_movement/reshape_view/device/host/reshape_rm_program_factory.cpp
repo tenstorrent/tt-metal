@@ -93,9 +93,9 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
         src1_cb_index,
         source_page_size_bytes,
         dest_page_size_bytes,
-        source_page_is_pow_2,
+        static_cast<const unsigned int>(source_page_is_pow_2),
         source_page_pow_2,
-        dest_page_is_pow_2,
+        static_cast<const unsigned int>(dest_page_is_pow_2),
         dest_page_pow_2};
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(

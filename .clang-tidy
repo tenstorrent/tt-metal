@@ -177,7 +177,6 @@ Checks: >
   -readability-function-cognitive-complexity,
   -readability-function-size,
   -readability-identifier-length,
-  -readability-implicit-bool-conversion,
   -readability-inconsistent-declaration-parameter-name,
   -readability-isolate-declaration,
   -readability-magic-numbers,
@@ -198,15 +197,19 @@ Checks: >
   -readability-use-anyofallof
 
 CheckOptions:
+  - key: portability-simd-intrinsics.Suggest
+    value: true
+  - key: performance-unnecessary-copy-initialization.AllowedTypes
+    value: "^MemoryPin$"
   - key: readability-function-cognitive-complexity.IgnoreMacros
     value: true
-  - key: portability-simd-intrinsics.Suggest
+  - key: readability-implicit-bool-conversion.AllowIntegerConditions
+    value: true
+  - key: readability-implicit-bool-conversion.AllowPointerConditions
     value: true
   # May enable later; for now activate the check with a lighter touch
   - key: readability-simplify-boolean-expr.SimplifyDeMorgan
     value: false
-  - key: performance-unnecessary-copy-initialization.AllowedTypes
-    value: "^MemoryPin$"
 
 FormatStyle: 'file'
 

@@ -84,9 +84,9 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
         (std::uint32_t)num_repeats,
         src0_cb_index,
         src1_cb_index,
-        source_page_is_pow_2,
+        static_cast<const unsigned int>(source_page_is_pow_2),
         source_page_pow_2,
-        dest_page_is_pow_2,
+        static_cast<const unsigned int>(dest_page_is_pow_2),
         dest_page_pow_2};
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -196,7 +196,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
         (std::uint32_t)page_size_bytes,
         src0_cb_index,
         src1_cb_index,
-        page_is_pow_2,
+        static_cast<const unsigned int>(page_is_pow_2),
         page_pow_2,
         number_of_lower_pages,
         number_of_rep_dim_pages};

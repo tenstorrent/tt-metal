@@ -535,9 +535,11 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
             uint32_t kv_heads_id = i / (Q_HEADS / KV_HEADS);
             // Runtime method of turning off kernels/code blocks
             // Needed because some cores only have partial readers for reading/mcasting kv_heads
-            uint32_t has_work_for_q_heads = i < Q_HEADS;  // compute and writer only does work if this is true; reader
-                                                          // will only receive kv_heads if this is true
-            uint32_t has_work_for_mcast_kv_heads = i < num_active_cores;  // reader only does any work if this is true
+            uint32_t has_work_for_q_heads =
+                static_cast<uint32_t>(i < Q_HEADS);  // compute and writer only does work if this is true; reader
+                                                     // will only receive kv_heads if this is true
+            uint32_t has_work_for_mcast_kv_heads =
+                static_cast<uint32_t>(i < num_active_cores);  // reader only does any work if this is true
             uint32_t mcast_num_cores_for_core =
                 mcast_num_cores -
                 (uint32_t)(i < mcast_num_cores);  // if sender is not part of mcast grid, send to full grid

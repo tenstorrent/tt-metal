@@ -163,7 +163,7 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
              HtWt,
              CHtWt,
              static_cast<uint32_t>(dim),
-             flip});
+             static_cast<const unsigned int>(flip)});
 
         SetRuntimeArgs(
             program,
@@ -178,7 +178,7 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
              HtWt,
              CHtWt,
              static_cast<uint32_t>(dim),
-             flip});
+             static_cast<const unsigned int>(flip)});
 
         if (core_group_1.contains(core)) {
             SetRuntimeArgs(program, compute_kernel_1_id, core, {num_cumsum_tiles, num_tiles_per_core});

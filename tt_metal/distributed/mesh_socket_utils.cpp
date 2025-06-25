@@ -206,7 +206,7 @@ void write_socket_configs(
                 md.downstream_noc_y = recv_virtual_core.y;
                 md.downstream_noc_x = recv_virtual_core.x;
                 md.downstream_bytes_sent_addr = peer_addr;
-                md.is_sender = is_sender;
+                md.is_sender = static_cast<uint32_t>(is_sender);
             }
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }
@@ -237,7 +237,7 @@ void write_socket_configs(
                 md.upstream_noc_y = sender_virtual_core.y;
                 md.upstream_noc_x = sender_virtual_core.x;
                 md.upstream_bytes_acked_addr = peer_addr;
-                md.is_sender = is_sender;
+                md.is_sender = static_cast<uint32_t>(is_sender);
             }
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }

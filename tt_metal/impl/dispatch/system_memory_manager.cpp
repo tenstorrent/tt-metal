@@ -234,7 +234,7 @@ uint32_t SystemMemoryManager::get_completion_queue_read_ptr(const uint8_t cq_id)
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_read_toggle(const uint8_t cq_id) const {
-    return this->cq_interfaces[cq_id].completion_fifo_rd_toggle;
+    return static_cast<uint32_t>(this->cq_interfaces[cq_id].completion_fifo_rd_toggle);
 }
 
 uint32_t SystemMemoryManager::get_cq_size() const { return this->cq_size; }
@@ -336,7 +336,8 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
 void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) const {
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
-    uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
+    uint32_t read_ptr_and_toggle =
+        cq_interface.completion_fifo_rd_ptr | (static_cast<int>(cq_interface.completion_fifo_rd_toggle) << 31);
     this->fast_write_callable(this->completion_byte_addrs[cq_id], 4, (uint8_t*)&read_ptr_and_toggle);
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
@@ -398,7 +399,8 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
     } while (cq_interface.completion_fifo_rd_ptr == write_ptr and
-             cq_interface.completion_fifo_rd_toggle == write_toggle and not exit_condition.load());
+             static_cast<uint32_t>(cq_interface.completion_fifo_rd_toggle) == write_toggle and
+             not exit_condition.load());
     return write_ptr_and_toggle;
 }
 

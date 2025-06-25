@@ -121,9 +121,19 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
         program,
         reader_kernel_id,
         core,
-        {output_grad.buffer()->address(), num_tiles, 0, mask_h, mask_w, do_mask_h, do_mask_w});
+        {output_grad.buffer()->address(),
+         num_tiles,
+         0,
+         mask_h,
+         mask_w,
+         static_cast<const unsigned int>(do_mask_h),
+         static_cast<const unsigned int>(do_mask_w)});
     SetRuntimeArgs(program, writer_kernel_id, core, {bias_grad.buffer()->address(), 1, 0});
-    SetRuntimeArgs(program, compute_kernel_id, core, {batch_num, Ht, Wt, do_mask_h, do_mask_w});
+    SetRuntimeArgs(
+        program,
+        compute_kernel_id,
+        core,
+        {batch_num, Ht, Wt, static_cast<const unsigned int>(do_mask_h), static_cast<const unsigned int>(do_mask_w)});
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id}};
 }

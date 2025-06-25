@@ -710,7 +710,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         B,                       // batch,
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out};
+        static_cast<const unsigned int>(untilize_out)};
 
     // Create compute kernel
     // bool fp32_dest_acc_en = true;

@@ -85,9 +85,9 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
         bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);
 
         if (is_tile_dim) {
-            need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
+            need_bcast_dim[i] = static_cast<unsigned int>(output_grad_shape[idx] != input_grad_shape[idx]);
         } else {
-            need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
+            need_bcast_dim[i] = static_cast<unsigned int>(output_grad_shape[idx] != input_grad_shape[idx]);
         }
     }
     const auto num_input_grad_tiles = input_grad.physical_volume() / tt::constants::TILE_HW;

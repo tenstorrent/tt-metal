@@ -85,12 +85,13 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
 
     const bfloat16 bfloat_scaler_value = bfloat16(1.0f);
     const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    std::vector<uint32_t> reader_compile_time_args = {input_is_dram, packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {
+        static_cast<const unsigned int>(input_is_dram), packed_scaler_value};
     std::vector<uint32_t> writer_compile_time_args = {
         intermed_cb_id1,
         intermed_cb_id2,
         output_cb_id,
-        output_is_dram,
+        static_cast<const unsigned int>(output_is_dram),
     };
     std::vector<uint32_t> compute_compile_time_args = {
         input_cb_id,

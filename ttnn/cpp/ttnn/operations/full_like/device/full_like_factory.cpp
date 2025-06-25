@@ -29,7 +29,7 @@ uint32_t get_bfloat16_rounded(const float val) {
     uint32_t lower_bits = float_bits & 0xFFFF;
     uint32_t guard_bit = (lower_bits >> 15) & 1;
     uint32_t round_bit = (lower_bits >> 14) & 1;
-    uint32_t sticky_bit = (lower_bits & 0x3FFF) != 0;
+    uint32_t sticky_bit = static_cast<uint32_t>((lower_bits & 0x3FFF) != 0);
 
     // Tie-to-even rounding rule
     if (guard_bit && (round_bit || sticky_bit || (bfloat16_bits & 1))) {

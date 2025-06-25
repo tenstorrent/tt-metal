@@ -924,13 +924,14 @@ struct test_traffic_t {
             // launch controller kernel
             // TODO: remove hardcoding
             std::vector<uint32_t> runtime_args = {
-                time_seed,                          // 0: time based seed
-                num_tx_workers,                     // 1: number of workers for mcast
-                tx_signal_address,                  // 2: address to send signal on to workers
-                host_signal_address,                // 3: address to receive signal from host
-                64,                                 // 4: num mcast dest
-                mcast_encoding,                     // 5: mcast dest noc encoding
-                sync_with_remote_controller_kernel  // 6: if need to sync with the remote controller kernel
+                time_seed,            // 0: time based seed
+                num_tx_workers,       // 1: number of workers for mcast
+                tx_signal_address,    // 2: address to send signal on to workers
+                host_signal_address,  // 3: address to receive signal from host
+                64,                   // 4: num mcast dest
+                mcast_encoding,       // 5: mcast dest noc encoding
+                static_cast<const unsigned int>(
+                    sync_with_remote_controller_kernel)  // 6: if need to sync with the remote controller kernel
             };
 
             // if need to sync with remote controller
@@ -1469,7 +1470,7 @@ int main(int argc, char **argv) {
         test_args::get_command_option_uint32(input_args, "--target_address", default_target_address);
     uint32_t atomic_increment =
         test_args::get_command_option_uint32(input_args, "--atomic_increment", default_atomic_increment);
-    uint32_t data_mode = test_args::has_command_option(input_args, "--raw_data");
+    uint32_t data_mode = static_cast<uint32_t>(test_args::has_command_option(input_args, "--raw_data"));
 
     // Note here that currently mcast_depth considers the mcast origin as a hop, and not the distance from the origin
     // This has side effects that specifying a depth of 0 or 1 will result in the same behavior
@@ -1698,50 +1699,50 @@ int main(int argc, char **argv) {
             client_interface_addr + PULL_CLIENT_INTERFACE_SIZE + sizeof(fabric_router_l1_config_t) * 4;
 
         std::vector<uint32_t> tx_compile_args = {
-            data_mode,                         // 0: Data mode. 0 - Packetized Data. 1 Raw Data.
-            num_dest_endpoints,                // 1: num_dest_endpoints
-            dest_endpoint_start_id,            // 2:
-            tx_queue_start_addr,               // 3: queue_start_addr_words
-            (tx_queue_size_bytes >> 4),        // 4: queue_size_words
-            routing_table_start_addr,          // 5: routeing table
-            test_results_addr,                 // 6: test_results_addr
-            test_results_size,                 // 7: test_results_size
-            prng_seed,                         // 8: prng_seed
-            data_kb_per_tx,                    // 9: total_data_kb
-            max_packet_size_words,             // 10: max_packet_size_words
-            timeout_cycles,                    // 11: timeout_cycles
-            tx_skip_pkt_content_gen,           // 12: skip_pkt_content_gen
-            tx_pkt_dest_size_choice,           // 13: pkt_dest_size_choice
-            tx_data_sent_per_iter_low,         // 14: data_sent_per_iter_low
-            tx_data_sent_per_iter_high,        // 15: data_sent_per_iter_high
-            fabric_command,                    // 16: fabric_command
-            target_address,                    // 17: target_address
-            atomic_increment,                  // 18: atomic_increment
-            tx_signal_address,                 // 19: tx_signal_address
-            client_interface_addr,             // 20:
-            client_pull_req_buf_addr,          // 21:
-            fixed_async_wr_notif_addr,         // 22: use fixed addr for async wr atomic inc
-            mcast,                             // 23: mcast
-            mcast_depth[RoutingDirection::E],  // 24: mcast_e
-            mcast_depth[RoutingDirection::W],  // 25: mcast_w
-            mcast_depth[RoutingDirection::N],  // 26: mcast_n
-            mcast_depth[RoutingDirection::S],  // 27: mcast_s
-            push_mode                          // 28: Router mode. 0 - Pull, 1 - Push
+            data_mode,                                                 // 0: Data mode. 0 - Packetized Data. 1 Raw Data.
+            num_dest_endpoints,                                        // 1: num_dest_endpoints
+            dest_endpoint_start_id,                                    // 2:
+            tx_queue_start_addr,                                       // 3: queue_start_addr_words
+            (tx_queue_size_bytes >> 4),                                // 4: queue_size_words
+            routing_table_start_addr,                                  // 5: routeing table
+            test_results_addr,                                         // 6: test_results_addr
+            test_results_size,                                         // 7: test_results_size
+            prng_seed,                                                 // 8: prng_seed
+            data_kb_per_tx,                                            // 9: total_data_kb
+            max_packet_size_words,                                     // 10: max_packet_size_words
+            timeout_cycles,                                            // 11: timeout_cycles
+            static_cast<const unsigned int>(tx_skip_pkt_content_gen),  // 12: skip_pkt_content_gen
+            tx_pkt_dest_size_choice,                                   // 13: pkt_dest_size_choice
+            tx_data_sent_per_iter_low,                                 // 14: data_sent_per_iter_low
+            tx_data_sent_per_iter_high,                                // 15: data_sent_per_iter_high
+            fabric_command,                                            // 16: fabric_command
+            target_address,                                            // 17: target_address
+            atomic_increment,                                          // 18: atomic_increment
+            tx_signal_address,                                         // 19: tx_signal_address
+            client_interface_addr,                                     // 20:
+            client_pull_req_buf_addr,                                  // 21:
+            static_cast<const unsigned int>(fixed_async_wr_notif_addr),  // 22: use fixed addr for async wr atomic inc
+            static_cast<const unsigned int>(mcast),                      // 23: mcast
+            mcast_depth[RoutingDirection::E],                            // 24: mcast_e
+            mcast_depth[RoutingDirection::W],                            // 25: mcast_w
+            mcast_depth[RoutingDirection::N],                            // 26: mcast_n
+            mcast_depth[RoutingDirection::S],                            // 27: mcast_s
+            static_cast<const unsigned int>(push_mode)                   // 28: Router mode. 0 - Pull, 1 - Push
         };
 
         std::vector<uint32_t> rx_compile_args = {
-            prng_seed,                  // 0: prng seed
-            data_kb_per_tx,             // 1: total data kb
-            max_packet_size_words,      // 2: max packet size (in words)
-            fabric_command,             // 3: fabric command
-            target_address,             // 4: target address
-            atomic_increment,           // 5: atomic increment
-            test_results_addr,          // 6: test results addr
-            test_results_size,          // 7: test results size in bytes
-            tx_pkt_dest_size_choice,    // 8: pkt dest and size choice
-            tx_skip_pkt_content_gen,    // 9: skip packet validation
-            fixed_async_wr_notif_addr,  // 10: use fixed addr for async wr atomic inc
-            timeout_cycles,             // 11: idle timeout cycles
+            prng_seed,                                                   // 0: prng seed
+            data_kb_per_tx,                                              // 1: total data kb
+            max_packet_size_words,                                       // 2: max packet size (in words)
+            fabric_command,                                              // 3: fabric command
+            target_address,                                              // 4: target address
+            atomic_increment,                                            // 5: atomic increment
+            test_results_addr,                                           // 6: test results addr
+            test_results_size,                                           // 7: test results size in bytes
+            tx_pkt_dest_size_choice,                                     // 8: pkt dest and size choice
+            static_cast<const unsigned int>(tx_skip_pkt_content_gen),    // 9: skip packet validation
+            static_cast<const unsigned int>(fixed_async_wr_notif_addr),  // 10: use fixed addr for async wr atomic inc
+            timeout_cycles,                                              // 11: idle timeout cycles
         };
 
         // TODO: launch traffic kernels

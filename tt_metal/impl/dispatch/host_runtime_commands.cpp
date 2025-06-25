@@ -157,8 +157,8 @@ void EnqueueProgramCommand::process() {
         this->manager,
         this->command_queue_id,
         this->dispatch_core_type,
-        dispatch_metadata.stall_first,
-        dispatch_metadata.stall_before_program);
+        dispatch_metadata.stall_first != 0u,
+        dispatch_metadata.stall_before_program != 0u);
     // Kernel Binaries are committed to DRAM, the first time the program runs on device. Reflect this on host.
     program.set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
 }

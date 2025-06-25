@@ -273,8 +273,8 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
             {
                 b_is_dram,
                 c_is_dram,
-                d_is_dram,
-                e_is_dram,
+                static_cast<const unsigned int>(d_is_dram),
+                static_cast<const unsigned int>(e_is_dram),
                 static_cast<uint32_t>(running_mean_has_value),
                 static_cast<uint32_t>(running_var_has_value),
                 batch_var_tensor_cb,

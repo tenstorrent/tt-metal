@@ -256,7 +256,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
              num_tiles,
              src0_cb_index,
              test_config.num_tiles_c,
-             false});
+             0u});
     }
 
     tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, (uint32_t)0, num_tiles});

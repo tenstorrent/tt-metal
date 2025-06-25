@@ -226,7 +226,9 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
     return chip_seq;
 }
 
-uint32_t get_sender_id(CoreCoord logical_core) { return logical_core.x << 16 || logical_core.y; }
+uint32_t get_sender_id(CoreCoord logical_core) {
+    return static_cast<uint32_t>((static_cast<uint32_t>(logical_core.x << 16) != 0u) || (logical_core.y) != 0u);
+}
 
 void create_kernel(
     tt::tt_metal::IDevice* device,

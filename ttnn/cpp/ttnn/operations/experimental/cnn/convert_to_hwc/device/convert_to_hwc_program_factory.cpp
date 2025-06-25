@@ -111,8 +111,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         output_stride_sticks,
         0,
         input_element_size,
-        is_input_in_dram,
-        true,
+        static_cast<const unsigned int>(is_input_in_dram),
+        1u,
         dram_write_stride_bytes,
         dram_read_stride_bytes,
         total_num_sticks_kernel_0};
@@ -127,8 +127,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         output_stride_sticks,
         output_stride_sticks,
         input_element_size,
-        is_input_in_dram,
-        false,
+        static_cast<const unsigned int>(is_input_in_dram),
+        0u,
         dram_write_stride_bytes,
         dram_read_stride_bytes,
         total_num_sticks_kernel_1};
@@ -140,7 +140,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         cb_in_transpose_id1,
         total_tiles_per_core,
         input_shard_height,
-        is_input_in_dram};
+        static_cast<const unsigned int>(is_input_in_dram)};
 
     auto writer_kernel_id0 = tt::tt_metal::CreateKernel(
         program,

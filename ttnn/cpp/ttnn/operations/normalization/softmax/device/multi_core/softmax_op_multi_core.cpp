@@ -182,10 +182,10 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool out0_is_dram = out0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
-                                                      src0_is_dram};
+                                                      static_cast<const unsigned int>(src0_is_dram)};
     if (mask.has_value()) {
         bool mask_is_dram = mask.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-        reader_compile_time_args.push_back(mask_is_dram);
+        reader_compile_time_args.push_back(static_cast<decltype(reader_compile_time_args)::value_type>(mask_is_dram));
     }
     if (causal_mask) {
         uint32_t num_tiles_causal_mask =
@@ -194,7 +194,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
 
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      out0_is_dram,
+                                                      static_cast<const unsigned int>(out0_is_dram),
                                                       num_datum_padded};
     std::map<string, string> softmax_defines, writer_defines;
     if (mask.has_value()) {
@@ -394,13 +394,24 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             program,
             softmax_kernels_id,
             core,
-            {num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, mask_padded_data, cb_length});
+            {num_tile_rows_per_core,
+             Ht,
+             Wt,
+             block_size,
+             curr_ht,
+             static_cast<const unsigned int>(mask_padded_data),
+             cb_length});
 
         SetRuntimeArgs(
             program,
             writer_kernels_id,
             core,
-            {out_addr, num_tile_rows_per_core * Wt, tile_offset, block_size, mask_padded_data, num_datum_padded});
+            {out_addr,
+             num_tile_rows_per_core * Wt,
+             tile_offset,
+             block_size,
+             static_cast<const unsigned int>(mask_padded_data),
+             num_datum_padded});
 
         curr_row += num_tile_rows_per_core;
     }
@@ -575,14 +586,14 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 softmax_kernel_args[2] = Wt;
                 softmax_kernel_args[3] = block_size;
                 softmax_kernel_args[4] = curr_ht;
-                softmax_kernel_args[5] = mask_padded_data;
+                softmax_kernel_args[5] = static_cast<std::uint32_t>(mask_padded_data);
                 softmax_kernel_args[6] = fp32_dest_acc_en ? 1 : 0;
 
                 writer_kernel_args[0] = dst_buffer_address;
                 writer_kernel_args[1] = num_tile_rows_per_core * Wt;
                 writer_kernel_args[2] = tile_offset;
                 writer_kernel_args[3] = block_size;
-                writer_kernel_args[4] = mask_padded_data;
+                writer_kernel_args[4] = static_cast<std::uint32_t>(mask_padded_data);
                 writer_kernel_args[5] = num_datum_padded;
 
                 curr_row += num_tile_rows_per_core;

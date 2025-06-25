@@ -328,7 +328,12 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> compute_args = {
-        Wt, block_size, stats_tiles_cols, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
+        Wt,
+        block_size,
+        stats_tiles_cols,
+        static_cast<const unsigned int>(gamma.has_value()),
+        static_cast<const unsigned int>(beta.has_value()),
+        static_cast<const unsigned int>(fp32_dest_acc_en)};
 
     auto compute_kernels_id = CreateKernel(
         program,

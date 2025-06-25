@@ -1054,7 +1054,7 @@ std::vector<Tensor> ExecuteUnaryBackwardAsin::invoke(
         UnaryWithParam{UnaryOpType::SQUARE},
         UnaryWithParam{UnaryOpType::NEG},
         UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
-        UnaryWithParam{UnaryOpType::RSQRT, true}};
+        UnaryWithParam{UnaryOpType::RSQRT, 1.0f}};
 
     Tensor grad_result =
         ttnn::multiply(grad, unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
@@ -1093,7 +1093,7 @@ std::vector<Tensor> ExecuteUnaryBackwardAsinh::invoke(
     std::vector<UnaryWithParam> ops_chain = {
         UnaryWithParam{UnaryOpType::SQUARE},
         UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
-        UnaryWithParam{UnaryOpType::RSQRT, true}};
+        UnaryWithParam{UnaryOpType::RSQRT, 1.0f}};
     Tensor grad_result =
         ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);

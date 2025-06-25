@@ -158,8 +158,8 @@ void generate_receiver_worker_kernels(
 
     tt_metal::CBHandle receiver_workers_cb = CreateCircularBuffer(program, worker_core, cb_src0_config);
     std::vector<uint32_t> receiver_worker_writer_compile_args{
-        dest_is_dram,  //
-        num_pages,     //
+        static_cast<const unsigned int>(dest_is_dram),  //
+        num_pages,                                      //
         page_size,
         num_pages_per_edm_buffer};
     std::vector<uint32_t> receiver_worker_writer_runtime_args{dram_output_buffer_base_addr};
@@ -230,8 +230,8 @@ void generate_sender_worker_kernels(
     bool src_is_dram,
     ttnn::ccl::EriscDataMoverTerminationMode edm_termination_mode) {
     std::vector<uint32_t> sender_worker_reader_compile_args{
-        src_is_dram,      //
-        num_pages_total,  //
+        static_cast<const unsigned int>(src_is_dram),  //
+        num_pages_total,                               //
         page_size,
         num_pages_per_edm_buffer};
     std::vector<uint32_t> sender_worker_reader_runtime_args{dram_output_buffer_base_addr};

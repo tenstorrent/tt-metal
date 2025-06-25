@@ -20,8 +20,8 @@ struct ExampleMultipleReturnDeviceOperation {
     struct operation_attributes_t {
         bool attribute = true;
         int some_other_attribute = 42;
-        uint32_t return_output1 = true;
-        uint32_t return_output2 = true;
+        uint32_t return_output1 = 1u;
+        uint32_t return_output2 = 1u;
     };
 
     // Define the tensor arguments. This is it to store all tensors passed in and/or out of the operation

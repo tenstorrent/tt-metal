@@ -693,7 +693,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         writer_compile_time_args.push_back(0);
     }
 
-    writer_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
+    writer_compile_time_args.push_back(
+        static_cast<decltype(writer_compile_time_args)::value_type>(gamma_cb_data_format == tt::DataFormat::Float32));
 
     // write back compile time args
     writer_compile_time_args.push_back(block_wt * out_single_tile_size);  // out_tensor_stride_w_bytes
@@ -724,7 +725,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         num_subblocks_w,
         1,  // To be overwritten if not an all to all worker
         block_wt,
-        fp32_dest_acc_en,
+        static_cast<const unsigned int>(fp32_dest_acc_en),
         num_blocks_second_stage,
         in2_cb_index,
         pre_in4_cb_index,
@@ -1048,13 +1049,13 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             all_gather_rts.insert(all_gather_rts.end(), stats_tensor_cores_x.begin(), stats_tensor_cores_x.end());
             all_gather_rts.insert(all_gather_rts.end(), stats_tensor_cores_y.begin(), stats_tensor_cores_y.end());
 
-            all_gather_rts.push_back(forward_device.has_value());
+            all_gather_rts.push_back(static_cast<decltype(all_gather_rts)::value_type>(forward_device.has_value()));
             if (forward_device.has_value()) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     target_device->id(), forward_device.value()->id(), i, program, {core}, all_gather_rts);
             }
 
-            all_gather_rts.push_back(backward_device.has_value());
+            all_gather_rts.push_back(static_cast<decltype(all_gather_rts)::value_type>(backward_device.has_value()));
             if (backward_device.has_value()) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     target_device->id(), backward_device.value()->id(), i, program, {core}, all_gather_rts);

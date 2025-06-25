@@ -173,12 +173,12 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             "reader_moreh_getitem_tilize_w.cpp",
             all_cores,
             {
-                src_is_dram,
-                index_info[0].is_dram,
-                index_info[1].is_dram,
-                index_info[2].is_dram,
-                index_info[3].is_dram,
-                index_info[4].is_dram,
+                static_cast<const unsigned int>(src_is_dram),
+                static_cast<const unsigned int>(index_info[0].is_dram),
+                static_cast<const unsigned int>(index_info[1].is_dram),
+                static_cast<const unsigned int>(index_info[2].is_dram),
+                static_cast<const unsigned int>(index_info[3].is_dram),
+                static_cast<const unsigned int>(index_info[4].is_dram),
             },
             reader_defines);
         auto writer_kernel_id = CreateWriteKernel(
@@ -186,7 +186,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
             "writer_moreh_getitem_tilize_w.cpp",
             all_cores,
-            {dst_is_dram},
+            {static_cast<const unsigned int>(dst_is_dram)},
             writer_defines);
 
         uint32_t face_width = 16;
@@ -262,11 +262,11 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 input_5d_shape_without_padding[4],
 
                 // index
-                index_info[0].is_defined,
-                index_info[1].is_defined,
-                index_info[2].is_defined,
-                index_info[3].is_defined,
-                index_info[4].is_defined,
+                static_cast<const unsigned int>(index_info[0].is_defined),
+                static_cast<const unsigned int>(index_info[1].is_defined),
+                static_cast<const unsigned int>(index_info[2].is_defined),
+                static_cast<const unsigned int>(index_info[3].is_defined),
+                static_cast<const unsigned int>(index_info[4].is_defined),
                 index_info[0].unit_size,
                 index_info[1].unit_size,
                 index_info[2].unit_size,
@@ -403,12 +403,12 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             "reader_moreh_getitem_tilize.cpp",
             all_cores,
             {
-                src_is_dram,
-                index_info[0].is_dram,
-                index_info[1].is_dram,
-                index_info[2].is_dram,
-                index_info[3].is_dram,
-                index_info[4].is_dram,
+                static_cast<const unsigned int>(src_is_dram),
+                static_cast<const unsigned int>(index_info[0].is_dram),
+                static_cast<const unsigned int>(index_info[1].is_dram),
+                static_cast<const unsigned int>(index_info[2].is_dram),
+                static_cast<const unsigned int>(index_info[3].is_dram),
+                static_cast<const unsigned int>(index_info[4].is_dram),
             },
             reader_defines);
         auto writer_kernel_id = CreateWriteKernel(
@@ -416,7 +416,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
             "writer_moreh_getitem_tilize.cpp",
             all_cores,
-            {dst_is_dram},
+            {static_cast<const unsigned int>(dst_is_dram)},
             writer_defines);
 
         uint32_t face_width = 16;
@@ -490,11 +490,11 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 input_5d_shape_without_padding[4],
 
                 // index
-                index_info[0].is_defined,
-                index_info[1].is_defined,
-                index_info[2].is_defined,
-                index_info[3].is_defined,
-                index_info[4].is_defined,
+                static_cast<const unsigned int>(index_info[0].is_defined),
+                static_cast<const unsigned int>(index_info[1].is_defined),
+                static_cast<const unsigned int>(index_info[2].is_defined),
+                static_cast<const unsigned int>(index_info[3].is_defined),
+                static_cast<const unsigned int>(index_info[4].is_defined),
                 index_info[0].unit_size,
                 index_info[1].unit_size,
                 index_info[2].unit_size,

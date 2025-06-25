@@ -390,7 +390,7 @@ operation::ProgramWithCallbacks joint_sdpa(
     defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
-    defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    defines["EXP_APPROX_MODE"] = std::to_string(static_cast<int>(exp_approx_mode));
 
     auto reader_kernels_id = CreateKernel(
         program,

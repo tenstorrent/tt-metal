@@ -284,7 +284,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         output_cores_all,
         reduction_reader_kernel_config);
     if (output_cores_unused.size() > 0) {
-        tt::tt_metal::SetRuntimeArgs(program, reduction_reader_kernel_id, output_cores_unused, {!has_work, 0});
+        tt::tt_metal::SetRuntimeArgs(
+            program, reduction_reader_kernel_id, output_cores_unused, {static_cast<const unsigned int>(!has_work), 0});
     }
 
     // Create reduction dataflow kernel
@@ -302,7 +303,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     tt::tt_metal::SetRuntimeArgs(
         program, reduction_kernel_id, output_tensor_cores, {1, ring_size, output_tensor_shard_num_pages});
     if (output_cores_unused.size() > 0) {
-        tt::tt_metal::SetRuntimeArgs(program, reduction_kernel_id, output_cores_unused, {!has_work, 0, 0});
+        tt::tt_metal::SetRuntimeArgs(
+            program, reduction_kernel_id, output_cores_unused, {static_cast<const unsigned int>(!has_work), 0, 0});
     }
 
     // Reader
@@ -445,13 +447,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             log_trace(tt::LogOp, "\t{}", arg);
         }
 
-        writer_rt_args.push_back(forward_device.has_value());
+        writer_rt_args.push_back(static_cast<decltype(writer_rt_args)::value_type>(forward_device.has_value()));
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
 
-        writer_rt_args.push_back(backward_device.has_value());
+        writer_rt_args.push_back(static_cast<decltype(writer_rt_args)::value_type>(backward_device.has_value()));
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
@@ -461,7 +463,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
 
         // Set reduction worker runtime args
         std::vector<uint32_t> reduction_reader_rt_args = {
-            has_work,
+            static_cast<const unsigned int>(has_work),
             reduction_semaphore_ids[link],  // reduction_semaphore_id
         };
         tt::tt_metal::SetRuntimeArgs(

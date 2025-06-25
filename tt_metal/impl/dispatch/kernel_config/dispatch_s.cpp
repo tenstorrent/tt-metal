@@ -115,7 +115,7 @@ void DispatchSKernel::CreateKernel() {
         static_config_.first_stream_used.value(),
         static_config_.max_num_worker_sems.value(),
         static_config_.max_num_go_signal_noc_data_entries.value(),
-        virtualize_num_eth_cores,
+        static_cast<const unsigned int>(virtualize_num_eth_cores),
         num_virtual_active_eth_cores,
         num_physical_active_eth_cores,
     };

@@ -172,7 +172,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     // Reader compile-time args
     uint32_t src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t stick_size = unpadded_row_size_bytes;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
+    uint32_t stick_size_is_power_of_two = static_cast<uint32_t>(is_power_of_two_at_least_32(stick_size));
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)log2(stick_size) : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         src0_is_dram, stick_size_is_power_of_two, log2_stick_size, tile_row_size_bytes};
@@ -268,7 +268,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
          full_cores_per_col] =
             ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
 
-    uint32_t total_tiles_per_row = full_cores_per_row * single_block_size + has_cliff_row * single_block_size_cliff_row;
+    uint32_t total_tiles_per_row =
+        full_cores_per_row * single_block_size + static_cast<uint32_t>(has_cliff_row) * single_block_size_cliff_row;
 
     uint32_t unpadded_row_size_bytes = a.padded_shape()[-1] * a.element_size();     // Assuming bfloat16 dataformat
     uint32_t padded_row_size_bytes = output.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
@@ -343,7 +344,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
 
     uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     uint32_t stick_size = unpadded_row_size_bytes;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
+    uint32_t stick_size_is_power_of_two = static_cast<uint32_t>(is_power_of_two_at_least_32(stick_size));
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
 
     uint32_t packed_pad_value = get_packed_value(a, pad_value);
@@ -579,7 +580,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
      */
     uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     uint32_t stick_size = unpadded_row_size_bytes;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
+    uint32_t stick_size_is_power_of_two = static_cast<uint32_t>(is_power_of_two_at_least_32(stick_size));
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
 
     uint32_t packed_pad_value = get_packed_value(a, pad_value);

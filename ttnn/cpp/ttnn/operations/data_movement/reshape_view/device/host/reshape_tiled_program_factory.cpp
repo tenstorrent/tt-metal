@@ -371,11 +371,15 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(
-            {input_is_dram, mapping_page_size_bytes, input_tile_size_bytes, mapping_cb_idx, input_cb_idx}));
+            {static_cast<const unsigned int>(input_is_dram),
+             mapping_page_size_bytes,
+             input_tile_size_bytes,
+             mapping_cb_idx,
+             input_cb_idx}));
 
     const uint32_t max_map_entries = mapping_page_size / detail::SegmentMapData::size;
     std::vector<uint32_t> writer_compile_time_args = {
-        output_is_dram,
+        static_cast<const unsigned int>(output_is_dram),
         input_tile_size_bytes,
         max_map_entries,
         tt::datum_size(output_cb_data_format),

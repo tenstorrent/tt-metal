@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
                                    : CoreCoord(0, 0);  // In this case pass physical coordinates as runtime args
 
     std::vector<uint32_t> compile_args = {
-        false,
+        0u,
         tl_core.x,
         tl_core.y,
         mcast_end.x,
@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
         virtual_offset.x,
         virtual_offset.y,
         N_RANDS,
-        rnd_delay_g,
+        static_cast<const unsigned int>(rnd_delay_g),
         device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
         mcast_from_eth_g ? tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
                                HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED)
@@ -202,7 +202,7 @@ int main(int argc, char** argv) {
     }
 
     if (!ucast_only) {
-        compile_args[0] = true;
+        compile_args[0] = 1u;
         KernelHandle mcast_kernel;
         if (mcast_from_eth_g) {
             mcast_kernel = tt_metal::CreateKernel(

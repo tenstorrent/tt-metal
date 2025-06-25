@@ -234,7 +234,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
     uint16_t start_split_size = width / largest_power_of_two(max_cores);
     for (uint16_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
         uint16_t rem = width % split_size;
-        uint16_t num_cores = width / split_size + (rem > 0);
+        uint16_t num_cores = width / split_size + static_cast<int>(rem > 0);
         uint32_t memory_cost_gather =
             2 * num_cores * (value_tile_size + index_tile_size);  // gathering one index and one value tile from each
                                                                   // local core, allocating two CBs for each
@@ -535,7 +535,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
             topk_compute_kernel_id,
             core,
             {
-                ascending,
+                static_cast<const unsigned int>(ascending),
             });
         core_w++;
         ascending = !ascending;

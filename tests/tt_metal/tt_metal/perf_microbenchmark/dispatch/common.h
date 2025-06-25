@@ -441,7 +441,7 @@ inline bool DeviceData::validate_one_core(
         }
     }
 
-    return fail_count;
+    return fail_count != 0;
 }
 
 bool DeviceData::validate_host(std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& host_data) {
@@ -948,7 +948,7 @@ inline void gen_dispatcher_paged_write_cmd(
     TT_ASSERT(
         prev_is_dram == -1 || prev_is_dram == is_dram,
         "Mixing paged L1 and paged DRAM writes not supported in this test.");
-    prev_is_dram = is_dram;
+    prev_is_dram = static_cast<uint32_t>(is_dram);
 
     // Assumption embedded in this function (seems reasonable, true with a single buffer) that paged size will never
     // change.
@@ -968,7 +968,7 @@ inline void gen_dispatcher_paged_write_cmd(
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PAGED;
-    cmd.write_paged.is_dram = is_dram;
+    cmd.write_paged.is_dram = static_cast<uint8_t>(is_dram);
     cmd.write_paged.start_page = start_page_cmd;
     cmd.write_paged.base_addr = base_addr;
     cmd.write_paged.page_size = page_size;
@@ -1046,7 +1046,7 @@ inline void gen_rnd_dispatcher_packed_write_cmd(IDevice* device, std::vector<uin
         }
     }
 
-    bool repeat = std::rand() % 2;
+    bool repeat = (std::rand() % 2) != 0;
     if (repeat) {
         // TODO fix this if/when we add mcast
         uint32_t sub_cmds_size = padded_size(

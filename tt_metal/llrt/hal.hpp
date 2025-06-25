@@ -288,7 +288,7 @@ public:
 
     uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) const { return erisc_iram_relocate_func_(addr); }
 
-    uint32_t valid_reg_addr(uint32_t addr) const { return valid_reg_addr_func_(addr); }
+    uint32_t valid_reg_addr(uint32_t addr) const { return static_cast<uint32_t>(valid_reg_addr_func_(addr)); }
 
     const std::vector<uint32_t>& get_noc_x_id_translate_table() const { return noc_x_id_translate_table_; }
     const std::vector<uint32_t>& get_noc_y_id_translate_table() const { return noc_y_id_translate_table_; }

@@ -200,8 +200,9 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
     // Running into code size issues on TRISC2 with profiler turned on; need to reduce stack size by 4B
     // constexpr bool has_work = true;
     constexpr bool is_q = true;  // If not q, must be k
-    tt::tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, q_cores, {is_q});
-    tt::tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, k_cores, {!is_q});
+    tt::tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, q_cores, {static_cast<const unsigned int>(is_q)});
+    tt::tt_metal::SetRuntimeArgs(
+        program, rotary_embedding_kernel_id, k_cores, {static_cast<const unsigned int>(!is_q)});
     // tt::tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, unused_cores, {!has_work});
 
     auto override_runtime_arguments_callback =

@@ -31,7 +31,7 @@ bool find_device_with_neighbor_in_multi_direction(
     for (auto* device : devices) {
         src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
         if (incoming_direction.has_value()) {
-            if (!control_plane.get_intra_chip_neighbors(src_fabric_node_id, incoming_direction.value()).size()) {
+            if (control_plane.get_intra_chip_neighbors(src_fabric_node_id, incoming_direction.value()).size() == 0u) {
                 // This potential source will not have the requested incoming direction, skip
                 continue;
             }

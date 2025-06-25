@@ -53,7 +53,7 @@ std::vector<uint32_t> _get_possible_products(std::vector<uint32_t> factors) {
             new_products.push_back(fac);
         }
         for (uint32_t& prod : products) {
-            if (not std::count(products.begin(), products.end(), fac * prod)) {
+            if (std::count(products.begin(), products.end(), fac * prod) == 0) {
                 new_products.push_back(fac * prod);
             }
         }

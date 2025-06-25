@@ -94,7 +94,7 @@ void issue_trace_commands(
         for (const auto& id : dispatch_md.sub_device_ids) {
             index_bitmask |= 1 << *id;
         }
-        command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
+        command_sequence.add_notify_dispatch_s_go_signal_cmd(0u, index_bitmask);
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
     }
 
@@ -106,8 +106,8 @@ void issue_trace_commands(
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
         const auto& noc_data_start_idx = device->noc_data_start_index(
             id,
-            desc.num_traced_programs_needing_go_signal_multicast,
-            desc.num_traced_programs_needing_go_signal_unicast);
+            desc.num_traced_programs_needing_go_signal_multicast != 0u,
+            desc.num_traced_programs_needing_go_signal_unicast != 0u);
 
         const auto& num_noc_mcast_txns =
             desc.num_traced_programs_needing_go_signal_multicast ? device->num_noc_mcast_txns(id) : 0;
@@ -179,7 +179,7 @@ uint32_t compute_trace_cmd_size(uint32_t num_sub_devices) {
         align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * num_sub_devices;
 
     uint32_t cmd_sequence_sizeB =
-        MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() *
+        static_cast<uint32_t>(MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) *
             hal.get_alignment(
                 HalMemType::HOST) +  // dispatch_d -> dispatch_s sem update (send only if dispatch_s is running)
         go_signals_cmd_size +        // go signal cmd
@@ -189,7 +189,7 @@ uint32_t compute_trace_cmd_size(uint32_t num_sub_devices) {
                                   // dispatch_s is responsible for resetting worker count and giving dispatch_d the
                                   // latest worker state. This is encapsulated in the dispatch_s wait command (only to
                                   // be sent when dispatch is distributed on 2 cores)
-         (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) *
+         static_cast<uint32_t>(MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) *
              hal.get_alignment(HalMemType::HOST)) *
             num_sub_devices +
         hal.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_EXEC_BUF

@@ -474,7 +474,8 @@ int main(int argc, char** argv) {
                 tx_signal_address,                                                      // 19:
                 client_interface_addr,                                                  // 20:
                 client_pull_req_buf_addr,                                               // 21:
-                fixed_async_wr_notif_addr,  // 22: use fixed addr for async wr atomic inc
+                static_cast<const unsigned int>(
+                    fixed_async_wr_notif_addr),  // 22: use fixed addr for async wr atomic inc
             };
 
             // setup runtime args

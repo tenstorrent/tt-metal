@@ -254,7 +254,7 @@ operation::ProgramWithCallbacks upsample_multi_core(
     std::vector<uint32_t> writer_compile_time_args = {
         in_cb_id,
         out_cb_id,
-        false,
+        0u,
         config_cb_id,
         input_stick_nbytes,
         input_nsticks_per_core,
@@ -266,7 +266,7 @@ operation::ProgramWithCallbacks upsample_multi_core(
         CreateKernel(program, writer_kernel_fname, all_cores, WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> reader_compile_time_args = writer_compile_time_args;
-    reader_compile_time_args[2] = true;  // reader
+    reader_compile_time_args[2] = 1u;  // reader
 
     std::string reader_kernel_fname =
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
