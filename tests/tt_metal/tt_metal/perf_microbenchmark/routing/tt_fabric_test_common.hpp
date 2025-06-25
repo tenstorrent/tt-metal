@@ -125,7 +125,7 @@ public:
 
     void close_devices() {
         mesh_device_->close();
-        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
 
         mesh_coordinate_to_node_id_.clear();
         node_id_to_mesh_coordinate_.clear();
@@ -458,7 +458,7 @@ private:
     bool are_devices_open_ = false;
 
     void open_devices_internal(tt::tt_metal::FabricConfig fabric_config) {
-        tt::tt_metal::detail::InitializeFabricConfig(fabric_config);
+        tt::tt_metal::detail::SetFabricConfig(fabric_config);
         mesh_device_ = MeshDevice::create(mesh_shape_);
 
         for (const auto& coord : available_device_coordinates_) {
