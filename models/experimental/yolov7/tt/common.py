@@ -15,6 +15,7 @@ class TtYOLOv7Conv2D:
         *,
         act_block_h=None,
         deallocate=False,
+        deallocate_activation=False,
         height_sharding=True,
         activation="silu",
         groups=1,
@@ -32,6 +33,7 @@ class TtYOLOv7Conv2D:
         self.weights = parameters["weight"]
         self.bias = parameters["bias"]
         self.dtype = dtype
+        self.deallocate_activation = deallocate_activation
         self.fp32_dest_acc_en = fp32_dest_acc_en
         self.packer_l1_acc = packer_l1_acc
         self.math_approx_mode = math_approx_mode
@@ -62,6 +64,7 @@ class TtYOLOv7Conv2D:
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             enable_split_reader=self.enable_split_reader,
             enable_act_double_buffer=self.enable_act_double_buffer,
+            deallocate_activation=self.deallocate_activation,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
