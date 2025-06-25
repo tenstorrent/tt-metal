@@ -79,7 +79,7 @@ tt::tt_metal::Shape convert_shape_to_pages(tt::tt_metal::Shape shape, const tt::
     return shape;
 }
 
-std::pair<Shape, Shape> minimize_shape_ranks(const Shape& tensor_shape, const Shape& shard_shape) {
+std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Shape& shard_shape) {
     TT_FATAL(
         tensor_shape.rank() >= shard_shape.rank(),
         "Tensor shape rank ({}) can't be less than shard shape rank ({})!",
@@ -160,7 +160,7 @@ BufferDistributionSpec::BufferDistributionSpec(
         TT_FATAL(cores_.size() != 0, "Can't distribute non zero volume tensor over an empty set of cores");
     }
     std::tie(tensor_shape_in_pages_, shard_shape_in_pages_) =
-        CMAKE_UNIQUE_NAMESPACE::minimize_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
+        CMAKE_UNIQUE_NAMESPACE::squeeze_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
 }
 
 size_t BufferDistributionSpec::num_shards() const {

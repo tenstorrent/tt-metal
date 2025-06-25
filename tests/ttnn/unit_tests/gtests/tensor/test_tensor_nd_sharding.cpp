@@ -56,7 +56,7 @@ struct NDShardingCoreInfoParams {
     BufferDistributionSpec::CoreGroup expected_core_group_1;
     BufferDistributionSpec::CoreGroup expected_core_group_2;
 };
-struct NDShardingMinimizingRankParams {
+struct NDShardingSqueezeRankParams {
     Shape tensor_shape_pages;
     Shape shard_shape_pages;
     Shape expected_tensor_shape_pages;
@@ -332,9 +332,9 @@ TEST_P(NDShardingCoreInfoTests, TestCoreInfo) {
     EXPECT_EQ(core_group_2.cores, params.expected_core_group_2.cores);
 }
 
-class NDShardingMinimizingRankTests : public ::testing::TestWithParam<NDShardingMinimizingRankParams> {};
+class NDShardingSqueezeRankTests : public ::testing::TestWithParam<NDShardingSqueezeRankParams> {};
 
-TEST_P(NDShardingMinimizingRankTests, TestMinimizingRank) {
+TEST_P(NDShardingSqueezeRankTests, TestSqueezeRank) {
     const auto& params = GetParam();
 
     CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
@@ -1018,114 +1018,114 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TensorShardingTests,
-    NDShardingMinimizingRankTests,
+    NDShardingSqueezeRankTests,
     ::testing::Values(
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({5}),
             .shard_shape_pages = Shape({3}),
             // Nothing to minimize
             .expected_tensor_shape_pages = Shape({5}),
             .expected_shard_shape_pages = Shape({3}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({3, 6}),
             .shard_shape_pages = Shape({2, 2}),
             // Nothing to minimize
             .expected_tensor_shape_pages = Shape({3, 6}),
             .expected_shard_shape_pages = Shape({2, 2}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({1, 3, 6}),
             .shard_shape_pages = Shape({2, 2}),
             // Leading tensor dimension higher than shard dimension must be folded
             .expected_tensor_shape_pages = Shape({3, 6}),
             .expected_shard_shape_pages = Shape({2, 2}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({5, 3, 6}),
             .shard_shape_pages = Shape({2, 2}),
             // Leading tensor dimension higher than shard dimension must be folded
             .expected_tensor_shape_pages = Shape({15, 6}),
             .expected_shard_shape_pages = Shape({2, 2}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({1, 3, 6}),
             .shard_shape_pages = Shape({1, 2, 2}),
             // Folding leading 1s in both shapes
             .expected_tensor_shape_pages = Shape({3, 6}),
             .expected_shard_shape_pages = Shape({2, 2}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({1, 1, 3, 6}),
             .shard_shape_pages = Shape({1, 1, 2, 2}),
             // Folding leading 1s in both shapes
             .expected_tensor_shape_pages = Shape({3, 6}),
             .expected_shard_shape_pages = Shape({2, 2}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({2, 3, 6}),
             .shard_shape_pages = Shape({1, 2, 2}),
             // Can't fold dim 0, because it would cause different paddings in dim 1
             .expected_tensor_shape_pages = Shape({2, 3, 6}),
             .expected_shard_shape_pages = Shape({1, 2, 2}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({2, 3, 6}),
             .shard_shape_pages = Shape({2, 2, 2}),
             // Can't fold dim 0, because it would cause different paddings in dim 1
             .expected_tensor_shape_pages = Shape({2, 3, 6}),
             .expected_shard_shape_pages = Shape({2, 2, 2}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({4, 3, 6}),
             .shard_shape_pages = Shape({2, 2, 2}),
             // True ND sharding, nothing to fold
             .expected_tensor_shape_pages = Shape({4, 3, 6}),
             .expected_shard_shape_pages = Shape({2, 2, 2}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({4, 4, 6}),
             .shard_shape_pages = Shape({1, 3, 2}),
             // Can't fold dim 0, because it would cause different paddings in dim 1
             .expected_tensor_shape_pages = Shape({4, 4, 6}),
             .expected_shard_shape_pages = Shape({1, 3, 2}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({4, 4, 6}),
             .shard_shape_pages = Shape({1, 2, 2}),
             // No padding in dim 1, so we can fold dim 0
             .expected_tensor_shape_pages = Shape({16, 6}),
             .expected_shard_shape_pages = Shape({2, 2}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({4, 4, 6}),
             .shard_shape_pages = Shape({2, 2, 2}),
             // True ND sharding, nothing to fold
             .expected_tensor_shape_pages = Shape({4, 4, 6}),
             .expected_shard_shape_pages = Shape({2, 2, 2}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({4, 4, 5, 5, 4, 6}),
             .shard_shape_pages = Shape({4, 3, 5, 5, 2, 2}),
             // Folding identical dimensions in tensor and shard shapes into the leading dimension
             .expected_tensor_shape_pages = Shape({4, 100, 4, 6}),
             .expected_shard_shape_pages = Shape({4, 75, 2, 2}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({4, 4, 5, 5, 4, 6}),
             .shard_shape_pages = Shape({4, 3, 1, 1, 2, 2}),
             // Folding 1 shard dimensions into the following dimension, because it doesn't have a padding
             .expected_tensor_shape_pages = Shape({4, 4, 100, 6}),
             .expected_shard_shape_pages = Shape({4, 3, 2, 2}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({4, 4, 5, 5, 4, 6}),
             .shard_shape_pages = Shape({4, 3, 1, 1, 3, 2}),
             // Folding 1 shard dimensions, but not into the following dimension, because it has a padding
             .expected_tensor_shape_pages = Shape({4, 4, 25, 4, 6}),
             .expected_shard_shape_pages = Shape({4, 3, 1, 3, 2}),
         },
-        NDShardingMinimizingRankParams{
+        NDShardingSqueezeRankParams{
             .tensor_shape_pages = Shape({4, 4, 5, 5, 4, 6}),
             .shard_shape_pages = Shape({4, 4, 1, 1, 3, 2}),
             .expected_tensor_shape_pages = Shape({16, 25, 4, 6}),
