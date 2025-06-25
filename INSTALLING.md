@@ -27,7 +27,7 @@ Note the current compatibility matrix:
 | Blackhole            | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.18.0.0 (v80.18.0.0)             | v3.0.12 or above      | N/A                            |
 
 #### Install System-level Dependencies
-For Ubuntu users. You can use the script provided in our repo to install build and runtime dependencies along with a working copy of Clang.
+For Ubuntu users. You can use the script provided in our repo to install build and runtime dependencies along with a working copy of Clang 17.
 
 ```bash
 wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/{install_dependencies.sh,tt_metal/sfpi-version.sh}
