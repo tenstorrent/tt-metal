@@ -122,26 +122,34 @@ Input prompts should be provided as a JSON file, with each entry containing a pr
 
 ## Serving the model from vLLM
 
-1. Ensure weights are downloaded and repacked as described above, and that the environment variables are set.
+1. Ensure that tt-metal is installed and set up correctly. Optional check: `python -c "import tt_lib"`.
 
 2. **Install vLLM**
 
     ```bash
     # Installing from within `tt-metal`
-    export VLLM_TARGET_DEVICE="tt"
     git clone https://github.com/tenstorrent/vllm.git
     cd vllm
+    git checkout dev
     VLLM_USE_PRECOMPILED=1 pip install -e .
-    cd ..
     ```
 
-3. **Running the server**
+3. Ensure weights are downloaded and repacked as described above, and that the environment variables are set.
 
     ```bash
-    python vllm/examples/server_example_tt.py
+    export VLLM_TARGET_DEVICE="tt"
+    export MESH_DEVICE=TG
+    export TT_LLAMA_TEXT_VER="llama3_subdevices"
+    export PYTHONPATH=<path_to_tt_metal>:<path_to_vllm>:$PYTHONPATH
     ```
 
-4. **Interact with server**
+4. **Running the server**
+
+    ```bash
+    python examples/server_example_tt.py
+    ```
+
+5. **Interact with server**
 
     In a separate terminal window, run:
 
