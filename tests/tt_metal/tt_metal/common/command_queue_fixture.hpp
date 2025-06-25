@@ -76,7 +76,7 @@ protected:
     void CreateDevice(const size_t trace_region_size) { this->create_device(trace_region_size); }
 };
 
-class MeshCommandQueueSingleCardFixture : public DispatchFixture {
+class UnitMeshCommandQueueFixture : public DispatchFixture {
 protected:
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {

@@ -1050,7 +1050,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestArbiterDoesNotHang) {
 }  // namespace compiler_workaround_hardware_bug_tests
 namespace single_core_tests {
 
-TEST_F(MeshCommandQueueSingleCardFixture, TensixTestSingleCbConfigCorrectlySentSingleCore) {
+TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleCbConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1063,7 +1063,7 @@ TEST_F(MeshCommandQueueSingleCardFixture, TensixTestSingleCbConfigCorrectlySentS
     }
 }
 
-TEST_F(MeshCommandQueueSingleCardFixture, TensixTestMultiCbSeqConfigCorrectlySentSingleCore) {
+TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbSeqConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1080,7 +1080,7 @@ TEST_F(MeshCommandQueueSingleCardFixture, TensixTestMultiCbSeqConfigCorrectlySen
     }
 }
 
-TEST_F(MeshCommandQueueSingleCardFixture, TensixTestMultiCbRandomConfigCorrectlySentSingleCore) {
+TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbRandomConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1153,7 +1153,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCBSharedAddressSpace
     }
 }
 
-TEST_F(MeshCommandQueueSingleCardFixture, TensixTestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
+TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1167,7 +1167,7 @@ TEST_F(MeshCommandQueueSingleCardFixture, TensixTestSingleCbConfigCorrectlyUpdat
     }
 }
 
-TEST_F(MeshCommandQueueSingleCardFixture, TensixTestSingleSemaphoreConfigCorrectlySentSingleCore) {
+TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleSemaphoreConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1317,7 +1317,7 @@ TEST_F(MultiCommandQueueOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunct
 }  // end namespace single_core_tests
 
 namespace multicore_tests {
-TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
+TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -1337,7 +1337,7 @@ TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllCbConfigsCorrectlySentMul
     }
 }
 
-TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
+TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -1358,7 +1358,7 @@ TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllCbConfigsCorrectlySentUpd
     }
 }
 
-TEST_F(MeshCommandQueueSingleCardFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
+TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -1379,7 +1379,7 @@ TEST_F(MeshCommandQueueSingleCardFixture, TensixTestMultiCbConfigsCorrectlySentU
     }
 }
 
-TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges) {
+TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -1402,7 +1402,7 @@ TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllCbConfigsCorrectlySentMul
     }
 }
 
-TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
+TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -1426,7 +1426,7 @@ TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllCbConfigsCorrectlySentUpd
     }
 }
 
-TEST_F(MeshCommandQueueSingleCardFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
+TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -1450,7 +1450,7 @@ TEST_F(MeshCommandQueueSingleCardFixture, TensixTestMultiCbConfigsCorrectlySentU
     }
 }
 
-TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllSemConfigsCorrectlySentMultiCore) {
+TEST_F(UnitMeshCommandQueueFixture, TensixTestAllSemConfigsCorrectlySentMultiCore) {
     for (auto device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
@@ -1463,7 +1463,7 @@ TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllSemConfigsCorrectlySentMu
     }
 }
 
-TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCoreRanges) {
+TEST_F(UnitMeshCommandQueueFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCoreRanges) {
     for (auto device : devices_) {
         CoreRange first_cr({0, 0}, {1, 1});
 
