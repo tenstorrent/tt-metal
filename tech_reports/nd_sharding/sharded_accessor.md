@@ -12,9 +12,8 @@ Parameters consist of [rank, number of banks, tensor shape, shard shape, banks c
 
 ```c++
 // Get accessor arguments based on buffer distribution specification
-using tt::tt_metal::sharded_accessor_utils::ArgConfig;
 const auto& buffer_distribution_spec =
-    std::get<BufferDistributionSpec>(mesh_buffer->device_local_config().shard_parameters.value());
+    mesh_buffer->device_local_config().sharding_args.buffer_distribution_spec().value();
 
 // Choose which parts are compile-time vs runtime
 // Options include: CTA (all compile-time), RankCRTA, NumBanksCRTA, TensorShapeCRTA, ShardShapeCRTA, BankCoordsCRTA
