@@ -62,6 +62,12 @@ class YOLOv10PerformanceRunnerInfra:
 
         self.torch_model = load_torch_model()
 
+        self.torch_input_tensor = (
+            torch.randn((1, 3, 640, 640), dtype=torch.float32)
+            if self.torch_input_tensor is None
+            else self.torch_input_tensor
+        )
+
         model_type = f"torch_model"
 
         self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
