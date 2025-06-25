@@ -66,19 +66,23 @@
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#tt-nn-tt-metalium-installation">TT-NN / TT-Metalium Installation</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#there-are-three-options-for-installing-tt-metalium">There are three options for installing TT-Metalium:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#there-are-four-options-for-installing-tt-metalium">There are four options for installing TT-Metalium:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#option-1-from-source">Option 1: From Source</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#binaries">Binaries</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#step-1-install-the-latest-wheel">Step 1. Install the Latest Wheel:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#step-2-for-models-users-only-set-up-environment-for-models">Step 2. (For models users only) Set Up Environment for Models:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#docker-release-image">Docker Release Image</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#source">Source</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#step-1-clone-the-repository">Step 1. Clone the Repository:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#step-2-build-the-library">Step 2. Build the Library:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#step-3-crate-a-virtual-environment-and-optional-documentation">Step 3. Crate a virtual environment and (optional) documentation.</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#option-2-from-docker-release-image">Option 2: From Docker Release Image</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#option-3-from-wheel">Option 3: From Wheel</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#step-1-download-and-install-the-latest-wheel">Step 1. Download and Install the Latest Wheel:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#step-2-for-models-users-only-set-up-environment-for-models">Step 2. (For models users only) Set Up Environment for Models:</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#anaconda">Anaconda</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#step-1-install-the-latest-package">Step 1. Install the Latest Package:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#you-are-all-set">You are All Set!</a><ul>
@@ -379,28 +383,87 @@ Be sure to align the topology version with the compatible version in the table a
 <section id="tt-nn-tt-metalium-installation">
 <h3>TT-NN / TT-Metalium Installation<a class="headerlink" href="#tt-nn-tt-metalium-installation" title="Permalink to this heading"></a>
 </h3>
-<section id="there-are-three-options-for-installing-tt-metalium">
-<h4>There are three options for installing TT-Metalium:<a class="headerlink" href="#there-are-three-options-for-installing-tt-metalium" title="Permalink to this heading"></a>
+<section id="there-are-four-options-for-installing-tt-metalium">
+<h4>There are four options for installing TT-Metalium:<a class="headerlink" href="#there-are-four-options-for-installing-tt-metalium" title="Permalink to this heading"></a>
 </h4>
 <ul>
 <li>
-<p><a class="reference internal" href="#option-1-from-source"><span class="std std-ref">Option 1: From Source</span></a></p>
+<p><a class="reference internal" href="#binaries"><span class="std std-ref">Option 1: From Binaries</span></a></p>
+<p>Install pre-built binaries for quick setup and immediate access to TT-NN APIs and AI models.</p>
+</li>
+<li>
+<p><a class="reference internal" href="#docker-release-image"><span class="std std-ref">Option 2: From Docker Release Image</span></a></p>
+<p>Installing from Docker Release Image is a quick way to access our APIs and start running AI models.</p>
+</li>
+<li>
+<p><a class="reference internal" href="#source"><span class="std std-ref">Option 3: From Source</span></a></p>
 <p>Installing from source gets developers closer to the metal and the source code.</p>
 </li>
 <li>
-<p><a class="reference internal" href="#option-2-from-docker-release-image"><span class="std std-ref">Option 2: From Docker Release Image</span></a></p>
-<p>Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.</p>
-</li>
-<li>
-<p><a class="reference internal" href="#option-3-from-wheel"><span class="std std-ref">Option 3: From Wheel</span></a></p>
-<p>Install from wheel as an alternative method to get quick access to our APIs and to running AI models.</p>
+<p><a class="reference internal" href="#anaconda"><span class="std std-ref">Option 4: From Anaconda</span></a></p>
+<p>Installing from Anaconda can be convienient for ML Developers who prefer that workflow.</p>
 </li>
 </ul>
 </section>
 </section>
 <hr class="docutils">
-<section id="option-1-from-source">
-<h3>Option 1: From Source<a class="headerlink" href="#option-1-from-source" title="Permalink to this heading"></a>
+<section id="binaries">
+<h3>Binaries<a class="headerlink" href="#binaries" title="Permalink to this heading"></a>
+</h3>
+<p>Install from wheel for quick access to <code class="docutils literal notranslate"><span class="pre">ttnn</span></code> Python APIs and to get an AI model running.
+All binaries support only Linux and distros with glibc 2.34 or newer.</p>
+<section id="step-1-install-the-latest-wheel">
+<h4>Step 1. Install the Latest Wheel:<a class="headerlink" href="#step-1-install-the-latest-wheel" title="Permalink to this heading"></a>
+</h4>
+<ul>
+<li>
+<p>Install the wheel using <code class="docutils literal notranslate"><span class="pre">pip</span></code>:</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>ttnn
+</pre></div>
+</div>
+</li>
+</ul>
+</section>
+<section id="step-2-for-models-users-only-set-up-environment-for-models">
+<h4>Step 2. (For models users only) Set Up Environment for Models:<a class="headerlink" href="#step-2-for-models-users-only-set-up-environment-for-models" title="Permalink to this heading"></a>
+</h4>
+<p>To try our pre-built models in <code class="docutils literal notranslate"><span class="pre">models/</span></code>, you must:</p>
+<ul>
+<li><p>Install their required dependencies</p></li>
+<li><p>Set appropriate environment variables</p></li>
+<li><p>Set the CPU performance governor to ensure high performance on the host</p></li>
+<li>
+<p>This is done by executing the following:</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span>
+pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>tt_metal/python_env/requirements-dev.txt
+sudo<span class="w"> </span>apt-get<span class="w"> </span>install<span class="w"> </span>cpufrequtils
+sudo<span class="w"> </span>cpupower<span class="w"> </span>frequency-set<span class="w"> </span>-g<span class="w"> </span>performance
+</pre></div>
+</div>
+</li>
+</ul>
+</section>
+</section>
+<hr class="docutils">
+<section id="docker-release-image">
+<h3>Docker Release Image<a class="headerlink" href="#docker-release-image" title="Permalink to this heading"></a>
+</h3>
+<p>Download the latest Docker release from our <a class="reference external" href="https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&amp;amp;tab=packages&amp;amp;q=tt-metalium-ubuntu-22.04-release-amd64">Docker registry</a> page</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>docker<span class="w"> </span>pull<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
+docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/dev/hugepages-1G:/dev/hugepages-1G<span class="w"> </span>--device<span class="w"> </span>/dev/tenstorrent<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc<span class="w"> </span>bash
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>For more information on the Docker Release Images, visit our <a class="reference external" href="https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&amp;amp;tab=packages&amp;amp;q=tt-metalium-ubuntu-22.04-release-amd64">Docker registry page</a>.</p></li>
+<li><p>You are all set! Try some <a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples">TT-NN Basic Examples</a> next.</p></li>
+</ul>
+</section>
+<hr class="docutils">
+<section id="source">
+<h3>Source<a class="headerlink" href="#source" title="Permalink to this heading"></a>
 </h3>
 <p>Install from source if you are a developer who wants to be close to the metal and the source code. Recommended for running the demo models.</p>
 <section id="step-1-clone-the-repository">
@@ -455,55 +518,19 @@ ninja<span class="w"> </span>install<span class="w"> </span><span class="c1"># I
 </section>
 </section>
 <hr class="docutils">
-<section id="option-2-from-docker-release-image">
-<h3>Option 2: From Docker Release Image<a class="headerlink" href="#option-2-from-docker-release-image" title="Permalink to this heading"></a>
+<section id="anaconda">
+<h3>Anaconda<a class="headerlink" href="#anaconda" title="Permalink to this heading"></a>
 </h3>
-<p>Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.</p>
-<p>Download the latest Docker release from our <a class="reference external" href="https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&amp;amp;tab=packages&amp;amp;q=tt-metalium-ubuntu-22.04-release-amd64">Docker registry</a> page</p>
-<div class="highlight-sh notranslate">
-<div class="highlight"><pre><span></span>docker<span class="w"> </span>pull<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
-docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/dev/hugepages-1G:/dev/hugepages-1G<span class="w"> </span>--device<span class="w"> </span>/dev/tenstorrent<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc<span class="w"> </span>bash
-</pre></div>
-</div>
-<ul class="simple">
-<li><p>For more information on the Docker Release Images, visit our <a class="reference external" href="https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&amp;amp;tab=packages&amp;amp;q=tt-metalium-ubuntu-22.04-release-amd64">Docker registry page</a>.</p></li>
-<li><p>You are all set! Try some <a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples">TT-NN Basic Examples</a> next.</p></li>
-</ul>
-</section>
-<hr class="docutils">
-<section id="option-3-from-wheel">
-<h3>Option 3: From Wheel<a class="headerlink" href="#option-3-from-wheel" title="Permalink to this heading"></a>
-</h3>
-<p>Install from wheel for quick access to our APIs and to get an AI model running</p>
-<section id="step-1-download-and-install-the-latest-wheel">
-<h4>Step 1. Download and Install the Latest Wheel:<a class="headerlink" href="#step-1-download-and-install-the-latest-wheel" title="Permalink to this heading"></a>
+<p>Anaconda is another virtual environment manager. There is a community driven recipe <a class="reference external" href="https://github.com/conda-forge/tt-metalium-feedstock">here</a>. There is support for Python 3.10, 3.11, and 3.12.
+All binaries support only Linux and distros with glibc 2.34 or newer.</p>
+<section id="step-1-install-the-latest-package">
+<h4>Step 1. Install the Latest Package:<a class="headerlink" href="#step-1-install-the-latest-package" title="Permalink to this heading"></a>
 </h4>
 <ul>
-<li><p>Navigate to our <a class="reference external" href="https://github.com/tenstorrent/tt-metal/releases/latest">releases page</a> and download the latest wheel file for the Tenstorrent card architecture you have installed.</p></li>
 <li>
-<p>Install the wheel using your Python environment manager of choice. For example, to install with <code class="docutils literal notranslate"><span class="pre">pip</span></code>:</p>
+<p>Install the package using <code class="docutils literal notranslate"><span class="pre">conda</span></code>:</p>
 <div class="highlight-sh notranslate">
-<div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>&lt;wheel_file.whl&gt;
-</pre></div>
-</div>
-</li>
-</ul>
-</section>
-<section id="step-2-for-models-users-only-set-up-environment-for-models">
-<h4>Step 2. (For models users only) Set Up Environment for Models:<a class="headerlink" href="#step-2-for-models-users-only-set-up-environment-for-models" title="Permalink to this heading"></a>
-</h4>
-<p>To try our pre-built models in <code class="docutils literal notranslate"><span class="pre">models/</span></code>, you must:</p>
-<ul>
-<li><p>Install their required dependencies</p></li>
-<li><p>Set appropriate environment variables</p></li>
-<li><p>Set the CPU performance governor to ensure high performance on the host</p></li>
-<li>
-<p>This is done by executing the following:</p>
-<div class="highlight-sh notranslate">
-<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span>
-pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>tt_metal/python_env/requirements-dev.txt
-sudo<span class="w"> </span>apt-get<span class="w"> </span>install<span class="w"> </span>cpufrequtils
-sudo<span class="w"> </span>cpupower<span class="w"> </span>frequency-set<span class="w"> </span>-g<span class="w"> </span>performance
+<div class="highlight"><pre><span></span>conda<span class="w"> </span>create<span class="w"> </span>-n<span class="w"> </span>metalium<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.10<span class="w"> </span>tt-metalium<span class="w"> </span>-c<span class="w"> </span>conda-forge
 </pre></div>
 </div>
 </li>
