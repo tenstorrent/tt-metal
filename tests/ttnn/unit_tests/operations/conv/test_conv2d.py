@@ -187,6 +187,7 @@ def test_conv_dram(
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
         input_layout=input_layout,
+        output_layout=input_layout,
         run_twice=True,
         fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(

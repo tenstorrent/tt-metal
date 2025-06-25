@@ -370,12 +370,6 @@ void py_bind_conv2d(py::module& module) {
         py::kw_only(),
         py::arg("slice_type"),
         py::arg("num_slices"));
-    py_conv_slice_config.def(
-        py::init<Conv2dSliceConfig::SliceType, uint32_t, Layout>(),
-        py::kw_only(),
-        py::arg("slice_type"),
-        py::arg("num_slices"),
-        py::arg("output_layout") = std::nullopt);
     py_conv_slice_config.def_readwrite(
         "slice_type",
         &Conv2dSliceConfig::slice_type,
@@ -393,12 +387,7 @@ void py_bind_conv2d(py::module& module) {
         | The corresponding input tensor needed to calculate that output is determined and sliced.
         | If the size of the slice dimension is not divisible by num_slices, then the last slice will be smaller than the rest.
         )doc");
-    py_conv_slice_config.def_readwrite(
-        "output_layout",
-        &Conv2dSliceConfig::output_layout,
-        R"doc(
-        | The layout of the output tensor in DRAM.
-        )doc");
+
     py::enum_<Conv2dSliceConfig::SliceType>(py_conv_slice_config, "SliceTypeEnum")
         .value("SliceHeight", Conv2dSliceConfig::SliceType::HEIGHT)
         .value("SliceWidth", Conv2dSliceConfig::SliceType::WIDTH);

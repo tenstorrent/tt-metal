@@ -289,6 +289,8 @@ def run_conv(
             return_output_dim=True,
             return_weights_and_bias=True,
         )
+    assert tt_output_tensor_on_device.layout == output_layout
+
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
     # out is in row major layout and NHWC shape
