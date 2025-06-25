@@ -218,15 +218,20 @@ inline void llk_unpack_tilizeA_B(
     WAYPOINT("UPTD");
 }
 
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
+template <
+    bool neginf_srcA = false,
+    std::uint32_t reload_srcB = false,
+    bool zero_srcA = false,
+    bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA,
     std::uint32_t operandB,
     std::uint32_t block_c_tiles_a,
+    std::uint32_t tile_id_a,
     std::uint32_t tile_idx_b,
     std::uint32_t num_faces = 4,
     std::uint32_t unpA_face_r_dim = FACE_R_DIM /*unused*/) {
-    for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
+    for (std::uint32_t tile_idx_a = tile_id_a; tile_idx_a < tile_id_a + block_c_tiles_a; tile_idx_a++) {
         llk_unpack_tilizeA_B<zero_srcA>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces);
     }
 }

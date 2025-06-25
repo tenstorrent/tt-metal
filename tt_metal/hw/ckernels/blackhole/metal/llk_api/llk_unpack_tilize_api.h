@@ -215,10 +215,11 @@ inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA,
     std::uint32_t operandB,
     std::uint32_t block_c_tiles_a,
+    std::uint32_t tile_id_a,
     std::uint32_t tile_idx_b,
     std::uint32_t num_faces = 4,
     std::uint32_t unpA_face_r_dim = FACE_R_DIM) {
-    for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
+    for (std::uint32_t tile_idx_a = tile_id_a; tile_idx_a < tile_id_a + block_c_tiles_a; tile_idx_a++) {
         llk_unpack_tilizeA_B<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces, unpA_face_r_dim);
     }
 }
