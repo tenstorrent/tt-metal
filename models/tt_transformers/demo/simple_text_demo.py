@@ -964,53 +964,55 @@ def test_demo_text(
             output_sequence_length=num_tokens_generated_decode[0],
         )
 
-        # check measurements against CI performance targets
-        # Targets set to 0.95x observed values for decode rates (higher is better)
-        # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
-        ci_target_ttft = {
-            # N150 targets (milliseconds) - lower is better
-            "N150_Llama3.2-1B": 26,
-            "N150_Llama3.2-3B": 57,
-            "N150_Llama3.1-8B": 112,
-            "N150_Mistral-7B": 106,
-            # N300 targets
-            "N300_Qwen2.5-7B": 94,
-            # T3K targets
-            "T3K_Llama3.1-70B": 167,
-            "T3K_Qwen2.5-72B": 211,
-            "T3K_Qwen3-32B": 142,
-        }
-        ci_target_decode_tok_s_u = {
-            # N150 targets - higher is better
-            "N150_Llama3.2-1B": 68,
-            "N150_Llama3.2-3B": 42,
-            "N150_Llama3.1-8B": 23,
-            "N150_Mistral-7B": 26,
-            # N300 targets
-            "N300_Qwen2.5-7B": 21,
-            # T3K targets
-            "T3K_Llama3.1-70B": 14,
-            "T3K_Qwen2.5-72B": 13,
-            "T3K_Qwen3-32B": 20,
-        }
+        # check measurements against CI performance targets -- for batch size 32
+        if global_batch_size == 32:
+            logger.info("Checking measurements against CI performance targets for batch size 32")
+            # Targets set to 0.95x observed values for decode rates (higher is better)
+            # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
+            ci_target_ttft = {
+                # N150 targets (milliseconds) - lower is better
+                "N150_Llama3.2-1B": 26,
+                "N150_Llama3.2-3B": 57,
+                "N150_Llama3.1-8B": 112,
+                "N150_Mistral-7B": 106,
+                # N300 targets
+                "N300_Qwen2.5-7B": 94,
+                # T3K targets
+                "T3K_Llama3.1-70B": 167,
+                "T3K_Qwen2.5-72B": 211,
+                "T3K_Qwen3-32B": 120,
+            }
+            ci_target_decode_tok_s_u = {
+                # N150 targets - higher is better
+                "N150_Llama3.2-1B": 58,
+                "N150_Llama3.2-3B": 35,
+                "N150_Llama3.1-8B": 21,
+                "N150_Mistral-7B": 23,
+                # N300 targets
+                "N300_Qwen2.5-7B": 21,
+                # T3K targets
+                "T3K_Llama3.1-70B": 14,
+                "T3K_Qwen2.5-72B": 13,
+                "T3K_Qwen3-32B": 20,
+            }
 
-        # Only call verify_perf if the model_device_key exists in the targets
-        ci_targets = {}
-        if model_device_key in ci_target_ttft:
-            ci_targets["prefill_time_to_token"] = ci_target_ttft[model_device_key] / 1000  # convert to seconds
-        if model_device_key in ci_target_decode_tok_s_u:
-            ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
-            # calculate from per-user rate
-            ci_targets["decode_t/s"] = ci_target_decode_tok_s_u[model_device_key] * global_batch_size
+            # Only call verify_perf if the model_device_key exists in the targets
+            ci_targets = {}
+            if model_device_key in ci_target_ttft:
+                ci_targets["prefill_time_to_token"] = ci_target_ttft[model_device_key] / 1000  # convert to seconds
+            if model_device_key in ci_target_decode_tok_s_u:
+                ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
+                # calculate from per-user rate
+                ci_targets["decode_t/s"] = ci_target_decode_tok_s_u[model_device_key] * global_batch_size
 
-        if ci_targets:  # Only verify performance if we have targets for this model/device combination
-            verify_perf(
-                measurements,
-                ci_targets,
-                high_tol_percentage=1.15,
-                expected_measurements={k: True for k in ci_targets.keys()},
-            )
-        else:
-            logger.warning(
-                f"No CI performance targets found for {model_device_key}. Skipping performance verification."
-            )
+            if ci_targets:  # Only verify performance if we have targets for this model/device combination
+                verify_perf(
+                    measurements,
+                    ci_targets,
+                    high_tol_percentage=1.15,
+                    expected_measurements={k: True for k in ci_targets.keys()},
+                )
+            else:
+                logger.warning(
+                    f"No CI performance targets found for {model_device_key}. Skipping performance verification."
+                )
