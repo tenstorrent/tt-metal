@@ -199,15 +199,9 @@ Result conv2d_DRAM(
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
-    Layout output_layout = dram_slice_config.output_layout.value_or(input_tensor_on_device.layout());
-    if (output_dtype == tt::tt_metal::DataType::BFLOAT8_B) {
-        if (dram_slice_config.output_layout.has_value()) {
-            TT_FATAL(
-                dram_slice_config.output_layout.value() == tt::tt_metal::Layout::ROW_MAJOR,
-                "BFLOAT8_B must always be Tiled, but Conv2D DRAM got ROW_MAJOR as the output layout.");
-        }
-        output_layout = tt::tt_metal::Layout::TILE;
-    }
+    TT_FATAL(
+        !(conv_config.output_layout == Layout::ROW_MAJOR && output_dtype == DataType::BFLOAT8_B),
+        "Conv output can't be in Row Major if output dtype is BFloat8_B.");
 
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -218,7 +212,7 @@ Result conv2d_DRAM(
             ttnn::Shape({batch_size, output_height, output_width, out_channels}),
             tt_metal::TensorLayout(
                 output_dtype,
-                tt_metal::PageConfig(output_layout),
+                tt_metal::PageConfig(conv_config.output_layout),
                 MemoryConfig{
                     TensorMemoryLayout::INTERLEAVED,
                     BufferType::DRAM,
@@ -226,7 +220,7 @@ Result conv2d_DRAM(
         device);
 
     uint32_t slice_rounding_value = 1;
-    if (output_layout == tt_metal::Layout::TILE) {
+    if (conv_config.output_layout == tt_metal::Layout::TILE) {
         // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
@@ -373,7 +367,7 @@ Result conv2d_DRAM(
         Tensor sliced_input_tensor;
         if (conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
             TT_FATAL(
-                output_layout != Layout::TILE,
+                conv_config.output_layout != Layout::TILE,
                 "Conv2D DRAM Slicing with Width Sharded layout is not supported with TILE layout. "
                 "Please use ROW_MAJOR layout.");
             sliced_input_tensor = ttnn::slice(
@@ -437,7 +431,7 @@ Result conv2d_DRAM(
             sliced_output_tensor = ttnn::to_memory_config(
                 sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         }
-        if (sliced_output_tensor.layout() != Layout::ROW_MAJOR && output_layout == Layout::ROW_MAJOR) {
+        if (sliced_output_tensor.layout() != Layout::ROW_MAJOR && conv_config.output_layout == Layout::ROW_MAJOR) {
             sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
         }
         if (sliced_output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
