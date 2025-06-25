@@ -1,0 +1,21 @@
+#include "isocket.hpp"
+
+namespace ttnn::distributed {
+
+class BidirectionalFabricSocket : public ISocket {
+public:
+    BidirectionalFabricSocket(
+        const tt::tt_metal::distributed::MeshSocket& send_socket,
+        const tt::tt_metal::distributed::MeshSocket& recv_socket);
+
+    ~BidirectionalFabricSocket() override = default;
+
+    void send(const ttnn::Tensor& tensor) override;
+    void recv(ttnn::Tensor& tensor) override;
+
+private:
+    tt::tt_metal::distributed::MeshSocket send_socket_;
+    tt::tt_metal::distributed::MeshSocket recv_socket_;
+};
+
+}  // namespace ttnn::distributed
