@@ -41,7 +41,8 @@ void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
 }
 
 void MetalContext::reinitialize() {
-    initialize(dispatch_core_config_, num_hw_cqs_, l1_bank_remap_, worker_l1_size_, false, true);
+    force_reinit_ = true;
+    initialize(dispatch_core_config_, num_hw_cqs_, l1_bank_remap_, worker_l1_size_, false);
 }
 
 void MetalContext::initialize(
@@ -49,8 +50,11 @@ void MetalContext::initialize(
     uint8_t num_hw_cqs,
     const BankMapping& l1_bank_remap,
     size_t worker_l1_size,
-    bool minimal,
-    bool force_reinit) {
+    bool minimal) {
+    // Workaround for galaxy and BH, need to always re-init
+    if (cluster_->is_galaxy_cluster() or cluster_->arch() == ARCH::BLACKHOLE) {
+        force_reinit_ = true;
+    }
     // Settings that affect FW build can also trigger a re-initialization
     auto fw_compile_hash = std::hash<std::string>{}(rtoptions_.get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, *hal_);
@@ -62,7 +66,8 @@ void MetalContext::initialize(
             teardown();
         } else {
             // Re-init request with the same parameters, do nothing unless force re-init requested.
-            if (force_reinit) {
+            if (force_reinit_) {
+                force_reinit_ = false;
                 log_warning(
                     tt::LogAlways,
                     "Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
@@ -192,7 +197,6 @@ void MetalContext::teardown() {
     }
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
-    distributed_context_.reset();
 }
 
 MetalContext& MetalContext::instance() {
@@ -367,6 +371,8 @@ void MetalContext::set_fabric_config(
     const tt_metal::FabricConfig fabric_config,
     tt_metal::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes) {
+    // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch config, not through this function exposed in the detail API.
+    force_reinit_ = true;
     if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED || fabric_config == tt_metal::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
         this->fabric_reliability_mode_ = reliability_mode;

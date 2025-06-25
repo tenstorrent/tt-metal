@@ -192,6 +192,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
                 tt::tt_fabric::forward_and_local_write_noc_vc);
         } break;
 
+#ifdef ARCH_WORMHOLE
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
             size_t offset = 0;
             size_t chunk_size;
@@ -212,6 +213,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
                 offset += chunk_size;
             }
         } break;
+#endif
 
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE:
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
