@@ -121,8 +121,8 @@
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
 | [SegFormer Semantic Segmentation (512x512)](./models/demos/segformer)       | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 90      | 300        |             |
 | [YOLOv9c (640x640)](./models/demos/yolov9c)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 55      | 270        |             |
-
-
+| [UNet - VGG19 (256x256)](./models/demos/vgg_unet)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 75      | 150        |             |
+| [ufld_v2 - v2 (480x640)](./models/demos/ufld_v2)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 107      | 250        |             |
 ## NLPs
 
 | Model                                               | Batch | Hardware                                           | sen/sec | Target sen/sec | Release |
