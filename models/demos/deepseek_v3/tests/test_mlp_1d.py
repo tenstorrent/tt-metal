@@ -14,7 +14,7 @@ from transformers import AutoConfig
 import ttnn
 
 # Import from local reference files instead of HuggingFace
-from models.demos.deepseek_v3.reference.mlp import DeepseekV3MLP
+from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP
 from models.demos.deepseek_v3.tt.mlp_1d import MLP_1D
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc

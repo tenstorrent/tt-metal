@@ -28,7 +28,7 @@ class Embedding_1D(AbstractModule):
         weight_config = {}
 
         # Get the embedding weight from the state dict (in the full model: model.embed_tokens.weight)
-        torch_weight = state_dict["embed_tokens.weight"]
+        torch_weight = state_dict["weight"]
 
         # Convert to TTNN tensor with 1D sharding across final dimension
         ttnn_weight = ttnn.as_tensor(

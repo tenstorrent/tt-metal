@@ -9,12 +9,12 @@ from pathlib import Path
 import pytest
 import torch
 from loguru import logger
+
+# Import from local reference files instead of HuggingFace
+from torch.nn import Embedding
 from transformers import AutoConfig
 
 import ttnn
-
-# Import from local reference files instead of HuggingFace
-from models.demos.deepseek_v3.reference.embeddings_and_head import DeepseekV3Embeddings
 from models.demos.deepseek_v3.tt.embedding_1d import Embedding_1D
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
@@ -29,18 +29,18 @@ def temp_dir():
 
 @pytest.fixture
 def hf_config():
-    """Load DeepSeek config for testing"""
+    """Load DeepSeek config for testing."""
     config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
     return config
 
 
 @pytest.fixture
 def reference_model(hf_config):
-    """Get the actual DeepSeek Embedding model using local implementation."""
-    return DeepseekV3Embeddings(
-        vocab_size=hf_config.vocab_size,
-        hidden_size=hf_config.hidden_size,
-        padding_idx=getattr(hf_config, "pad_token_id", None),
+    """DeepSeek just uses the standard Embedding module."""
+    return Embedding(
+        hf_config.vocab_size,
+        hf_config.hidden_size,
+        hf_config.pad_token_id,
     )
 
 
