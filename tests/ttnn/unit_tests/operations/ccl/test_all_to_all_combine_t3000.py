@@ -53,11 +53,9 @@ def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping, app
                 local_expert_idx = experts_on_device.index(expert_idx)
 
                 # multiply by expert index to mock application of expert
-                input_contribs_tensor[d, local_expert_idx, b, :] = sparse_tokens[d, b, 0, :] 
+                input_contribs_tensor[d, local_expert_idx, b, :] = sparse_tokens[d, b, 0, :]
                 if apply_fake_expert:
-                    input_contribs_tensor[d, local_expert_idx, b, :]*= (
-                        -1 if expert_idx == 0 else expert_idx
-                    )
+                    input_contribs_tensor[d, local_expert_idx, b, :] *= -1 if expert_idx == 0 else expert_idx
                 token_expert_count += 1
 
     assert token_expert_count == batch * selected_experts_k
@@ -373,7 +371,9 @@ def gen_tensors_integration(
     expert_indices = get_expert_indices(batch, experts, selected_experts_k, seq, mesh_shape, scheme)
 
     sparse_dispatched_tokens = get_sparse_tokens(input_tokens, expert_indices, expert_mapping, seq, mesh_shape)
-    input_sparse_contribs_tensor = get_input_sparse_contribs(sparse_dispatched_tokens, expert_indices, expert_mapping)
+    input_sparse_contribs_tensor = get_input_sparse_contribs(
+        sparse_dispatched_tokens, expert_indices, expert_mapping, apply_fake_expert=False
+    )
 
     output_tensor, data_map = get_output_combined_contribs(
         input_sparse_contribs_tensor, expert_indices, expert_mapping, mesh_shape, replication_axis
@@ -392,6 +392,7 @@ def gen_tensors_integration(
         output_tensor,
         data_map,
     )
+
 
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
@@ -421,6 +422,7 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
     assert metadata_tensor.shape == (devices, batch, 1, select_experts_k)
 
 
+
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
@@ -435,7 +437,7 @@ def test_integration(mesh_device, mesh_shape):
     batch = 1 * devices
     seq_len = 1
     experts = 2 * devices
-    select_experts_k = 2
+    select_experts_k = 8
     hidden_size = 16
     num_iters = 1
     input_memory_config = ttnn.L1_MEMORY_CONFIG
@@ -466,7 +468,7 @@ def test_integration(mesh_device, mesh_shape):
         output_tensor,
         data_map,
     ) = gen_tensors_integration(
-        batch, experts, select_experts_k, hidden_size, mesh_shape, axis, devices, scheme="sequential"
+        batch, experts, select_experts_k, hidden_size, mesh_shape, axis, devices, scheme="random"
     )
 
     preallocated_output_tensor = torch.zeros((devices, batch, seq_len, hidden_size), dtype=torch.bfloat16)

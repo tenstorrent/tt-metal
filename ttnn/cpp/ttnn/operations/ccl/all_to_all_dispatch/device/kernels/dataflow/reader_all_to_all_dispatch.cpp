@@ -85,6 +85,4 @@ void kernel_main() {
     // wait for all other devices to finish dispatching their input tokens and metadata
     noc_semaphore_wait((uint32_t*)global_semaphore_address, tokens_per_device * dispatch_devices);
     noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
-
-    tt::data_movement::common::wait((uint32_t)21474836400);
 }
