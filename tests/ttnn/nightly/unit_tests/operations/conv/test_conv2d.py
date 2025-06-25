@@ -3531,9 +3531,16 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
     height = 512
     width = 512
     torch.manual_seed(20250416)
+
+    # In case of output dtype is bfloat8_b, we need to pad the input channels to be divisible by 8.
+    required_padding = (8 - num_channels % 8) % 8
+    padded_num_channels = num_channels + required_padding
+
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
+    torch_input_tensor = torch.nn.functional.pad(torch_input_tensor, (0, 0, 0, 0, 0, required_padding), mode="constant", value=0)
 
     torch_weights = torch.randn((hidden_size, num_channels, patch_size, patch_size), dtype=torch.bfloat16).float()
+    torch_weights = torch.nn.functional.pad(torch_weights, (0, 0, 0, 0, 0, required_padding), mode="constant", value=0)
     torch_bias = torch.randn((1, 1, 1, hidden_size), dtype=torch.bfloat16).float()
 
     torch_output_tensor = (
@@ -3581,7 +3588,7 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
         input_tensor=ttnn_input_tensor,
         weight_tensor=ttnn_weights,
         bias_tensor=ttnn_bias,
-        in_channels=num_channels,
+        in_channels=padded_num_channels,
         out_channels=hidden_size,
         batch_size=batch_size,
         input_height=height,
