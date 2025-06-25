@@ -203,7 +203,7 @@ Tensor from_flatbuffer(
                     coord, [host_buffer = std::move(host_buffer)]() mutable { return std::move(host_buffer); });
             }
 
-            // TODO: #22258 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used
+            // TODO: #24115 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used
             // directly in Tensor storage.
             const auto strategy = [&]() -> tt::tt_metal::DistributedTensorConfig {
                 std::unordered_set<const std::byte*> buffer_addresses;
