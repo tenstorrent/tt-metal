@@ -55,7 +55,8 @@ std::vector<uint32_t> read_control_buffer_from_core(
     std::vector<uint32_t> control_buffer;
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active()) {
+    if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active() &&
+        !isGalaxyMMIODevice(device)) {
         if (auto mesh_device = device->get_mesh_device()) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
@@ -94,7 +95,8 @@ void write_control_buffer_to_core(
     const std::vector<uint32_t>& control_buffer) {
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active()) {
+    if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active() &&
+        !isGalaxyMMIODevice(device)) {
         if (auto mesh_device = device->get_mesh_device()) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
@@ -118,12 +120,13 @@ void write_control_buffer_to_core(
     }
 }
 
-bool useSlowDispatchForReading(ProfilerDumpState state) {
-    return state == ProfilerDumpState::FORCE_UMD_READ || onlyProfileDispatchCores(state);
+bool useSlowDispatchForReading(const IDevice* device, ProfilerDumpState state) {
+    return state == ProfilerDumpState::FORCE_UMD_READ || onlyProfileDispatchCores(state) || isGalaxyMMIODevice(device);
 }
 
 void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
     ZoneScoped;
+    // log_info(tt::LogMetal, "Issuing fast dispatch read from profiler buffer for device {}", device->id());
     TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
     const DeviceAddr profiler_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
     uint32_t profile_buffer_idx = 0;
@@ -156,14 +159,17 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
 
 void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
     ZoneScoped;
+    // log_info(tt::LogMetal, "Issuing slow dispatch read from profiler buffer for device {}", device->id());
     const DeviceAddr profiler_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
     uint32_t profile_buffer_idx = 0;
     const int num_dram_channels = device->num_dram_channels();
     for (int dram_channel = 0; dram_channel < num_dram_channels; ++dram_channel) {
+        // log_info(tt::LogMetal, "Reading profiler buffer for device {} dram channel {}", device->id(), dram_channel);
         std::vector<uint32_t> profile_buffer_bank_data(profile_buffer_bank_size_bytes / sizeof(uint32_t), 0);
         tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
             profile_buffer_bank_data.data(), profile_buffer_bank_size_bytes, device->id(), dram_channel, profiler_addr);
 
+        // log_info(tt::LogMetal, "Copying profiler buffer for device {} dram channel {}", device->id(), dram_channel);
         std::copy(
             profile_buffer_bank_data.begin(),
             profile_buffer_bank_data.end(),
@@ -175,6 +181,8 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
 std::vector<uint32_t> DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
     IDevice* device, const CoreCoord& worker_core) {
     ZoneScoped;
+    // log_info(tt::LogMetal, "Issuing fast dispatch read from L1 data buffer for device {} core {}", device->id(),
+    // worker_core);
 
     TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
 
@@ -209,6 +217,8 @@ std::vector<uint32_t> DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
 std::vector<uint32_t> DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
     IDevice* device, const CoreCoord& worker_core) {
     ZoneScoped;
+    // log_info(tt::LogMetal, "Issuing slow dispatch read from L1 data buffer for device {} core {}", device->id(),
+    // worker_core);
 
     const chip_id_t device_id = device->id();
     const Hal& hal = MetalContext::instance().hal();
@@ -223,6 +233,7 @@ std::vector<uint32_t> DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
 
 void DeviceProfiler::readControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state) {
     ZoneScoped;
+    // log_info(tt::LogMetal, "Reading control buffers for device {} core {}", device->id(), worker_core);
     chip_id_t device_id = device->id();
 
     HalProgrammableCoreType CoreType = tt::llrt::get_core_type(device_id, worker_core);
@@ -233,6 +244,8 @@ void DeviceProfiler::readControlBuffers(IDevice* device, const CoreCoord& worker
 
 void DeviceProfiler::resetControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state) {
     ZoneScoped;
+
+    // log_info(tt::LogMetal, "Resetting control buffers for device {} core {}", device->id(), worker_core);
 
     chip_id_t device_id = device->id();
     HalProgrammableCoreType CoreType = tt::llrt::get_core_type(device_id, worker_core);
@@ -258,6 +271,8 @@ void DeviceProfiler::readRiscProfilerResults(
     std::ofstream& log_file_ofs,
     nlohmann::ordered_json& noc_trace_json_log) {
     ZoneScoped;
+
+    // log_info(tt::LogMetal, "Reading risc profiler results for device {} core {}", device->id(), worker_core);
 
     const std::vector<uint32_t>& control_buffer = core_control_buffers.at(worker_core);
 
@@ -1167,6 +1182,8 @@ void DeviceProfiler::dumpResults(
     const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
+    // log_info(tt::LogMetal, "DumpResults for device {} with {} cores state {} data_source {}", device->id(),
+    // worker_cores.size(), magic_enum::enum_name(state), magic_enum::enum_name(data_source));
 
     const chip_id_t device_id = device->id();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
@@ -1185,7 +1202,7 @@ void DeviceProfiler::dumpResults(
         }
 
         if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-            if (useSlowDispatchForReading(state)) {
+            if (useSlowDispatchForReading(device, state)) {
                 issueSlowDispatchReadFromProfilerBuffer(device);
             } else {
                 issueFastDispatchReadFromProfilerBuffer(device);
@@ -1232,7 +1249,7 @@ void DeviceProfiler::dumpResults(
 
                 std::vector<uint32_t> core_l1_data_buffer;
                 if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-                    if (useSlowDispatchForReading(state)) {
+                    if (useSlowDispatchForReading(device, state)) {
                         core_l1_data_buffer = issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
                     } else {
                         core_l1_data_buffer = issueFastDispatchReadFromL1DataBuffer(device, worker_core);
@@ -1567,6 +1584,10 @@ bool getDeviceProfilerState() { return tt::tt_metal::MetalContext::instance().rt
 bool onlyProfileDispatchCores(ProfilerDumpState state) {
     return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
            state == ProfilerDumpState::ONLY_DISPATCH_CORES;
+}
+
+bool isGalaxyMMIODevice(const IDevice* device) {
+    return tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device->is_mmio_capable();
 }
 
 }  // namespace tt_metal

@@ -70,9 +70,11 @@ void DumpMeshDeviceProfileResults(
     const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
+    // log_info(tt::LogMetal, "Dumping mesh device profile results for mesh device {}", mesh_device.id());
     for (IDevice* device : mesh_device.get_devices()) {
         detail::DumpDeviceProfileResults(device, state, metadata);
     }
+    // log_info(tt::LogMetal, "Finished dumping mesh device profile results for mesh device {}", mesh_device.id());
 #endif
 }
 
@@ -681,18 +683,25 @@ void DumpDeviceProfileResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
+    // log_info(tt::LogMetal, "DumpDeviceProfileResults for device {}", device->id());
+
     std::vector<CoreCoord> workerCores;
     const chip_id_t device_id = device->id();
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
     const auto& dispatch_core_config = get_dispatch_core_config();
     for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
         const CoreCoord curr_core = device->worker_core_from_logical_core(core);
+        // log_info(tt::LogMetal, "Logical Compute core: {} -> Virtual Compute core: {}", core, curr_core);
         workerCores.push_back(curr_core);
     }
     for (const CoreCoord& core : device->get_active_ethernet_cores(true)) {
         auto virtualCore = device->virtual_core_from_logical_core(core, CoreType::ETH);
+        // log_info(tt::LogMetal, "Logical Ethernet core: {} -> Virtual Ethernet core: {}", core, virtualCore);
         workerCores.push_back(virtualCore);
     }
+
+    // log_info(tt::LogMetal, "Device {} Compute with storage grid size: {}", device->id(),
+    // device->compute_with_storage_grid_size());
 
     DumpDeviceProfileResults(device, workerCores, state, metadata);
 #endif
@@ -706,18 +715,30 @@ void DumpDeviceProfileResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
+    // log_info(
+    //     tt::LogMetal,
+    //     "DumpDeviceProfileResults for device {} with {} cores state {}",
+    //     device->id(),
+    //     worker_cores.size(),
+    //     magic_enum::enum_name(state));
+
     std::scoped_lock<std::mutex> lock(device_mutex);
 
     if (getDeviceProfilerState()) {
         if (state != ProfilerDumpState::ONLY_DISPATCH_CORES) {
-            if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
+            // log_info(tt::LogMetal, "Finishing device {}", device->id());
+            if (tt::DevicePool::instance().is_dispatch_firmware_active() && !isGalaxyMMIODevice(device)) {
                 if (auto mesh_device = device->get_mesh_device()) {
+                    // log_info(tt::LogMetal, "Finishing mesh device {}", mesh_device->id());
                     mesh_device->mesh_command_queue().finish();
                 } else {
+                    // log_info(tt::LogMetal, "Finishing device {}", device->id());
                     Finish(device->command_queue());
                 }
             }
+            // log_info(tt::LogMetal, "Finished device {}", device->id());
         } else if (onlyProfileDispatchCores(state)) {
+            // log_info(tt::LogMetal, "Only profile dispatch cores");
             const chip_id_t device_id = device->id();
             const uint8_t device_num_hw_cqs = device->num_hw_cqs();
 
@@ -727,7 +748,9 @@ void DumpDeviceProfileResults(
                 tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config);
             worker_cores.clear();
             for (const CoreCoord& core : dispatch_cores) {
+                log_info(tt::LogMetal, "Logical Dispatch core: {}", core);
                 const auto curr_core = device->virtual_core_from_logical_core(core, dispatch_core_type);
+                log_info(tt::LogMetal, "Virtual Dispatch core: {}", curr_core);
                 worker_cores.push_back(curr_core);
             }
 
