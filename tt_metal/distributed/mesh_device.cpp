@@ -48,6 +48,7 @@
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.h>
+#include <tt-metalium/fabric_node_id.hpp>
 
 enum class CoreType;
 namespace tt {
