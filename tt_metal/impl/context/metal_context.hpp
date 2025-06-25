@@ -63,8 +63,7 @@ public:
         uint8_t num_hw_cqs,
         const BankMapping& l1_bank_remap,
         size_t worker_l1_size,
-        bool minimal = false,
-        bool force_reinit = false);
+        bool minimal = false);
     void reinitialize();
     void teardown();
 
@@ -113,6 +112,7 @@ private:
 
     bool initialized_ = false;
     bool teardown_registered_ = false;
+    bool force_reinit_ = false;
 
     uint8_t num_hw_cqs_ = 0;
     BankMapping l1_bank_remap_;
