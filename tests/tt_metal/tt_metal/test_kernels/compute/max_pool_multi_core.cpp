@@ -49,7 +49,7 @@ inline void tilize(
     uint32_t in_ntiles_hwc,
     uint32_t window_hw_padded,
     uint32_t out_cb_id) {
-    tilize_init_short(in_cb_id, in_ntiles_hwc, out_cb_id);
+    tilize_init(in_cb_id, in_ntiles_hwc, out_cb_id);
     for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++out_elem_i) {
         cb_wait_front(in_cb_id, 1);
         cb_reserve_back(out_cb_id, in_ntiles_hwc);
@@ -118,6 +118,7 @@ void MAIN {
     const uint32_t nsticks_per_core = get_compile_time_arg_val(12);
     const uint32_t nsticks_per_core_by_nblocks = get_compile_time_arg_val(13);
 
+    compute_kernel_hw_startup(in_cb_id, in_tiled_cb_id);
     tilize_init(in_cb_id, in_ntiles_hwc, in_tiled_cb_id);
 
 #if DEBUG_PRINT == 1

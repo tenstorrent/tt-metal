@@ -137,6 +137,7 @@ void MAIN {
     }
 
     if constexpr (tilize_q) {
+        compute_kernel_hw_startup(cb_q_rm, cb_q_in);
         tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
         cb_wait_front(cb_q_rm, q_chunk_tiles);
         cb_reserve_back(cb_q_in, q_chunk_tiles);
