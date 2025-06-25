@@ -496,15 +496,13 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         {input_buffer->address(), index_buffer->address(), physical_core_lookup_table_tensor_buffer->address()});
 
     const std::vector<uint32_t> writer_compile_time_args = {
-        compute_with_storage_grid_size.x, compute_with_storage_grid_size.y,
-        // value_tensor_cb_index,
-        // index_tensor_cb_index,
-        // static_cast<uint32_t>(value_tensor_is_dram),
-        // Wt,
-        // Ht,
-        // total_number_of_cores,
-        // compute_with_storage_grid_size.x,
-        // compute_with_storage_grid_size.y
+        compute_with_storage_grid_size.x,
+        compute_with_storage_grid_size.y,
+        index_tensor_cb_index,
+        Wt,
+        Ht,
+        number_of_tiles_per_core,
+        total_number_of_cores,
     };
     const std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
@@ -525,7 +523,12 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         number_of_tiles_per_core,
         all_core_utilization_count,
         !attributes.descending,
-    };
+        input_tensor_cb_index,
+        index_tensor_cb_index,
+        input_tensor_transposed_cb_index,
+        index_tensor_transposed_cb_index,
+        value_tensor_cb_index,
+        index_tensor_output_cb_index};
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_hybrid.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
@@ -554,8 +557,8 @@ void SortProgramFactoryHybrid::override_runtime_arguments(
 
     for (const auto& core_range : cached_program.shared_variables.core_range_set.ranges()) {
         for (const auto& core_coord : core_range) {
-            auto& reader_runtime_args =
-                GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core_coord);
+            // auto& reader_runtime_args =
+            //     GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core_coord);
             // reader_runtime_args[0] = input_tensor_buffer->address();
             // reader_runtime_args[1] = index_tensor_buffer->address();
             // reader_runtime_args[2] =

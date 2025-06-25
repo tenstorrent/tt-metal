@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
+#include "debug/dprint.h"
 namespace NAMESPACE {
 
 void sort_Wt_tiles_row_to_bitonic_sequence(

@@ -9,7 +9,9 @@
 #include "compute_kernel_api/pack.h"
 #include "compute_kernel_api/eltwise_binary.h"
 
-// #include "sort_common.hpp"
+#include "debug/dprint.h"
+
+#include "sort_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -21,14 +23,40 @@ void MAIN {
     constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(4);
     constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(5);
     constexpr bool ascending = get_compile_time_arg_val(6) == 1;
+    constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(8);
+    constexpr uint32_t input_tensor_transposed_cb_index = get_compile_time_arg_val(9);
+    constexpr uint32_t index_tensor_transposed_cb_index = get_compile_time_arg_val(10);
 
     // Constants
     constexpr uint32_t one_tile = 1;
     const uint16_t core_id = get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
+    constexpr uint32_t input_dest_start = 0;
+    constexpr uint32_t index_dest_start = 2;
+    constexpr uint32_t input_dest_end = 1;
+    constexpr uint32_t index_dest_end = 3;
+
+    ckernel::topk_tile_init();
+    transpose_wh_init(input_tensor_cb_index, input_tensor_transposed_cb_index);
 
     for (uint32_t h = 0; h < Ht; h++) {
+        // Create input sequence
+        sort_Wt_tiles_row_to_bitonic_sequence(
+            input_tensor_cb_index,
+            index_tensor_cb_index,
+            input_tensor_transposed_cb_index,
+            index_tensor_transposed_cb_index,
+            number_of_tiles_per_core,
+            /*switch_dir=*/true,
+            ascending,
+            /*end_phase(log2(K))=*/5);
+
+        // Wait for bitonic sequence of Wt tiles
+        cb_wait_front(input_tensor_transposed_cb_index, number_of_tiles_per_core);
+        cb_wait_front(index_tensor_transposed_cb_index, number_of_tiles_per_core);
+
         // Tiles for each core placeholder
-        std::array<std::array<uint16_t, number_of_tiles_per_core>, number_of_cores_used> core_holds{};
+        uint16_t core_holds[number_of_cores_used][number_of_tiles_per_core] = {};
         for (uint16_t core = 0; core < number_of_cores_used; ++core) {
             for (uint16_t i = 0; i < number_of_tiles_per_core; ++i) {
                 core_holds[core][i] = core * number_of_tiles_per_core + i;
@@ -41,7 +69,7 @@ void MAIN {
             stages++;
         }
         // Sort tiles for each core
-        for (uint16_t stage = 1; stage <= stages; ++stage) {
+        for (uint16_t stage = 2; stage <= stages; ++stage) {
             // DPRINT << "Stage " << stage << ":" << ENDL();
             for (uint16_t sub = stage; sub > 0; --sub) {
                 const uint16_t sub_dist = 1 << (sub - 1);
@@ -97,6 +125,7 @@ void MAIN {
 
                         if (has_a && has_b) {
                             // DPRINT << "   L1-local compare of tiles " << tile_a << " and " << tile_b << ENDL();
+                            // TODO: SORTING LOCAL Tiles
                         } else {
                             const uint16_t local_tile = has_a ? tile_a : tile_b;
                             const uint16_t remote_tile = has_a ? tile_b : tile_a;
@@ -105,12 +134,10 @@ void MAIN {
                         }
                     }  // if core_id == core_a || core_id == core_b
                 }  // elem loop
-
-                // DPRINT << ENDL();
-
             }  // sub loop
         }  // stage loop
-    }  // h loop
 
+    }  // h loop
+    DPRINT << "COMPUTE: Finished reading and sorting tiles." << ENDL();
 }  // MAIN
 }  // namespace NAMESPACE
