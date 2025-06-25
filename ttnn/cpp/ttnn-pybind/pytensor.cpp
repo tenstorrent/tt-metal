@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -344,12 +345,11 @@ Tensor convert_python_tensor_to_tt_tensor(
         }
     }();
 
-    // Important: `inc_ref` and `dec_ref` must be called while holding GIL. We wrap them in `MemoryPin` in a way that
-    // triggers a single increment on constructuion below, and a single decrement on destruction, which should also be
-    // triggered from within the main thread.
-    tt::tt_metal::MemoryPin pydata_pin(std::make_shared<tt::tt_metal::MemoryPin>(
-        /*increment_ref_count=*/[t = preprocessed_py_tensor.contiguous_py_tensor] { t.inc_ref(); },
-        /*decrement_ref_count=*/[t = preprocessed_py_tensor.contiguous_py_tensor] { t.dec_ref(); }));
+    // Important: `py::object` copying and destruction must be done while holding GIL, which pybind ensures for a thread
+    // that calls the C++ APIs. We wrap `py::object` in `MemoryPin` so that multi-threaded C++ code only increments /
+    // decrements the reference count on the memory pin; the last decrement to the pin should be triggered from the
+    // pybind caller thread, which will correctly decrement the `py::object` reference count while hodling GIL.
+    tt::tt_metal::MemoryPin pydata_pin(std::make_shared<py::object>(preprocessed_py_tensor.contiguous_py_tensor));
 
     auto output = create_tt_tensor_from_py_data(
         preprocessed_py_tensor.py_data_ptr,
