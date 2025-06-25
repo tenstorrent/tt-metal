@@ -281,11 +281,12 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
             logger.warning(
                 f"Job {github_job_id} is skipped. Setting start timestamp equal to submission timestamp for data"
             )
+            job_start_ts = job_submission_ts
         else:
             logger.warning(
                 f"Job {github_job_id} seems to have a start time that's earlier than submission. Setting start timestamp equal to submission timestamp for data"
             )
-        job_submission_ts = job_start_ts
+            job_submission_ts = job_start_ts
 
     job_end_ts = github_job["completed_at"]
 
