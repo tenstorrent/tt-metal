@@ -134,60 +134,7 @@ def test_ar_tg_llama_perf(
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_6u_matmul_rs(
-    ar_type,
-    warmup_iters,
-    perf_target_us,
-):
-    if not is_RING_6U:
-        pytest.skip("This test is only applicable for 6U ring devices")
-    profiler = BenchmarkProfiler()
-    benchmark_data = BenchmarkData()
-    step_name = f"matmul_rs_test"
-
-    subdir = "llama_ccl_perf"
-    command = f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_rs_matmul_1d_gather_in0.py::test_6U_matmul_1d_ring_llama_with_rs_perf"
-    cols = ["DEVICE KERNEL"]
-    op_name = "Matmul_RS"
-    warmup_iters = warmup_iters * 32  # 5 iterations per device
-
-    profiler.start("run")
-    profiler.start(step_name)
-    results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True, warmup_iters=0)
-    profiler.end(step_name)
-    profiler.end("run")
-
-    # Get the measured performance
-    measured_min = results[cols[0]]["MIN"]
-    measured_max = results[cols[0]]["MAX"]
-    measured_avg = results[cols[0]]["AVG"]
-    measured_std = results[cols[0]]["STD"]
-    measured_avg_us = measured_avg / 1000
-
-    logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
-
-    # Save the measurement
-    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-min", measured_min)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-max", measured_max)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-avg", measured_avg)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-std", measured_std)
-    benchmark_data.save_partial_run_json(
-        profiler,
-        run_type=f"tg_llama_ops",
-        ml_model_name="llama70b-tg",
-    )
-
-    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
-
-
-@pytest.mark.parametrize(
-    "ar_type, warmup_iters, perf_target_us",
-    [
-        ("Matmul_RS", 10, 25),
-    ],
-)
-@pytest.mark.models_device_performance_bare_metal
-def test_tg_matmul_rs(
+def test_matmul_rs(
     ar_type,
     warmup_iters,
     perf_target_us,
@@ -197,62 +144,12 @@ def test_tg_matmul_rs(
     step_name = f"matmul_rs_test"
 
     subdir = "llama_ccl_perf"
-    command = f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_rs_matmul_1d_gather_in0.py::test_tg_matmul_1d_ring_llama_with_rs_perf"
+    if is_RING_6U:
+        command = f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_rs_matmul_1d_gather_in0.py::test_6U_matmul_1d_ring_llama_with_rs_perf"
+    else:
+        command = f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_rs_matmul_1d_gather_in0.py::test_tg_matmul_1d_ring_llama_with_rs_perf"
     cols = ["DEVICE KERNEL"]
     op_name = "Matmul_RS"
-    warmup_iters = warmup_iters * 32  # 5 iterations per device
-
-    profiler.start("run")
-    profiler.start(step_name)
-    results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True, warmup_iters=0)
-    profiler.end(step_name)
-    profiler.end("run")
-
-    # Get the measured performance
-    measured_min = results[cols[0]]["MIN"]
-    measured_max = results[cols[0]]["MAX"]
-    measured_avg = results[cols[0]]["AVG"]
-    measured_std = results[cols[0]]["STD"]
-    measured_avg_us = measured_avg / 1000
-
-    logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
-
-    # Save the measurement
-    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-min", measured_min)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-max", measured_max)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-avg", measured_avg)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-std", measured_std)
-    benchmark_data.save_partial_run_json(
-        profiler,
-        run_type=f"tg_llama_ops",
-        ml_model_name="llama70b-tg",
-    )
-
-    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
-
-
-@pytest.mark.parametrize(
-    "ar_type, warmup_iters, perf_target_us",
-    [
-        ("rms", 10, 25),
-    ],
-)
-@pytest.mark.models_device_performance_bare_metal
-def test_6u_rms_perf(
-    ar_type,
-    warmup_iters,
-    perf_target_us,
-):
-    if not is_RING_6U:
-        pytest.skip("This test is only applicable for 6U ring devices")
-    profiler = BenchmarkProfiler()
-    benchmark_data = BenchmarkData()
-    step_name = f"rms_test"
-
-    subdir = "llama_ccl_perf"
-    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_6u_trace_rms_fuse"
-    cols = ["DEVICE KERNEL"]
-    op_name = "RMSAllGather"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
 
     profiler.start("run")
@@ -301,7 +198,10 @@ def test_rms_perf(
     step_name = f"rms_test"
 
     subdir = "llama_ccl_perf"
-    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_tg_trace_rms_fuse"
+    if is_RING_6U:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_6u_trace_rms_fuse"
+    else:
+        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_tg_trace_rms_fuse"
     cols = ["DEVICE KERNEL"]
     op_name = "RMSAllGather"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
@@ -335,6 +235,12 @@ def test_rms_perf(
     assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
 
 
+@pytest.mark.parametrize(
+    "ar_type, warmup_iters, perf_target_us",
+    [
+        ("rms", 10, 25),
+    ],
+)
 @pytest.mark.parametrize(
     "warmup_iters, perf_target_us",
     [
