@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
+
+import ttnn
 
 layernorm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
     compute_with_storage_grid_size=(6, 8),
