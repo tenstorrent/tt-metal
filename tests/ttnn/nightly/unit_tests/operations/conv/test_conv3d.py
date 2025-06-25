@@ -174,7 +174,6 @@ def test_conv3d_mochi_shapes(
     padding,
     padding_mode,
     blocking,
-    use_program_cache,
     is_ci_env,
 ):
     if out_channels == 128 or out_channels == 256:

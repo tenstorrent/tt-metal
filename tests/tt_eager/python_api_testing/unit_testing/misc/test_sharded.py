@@ -960,7 +960,7 @@ def test_sharded_binary(
     assert passing
 
 
-def test_sharded_program_cache(device, use_program_cache, function_level_defaults):
+def test_sharded_program_cache(device, function_level_defaults):
     grid_size = device.compute_with_storage_grid_size()
     num_cores = 98
     compute_grid_size = device.compute_with_storage_grid_size()

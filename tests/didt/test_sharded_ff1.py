@@ -54,7 +54,7 @@ def test_specific_chip_reproduce_matmul_2d_hang(
     mesh_device, logical_chip_index, didt_workload_iterations, use_program_cache
 ):
     test_specific_chip_ff1_matmul(
-        mesh_device, logical_chip_index, GELU, MATH_FIDELITY, didt_workload_iterations, -1, use_program_cache, False
+        mesh_device, logical_chip_index, GELU, MATH_FIDELITY, didt_workload_iterations, -1, False
     )
 
 
@@ -74,9 +74,7 @@ def test_determinism(mesh_device, didt_workload_iterations, determinism_check_in
     if determinism_check_interval == -1:
         determinism_check_interval = 1
 
-    test_ff1_matmul(
-        mesh_device, GELU, MATH_FIDELITY, didt_workload_iterations, determinism_check_interval, use_program_cache, False
-    )
+    test_ff1_matmul(mesh_device, GELU, MATH_FIDELITY, didt_workload_iterations, determinism_check_interval, False)
 
 
 @skip_for_blackhole("Multi-chip Blackhole has not been tested")
@@ -107,6 +105,5 @@ def test_determinism_specific_chip(
         MATH_FIDELITY,
         didt_workload_iterations,
         determinism_check_interval,
-        use_program_cache,
         False,
     )

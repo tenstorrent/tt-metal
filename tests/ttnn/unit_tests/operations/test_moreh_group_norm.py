@@ -533,7 +533,6 @@ def test_moreh_group_norm_backward_callback(
     gamma_requires_grad,
     beta_requires_grad,
     device,
-    use_program_cache,
 ):
     torch.manual_seed(2024)
     num_program_cache_entries_list = []

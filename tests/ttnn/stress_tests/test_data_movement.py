@@ -56,7 +56,7 @@ def reshape_input_shapes(test_case: str):
         (*reshape_input_shapes("dram"), ttnn.DRAM_MEMORY_CONFIG),
     ],
 )
-def test_stress_reshape(mesh_device, use_program_cache, shapes_memory_config):
+def test_stress_reshape(mesh_device, shapes_memory_config):
     input_shape, output_shape, memory_config = shapes_memory_config
     for _ in range(NUM_REPEATS):
         torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)

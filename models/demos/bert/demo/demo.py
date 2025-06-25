@@ -43,7 +43,6 @@ def positional_ids(config, input_ids, past_key_values_length=0):
 
 def run_bert_question_and_answering_inference(
     device,
-    use_program_cache,
     model_name,
     batch_size,
     sequence_size,
@@ -73,9 +72,6 @@ def run_bert_question_and_answering_inference(
         config = ttnn_optimized_sharded_bert.update_model_config(config, batch_size)
     else:
         raise ValueError(f"Unknown bert: {bert}")
-
-    if not use_program_cache:
-        device.disable_and_clear_program_cache()
 
     profiler.start(f"preprocessing_parameter")
     parameters = preprocess_model_parameters(
@@ -183,7 +179,6 @@ def run_bert_question_and_answering_inference(
 
 def run_bert_question_and_answering_inference_squad_v2(
     device,
-    use_program_cache,
     model_name,
     batch_size,
     sequence_size,
@@ -290,20 +285,11 @@ def run_bert_question_and_answering_inference_squad_v2(
     "n_iterations",
     ((5),),
 )
-def test_demo(
-    input_path,
-    model_name,
-    bert,
-    n_iterations,
-    model_location_generator,
-    device,
-    use_program_cache,
-):
+def test_demo(input_path, model_name, bert, n_iterations, model_location_generator, device):
     disable_persistent_kernel_cache()
 
     return run_bert_question_and_answering_inference(
         device=device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         batch_size=8,
         sequence_size=384,
@@ -320,19 +306,11 @@ def test_demo(
     "n_iterations",
     ((3),),
 )
-def test_demo_squadv2(
-    model_name,
-    bert,
-    n_iterations,
-    model_location_generator,
-    device,
-    use_program_cache,
-):
+def test_demo_squadv2(model_name, bert, n_iterations, model_location_generator, device):
     disable_persistent_kernel_cache()
 
     return run_bert_question_and_answering_inference_squad_v2(
         device=device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         batch_size=8,
         sequence_size=384,

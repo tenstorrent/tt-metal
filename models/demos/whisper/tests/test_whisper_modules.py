@@ -48,7 +48,6 @@ def test_whisper_attention(
     use_encoder_states,
     use_attn_mask,
     use_kv_cache,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
@@ -247,7 +246,6 @@ def test_decoder_layer(
     encoder_sequence_size,
     decoder_sequence_size,
     use_kv_cache,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
@@ -321,7 +319,6 @@ def test_decoder(
     encoder_sequence_size,
     decoder_sequence_size,
     use_kv_cache,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)

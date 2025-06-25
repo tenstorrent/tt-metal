@@ -84,7 +84,6 @@ class TestUpdateCache:
         input_dtype,
         cache_dtype,
         device,
-        use_program_cache,
     ):
         if num_users > 32 or (num_users + batch_offset) > 32:
             pytest.skip("Batch offset is only used when num_users < 32 and batch_offset + num_users <= 32")
@@ -217,7 +216,6 @@ class TestUpdateCacheFP32:
         input_dtype,
         cache_dtype,
         device,
-        use_program_cache,
     ):
         if is_grayskull() and input_dtype == ttnn.float32:
             pytest.skip("Skipping float32 tests on Grayskull")

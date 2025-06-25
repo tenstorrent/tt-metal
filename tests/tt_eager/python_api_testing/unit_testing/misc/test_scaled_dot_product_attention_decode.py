@@ -1148,7 +1148,7 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
     ],
 )
 def test_sdpa_decode_sharded_on_subcoregrids(
-    device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids
+    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids
 ):
     run_test_sdpa_decode_single_iter(
         device,

@@ -364,7 +364,6 @@ def test_run_slice_test(
     in_mem_config,
     out_mem_config,
     dtype,
-    use_program_cache,
 ):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")

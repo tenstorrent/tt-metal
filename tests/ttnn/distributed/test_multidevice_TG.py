@@ -778,7 +778,6 @@ class TestUpdateCache:
         input_dtype,
         cache_dtype,
         mesh_device,
-        use_program_cache,
     ):
         torch.manual_seed(1234)
 

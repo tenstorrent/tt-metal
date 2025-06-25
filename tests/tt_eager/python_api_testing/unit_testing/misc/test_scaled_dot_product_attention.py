@@ -524,7 +524,6 @@ def test_sdpa_chunked(
     page_block_size,
     q_dtype,
     k_dtype,
-    use_program_cache,
     use_high_precision_compute=False,
 ):
     for _ in range(2):
@@ -576,7 +575,6 @@ def test_sdpa_chunked_iterate_batch(
     page_block_size,
     q_dtype,
     k_dtype,
-    use_program_cache,
     use_high_precision_compute=False,
 ):
     """
