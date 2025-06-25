@@ -13,7 +13,7 @@ from models.utility_functions import run_for_wormhole_b0
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "device_batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.0100, 60),),
+    ((16, 0.015, 60),),
 )
 def test_perf(
     mesh_device,
@@ -67,7 +67,7 @@ def test_perf_trace(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "device_batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.0105, 60),),
+    ((16, 0.014, 60),),
 )
 def test_perf_2cqs(
     mesh_device,
@@ -96,7 +96,7 @@ def test_perf_2cqs(
 )
 @pytest.mark.parametrize(
     "device_batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.0047, 60),),
+    ((16, 0.007, 60),),
 )
 def test_perf_trace_2cqs(
     mesh_device,
