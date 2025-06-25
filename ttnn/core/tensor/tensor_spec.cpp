@@ -146,22 +146,15 @@ void TensorSpec::populate_sharding_specs() {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
             tensor_layout_ = tensor_layout_.with_memory_config(std::move(*upd_mem_config));
         }
-    } else if (memory_config().shard_spec().has_value()) {
-        if (auto upd_mem_config = populate_nd_shard_spec_from_legacy()) {
-            tensor_layout_ = tensor_layout_.with_memory_config(std::move(*upd_mem_config));
-        }
+    } else if (memory_config().shard_spec() && memory_config().shard_spec()->mode == ShardMode::PHYSICAL) {
+        tensor_layout_ = tensor_layout_.with_memory_config(populate_nd_shard_spec_from_legacy());
     }
 }
 
-std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() const {
+MemoryConfig TensorSpec::populate_nd_shard_spec_from_legacy() const {
     const auto& mem_config = memory_config();
     auto mem_layout = mem_config.memory_layout();
     const auto& shard_spec = mem_config.shard_spec().value();
-
-    // Can't convert logical sharding
-    if (shard_spec.mode == ShardMode::LOGICAL) {
-        return std::nullopt;
-    }
 
     NdShardSpec nd_shard_spec{
         .shard_shape = Shape({shard_spec.shape[0], shard_spec.shape[1]}),
