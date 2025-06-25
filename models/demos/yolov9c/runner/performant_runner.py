@@ -87,7 +87,7 @@ class YOLOv9PerformantRunner:
     def _execute_yolov9_trace_2cqs_inference(self, tt_inputs_host=None):
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
         ttnn.wait_for_event(1, self.op_event)
-        ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
         # TODO: Add in place support to ttnn to_memory_config
@@ -95,7 +95,10 @@ class YOLOv9PerformantRunner:
             self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
-        return self.runner_infra.output_tensor
+        ttnn.synchronize_device(self.device)
+
+        ttnn_output_tensor = self.runner_infra.output_tensor
+        return ttnn_output_tensor
 
     def _validate(self, input_tensor, result_output_tensor):
         torch_output_tensor = self.runner_infra.torch_output_tensor

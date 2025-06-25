@@ -34,6 +34,7 @@ Tensor make_tensor_with_num_shards(const TensorSpec& tensor_spec, int num_device
 
     auto host_tensor = Tensor::from_vector(std::vector<float>(tensor_spec.logical_shape().volume()), tensor_spec);
     std::vector<Tensor> host_tensors;
+    host_tensors.reserve(num_device_shards);
     for (int i = 0; i < num_device_shards; ++i) {
         host_tensors.push_back(host_tensor);
     }
