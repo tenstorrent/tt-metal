@@ -194,16 +194,138 @@
 <span class="target" id="namespaceckernel_1a6e04cf1fcbf9742c75859a02b7c57965"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tilize_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">block</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel11tilize_initE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Initialize the tilize operation. To be called once at beginning of a kernel. </p>
+<p>Initializes the tilize operation. Should be called once at the beginning of a kernel.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>icb   </p></td>
+<td><p>Input circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>block   </p></td>
+<td><p>Size of tile block to work on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>&gt; 0   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>ocb   </p></td>
+<td><p>Output circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True   </p></td>
+</tr>
+</tbody>
+</table>
+
 </dd>
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel17tilize_init_shortE8uint32_t8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1a9ebe929ef02504acdfc2405f2e65a3fa"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tilize_init_short</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">block</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel17tilize_init_shortE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_b_bEN7ckernel21tilizeA_B_reduce_initEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">neginf_srcA</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">zero_srcA_reduce</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1ae5fba5f336b2847bcf27014fe225ffbe"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tilizeA_B_reduce_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1_scaler</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">block</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">num_faces</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">4</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">face_r_dim</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">16</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_b_bEN7ckernel21tilizeA_B_reduce_initEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Re-initialize for the tilize operation. This can be called after a full init. </p>
+<p>Initializes the tilize operation with reduction. Should be called once at the beginning of a kernel.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Template   </p></td>
+<td><p>neginf_srcA   </p></td>
+<td><p>NegInf source A flag   </p></td>
+<td><p>bool   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Template   </p></td>
+<td><p>zero_srcA_reduce   </p></td>
+<td><p>Zero source A for reduce flag   </p></td>
+<td><p>bool   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>icb0   </p></td>
+<td><p>Input circular buffer A identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>icb1_scaler   </p></td>
+<td><p>Input circular buffer for scaler   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>block   </p></td>
+<td><p>Size of tile block to work on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>&gt; 0   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>ocb   </p></td>
+<td><p>Output circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>num_faces   </p></td>
+<td><p>Number of faces per tile   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>1 to 4   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>face_r_dim   </p></td>
+<td><p>Number of rows in each face   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>1 to 16   </p></td>
+<td><p>False   </p></td>
+</tr>
+</tbody>
+</table>
+
 </dd>
 </dl>
 
@@ -212,7 +334,56 @@
 <span class="target" id="namespaceckernel_1abbc077d029fa62bdddb438a775e6fe68"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tilize_init_short_with_dt</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">old_icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">new_icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">block</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel25tilize_init_short_with_dtE8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Re-initialize for the tilize operation. This also reconfigure the unpacker with CB data type. </p>
+<p>Re-initializes the tilize operation and reconfigures the unpacker with CB data type.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>old_icb   </p></td>
+<td><p>Previous input circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>new_icb   </p></td>
+<td><p>New input circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>block   </p></td>
+<td><p>Size of tile block to work on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>&gt; 0   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>ocb   </p></td>
+<td><p>Output circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True   </p></td>
+</tr>
+</tbody>
+</table>
+
 </dd>
 </dl>
 
@@ -221,7 +392,154 @@
 <span class="target" id="namespaceckernel_1aea0827dbb324004596b2971a52c4d0ad"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tilize_block</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">block</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel12tilize_blockE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Perform tilize operation on a block. This simply loops over the provided blocks. </p>
+<p>Performs the tilize operation on a block.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>icb   </p></td>
+<td><p>Input circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>block   </p></td>
+<td><p>Size of tile block to work on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>&gt; 0   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>ocb   </p></td>
+<td><p>Output circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True   </p></td>
+</tr>
+</tbody>
+</table>
+
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4I_b_NSt8uint32_tE_b_bEN7ckernel22unpack_tilizeA_B_blockEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">neginf_srcA</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">reload_srcB</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">zero_srcA</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">zero_srcA_reduce</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1af72e2c94fb7c07a526597eea8b55cddd"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">unpack_tilizeA_B_block</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">block</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">tile_idx_b</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">num_faces</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">4</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">srca_face_r_dim</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">16</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_b_NSt8uint32_tE_b_bEN7ckernel22unpack_tilizeA_B_blockEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Unpacks and tilizes a block from two input CBs.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Template   </p></td>
+<td><p>neginf_srcA   </p></td>
+<td><p>NegInf source A flag   </p></td>
+<td><p>bool   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Template   </p></td>
+<td><p>reload_srcB   </p></td>
+<td><p>Reload source B flag   </p></td>
+<td><p>std::uint32_t   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Template   </p></td>
+<td><p>zero_srcA   </p></td>
+<td><p>Zero source A flag   </p></td>
+<td><p>bool   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Template   </p></td>
+<td><p>zero_srcA_reduce   </p></td>
+<td><p>Zero source A for reduce flag   </p></td>
+<td><p>bool   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>icb0   </p></td>
+<td><p>Input circular buffer A identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>icb1   </p></td>
+<td><p>Input circular buffer B identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>block   </p></td>
+<td><p>Size of tile block to work on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>&gt; 0   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>tile_idx_b   </p></td>
+<td><p>Tile index for source B   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>&gt;= 0   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>num_faces   </p></td>
+<td><p>Number of faces per tile   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>1 to 4   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>srca_face_r_dim   </p></td>
+<td><p>Number of rows in each face (A)   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>1 to 16   </p></td>
+<td><p>False   </p></td>
+</tr>
+</tbody>
+</table>
+
 </dd>
 </dl>
 
@@ -230,7 +548,40 @@
 <span class="target" id="namespaceckernel_1a920c52ea4b0a347de6914b972d43809f"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tilize_uninit</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel13tilize_uninitE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Uninitialize tilize operation before re-initializing for another operation. </p>
+<p>Uninitializes the tilize operation before re-initializing for another operation.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>icb   </p></td>
+<td><p>Input circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>ocb   </p></td>
+<td><p>Output circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True   </p></td>
+</tr>
+</tbody>
+</table>
+
 </dd>
 </dl>
 
@@ -239,7 +590,48 @@
 <span class="target" id="namespaceckernel_1a65059565d3ea2aea2707b5383b0269a5"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tilize_uninit_with_dt</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">old_icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">new_icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel21tilize_uninit_with_dtE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Uninitialize the tilize operation along with re-configuring unpacker with the CB data types. </p>
+<p>Uninitializes the tilize operation and reconfigures the unpacker with CB data types.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>old_icb   </p></td>
+<td><p>Previous input circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>new_icb   </p></td>
+<td><p>New input circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>ocb   </p></td>
+<td><p>Output circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True   </p></td>
+</tr>
+</tbody>
+</table>
+
 </dd>
 </dl>
 
