@@ -3751,3 +3751,165 @@ def test_conv_yolov10x(
     activation = activation,
     math_approx_mode = False,
 )
+
+@pytest.mark.parametrize(
+    "batch, input_height, input_width, weights_dtype, output_dtype, groups, padding, dilation",
+    (
+        (1, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (0, 0, 0, 0), (1, 1)),
+    ),
+)
+@pytest.mark.parametrize( "input_channels, output_channels", [
+    (512, 512),
+    (64,64)
+    ])
+@pytest.mark.parametrize("kernel,", [
+    (1, 1),
+    (2, 2)]
+    )
+@pytest.mark.parametrize("stride", [
+    (1, 1),
+    (2, 2)]
+)
+@pytest.mark.parametrize(
+    "input_layout",
+    [
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
+    "output_layout",
+    [
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
+    ],
+)
+
+@pytest.mark.parametrize(
+    "shard_layout",
+    [
+        None,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ]
+)
+@pytest.mark.parametrize(
+    "enable_fenable_kernel_stride_folding",
+    [
+        True,
+        False,
+    ],
+)
+@pytest.mark.parametrize("slice_type, num_slices", [
+    (None,1), # no slicing
+    (SliceHeight, 2),
+])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_act_dealloc(
+    device,
+    torch_tensor_map,
+    batch,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    weights_dtype,
+    output_dtype,
+    groups,
+    kernel,
+    stride,
+    padding,
+    dilation,
+    input_layout,
+    output_layout,
+    shard_layout,
+    enable_fenable_kernel_stride_folding,
+    slice_type,
+    num_slices,
+):
+    if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED and input_layout == ttnn.ROW_MAJOR_LAYOUT and stride == (1,1):
+        pytest.skip("Block sharded conv2d does not support input with row major layout")
+    if enable_fenable_kernel_stride_folding and stride != kernel:
+        pytest.skip("Kernel stride folding is only supported when stride == kernel size")
+    if enable_fenable_kernel_stride_folding and shard_layout is not None:
+        pytest.skip("Kernel stride folding is not supported for non L1 inputs")
+    if (input_channels > 64 and shard_layout is not None) or kernel > stride:
+        pytest.skip("OOM for this given core_grid (expected)")
+    if slice_type is not None and shard_layout is not None:
+        pytest.skip("Slicing is not supported for sharded conv2d")
+    if slice_type is not None and enable_fenable_kernel_stride_folding:
+        pytest.skip("Skip slicing when folding is enabled")
+    if slice_type is SliceHeight and kernel == (1,1) and stride == (1,1) and input_channels == 512:
+        pytest.skip("Skip due to assertion in conv2d implementation in tilize op")
+
+    input_shape = (batch, input_channels, input_height, input_width)
+    weight_shape = (output_channels, input_channels // groups, kernel[0], kernel[1])
+    torch_input_tensor = randomize_torch_tensor(torch_tensor_map, input_shape)
+    torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+
+    torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, weight_shape)
+
+    tt_weight_tensor = ttnn.from_torch(
+        torch_weight_tensor,
+        ttnn.bfloat16 if weights_dtype == ttnn.bfloat16 else ttnn.float32,
+    )
+
+    input_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+    if shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        num_cores = 2
+        input_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(input_height*input_width*batch // num_cores, input_channels),
+                core_grid=ttnn.num_cores_to_corerangeset(target_num_cores=num_cores, grid_size=device.compute_with_storage_grid_size(), row_wise=True),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+        )
+    elif shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        num_cores = 4
+        input_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(input_height*input_width*batch // 2, input_channels // 2),
+                core_grid=ttnn.CoreGrid(x=2,y=2),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+        )
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        output_dtype,
+        layout=input_layout,
+        device=device, # set the tensor to be on device because is_allocated() returns true for host tensors
+        memory_config=input_mem_cfg,
+    )
+
+    conv_config = ttnn.Conv2dConfig(
+        dtype=output_dtype,
+        weights_dtype=weights_dtype,
+        deallocate_activation=True,
+        output_layout=output_layout,
+        enable_kernel_stride_folding=enable_fenable_kernel_stride_folding,
+    )
+    slice_config = None
+    if slice_type is not None:
+        slice_config = ttnn.Conv2dSliceConfig(
+            slice_type=slice_type,
+            num_slices=num_slices,
+        )
+    _ = ttnn.conv2d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=None,
+        kernel_size=kernel,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        batch_size=batch,
+        input_height=input_height,
+        input_width=input_width,
+        conv_config=conv_config,
+        groups=groups,
+        slice_config=slice_config,
+    )
+    assert not tt_input_tensor.is_allocated(), "Input tensor is allocated"
