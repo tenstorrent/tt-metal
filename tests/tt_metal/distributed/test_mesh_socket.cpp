@@ -557,9 +557,9 @@ void test_single_connection_multi_device_socket(
     // Used to setup fabric connections
     const uint32_t sender_physical_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
     const uint32_t recv_physical_device_id = md1->get_device(MeshCoordinate(0, 0))->id();
-    const auto& sender_fabric_node_id =
+    const auto sender_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender_physical_device_id);
-    const auto& recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
+    const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
 
     // Create Socket between Sender and Receiver
     SocketConnection socket_connection = {
@@ -758,9 +758,9 @@ void test_single_connection_multi_device_socket_with_workers(
     // Used to setup fabric connections
     const uint32_t sender_physical_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
     const uint32_t recv_physical_device_id = md1->get_device(MeshCoordinate(0, 0))->id();
-    const auto& sender_fabric_node_id =
+    const auto sender_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender_physical_device_id);
-    const auto& recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
+    const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
     // Create Socket between Sender and Receiver
     SocketConnection socket_connection = {
         .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
@@ -945,9 +945,9 @@ std::shared_ptr<Program> create_sender_program(
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Used to setup fabric connections
-    const auto& sender_fabric_node_id =
+    const auto sender_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender_physical_device_id);
-    const auto& recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
+    const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
 
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
     auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
@@ -1011,10 +1011,10 @@ std::shared_ptr<Program> create_split_reduce_program(
 
     // Used to setup fabric connections
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
-    const auto& sender0_fabric_node_id =
+    const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
+    const auto sender0_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender0_physical_device_id);
-    const auto& sender1_fabric_node_id =
+    const auto sender1_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender1_physical_device_id);
 
     auto recv_virtual_coord_0 = recv_data_buffer->device()->worker_core_from_logical_core(recv_logical_coord_0);
