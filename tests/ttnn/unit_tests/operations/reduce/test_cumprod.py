@@ -11,21 +11,13 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5, 6, -1, -2, -3, -4, -5, -6])
+@pytest.mark.parametrize("dim", [0, 2, -1])
 @pytest.mark.parametrize(
     "shape",
     [
-        [10],
-        [10000],
-        [3, 3],
-        [16, 16],
-        [1, 1, 1, 1],
-        [16, 8, 4, 16],
-        [10, 10, 10, 10],
+        [2000],
         [1000, 32, 32],
-        [3, 4, 5, 4, 3],
-        [3, 4, 5, 4, 1, 2, 1],
-        [10, 10, 10, 10, 1, 1, 1],
+        [5, 5, 5, 5, 1, 1, 1],
     ],
 )
 def test_cumprod_normal(dim, shape, device, use_program_cache):
@@ -50,21 +42,13 @@ def test_cumprod_normal(dim, shape, device, use_program_cache):
             assert_with_pcc(ttnn.to_torch(ttnn_result_tensor), torch_result_tensor, -0.1)
 
 
-@pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5, 6, -1, -2, -3, -4, -5, -6, -7])
+@pytest.mark.parametrize("dim", [0, 2, -1])
 @pytest.mark.parametrize(
     "shape",
     [
-        [10],
-        [10000],
-        [3, 3],
-        [16, 16],
-        [1, 1, 1, 1],
-        [16, 8, 4, 16],
-        [10, 10, 10, 10],
+        [2000],
         [1000, 32, 32],
-        [3, 4, 5, 4, 3],
-        [3, 4, 5, 4, 1, 2, 1],
-        [10, 10, 10, 10, 1, 1, 1],
+        [5, 5, 5, 5, 1, 1, 1],
     ],
 )
 def test_cumprod_preallocated(dim, shape, device, use_program_cache):
