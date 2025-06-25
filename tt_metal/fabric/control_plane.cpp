@@ -1632,11 +1632,6 @@ std::unordered_set<CoreCoord> ControlPlane::get_inactive_ethernet_cores(chip_id_
     std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
     std::unordered_set<CoreCoord> inactive_ethernet_cores;
 
-    // Check if there are any ethernet cores available on this chip
-    if (cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map.empty()) {
-        return inactive_ethernet_cores;  // Return empty set if no ethernet cores
-    }
-
     for (const auto& [eth_core, chan] : cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
         if (active_ethernet_cores.find(eth_core) == active_ethernet_cores.end()) {
             inactive_ethernet_cores.insert(eth_core);
