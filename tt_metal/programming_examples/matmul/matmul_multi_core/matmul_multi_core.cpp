@@ -10,7 +10,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <matmul_common/bmm_op.hpp>
+#include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
 #include <fmt/core.h>
 

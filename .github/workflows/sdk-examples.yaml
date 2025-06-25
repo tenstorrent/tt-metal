@@ -58,65 +58,30 @@ jobs:
           ls -1d /usr/share/${{ inputs.product }}/examples/*/
           for example in /usr/share/${{ inputs.product }}/examples/*; do
             echo "looking at example: $example"
-            echo "example has contents:"
-            ls -la "$example"
 
             [ -f "$example/CMakeLists.txt" ] || continue
 
-            # Check if this is a parent directory (no kernels folder)
-            if [ ! -d "$example/kernels" ]; then
-              # This is a parent directory, look for subdirectories
-              for subdir in "$example"/*; do
-                [ -f "$subdir/CMakeLists.txt" ] || continue
-                example_name=$(basename "$subdir")
-                # Wouldn't it be nice if we could have nested groups?
-                # Yeah, others thought so, too. https://github.com/actions/toolkit/issues/1001
-                echo "::group::${example_name} - build"
-                cd `mktemp -d`
-                cmake -G Ninja -S "$subdir" -B .
-                cmake --build .
-                echo "::endgroup::"
+            example_name=$(basename "$example")
+            echo "::group::${example_name} - build"
+            cd `mktemp -d`
+            cmake -G Ninja -S "$example" -B .
+            cmake --build .
+            echo "::endgroup::"
 
-                echo "::group::${example_name} - run"
-                # Find and run the built executable
-                exec_path=$(find . -maxdepth 1 -type f -executable -not -name "*.so")
-                echo "Found executables, running them in sequence:"
-                echo "$exec_path"
-                echo "----------------------------------------"
-                for exe in $exec_path; do
-                  echo "Running: $exe"
-                  "$exe"
-                  if [ $? -ne 0 ]; then
-                    echo "Error: $exe failed with exit code $?"
-                    exit 1
-                  fi
-                  echo "----------------------------------------"
-                done
-                echo "::endgroup::"
-              done
-            else
-              example_name=$(basename "$example")
-              echo "::group::${example_name} - build"
-              cd `mktemp -d`
-              cmake -G Ninja -S "$example" -B .
-              cmake --build .
-              echo "::endgroup::"
-
-              echo "::group::${example_name} - run"
-              # Find and run the built executable
-              exec_path=$(find . -maxdepth 1 -type f -executable -not -name "*.so")
-              echo "Found executables, running them in sequence:"
-              echo "$exec_path"
+            echo "::group::${example_name} - run"
+            # Find and run the built executable
+            exec_path=$(find . -maxdepth 1 -type f -executable -not -name "*.so")
+            echo "Found executables, running them in sequence:"
+            echo "$exec_path"
+            echo "----------------------------------------"
+            for exe in $exec_path; do
+              echo "Running: $exe"
+              "$exe"
+              if [ $? -ne 0 ]; then
+                echo "Error: $exe failed with exit code $?"
+                exit 1
+              fi
               echo "----------------------------------------"
-              for exe in $exec_path; do
-                echo "Running: $exe"
-                "$exe"
-                if [ $? -ne 0 ]; then
-                  echo "Error: $exe failed with exit code $?"
-                  exit 1
-                fi
-                echo "----------------------------------------"
-              done
-              echo "::endgroup::"
-            fi
+            done
+            echo "::endgroup::"
           done

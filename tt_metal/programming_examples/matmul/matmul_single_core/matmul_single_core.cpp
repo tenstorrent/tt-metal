@@ -9,7 +9,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/command_queue.hpp>
-#include <matmul_common/bmm_op.hpp>
+#include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
 #include "tt-metalium/core_coord.hpp"
 

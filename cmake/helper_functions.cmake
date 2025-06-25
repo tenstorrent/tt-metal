@@ -49,8 +49,16 @@ function(CREATE_PGM_EXAMPLES_EXE TESTLIST SUBDIR)
     cmake_parse_arguments(PARSE_ARGV 2 ARG "" "" "")
 
     set(EXTRA_INCLUDE_DIR "")
+    set(IS_MATMUL FALSE)
     if(ARGC GREATER 2)
         set(EXTRA_INCLUDE_DIR "${ARGV2}")
+        if("${ARGV2}" STREQUAL "matmul")
+            set(IS_MATMUL TRUE)
+        endif()
+    endif()
+
+    if(IS_MATMUL)
+        add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/matmul/matmul_common)
     endif()
 
     foreach(TEST_SRC ${TESTLIST})
@@ -64,6 +72,10 @@ function(CREATE_PGM_EXAMPLES_EXE TESTLIST SUBDIR)
                 m
                 pthread
         )
+
+        if(IS_MATMUL)
+            target_link_libraries(${TEST_TARGET} PUBLIC Matmul::Common)
+        endif()
 
         target_include_directories(${TEST_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 

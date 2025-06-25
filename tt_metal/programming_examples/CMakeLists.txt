@@ -12,6 +12,7 @@ set(PROGRAMMING_EXAMPLES_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/loopback/loopback.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pad_multi_core/pad_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shard_data_rm/shard_data_rm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/vecadd/vecadd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vecadd_sharding/vecadd_sharding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vecadd_multi_core/vecadd_multi_core.cpp
 )
@@ -29,7 +30,6 @@ CREATE_PGM_EXAMPLES_EXE("${PROGRAMMING_EXAMPLES_SRCS}" "") # no subdir, output b
 CREATE_PGM_EXAMPLES_EXE("${MATMUL_SRCS}" "" "matmul")
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/profiler)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/contributed)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/distributed)
 
 add_custom_target(
@@ -43,7 +43,6 @@ install(
     DIRECTORY
         add_2_integers_in_compute
         add_2_integers_in_riscv
-        contributed
         eltwise_binary
         eltwise_sfpu
         hello_world_compute_kernel
@@ -51,6 +50,7 @@ install(
         hello_world_datatypes_kernel
         loopback
         matmul
+        vecadd
         shard_data_rm
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into
@@ -67,7 +67,6 @@ install(
     DIRECTORY
         add_2_integers_in_compute
         add_2_integers_in_riscv
-        contributed
         eltwise_binary
         eltwise_sfpu
         hello_world_compute_kernel
@@ -75,6 +74,7 @@ install(
         hello_world_datatypes_kernel
         loopback
         matmul
+        vecadd
         shard_data_rm
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
