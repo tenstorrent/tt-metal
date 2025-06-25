@@ -188,6 +188,20 @@ inline auto any_row_broadcasted(const Tensor& a, const auto& b) {
     return false;
 }
 
+inline auto any_sharded_scalar(const Tensor& a, const auto& b) {
+    if constexpr (requires {
+                      b.get_logical_shape();
+                      b.is_sharded();
+                  }) {
+        const auto& a_shape = a.get_logical_shape();
+        const auto& b_shape = b.get_logical_shape();
+        return (a.is_sharded() or b.is_sharded()) and
+               ((a_shape[-2] == 1 and a_shape[-1] == 1) or (b_shape[-2] == 1 and b_shape[-1] == 1));
+    }
+
+    return false;
+}
+
 inline auto any_sharded_block_format(const Tensor& a, const auto& b) {
     if (a.is_sharded() and is_block_format(a.get_dtype())) {
         return true;
@@ -222,11 +236,11 @@ inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b)
 }
 
 inline auto any_sharded_scalar(const Tensor& a, const auto& b) {
-    const auto& a_shape = a.get_logical_shape();
     if constexpr (requires {
                       b.get_logical_shape();
                       b.is_sharded();
                   }) {
+        const auto& a_shape = a.get_logical_shape();
         const auto& b_shape = b.get_logical_shape();
         return (a.is_sharded() or b.is_sharded()) and
                ((a_shape[-2] == 1 and a_shape[-1] == 1) or (b_shape[-2] == 1 and b_shape[-1] == 1));
@@ -235,19 +249,30 @@ inline auto any_sharded_scalar(const Tensor& a, const auto& b) {
     return false;
 }
 
-inline auto any_non_height_sharded(const Tensor& a, const auto& b, const MemoryConfig& c) {
+inline auto is_w_bcast(const Tensor& a, const auto& b) {
+    if constexpr (requires { b.get_padded_shape(); }) {
+        const auto& shape_a = a.get_padded_shape();
+        const auto& shape_b = b.get_padded_shape();
+        return (shape_a[-1] == 1 and shape_b[-1] > 1) or (shape_b[-1] == 1 and shape_a[-1] > 1);
+    }
+    return false;
+}
+
+inline auto any_non_height_sharded_w_bcast(const Tensor& a, const auto& b, const MemoryConfig& c) {
+    // NOTE: currently with sharded tensor, broadcast is on w dimension only,
+    // so only check for w dimension, not all dimensions
     if (a.is_sharded()) {
-        return a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
+        return a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED and is_w_bcast(a, b);
     }
 
     if constexpr (requires { b.is_sharded(); }) {
         if (b.is_sharded()) {
-            return b.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
+            return b.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED and is_w_bcast(a, b);
         }
     }
 
     if (c.is_sharded()) {
-        return c.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
+        return c.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED and is_w_bcast(a, b);
     }
 
     return false;
@@ -282,6 +307,59 @@ inline auto any_uneven(const Tensor& a, const auto& b, const std::optional<Tenso
     return false;
 }
 
+inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binary_op_type) {
+    if constexpr (requires {
+                      b.dtype();
+                      b.is_sharded();
+                      b.get_logical_shape();
+                  }) {
+        if (a.dtype() == DataType::INT32 or b.dtype() == DataType::INT32) {
+            if (any_row_broadcasted(a, b)) {
+                return true;
+            }
+            if (binary_op_type == BinaryOpType::NE or binary_op_type == BinaryOpType::EQ or
+                binary_op_type == BinaryOpType::GTE or binary_op_type == BinaryOpType::LTE or
+                binary_op_type == BinaryOpType::GT or binary_op_type == BinaryOpType::LT) {
+                return true;
+            }
+        }
+
+        if ((a.is_sharded() or b.is_sharded()) and (a.dtype() == DataType::UINT16 or b.dtype() == DataType::UINT16)) {
+            return true;
+        }
+
+        if (any_row_broadcasted(a, b) and
+            (/*binary_op_type == BinaryOpType::POWER*/ binary_op_type != BinaryOpType::ADD and
+             binary_op_type != BinaryOpType::SUB and binary_op_type != BinaryOpType::MUL)) {
+            return true;
+        }
+
+        if (a.get_logical_shape().rank() > 4 or b.get_logical_shape().rank() > 4) {
+            return true;
+        }
+
+        if ((a.is_sharded() or b.is_sharded()) and (a.dtype() == DataType::FLOAT32 or b.dtype() == DataType::FLOAT32 or
+                                                    a.dtype() == DataType::INT32 or b.dtype() == DataType::INT32)) {
+            return true;
+        }
+
+        if (a.get_logical_shape()[-2] == 1 && b.get_logical_shape()[-2] > 1 && a.get_logical_shape()[-1] > 1 &&
+            b.get_logical_shape()[-1] == 1) {
+            return true;
+        }
+        if (b.get_logical_shape()[-2] == 1 && a.get_logical_shape()[-2] > 1 && b.get_logical_shape()[-1] > 1 &&
+            a.get_logical_shape()[-1] == 1) {
+            return true;
+        }
+
+        if (any_row_broadcasted(a, b) and (is_block_format(a.get_dtype()) or is_block_format(b.get_dtype()))) {
+            // TODO
+            // return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace detail
 
 bool is_legacy_only(
@@ -295,7 +373,7 @@ bool is_legacy_only(
 
     if (detail::any_row_broadcasted(lhs, rhs) or detail::any_sharded_block_format(lhs, rhs) or
         detail::any_subtile_broadcasted_block_format(lhs, rhs) or
-        detail::any_non_height_sharded(lhs, rhs, output_mem_cfg) or detail::any_uneven(lhs, rhs, output) or
+        detail::any_non_height_sharded_w_bcast(lhs, rhs, output_mem_cfg) or detail::any_uneven(lhs, rhs, output) or
         detail::any_sharded_scalar(lhs, rhs)) {
         TT_FATAL(
             lhs_activations.size() <= 1,
@@ -351,18 +429,20 @@ inline auto invoke_binary_ng(
     const std::optional<bool>& use_legacy) {
     if (use_legacy ? *use_legacy
                    : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations)) {
-        const std::vector activations(post_activations.begin(), post_activations.end());
-        const std::optional lhs_activation =
-            lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
+        if ((not detail::is_binary_ng_only(lhs, rhs, binary_op_type)) or *use_legacy) {
+            const std::vector activations(post_activations.begin(), post_activations.end());
+            const std::optional lhs_activation =
+                lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
 
-        if constexpr (requires { detail::preprocess_inputs(binary_op_type, lhs, rhs); }) {
-            auto [a, b] = detail::preprocess_inputs(binary_op_type, lhs, rhs);
+            if constexpr (requires { detail::preprocess_inputs(binary_op_type, lhs, rhs); }) {
+                auto [a, b] = detail::preprocess_inputs(binary_op_type, lhs, rhs);
 
-            return ttnn::prim::binary(
-                queue_id, a, b, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
-        } else {
-            return ttnn::prim::binary(
-                queue_id, lhs, rhs, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
+                return ttnn::prim::binary(
+                    queue_id, a, b, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
+            } else {
+                return ttnn::prim::binary(
+                    queue_id, lhs, rhs, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
+            }
         }
     }
 
@@ -530,7 +610,9 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     const std::optional<bool>& use_legacy) {
     if (use_legacy ? *use_legacy
                    : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations)) {
-        return detail::binary_impl(DefaultQueueId, binary_op_type, lhs, rhs, dtype, memory_config, output);
+        if ((not detail::is_binary_ng_only(lhs, rhs, binary_op_type)) or *use_legacy) {
+            return detail::binary_impl(DefaultQueueId, binary_op_type, lhs, rhs, dtype, memory_config, output);
+        }
     }
 
     return detail::invoke_binary_ng(
