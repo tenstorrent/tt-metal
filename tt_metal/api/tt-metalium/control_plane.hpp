@@ -98,7 +98,7 @@ public:
     void set_routing_mode(uint16_t mode);
     uint16_t get_routing_mode() const;
 
-    void initialize_fabric_context(tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
+    void initialize_fabric_context(tt_metal::FabricConfig fabric_config);
 
     FabricContext& get_fabric_context() const;
 

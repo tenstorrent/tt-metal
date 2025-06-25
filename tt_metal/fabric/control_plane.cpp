@@ -1420,7 +1420,7 @@ void ControlPlane::set_routing_mode(uint16_t mode) {
 
 uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
 
-void ControlPlane::initialize_fabric_context(tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
+void ControlPlane::initialize_fabric_context(tt_metal::FabricConfig fabric_config) {
     TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
     this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);
 }
