@@ -15,6 +15,7 @@ permissions:
 # is-release-candidate is always true, unless the workflow is manually dispatched on a tag
 # should-create-release is used to avoid creating a duplicate release
 # if we are running on main branch, don't upload any artifacts or create a gh release
+# if we are promoting a release candidate, don't rerun the tests
 
 jobs:
   get-params:
