@@ -770,10 +770,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         }
     }
 
-    // For 2D convs, pre-tilize input and round robin self-mcast tilized act matrix to other cores
-    const bool tilize_in0 = height_sharded;
-    if (!tilize_in0) {
-        compute_defines["PRE_TILIZE"] = "1";
+    if (block_sharded) {
+        compute_defines["BLOCK_SHARDED"] = "1";
     }
 
     if (enable_split_reader) {
@@ -854,7 +852,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         out_subblock_w_ntiles,
         out_subblock_num_tiles,
 
-        tilize_in0,
+        height_sharded,
         untilize_out,
 
         bias_ntiles_per_core,
