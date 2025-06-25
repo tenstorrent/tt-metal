@@ -197,7 +197,6 @@ void MetalContext::teardown() {
     }
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
-    distributed_context_.reset();
 }
 
 MetalContext& MetalContext::instance() {
