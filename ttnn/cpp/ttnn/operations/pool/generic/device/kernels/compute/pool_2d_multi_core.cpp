@@ -29,30 +29,29 @@ inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize 
 template <
     uint32_t num_output_tiles,
     bool is_partial_tile,
-    uint32_t split_reader,
     uint32_t unpA_face_r_dim,
     uint32_t num_faces_in_tile,
     bool neginf_srca_maxpool,
     bool zero_srca_avgpool>
 inline void reduce_h_fused(
-    const uint32_t in_cb_id_0,
-    const uint32_t in_cb_id_1,
+    const uint32_t curr_in_cb_id,
     const uint32_t in_scalar_cb_id,
+    const uint32_t tile_id,
     const uint32_t in_stick_index,
     const uint32_t out_cb_id) {
     constexpr uint32_t num_out_rows = 1;
     constexpr uint32_t num_output_faces = (is_partial_tile ? 1 : 2);
+    DPRINT << "tile_id" << tile_id << ENDL();
     cb_reserve_back(out_cb_id, num_output_tiles);
-    const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
-
     tile_regs_acquire();
     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-        curr_in_cb_id, in_scalar_cb_id, num_output_tiles, 0, num_faces_in_tile, unpA_face_r_dim);
+        curr_in_cb_id, in_scalar_cb_id, num_output_tiles, tile_id, 0, num_faces_in_tile, unpA_face_r_dim);
     for (uint32_t c_i = 0; c_i < num_output_tiles; ++c_i) {
         reduce_tile_math(c_i, num_faces_in_tile);
     }
     tile_regs_wait();
     tile_regs_commit();
+    DPRINT << "num_output_faces" << num_output_faces << ENDL();
     pack_untilize_dst<num_output_tiles>(
         out_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_output_faces); /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
@@ -128,11 +127,10 @@ void MAIN {
             reduce_h_fused<
                 max_tiles_per_iter,
                 false,
-                split_reader,
                 face_r_dim,
                 num_faces_in_tile,
                 neginf_srca_maxpool,
-                zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, out_cb_id);
+                zero_srca_avgpool>(curr_in_cb_id, curr_scalar_cb_id, 0, i, out_cb_id);
             cb_pop_front(curr_in_cb_id, 1);
         }
 
@@ -147,21 +145,18 @@ void MAIN {
             reduce_h_fused<
                 partial_iter_output_tiles - 1,
                 false,
-                split_reader,
                 face_r_dim,
                 num_faces_in_tile,
                 neginf_srca_maxpool,
-                zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, out_cb_id);
+                zero_srca_avgpool>(curr_in_cb_id, curr_scalar_cb_id, 0, i, out_cb_id);
         }
 
-        reduce_h_fused<
-            1,
-            last_tile_is_partial,
-            split_reader,
-            face_r_dim,
-            num_faces_in_tile,
-            neginf_srca_maxpool,
-            zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, out_cb_id);
+        if (last_tile_is_partial) {
+            DPRINT << "last tile is partial" << ENDL();
+        }
+        DPRINT << "partial_iter_output_tiles " << partial_iter_output_tiles << ENDL();
+        reduce_h_fused<1, last_tile_is_partial, face_r_dim, num_faces_in_tile, neginf_srca_maxpool, zero_srca_avgpool>(
+            curr_in_cb_id, curr_scalar_cb_id, partial_iter_output_tiles - 1, i, out_cb_id);
         cb_pop_front(curr_in_cb_id, 1);
 
         if constexpr (!one_scalar_per_core) {
