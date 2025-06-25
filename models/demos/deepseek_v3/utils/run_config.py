@@ -3,6 +3,7 @@
 
 import dataclasses
 import itertools
+from types import NoneType
 from typing import Any, Optional, Union
 
 import ttnn
@@ -432,13 +433,27 @@ def _merge_model_weight_config(model_value: Any, loaded_weight_value: Any) -> An
     """
 
     if _is_op_config(model_value):
-        return model_value.__class__(**_merge_model_weight_config(dataclasses.asdict(model_value), loaded_weight_value))
+        op_config_dataclass = model_value.__class__
+        op_config_dict = {
+            field.name: getattr(model_value, field.name) for field in dataclasses.fields(op_config_dataclass)
+        }
+        return model_value.__class__(**_merge_model_weight_config(op_config_dict, loaded_weight_value))
 
-    if isinstance(model_value, dict) and isinstance(loaded_weight_value, dict):
+    if isinstance(model_value, (dict, NoneType)) and isinstance(loaded_weight_value, (dict, NoneType)):
+        if model_value is None and loaded_weight_value is None:
+            return None
+        model_value = model_value or {}
+        loaded_weight_value = loaded_weight_value or {}
         return {
-            k: _merge_model_weight_config(model_value.get(k, {}), loaded_weight_value.get(k, {}))
+            k: _merge_model_weight_config(model_value.get(k, None), loaded_weight_value.get(k, None))
             for k in itertools.chain(model_value.keys(), loaded_weight_value.keys())
         }
+
+    if model_value is None:
+        return loaded_weight_value
+
+    if loaded_weight_value is None:
+        return model_value
 
     if isinstance(model_value, list) and isinstance(loaded_weight_value, list):
         if len(model_value) != len(loaded_weight_value):
@@ -478,4 +493,4 @@ def _is_op_config(value: Any) -> bool:
     Returns:
         True if the value is an operator configuration, False otherwise
     """
-    return issubclass(value, OpConfigBase)
+    return issubclass(type(value), OpConfigBase)
