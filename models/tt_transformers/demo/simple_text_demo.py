@@ -494,7 +494,7 @@ def prepare_generator_args(
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
-            False,  # token_accuracy
+            True,  # token_accuracy
         ),
         (  # CI stress test batch-1 run - Runs a short prefill (128) and exhaust the KV cache (128K), by running 50000 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
