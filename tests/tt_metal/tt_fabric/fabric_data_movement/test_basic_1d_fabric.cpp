@@ -880,7 +880,7 @@ void RunTestMCastConnAPI(
     }
     link_idx =
         get_forwarding_link_indices(src_fabric_node_id, get_fabric_node_id_from_physical_chip_id(dst_chip_id))[0];
-    const auto& left_dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_chip_id);
+    const auto left_dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_chip_id);
     append_fabric_connection_rt_args(
         src_fabric_node_id,
         left_dst_fabric_node_id,
@@ -900,7 +900,7 @@ void RunTestMCastConnAPI(
     }
     link_idx =
         get_forwarding_link_indices(src_fabric_node_id, get_fabric_node_id_from_physical_chip_id(dst_chip_id))[0];
-    const auto& right_dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_chip_id);
+    const auto right_dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_chip_id);
     append_fabric_connection_rt_args(
         src_fabric_node_id,
         right_dst_fabric_node_id,
@@ -1137,7 +1137,7 @@ void RunTestChipMCast1D(
 
     // append the EDM connection rt args for fwd connection
     chip_id_t dst_chip_id = first_hop_phys_chip_id;
-    const auto& dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_chip_id);
+    const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_chip_id);
     uint32_t link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
     append_fabric_connection_rt_args(
         src_fabric_node_id, dst_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
@@ -1405,9 +1405,9 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
                         worker_args.push_back(i % packet_sizes.size());
                         worker_args.push_back(i % message_counts.size());
 
-                        const auto& sender_fabric_node_id =
+                        const auto sender_fabric_node_id =
                             tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-                        const auto& receiver_fabric_node_id =
+                        const auto receiver_fabric_node_id =
                             tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(receiver_device->id());
                         append_fabric_connection_rt_args(
                             sender_fabric_node_id,

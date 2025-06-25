@@ -1050,9 +1050,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
             all_gather_rts.push_back(forward_device.has_value());
             if (forward_device.has_value()) {
-                const auto& target_device_fabric_node_id =
+                const auto target_device_fabric_node_id =
                     tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-                const auto& forward_device_fabric_node_id =
+                const auto forward_device_fabric_node_id =
                     tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     target_device_fabric_node_id, forward_device_fabric_node_id, i, program, {core}, all_gather_rts);
@@ -1060,9 +1060,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
             all_gather_rts.push_back(backward_device.has_value());
             if (backward_device.has_value()) {
-                const auto& target_device_fabric_node_id =
+                const auto target_device_fabric_node_id =
                     tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-                const auto& backward_device_fabric_node_id =
+                const auto backward_device_fabric_node_id =
                     tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     target_device_fabric_node_id, backward_device_fabric_node_id, i, program, {core}, all_gather_rts);
