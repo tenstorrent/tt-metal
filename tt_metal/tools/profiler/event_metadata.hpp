@@ -95,9 +95,10 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         FABRIC_FUSED_UNICAST_ATOMIC_INC = 31,
         FABRIC_MULTICAST_WRITE = 32,
         FABRIC_MULTICAST_ATOMIC_INC = 33,
-        FABRIC_ROUTING_FIELDS = 34,
+        FABRIC_UNICAST_SCATTER_WRITE = 34,
+        FABRIC_ROUTING_FIELDS = 35,
 
-        UNSUPPORTED = 35
+        UNSUPPORTED = 36
     };
     NocEventType noc_xfer_type;
 
