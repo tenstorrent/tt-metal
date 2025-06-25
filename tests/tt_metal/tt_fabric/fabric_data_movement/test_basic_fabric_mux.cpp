@@ -45,8 +45,8 @@ const auto routing_directions = {
     tt_fabric::RoutingDirection::W};
 
 using FabricMuxBaseFixture = BaseFabricFixture;
-using FabricMux1DFixture = Fabric1DFixture;
-using FabricMux2DFixture = Fabric2DFixture;
+using Fabric1DMuxFixture = Fabric1DFixture;
+using Fabric2DMuxFixture = Fabric2DFixture;
 
 struct TestConfig {
     uint32_t num_devices = 0;
@@ -621,7 +621,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     }
 }
 
-TEST_F(FabricMux1DFixture, TestFabricMuxTwoChipVariant1) {
+TEST_F(Fabric1DMuxFixture, TestFabricMuxTwoChipVariant1) {
     TestConfig test_config = {
         .num_devices = 2,
         .num_sender_clients = 1,
@@ -639,7 +639,7 @@ TEST_F(FabricMux1DFixture, TestFabricMuxTwoChipVariant1) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux1DFixture, TestFabricMuxTwoChipVariant2) {
+TEST_F(Fabric1DMuxFixture, TestFabricMuxTwoChipVariant2) {
     TestConfig test_config = {
         .num_devices = 2,
         .num_sender_clients = 2,
@@ -657,7 +657,7 @@ TEST_F(FabricMux1DFixture, TestFabricMuxTwoChipVariant2) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux1DFixture, TestFabricMuxTwoChipVariant3) {
+TEST_F(Fabric1DMuxFixture, TestFabricMuxTwoChipVariant3) {
     TestConfig test_config = {
         .num_devices = 2,
         .num_sender_clients = 8,
@@ -675,7 +675,7 @@ TEST_F(FabricMux1DFixture, TestFabricMuxTwoChipVariant3) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux1DFixture, TestFabricMuxTwoChipVariant4) {
+TEST_F(Fabric1DMuxFixture, TestFabricMuxTwoChipVariant4) {
     TestConfig test_config = {
         .num_devices = 2,
         .num_sender_clients = 8,
@@ -693,7 +693,7 @@ TEST_F(FabricMux1DFixture, TestFabricMuxTwoChipVariant4) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux1DFixture, TestFabricMuxThreeChipVariant) {
+TEST_F(Fabric1DMuxFixture, TestFabricMuxThreeChipVariant) {
     TestConfig test_config = {
         .num_devices = 3,
         .num_sender_clients = 8,
@@ -711,7 +711,7 @@ TEST_F(FabricMux1DFixture, TestFabricMuxThreeChipVariant) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux1DFixture, TestFabricMuxFourChipVariant1) {
+TEST_F(Fabric1DMuxFixture, TestFabricMuxFourChipVariant1) {
     TestConfig test_config = {
         .num_devices = 4,
         .num_sender_clients = 8,
@@ -729,7 +729,7 @@ TEST_F(FabricMux1DFixture, TestFabricMuxFourChipVariant1) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux1DFixture, TestFabricMuxFourChipVariant2) {
+TEST_F(Fabric1DMuxFixture, TestFabricMuxFourChipVariant2) {
     TestConfig test_config = {
         .num_devices = 4,
         .num_sender_clients = 8,
@@ -747,7 +747,7 @@ TEST_F(FabricMux1DFixture, TestFabricMuxFourChipVariant2) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux1DFixture, TestFabricMuxFiveChipVariant) {
+TEST_F(Fabric1DMuxFixture, TestFabricMuxFiveChipVariant) {
     TestConfig test_config = {
         .num_devices = 5,
         .num_sender_clients = 8,
@@ -765,7 +765,7 @@ TEST_F(FabricMux1DFixture, TestFabricMuxFiveChipVariant) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux1DFixture, TestFabricMuxSixChipVariant) {
+TEST_F(Fabric1DMuxFixture, TestFabricMuxSixChipVariant) {
     TestConfig test_config = {
         .num_devices = 6,
         .num_sender_clients = 16,
@@ -783,7 +783,7 @@ TEST_F(FabricMux1DFixture, TestFabricMuxSixChipVariant) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux1DFixture, TestFabricMuxSevenChipVariant) {
+TEST_F(Fabric1DMuxFixture, TestFabricMuxSevenChipVariant) {
     TestConfig test_config = {
         .num_devices = 7,
         .num_sender_clients = 20,
@@ -801,7 +801,7 @@ TEST_F(FabricMux1DFixture, TestFabricMuxSevenChipVariant) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux1DFixture, TestFabricMuxEightChipVariant) {
+TEST_F(Fabric1DMuxFixture, TestFabricMuxEightChipVariant) {
     TestConfig test_config = {
         .num_devices = 8,
         .num_sender_clients = 20,
@@ -819,7 +819,7 @@ TEST_F(FabricMux1DFixture, TestFabricMuxEightChipVariant) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux1DFixture, TestFabricMuxStressOpenClose) {
+TEST_F(Fabric1DMuxFixture, TestFabricMuxStressOpenClose) {
     TestConfig test_config = {
         .num_devices = 2,  // running on 2 devices will allow to test on all types of multi-chip systems
         .num_sender_clients = 8,
@@ -837,7 +837,7 @@ TEST_F(FabricMux1DFixture, TestFabricMuxStressOpenClose) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux1DFixture, TestFabricMuxNumFullSizeChannelIters) {
+TEST_F(Fabric1DMuxFixture, TestFabricMuxNumFullSizeChannelIters) {
     TestConfig test_config = {
         .num_devices = 2,  // running on 2 devices will allow to test on all types of multi-chip systems
         .num_sender_clients = 8,
@@ -855,7 +855,7 @@ TEST_F(FabricMux1DFixture, TestFabricMuxNumFullSizeChannelIters) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux2DFixture, TestFabricMux2DTwoChipVariant) {
+TEST_F(Fabric2DMuxFixture, TestFabricMux2DTwoChipVariant) {
     TestConfig test_config = {
         .num_devices = 2,
         .num_sender_clients = 8,
@@ -873,7 +873,7 @@ TEST_F(FabricMux2DFixture, TestFabricMux2DTwoChipVariant) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux2DFixture, TestFabricMux2DThreeChipVariant) {
+TEST_F(Fabric2DMuxFixture, TestFabricMux2DThreeChipVariant) {
     TestConfig test_config = {
         .num_devices = 3,
         .num_sender_clients = 8,
@@ -891,7 +891,7 @@ TEST_F(FabricMux2DFixture, TestFabricMux2DThreeChipVariant) {
     run_mux_test_variant(this, test_config);
 }
 
-TEST_F(FabricMux2DFixture, TestFabricMux2DFourChipVariant) {
+TEST_F(Fabric2DMuxFixture, TestFabricMux2DFourChipVariant) {
     TestConfig test_config = {
         .num_devices = 4,
         .num_sender_clients = 8,
