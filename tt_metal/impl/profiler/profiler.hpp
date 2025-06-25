@@ -305,7 +305,7 @@ public:
     // Device events
     std::unordered_set<tracy::TTDeviceEvent> device_events;
 
-    std::unordered_set<tracy::TTDeviceEvent> device_sync_events;
+    std::set<tracy::TTDeviceEvent> device_sync_events;
 
     std::set<tracy::TTDeviceEvent> device_sync_new_events;
 
