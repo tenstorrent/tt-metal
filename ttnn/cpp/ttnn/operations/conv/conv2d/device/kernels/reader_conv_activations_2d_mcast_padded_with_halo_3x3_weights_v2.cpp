@@ -12,7 +12,7 @@
 #include "debug/dprint_pages.h"
 #endif
 
-constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);  // Input filter window width
+constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);  // Input filter window height
 constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);  // Input filter window width
 
 template <int window_height, int window_width>
@@ -48,10 +48,9 @@ void read_channels(
     const uint32_t conv_act_c_read_bytes,
     const uint32_t coalesced_read_bytes,
     const uint32_t stride_h_bytes) {
-    constexpr uint32_t unroll_factor = WINDOW_INNER;
     uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_read_bytes);
-#pragma GCC unroll unroll_factor
-    for (uint32_t inner = 0; inner < WINDOW_INNER; inner++) {
+#pragma GCC unroll weight_size_h
+    for (uint32_t inner = 0; inner < weight_size_h; inner++) {
         noc_async_read_one_packet_with_state<true>(act_l1_read_addr_plus_offset, l1_write_addr_act);
         l1_write_addr_act += coalesced_read_bytes;
         // +2 is hard-coded, TODO: generalize
