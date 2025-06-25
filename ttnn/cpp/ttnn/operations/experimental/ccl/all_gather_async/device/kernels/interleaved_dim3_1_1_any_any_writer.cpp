@@ -188,8 +188,8 @@ void kernel_main() {
         tile_id_start += output_tensor_Wt * output_tensor_Ht;
         tiles_read = input_tile_id_start;
         tiles_to_read = input_tile_id_end;
-        pages_read_in_row = input_tile_id_start % input_tensor_Wt;
-        row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
+        pages_read_in_row = start_pages_read_in_row;
+        row_offset = start_row_offset;
     }
 
     // 2. unicast output ready semaphore
