@@ -2,6 +2,8 @@
 
 This document provides a comprehensive list of all `ttnn` functions used in the LLM transformer codebase, with descriptions and context for each function.
 
+It is auto-generated for the benefit of LLM assistants writing code. It may be incorrect or incomplete and has not been verified by a human.
+
 ## Tensor Creation and Conversion Functions
 
 ### `ttnn.from_torch(tensor, device=None, dtype=None, layout=None, mesh_mapper=None, memory_config=None, cache_file_name=None)`
