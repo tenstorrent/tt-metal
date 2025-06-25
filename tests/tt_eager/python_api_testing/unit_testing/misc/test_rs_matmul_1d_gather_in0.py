@@ -9,6 +9,9 @@ from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_worm
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import itertools
+import os
+
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 
@@ -795,6 +798,8 @@ def test_6U_matmul_1d_ring_llama_with_rs_perf(
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
         pytest.skip("Skipping test_run_prefetcher because it only works with a 7x10 grid")
+    if not is_RING_6U:
+        pytest.skip("This test is only for 6U TG devices")
 
     if in1_is_dram_interleaved:
         hop_grid = None
