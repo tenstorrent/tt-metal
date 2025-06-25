@@ -980,6 +980,7 @@ void test_basic_dispatch_functions(IDevice* device, int cq_id) {
 
     constexpr uint32_t k_DataSize = 64 * 1024;
     constexpr uint32_t k_PageSize = 4 * 1024;
+    constexpr uint32_t k_Iterations = 10;
     constexpr uint32_t k_LoopPerDev = 100;
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
@@ -992,15 +993,16 @@ void test_basic_dispatch_functions(IDevice* device, int cq_id) {
     }
     auto buffer = CreateBuffer(InterleavedBufferConfig{device, k_DataSize, k_PageSize, BufferType::L1});
     auto& cq = device->command_queue(cq_id);
-    for (int i = 0; i < k_LoopPerDev; ++i) {
-        log_info(tt::LogTest, " Iteration {}", i);
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, cq, dummy_program_config, 24, 12, 15, k_LoopPerDev));
-        EnqueueWriteBuffer(cq, *buffer, src_data, false);
+    for (int iteration = 0; iteration < k_Iterations; ++iteration) {
+        for (int i = 0; i < k_LoopPerDev; ++i) {
+            EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+                device, cq, dummy_program_config, 24, 12, 15, k_LoopPerDev));
+            EnqueueWriteBuffer(cq, *buffer, src_data, false);
 
-        std::vector<uint32_t> dst_data;
-        EnqueueReadBuffer(cq, *buffer, dst_data, true);
-        EXPECT_EQ(src_data, dst_data);
+            std::vector<uint32_t> dst_data;
+            EnqueueReadBuffer(cq, *buffer, dst_data, true);
+            EXPECT_EQ(src_data, dst_data);
+        }
     }
 }
 
@@ -1280,13 +1282,23 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestRuntimeArgsCorrectlySentS
     }
 }
 
-TEST_F(CommandQueueOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunctions) {
+auto CommandQueueFabricConfigsToTest = ::testing::Values(
+    tt::tt_metal::FabricConfig::FABRIC_1D,
+    tt::tt_metal::FabricConfig::FABRIC_1D_RING,
+    tt::tt_metal::FabricConfig::FABRIC_2D);
+
+INSTANTIATE_TEST_SUITE_P(CommandQueue, CommandQueueOnFabricMultiDeviceFixture, CommandQueueFabricConfigsToTest);
+
+INSTANTIATE_TEST_SUITE_P(
+    MultiCommandQueue, MultiCommandQueueOnFabricMultiDeviceFixture, CommandQueueFabricConfigsToTest);
+
+TEST_P(CommandQueueOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunctions) {
     for (IDevice* device : devices_) {
         local_test_functions::test_basic_dispatch_functions(device, 0);
     }
 }
 
-TEST_F(MultiCommandQueueOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunctions) {
+TEST_P(MultiCommandQueueOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunctions) {
     for (IDevice* device : devices_) {
         for (int cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
             local_test_functions::test_basic_dispatch_functions(device, cq_id);
