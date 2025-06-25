@@ -552,6 +552,8 @@ void test_single_connection_multi_device_socket(
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
     auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
     // Used to setup fabric connections
     const uint32_t sender_physical_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
     const uint32_t recv_physical_device_id = md1->get_device(MeshCoordinate(0, 0))->id();
@@ -941,15 +943,14 @@ std::shared_ptr<Program> create_sender_program(
     chip_id_t recv_physical_device_id,
     uint32_t sender_link_idx) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
 
     // Used to setup fabric connections
     const auto& sender_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender_physical_device_id);
     const auto& recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
 
-    auto fabric_max_packet_size = fabric_context.get_fabric_max_payload_size_bytes();
-    auto packet_header_size_bytes = fabric_context.get_fabric_packet_header_size_bytes();
+    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     const auto reserved_packet_header_CB_index = tt::CB::c_in0;
     auto sender_program = std::make_shared<Program>();
@@ -1009,6 +1010,7 @@ std::shared_ptr<Program> create_split_reduce_program(
     auto in1_cb_index = tt::CBIndex::c_4;
 
     // Used to setup fabric connections
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
     const auto& sender0_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender0_physical_device_id);
@@ -1160,13 +1162,14 @@ std::shared_ptr<Program> create_reduce_program(
     auto reserved_sender_packet_header_CB_index = tt::CBIndex::c_1;
     auto out_cb_index = tt::CBIndex::c_2;
 
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     // Used to setup fabric connections
-    const auto& sender0_fabric_node_id =
+    const auto sender0_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender0_physical_device_id);
-    const auto& sender1_fabric_node_id =
+    const auto sender1_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender1_physical_device_id);
-    const auto& recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
-    const auto& reducer_fabric_node_id =
+    const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
+    const auto reducer_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(reducer_physical_device_id);
 
     auto reduce_virtual_coord = reducer->worker_core_from_logical_core(reduce_logical_coord);
@@ -1262,9 +1265,10 @@ std::shared_ptr<Program> create_recv_program(
     auto reserved_packet_header_CB_index = tt::CB::c_in0;
 
     // Used to setup fabric connections
-    const auto& sender_fabric_node_id =
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto sender_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender_physical_device_id);
-    const auto& recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
+    const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
 
     auto recv_virtual_coord = output_data_buffer->device()->worker_core_from_logical_core(recv_logical_coord);
     auto output_virtual_coord = output_data_buffer->device()->worker_core_from_logical_core(output_logical_coord);
