@@ -18,8 +18,9 @@ class TtMobileNetV2:
             device,
             batchsize,
             deallocate_activation=True,
-            # enable_split_reader = True
+            enable_act_double_buffer=True,
             reshard_if_not_optimal=False,
+            activation_function="relu6",
         )
         self.conv2 = TtMobileNetV2Conv2D(
             [3, 1, 1, 32],
@@ -27,9 +28,17 @@ class TtMobileNetV2:
             device,
             batchsize,
             groups=32,
+            enable_act_double_buffer=True,
+            deallocate_activation=True,
+            activation_function="relu6",
         )
         self.conv3 = TtMobileNetV2Conv2D(
-            [1, 1, 0, 16], (model_params["conv_0_weight"], model_params["conv_0_bias"]), device, batchsize
+            [1, 1, 0, 16],
+            (model_params["conv_0_weight"], model_params["conv_0_bias"]),
+            device,
+            batchsize,
+            enable_act_double_buffer=True,
+            deallocate_activation=True,
         )
 
         self.block1 = TtInvertedResidual(
@@ -214,7 +223,8 @@ class TtMobileNetV2:
             (model_params["fused_conv_34_weight"], model_params["fused_conv_34_bias"]),
             device,
             batchsize,
-            width_shard=True,
+            deallocate_activation=True,
+            activation_function="relu6",
         )
         self.l1_weight = model_params["classifier_1_weight"]
         self.l1_bias = model_params["classifier_1_bias"]
@@ -224,9 +234,7 @@ class TtMobileNetV2:
         x,
     ):
         output_tensor, h, w = self.conv1(x)
-        output_tensor = ttnn.relu6(output_tensor)
         output_tensor, h, w = self.conv2(output_tensor)
-        output_tensor = ttnn.relu6(output_tensor)
         output_tensor, h, w = self.conv3(output_tensor)
         output_tensor = self.block1(output_tensor)
         output_tensor = self.block2(output_tensor)
@@ -246,11 +254,10 @@ class TtMobileNetV2:
         output_tensor = self.block16(output_tensor)
 
         output_tensor, h, w = self.conv4(output_tensor)
-        output_tensor = ttnn.relu6(output_tensor)
-        if output_tensor.is_sharded():
-            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor = ttnn.reshape(output_tensor, (self.batchsize, h, w, output_tensor.shape[3]))
+        if output_tensor.is_sharded():
+            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
 
         output_tensor = ttnn.global_avg_pool2d(output_tensor)
 
