@@ -5,6 +5,8 @@
 #include "buffer_distribution_spec.hpp"
 #include "assert.hpp"
 
+#include <algorithm>
+
 namespace tt::tt_metal {
 
 namespace {
@@ -77,6 +79,58 @@ tt::tt_metal::Shape convert_shape_to_pages(tt::tt_metal::Shape shape, const tt::
     return shape;
 }
 
+std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Shape& shard_shape) {
+    TT_FATAL(
+        tensor_shape.rank() >= shard_shape.rank(),
+        "Tensor shape rank ({}) can't be less than shard shape rank ({})!",
+        tensor_shape.rank(),
+        shard_shape.rank());
+
+    uint64_t tensor_volume = tensor_shape.volume();
+    uint64_t shard_volume = shard_shape.volume();
+    tt::stl::SmallVector<uint32_t> new_tensor_shape;
+    tt::stl::SmallVector<uint32_t> new_shard_shape;
+
+    bool last_dim_identical = false;
+    bool last_dim_divisible = false;
+    uint64_t cur_tensor_volume = 1;
+    uint64_t cur_shard_volume = 1;
+    for (int dim = -1; dim >= -static_cast<int>(shard_shape.rank()); dim--) {
+        auto tensor_size = tensor_shape[dim];
+        auto shard_size = shard_shape[dim];
+
+        bool should_merge_dims = false;
+        if (dim < -2) {
+            should_merge_dims = last_dim_identical || (shard_size == 1 && last_dim_divisible);
+        }
+
+        if (should_merge_dims) {
+            new_tensor_shape.back() *= tensor_size;
+            new_shard_shape.back() *= shard_size;
+        } else {
+            new_tensor_shape.push_back(tensor_size);
+            new_shard_shape.push_back(shard_size);
+        }
+
+        cur_tensor_volume *= tensor_size;
+        cur_shard_volume *= shard_size;
+        if (cur_tensor_volume == tensor_volume && cur_shard_volume == shard_volume) {
+            break;
+        }
+
+        last_dim_identical = tensor_size == shard_size;
+        last_dim_divisible = tensor_size % shard_size == 0;
+    }
+
+    for (int dim = -static_cast<int>(shard_shape.rank()) - 1; dim >= -static_cast<int>(tensor_shape.rank()); dim--) {
+        new_tensor_shape.back() *= tensor_shape[dim];
+    }
+
+    std::reverse(new_tensor_shape.begin(), new_tensor_shape.end());
+    std::reverse(new_shard_shape.begin(), new_shard_shape.end());
+    return {Shape(std::move(new_tensor_shape)), Shape(std::move(new_shard_shape))};
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -96,21 +150,17 @@ BufferDistributionSpec::BufferDistributionSpec(
     tt::tt_metal::Shape shard_shape_in_pages,
     CoreRangeSet core_range_set,
     ShardOrientation shard_orientation) :
-    tensor_shape_in_pages_(std::move(tensor_shape_in_pages)),
-    shard_shape_in_pages_(std::move(shard_shape_in_pages)),
     shard_orientation_(shard_orientation) {
     cores_ = corerange_to_cores(
         core_range_set, core_range_set.num_cores(), shard_orientation_ == ShardOrientation::ROW_MAJOR);
-    TT_FATAL(
-        tensor_shape_in_pages_.rank() == shard_shape_in_pages_.rank(),
-        "Tensor shape rank ({}) must be same as shard shape rank ({})!",
-        tensor_shape_in_pages_.rank(),
-        shard_shape_in_pages_.rank());
-    TT_FATAL(tensor_shape_in_pages_.rank() >= 1, "Tensor rank must be at least 1!");
-    TT_FATAL(shard_shape_in_pages_.volume() != 0, "Shard shape must have non zero volume!");
-    if (tensor_shape_in_pages_.volume() != 0) {
+    TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
+    TT_FATAL(shard_shape_in_pages.rank() >= 1, "Shard rank must be at least 1!");
+    TT_FATAL(shard_shape_in_pages.volume() != 0, "Shard shape must have non zero volume!");
+    if (tensor_shape_in_pages.volume() != 0) {
         TT_FATAL(cores_.size() != 0, "Can't distribute non zero volume tensor over an empty set of cores");
     }
+    std::tie(tensor_shape_in_pages_, shard_shape_in_pages_) =
+        CMAKE_UNIQUE_NAMESPACE::squeeze_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
 }
 
 size_t BufferDistributionSpec::num_shards() const {
@@ -173,41 +223,47 @@ BufferDistributionSpec::get_core_groups_by_num_shards() const {
     };
 }
 
-UncompressedBufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
+namespace detail {
+UncompressedBufferPageMapping compute_page_mapping(
+    const Shape& tensor_shape, const Shape& shard_shape, const std::vector<CoreCoord>& cores) {
     UncompressedBufferPageMapping page_mapping;
-    page_mapping.all_cores = cores_;
+    page_mapping.all_cores = cores;
 
-    if (tensor_shape_in_pages_.volume() == 0) {
+    if (tensor_shape.volume() == 0) {
         return page_mapping;
     }
 
-    size_t num_shards_per_core = this->max_num_shards_per_core();
-    size_t shard_pages = shard_shape_in_pages_.volume();
-    size_t host_pages = tensor_shape_in_pages_.volume();
-    size_t dev_pages = cores_.size() * num_shards_per_core * shard_pages;
+    size_t num_shards = 1;
+    for (size_t i = 0; i < tensor_shape.rank(); i++) {
+        num_shards *= (tensor_shape[i] + shard_shape[i] - 1) / shard_shape[i];
+    }
 
-    page_mapping.core_host_page_indices.resize(cores_.size());
-    for (size_t i = 0; i < cores_.size(); i++) {
+    size_t num_shards_per_core = (num_shards + cores.size() - 1) / cores.size();
+    size_t shard_pages = shard_shape.volume();
+    size_t dev_pages = cores.size() * num_shards_per_core * shard_pages;
+
+    page_mapping.core_host_page_indices.resize(cores.size());
+    for (size_t i = 0; i < cores.size(); i++) {
         page_mapping.core_host_page_indices[i].resize(
             num_shards_per_core * shard_pages, UncompressedBufferPageMapping::PADDING);
     }
 
-    tt::stl::SmallVector<uint32_t> shard_grid(tensor_shape_in_pages_.rank());
-    for (size_t i = 0; i < tensor_shape_in_pages_.rank(); i++) {
-        shard_grid[i] = (tensor_shape_in_pages_[i] + shard_shape_in_pages_[i] - 1) / shard_shape_in_pages_[i];
+    tt::stl::SmallVector<uint32_t> shard_grid(tensor_shape.rank());
+    for (size_t i = 0; i < tensor_shape.rank(); i++) {
+        shard_grid[i] = (tensor_shape[i] + shard_shape[i] - 1) / shard_shape[i];
     }
 
-    tt::stl::SmallVector<uint32_t> tensor_strides = tt::tt_metal::compute_strides(tensor_shape_in_pages_);
-    tt::stl::SmallVector<uint32_t> shard_strides = tt::tt_metal::compute_strides(shard_shape_in_pages_);
-    tt::stl::SmallVector<uint32_t> actual_shard_size(tensor_shape_in_pages_.rank());
+    tt::stl::SmallVector<uint32_t> tensor_strides = tt::tt_metal::compute_strides(tensor_shape);
+    tt::stl::SmallVector<uint32_t> shard_strides = tt::tt_metal::compute_strides(shard_shape);
+    tt::stl::SmallVector<uint32_t> actual_shard_size(tensor_shape.rank());
 
     CMAKE_UNIQUE_NAMESPACE::PageMappingIntermData params{
         .page_mapping = &page_mapping,
-        .num_cores = cores_.size(),
-        .rank = tensor_shape_in_pages_.rank(),
-        .tensor_shape = tensor_shape_in_pages_.view().data(),
-        .shard_shape = shard_shape_in_pages_.view().data(),
-        .shard_volume = shard_shape_in_pages_.volume(),
+        .num_cores = cores.size(),
+        .rank = tensor_shape.rank(),
+        .tensor_shape = tensor_shape.view().data(),
+        .shard_shape = shard_shape.view().data(),
+        .shard_volume = shard_pages,
         .shard_grid = shard_grid.data(),
         .tensor_strides = tensor_strides.data(),
         .shard_strides = shard_strides.data(),
@@ -219,5 +275,6 @@ UncompressedBufferPageMapping BufferDistributionSpec::compute_page_mapping() con
 
     return page_mapping;
 }
+}  // namespace detail
 
 }  // namespace tt::tt_metal
