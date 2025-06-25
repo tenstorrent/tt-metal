@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import ttnn
 
@@ -10,7 +11,7 @@ from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch2tt_tensor
 
 
-class TtConvNet(torch.nn.Module):
+class TtConvNet(LightweightModule):
     def __init__(self, device=None, state_dict=None):
         super().__init__()
         self.device = device

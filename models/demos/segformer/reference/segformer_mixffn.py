@@ -5,10 +5,11 @@
 import torch.nn as nn
 from transformers.activations import ACT2FN
 
+from models.common.lightweightmodule import LightweightModule
 from models.demos.segformer.reference.segformer_dwconv import SegformerDWConv
 
 
-class SegformerMixFFN(nn.Module):
+class SegformerMixFFN(LightweightModule):
     def __init__(self, config, in_features, hidden_features=None, out_features=None):
         super().__init__()
         out_features = out_features or in_features

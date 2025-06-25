@@ -28,6 +28,7 @@ import torch
 from torch import nn
 from torch.nn.utils import skip_init
 
+from models.common.lightweightmodule import LightweightModule
 from models.demos.t3000.mixtral8x7b.reference.moe import MoeLayer
 
 
@@ -65,7 +66,7 @@ def apply_rotary_emb(
     return xq_out.type_as(xq), xk_out.type_as(xk)
 
 
-class Attention(nn.Module):
+class Attention(LightweightModule):
     def __init__(self, args):
         super().__init__()
         self.args = args
@@ -141,7 +142,7 @@ class Attention(nn.Module):
         return self.wo(output)
 
 
-class FeedForward(nn.Module):
+class FeedForward(LightweightModule):
     def __init__(self, args):
         super().__init__()
 
@@ -153,7 +154,7 @@ class FeedForward(nn.Module):
         return self.w2(nn.functional.silu(self.w1(x)) * self.w3(x))
 
 
-class RMSNorm(torch.nn.Module):
+class RMSNorm(LightweightModule):
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
@@ -167,7 +168,7 @@ class RMSNorm(torch.nn.Module):
         return output * self.weight
 
 
-class TransformerBlock(nn.Module):
+class TransformerBlock(LightweightModule):
     def __init__(self, args):
         super().__init__()
         self.n_heads = args.n_heads
@@ -176,7 +177,7 @@ class TransformerBlock(nn.Module):
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
         self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
         self.args = args
-        self.feed_forward: nn.Module
+        self.feed_forward: LightweightModule
         if args.moe is not None:
             self.feed_forward = MoeLayer(
                 experts=[FeedForward(args=args) for _ in range(args.num_experts)],
@@ -205,7 +206,7 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 1000000.0) -> torch.
     return torch.polar(torch.ones_like(freqs), freqs)  # complex64
 
 
-class Transformer(nn.Module):
+class Transformer(LightweightModule):
     def __init__(self, args):
         super().__init__()
         self.args = args

@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.wormhole.mamba.reference.args import ModelMode
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
 from models.demos.wormhole.mamba.tt import model_config
@@ -16,7 +17,7 @@ from models.utility_functions import skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
-class PytorchResidualBlock(torch.nn.Module):
+class PytorchResidualBlock(LightweightModule):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
         self.block = hf_reference_model.layers[layer_num]

@@ -7,6 +7,8 @@ from typing import Callable, List, Optional
 import torch
 import torch.nn as nn
 
+from models.common.lightweightmodule import LightweightModule
+
 
 def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1) -> nn.Conv2d:
     return nn.Conv2d(
@@ -25,7 +27,7 @@ def conv1x1(in_planes: int, out_planes: int, stride: int = 1) -> nn.Conv2d:
     return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
 
 
-class BasicBlock(nn.Module):
+class BasicBlock(LightweightModule):
     expansion: int = 1
 
     def __init__(
@@ -33,11 +35,11 @@ class BasicBlock(nn.Module):
         inplanes: int,
         planes: int,
         stride: int = 1,
-        downsample: Optional[nn.Module] = None,
+        downsample: Optional[LightweightModule] = None,
         groups: int = 1,
         base_width: int = 64,
         dilation: int = 1,
-        norm_layer: Optional[Callable[..., nn.Module]] = None,
+        norm_layer: Optional[Callable[..., LightweightModule]] = None,
     ) -> None:
         super().__init__()
         if norm_layer is None:
@@ -65,7 +67,7 @@ class BasicBlock(nn.Module):
         return out
 
 
-class CustomResNet34(nn.Module):
+class CustomResNet34(LightweightModule):
     def __init__(
         self,
         block: BasicBlock,
@@ -75,7 +77,7 @@ class CustomResNet34(nn.Module):
         groups: int = 1,
         width_per_group: int = 64,
         replace_stride_with_dilation: Optional[List[bool]] = None,
-        norm_layer: Optional[Callable[..., nn.Module]] = None,
+        norm_layer: Optional[Callable[..., LightweightModule]] = None,
     ) -> None:
         super().__init__()
         if norm_layer is None:
@@ -151,7 +153,7 @@ class CustomResNet34(nn.Module):
         return [x2, x3, x4]
 
 
-class TuSimple34(nn.Module):
+class TuSimple34(LightweightModule):
     def __init__(self, input_height=320, input_width=800):
         super(TuSimple34, self).__init__()
         self.num_grid_row = 100

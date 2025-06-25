@@ -2,11 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import torch.nn as nn
 
 
-class UNet(nn.Module):
+class UNet(LightweightModule):
     def __init__(self, in_channels=3, out_channels=1, init_features=32):
         super(UNet, self).__init__()
 

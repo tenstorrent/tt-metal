@@ -6,6 +6,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from models.common.lightweightmodule import LightweightModule
+
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
     """Pad to 'same' shape outputs."""
@@ -16,7 +18,7 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
     return p
 
 
-class Conv(nn.Module):
+class Conv(LightweightModule):
     """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)."""
 
     default_act = nn.SiLU(inplace=True)  # default activation
@@ -26,14 +28,14 @@ class Conv(nn.Module):
         super().__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         self.bn = nn.BatchNorm2d(c2, eps=0.001, momentum=0.03)
-        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+        self.act = self.default_act if act is True else act if isinstance(act, LightweightModule) else nn.Identity()
 
     def forward(self, x):
         """Apply convolution, batch normalization and activation to input tensor."""
         return self.act(self.bn(self.conv(x)))
 
 
-class Bottleneck(nn.Module):
+class Bottleneck(LightweightModule):
     def __init__(self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5):
         super().__init__()
         c_ = int(c2 * e)
@@ -48,7 +50,7 @@ class Bottleneck(nn.Module):
         return x + cv2_out if add else cv2_out
 
 
-class C2f(nn.Module):
+class C2f(LightweightModule):
     """Faster Implementation of CSP Bottleneck with 2 convolutions."""
 
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
@@ -67,7 +69,7 @@ class C2f(nn.Module):
         return self.cv2(torch.cat(y, 1))
 
 
-class SPPF(nn.Module):
+class SPPF(LightweightModule):
     """Spatial Pyramid Pooling - Fast (SPPF) layer for YOLOv5 by Glenn Jocher."""
 
     def __init__(self, c1, c2, k=5):
@@ -89,7 +91,7 @@ class SPPF(nn.Module):
         return self.cv2(torch.cat(y, 1))
 
 
-class Concat(nn.Module):
+class Concat(LightweightModule):
     """Concatenate a list of tensors along dimension."""
 
     def __init__(self, dimension=1):
@@ -102,7 +104,7 @@ class Concat(nn.Module):
         return torch.cat(x, self.d)
 
 
-class MaxSigmoidAttnBlock(nn.Module):
+class MaxSigmoidAttnBlock(LightweightModule):
     """Max Sigmoid attention block."""
 
     def __init__(self, c1, c2, nh=1, ec=128, gc=512, scale=False):
@@ -137,7 +139,7 @@ class MaxSigmoidAttnBlock(nn.Module):
         return x.view(bs, -1, h, w)
 
 
-class C2fAttn(nn.Module):
+class C2fAttn(LightweightModule):
     """C2f module with an additional attn module."""
 
     def __init__(self, c1, c2, n=1, ec=128, nh=1, gc=512, shortcut=False, g=1, e=0.5):
@@ -157,7 +159,7 @@ class C2fAttn(nn.Module):
         return self.cv2(torch.cat(y, 1))
 
 
-class ImagePoolingAttn(nn.Module):
+class ImagePoolingAttn(LightweightModule):
     """ImagePoolingAttn: Enhance the text embeddings with image-aware information."""
 
     def __init__(self, ec=256, ch=(), ct=512, nh=8, k=3, scale=False):
@@ -203,7 +205,7 @@ class ImagePoolingAttn(nn.Module):
         return x * self.scale + text
 
 
-class ContrastiveHead(nn.Module):
+class ContrastiveHead(LightweightModule):
     """Implements contrastive learning head for region-text similarity in vision-language models."""
 
     def __init__(self):
@@ -221,7 +223,7 @@ class ContrastiveHead(nn.Module):
         return x * self.logit_scale.exp() + self.bias
 
 
-class DFL(nn.Module):
+class DFL(LightweightModule):
     def __init__(self, c1=16):
         super().__init__()
         self.conv = nn.Conv2d(c1, 1, 1, bias=False)
@@ -237,7 +239,7 @@ class DFL(nn.Module):
         return x
 
 
-class WorldDetect(nn.Module):
+class WorldDetect(LightweightModule):
     """Head for integrating YOLO detection models with semantic understanding from text embeddings."""
 
     dynamic = False
@@ -331,7 +333,7 @@ class WorldDetect(nn.Module):
         return torch.cat(anchor_points), torch.cat(stride_tensor)
 
 
-class WorldModel(nn.Module):
+class WorldModel(LightweightModule):
     def __init__(self, model_torch=None, ch=3, nc=None, verbose=True):
         super().__init__()
         if model_torch != None:
@@ -416,7 +418,7 @@ class WorldModel(nn.Module):
         return x
 
 
-class YOLOWorld(nn.Module):
+class YOLOWorld(LightweightModule):
     def __init__(self, model_torch=None, weights_path=None):
         super().__init__()
         self.model = WorldModel(model_torch=model_torch)

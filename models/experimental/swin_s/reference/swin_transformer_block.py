@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from torch import nn, Tensor
 from typing import Callable, List
 from models.experimental.swin_s.reference.shifted_window_attention import ShiftedWindowAttention
 from models.experimental.swin_s.reference.mlp import MLP
 
 
-class SwinTransformerBlock(nn.Module):
+class SwinTransformerBlock(LightweightModule):
     def __init__(
         self,
         dim: int,
@@ -19,8 +20,8 @@ class SwinTransformerBlock(nn.Module):
         dropout: float = 0.0,
         attention_dropout: float = 0.0,
         stochastic_depth_prob: float = 0.0,
-        norm_layer: Callable[..., nn.Module] = nn.LayerNorm,
-        attn_layer: Callable[..., nn.Module] = ShiftedWindowAttention,
+        norm_layer: Callable[..., LightweightModule] = nn.LayerNorm,
+        attn_layer: Callable[..., LightweightModule] = ShiftedWindowAttention,
     ):
         super().__init__()
         self.norm1 = norm_layer(dim)

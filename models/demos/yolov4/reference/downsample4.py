@@ -6,10 +6,11 @@
 import torch
 import torch.nn as nn
 
+from models.common.lightweightmodule import LightweightModule
 from models.demos.yolov4.reference.resblock import ResBlock
 
 
-class Mish(torch.nn.Module):
+class Mish(LightweightModule):
     def __init__(self):
         super().__init__()
 
@@ -18,7 +19,7 @@ class Mish(torch.nn.Module):
         return x
 
 
-class DownSample4(nn.Module):
+class DownSample4(LightweightModule):
     def __init__(self):
         super().__init__()
         self.c1 = nn.Conv2d(256, 512, 3, 2, 1, bias=False)

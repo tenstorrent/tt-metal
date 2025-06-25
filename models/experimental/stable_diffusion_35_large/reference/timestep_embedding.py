@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from __future__ import annotations
 
 import math
@@ -10,7 +11,7 @@ import torch
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/embeddings.py
-class CombinedTimestepTextProjEmbeddings(torch.nn.Module):
+class CombinedTimestepTextProjEmbeddings(LightweightModule):
     def __init__(self, *, embedding_dim: int, pooled_projection_dim: int) -> None:
         super().__init__()
 
@@ -25,7 +26,7 @@ class CombinedTimestepTextProjEmbeddings(torch.nn.Module):
         return timesteps_emb + self.text_embedder(pooled_projection)
 
 
-class _TimestepEmbedding(torch.nn.Module):
+class _TimestepEmbedding(LightweightModule):
     def __init__(self, *, in_channels: int, time_embed_dim: int) -> None:
         super().__init__()
 
@@ -54,7 +55,7 @@ def _time_proj(num_channels: int, timesteps: torch.Tensor) -> torch.Tensor:
     return torch.cat([torch.cos(emb), torch.sin(emb)], dim=-1)
 
 
-class _PixArtAlphaTextProjection(torch.nn.Module):
+class _PixArtAlphaTextProjection(LightweightModule):
     def __init__(self, *, in_features: int, hidden_size: int) -> None:
         super().__init__()
 

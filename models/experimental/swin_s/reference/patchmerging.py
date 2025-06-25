@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Callable
 
 import torch
@@ -10,8 +11,8 @@ from torch import nn
 from torch import Tensor
 
 
-class PatchMerging(nn.Module):
-    def __init__(self, dim: int, norm_layer: Callable[..., nn.Module] = nn.LayerNorm):
+class PatchMerging(LightweightModule):
+    def __init__(self, dim: int, norm_layer: Callable[..., LightweightModule] = nn.LayerNorm):
         super().__init__()
 
         self.dim = dim

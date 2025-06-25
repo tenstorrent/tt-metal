@@ -4,8 +4,10 @@
 
 import torch
 
+from models.common.lightweightmodule import LightweightModule
 
-class MnistModel(torch.nn.Module):
+
+class MnistModel(LightweightModule):
     def __init__(self, state_dict):
         super().__init__()
 

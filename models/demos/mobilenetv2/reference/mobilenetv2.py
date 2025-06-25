@@ -8,6 +8,8 @@ from typing import Callable, List, Optional
 import torch
 import torch.nn as nn
 
+from models.common.lightweightmodule import LightweightModule
+
 
 def _make_divisible(v: float, divisor: int, min_value: Optional[int] = None) -> int:
     if min_value is None:
@@ -27,8 +29,8 @@ class Conv2dNormActivation(nn.Sequential):
         stride: int = 1,
         padding: int = 0,
         groups: int = 1,
-        norm_layer: Optional[Callable[..., nn.Module]] = nn.BatchNorm2d,
-        activation_layer: Optional[Callable[..., nn.Module]] = nn.ReLU6,
+        norm_layer: Optional[Callable[..., LightweightModule]] = nn.BatchNorm2d,
+        activation_layer: Optional[Callable[..., LightweightModule]] = nn.ReLU6,
         inplace: Optional[bool] = True,
     ) -> None:
         layers = [
@@ -50,14 +52,14 @@ class Conv2dNormActivation(nn.Sequential):
         super().__init__(*layers)
 
 
-class InvertedResidual(nn.Module):
+class InvertedResidual(LightweightModule):
     def __init__(
         self,
         inp: int,
         oup: int,
         stride: int,
         expand_ratio: int,
-        norm_layer: Optional[Callable[..., nn.Module]] = nn.BatchNorm2d,
+        norm_layer: Optional[Callable[..., LightweightModule]] = nn.BatchNorm2d,
     ) -> None:
         super().__init__()
         self.stride = stride
@@ -66,7 +68,7 @@ class InvertedResidual(nn.Module):
         hidden_dim = int(round(inp * expand_ratio))
         self.use_res_connect = self.stride == 1 and inp == oup
 
-        layers: List[nn.Module] = []
+        layers: List[LightweightModule] = []
         if expand_ratio != 1:
             layers.append(Conv2dNormActivation(inp, hidden_dim, kernel_size=1, norm_layer=norm_layer))
         layers.append(
@@ -93,13 +95,13 @@ class InvertedResidual(nn.Module):
             return self.conv(x)
 
 
-class Mobilenetv2(nn.Module):
+class Mobilenetv2(LightweightModule):
     def __init__(
         self,
         num_classes: int = 1000,
         width_mult: float = 1.0,
         round_nearest: int = 8,
-        norm_layer: Optional[Callable[..., nn.Module]] = nn.BatchNorm2d,
+        norm_layer: Optional[Callable[..., LightweightModule]] = nn.BatchNorm2d,
     ):
         super().__init__()
 
@@ -117,7 +119,7 @@ class Mobilenetv2(nn.Module):
             [6, 320, 1, 1],
         ]
 
-        features: List[nn.Module] = []
+        features: List[LightweightModule] = []
         features.append(Conv2dNormActivation(3, input_channel, stride=2, padding=1, norm_layer=norm_layer))
 
         for t, c, n, s in inverted_residual_setting:

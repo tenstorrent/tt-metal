@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from functools import partial
 from typing import Any, Callable, List, Optional, Sequence
 import torch
@@ -49,25 +50,21 @@ class InvertedResidualConfig:
         return _make_divisible(channels * width_mult, 8)
 
 
-class InvertedResidual(nn.Module):
+class InvertedResidual(LightweightModule):
     # Implemented as described at section 5 of MobileNetV3 paper
     def __init__(
         self,
         cnf: InvertedResidualConfig,
-        norm_layer: Callable[..., nn.Module],
-        se_layer: Callable[..., nn.Module] = partial(
-            SElayer, scale_activation=nn.Hardsigmoid
-        ),
+        norm_layer: Callable[..., LightweightModule],
+        se_layer: Callable[..., LightweightModule] = partial(SElayer, scale_activation=nn.Hardsigmoid),
     ):
         super().__init__()
         if not (1 <= cnf.stride <= 2):
             raise ValueError("illegal stride value")
 
-        self.use_res_connect = (
-            cnf.stride == 1 and cnf.input_channels == cnf.out_channels
-        )
+        self.use_res_connect = cnf.stride == 1 and cnf.input_channels == cnf.out_channels
 
-        layers: List[nn.Module] = []
+        layers: List[LightweightModule] = []
         activation_layer = nn.Hardswish if cnf.use_hs else nn.ReLU
 
         # expand
@@ -122,14 +119,14 @@ class InvertedResidual(nn.Module):
         return result
 
 
-class MobileNetV3(nn.Module):
+class MobileNetV3(LightweightModule):
     def __init__(
         self,
         inverted_residual_setting: List[InvertedResidualConfig],
         last_channel: int,
         num_classes: int = 1000,
-        block: Optional[Callable[..., nn.Module]] = None,
-        norm_layer: Optional[Callable[..., nn.Module]] = None,
+        block: Optional[Callable[..., LightweightModule]] = None,
+        norm_layer: Optional[Callable[..., LightweightModule]] = None,
         dropout: float = 0.0,
         **kwargs: Any,
     ) -> None:
@@ -140,16 +137,9 @@ class MobileNetV3(nn.Module):
             raise ValueError("The inverted_residual_setting should not be empty")
         elif not (
             isinstance(inverted_residual_setting, Sequence)
-            and all(
-                [
-                    isinstance(s, InvertedResidualConfig)
-                    for s in inverted_residual_setting
-                ]
-            )
+            and all([isinstance(s, InvertedResidualConfig) for s in inverted_residual_setting])
         ):
-            raise TypeError(
-                "The inverted_residual_setting should be List[InvertedResidualConfig]"
-            )
+            raise TypeError("The inverted_residual_setting should be List[InvertedResidualConfig]")
 
         if block is None:
             block = InvertedResidual
@@ -157,7 +147,7 @@ class MobileNetV3(nn.Module):
         if norm_layer is None:
             norm_layer = partial(nn.BatchNorm2d, eps=0.001, momentum=0.01)
 
-        layers: List[nn.Module] = []
+        layers: List[LightweightModule] = []
 
         # building first layer
         firstconv_output_channels = inverted_residual_setting[0].input_channels
@@ -235,9 +225,7 @@ def _mobilenet_v3_conf(
     dilation = 2 if dilated else 1
 
     bneck_conf = partial(InvertedResidualConfig, width_mult=width_mult)
-    adjust_channels = partial(
-        InvertedResidualConfig.adjust_channels, width_mult=width_mult
-    )
+    adjust_channels = partial(InvertedResidualConfig.adjust_channels, width_mult=width_mult)
 
     if arch == "mobilenet_v3_large":
         inverted_residual_setting = [
@@ -253,9 +241,7 @@ def _mobilenet_v3_conf(
             bneck_conf(80, 3, 184, 80, False, "HS", 1, 1),
             bneck_conf(80, 3, 480, 112, True, "HS", 1, 1),
             bneck_conf(112, 3, 672, 112, True, "HS", 1, 1),
-            bneck_conf(
-                112, 5, 672, 160 // reduce_divider, True, "HS", 2, dilation
-            ),  # C4
+            bneck_conf(112, 5, 672, 160 // reduce_divider, True, "HS", 2, dilation),  # C4
             bneck_conf(
                 160 // reduce_divider,
                 5,
@@ -294,9 +280,7 @@ def _mobilenet_v3(
     model = MobileNetV3(inverted_residual_setting, last_channel, **kwargs)
 
     if weights is not None:
-        model.load_state_dict(
-            weights.get_state_dict(progress=progress, check_hash=False)
-        )
+        model.load_state_dict(weights.get_state_dict(progress=progress, check_hash=False))
 
     return model
 
@@ -329,9 +313,7 @@ class MobileNet_V3_Large_Weights(WeightsEnum):
 
 
 @register_model()
-@handle_legacy_interface(
-    weights=("pretrained", MobileNet_V3_Large_Weights.IMAGENET1K_V1)
-)
+@handle_legacy_interface(weights=("pretrained", MobileNet_V3_Large_Weights.IMAGENET1K_V1))
 def mobilenet_v3_large(
     *,
     weights: Optional[MobileNet_V3_Large_Weights] = None,
@@ -340,9 +322,5 @@ def mobilenet_v3_large(
 ) -> MobileNetV3:
     weights = MobileNet_V3_Large_Weights.verify(weights)
 
-    inverted_residual_setting, last_channel = _mobilenet_v3_conf(
-        "mobilenet_v3_large", **kwargs
-    )
-    return _mobilenet_v3(
-        inverted_residual_setting, last_channel, weights, progress, **kwargs
-    )
+    inverted_residual_setting, last_channel = _mobilenet_v3_conf("mobilenet_v3_large", **kwargs)
+    return _mobilenet_v3(inverted_residual_setting, last_channel, weights, progress, **kwargs)

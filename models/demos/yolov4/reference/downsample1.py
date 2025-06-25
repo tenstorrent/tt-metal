@@ -6,8 +6,10 @@
 import torch
 import torch.nn as nn
 
+from models.common.lightweightmodule import LightweightModule
 
-class Mish(torch.nn.Module):
+
+class Mish(LightweightModule):
     def __init__(self):
         super().__init__()
 
@@ -16,7 +18,7 @@ class Mish(torch.nn.Module):
         return x
 
 
-class DownSample1(nn.Module):
+class DownSample1(LightweightModule):
     def __init__(self):
         super().__init__()
         self.c1 = nn.Conv2d(3, 32, 3, 1, 1, bias=False)

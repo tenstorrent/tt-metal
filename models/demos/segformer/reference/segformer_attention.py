@@ -2,13 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
-
+from models.common.lightweightmodule import LightweightModule
 from models.demos.segformer.reference.segformer_efficient_selfattention import SegformerEfficientSelfAttention
 from models.demos.segformer.reference.segformer_selfoutput import SegformerSelfOutput
 
 
-class SegformerAttention(nn.Module):
+class SegformerAttention(LightweightModule):
     def __init__(self, config, hidden_size, num_attention_heads, sequence_reduction_ratio):
         super().__init__()
         self.self = SegformerEfficientSelfAttention(

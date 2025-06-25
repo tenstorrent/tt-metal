@@ -8,6 +8,7 @@ from loguru import logger
 from tqdm import tqdm
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.datasets.llm_dataset_utils import (
     calculate_acc_metrics,
     prepare_textgen_dataloader,
@@ -23,7 +24,7 @@ from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from ttnn import ConcatMeshToTensor
 
 
-class Emb(torch.nn.Module):
+class Emb(LightweightModule):
     def __init__(self):
         super().__init__()
         self.emb = torch.nn.Embedding(32000, 4096)

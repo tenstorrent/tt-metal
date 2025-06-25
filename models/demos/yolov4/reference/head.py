@@ -5,8 +5,10 @@
 import torch
 import torch.nn as nn
 
+from models.common.lightweightmodule import LightweightModule
 
-class Head(nn.Module):
+
+class Head(LightweightModule):
     def __init__(self):
         super().__init__()
         # left side of graph

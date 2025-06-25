@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 from torch import nn
 import logging
@@ -15,18 +16,18 @@ def autopad(k, p=None):
     return p
 
 
-class Conv(nn.Module):
+class Conv(LightweightModule):
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):
         super(Conv, self).__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
         self.bn = nn.BatchNorm2d(c2, eps=0.001, momentum=0.03, affine=True, track_running_stats=True)
-        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, LightweightModule) else nn.Identity())
 
     def forward(self, x):
         return self.act(self.bn(self.conv(x)))
 
 
-class SPPCSPC(nn.Module):
+class SPPCSPC(LightweightModule):
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5, k=(5, 9, 13)):
         super(SPPCSPC, self).__init__()
         c_ = int(2 * c2 * e)
@@ -50,7 +51,7 @@ class SPPCSPC(nn.Module):
         return self.cv7(torch.cat((y1, y2), dim=1))
 
 
-class RepConv(nn.Module):
+class RepConv(LightweightModule):
     def __init__(self, c1, c2, k=3, s=1, p=None, g=1, act=True, deploy=False):
         super(RepConv, self).__init__()
         self.deploy = deploy
@@ -60,7 +61,7 @@ class RepConv(nn.Module):
         assert k == 3
         assert autopad(k, p) == 1
         padding_11 = autopad(k, p) - k // 2
-        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, LightweightModule) else nn.Identity())
         if deploy:
             self.rbr_reparam = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=True)
         else:
@@ -85,7 +86,7 @@ class RepConv(nn.Module):
         return out
 
 
-class Detect(nn.Module):
+class Detect(LightweightModule):
     stride = None
     export = False
     end2end = False
@@ -158,7 +159,7 @@ class Detect(nn.Module):
         return (box, score)
 
 
-class Concat(nn.Module):
+class Concat(LightweightModule):
     def __init__(self, dimension=1):
         super(Concat, self).__init__()
         self.d = dimension
@@ -167,7 +168,7 @@ class Concat(nn.Module):
         return torch.cat(x, self.d)
 
 
-class MP(nn.Module):
+class MP(LightweightModule):
     def __init__(self, k=2):
         super(MP, self).__init__()
         self.m = nn.MaxPool2d(kernel_size=k, stride=k)
@@ -176,7 +177,7 @@ class MP(nn.Module):
         return self.m(x)
 
 
-class Yolov7_model(nn.Module):
+class Yolov7_model(LightweightModule):
     def __init__(self):
         super().__init__()
         self.nc = 80

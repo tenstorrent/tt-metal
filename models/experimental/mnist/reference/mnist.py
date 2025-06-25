@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 
 
-class MnistModel(torch.nn.Module):
+class MnistModel(LightweightModule):
     def __init__(self, state_dict):
         super().__init__()
 

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch.nn as nn
 import torch
 
@@ -12,7 +13,7 @@ from models.utility_functions import (
 )
 
 
-class TtDetect(nn.Module):
+class TtDetect(LightweightModule):
     # YOLOv3 Detect head for detection models
     stride = None  # strides computed during build
     dynamic = False  # force grid reconstruction

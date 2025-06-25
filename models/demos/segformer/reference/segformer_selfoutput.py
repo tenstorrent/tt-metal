@@ -4,8 +4,10 @@
 
 import torch.nn as nn
 
+from models.common.lightweightmodule import LightweightModule
 
-class SegformerSelfOutput(nn.Module):
+
+class SegformerSelfOutput(LightweightModule):
     def __init__(self, config, hidden_size):
         super().__init__()
         self.dense = nn.Linear(hidden_size, hidden_size)

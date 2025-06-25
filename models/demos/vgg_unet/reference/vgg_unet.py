@@ -6,9 +6,11 @@ import torch
 import torch.nn as nn
 from torchvision import models
 
+from models.common.lightweightmodule import LightweightModule
+
 
 # Conv Block
-class ConvBlock(nn.Module):
+class ConvBlock(LightweightModule):
     def __init__(self, in_channels, out_channels):
         super(ConvBlock, self).__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding="same")
@@ -30,7 +32,7 @@ class ConvBlock(nn.Module):
 
 
 # Decoder Block
-class DecoderBlock(nn.Module):
+class DecoderBlock(LightweightModule):
     def __init__(self, in_channels, out_channels):
         super(DecoderBlock, self).__init__()
         self.up = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2, padding=0)
@@ -44,7 +46,7 @@ class DecoderBlock(nn.Module):
 
 
 # U-Net with VGG19 Encoder
-class UNetVGG19(nn.Module):
+class UNetVGG19(LightweightModule):
     def __init__(self, input_shape=(1, 3, 256, 256)):
         super(UNetVGG19, self).__init__()
 

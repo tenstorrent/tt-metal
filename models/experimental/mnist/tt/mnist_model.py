@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import ttnn
 
@@ -11,7 +12,7 @@ from models.utility_functions import torch2tt_tensor
 from models.experimental.mnist.reference.mnist import MnistModel
 
 
-class TtMnistModel(torch.nn.Module):
+class TtMnistModel(LightweightModule):
     def __init__(self, device, state_dict):
         super().__init__()
         self.device = device

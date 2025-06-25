@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from __future__ import annotations
 
 import torch
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention.py
-class FeedForward(torch.nn.Module):
+class FeedForward(LightweightModule):
     def __init__(
         self,
         dim: int,
@@ -32,7 +33,7 @@ class FeedForward(torch.nn.Module):
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/activations.py
-class Gelu(torch.nn.Module):
+class Gelu(LightweightModule):
     def __init__(self, dim_in: int, dim_out: int, approximate: str) -> None:
         super().__init__()
         self.proj = torch.nn.Linear(dim_in, dim_out)

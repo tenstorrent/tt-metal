@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_mlp import TtFalconMLP
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
@@ -15,7 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from ttnn import ConcatMeshToTensor
 
 
-class PytorchFalconMLPModel(torch.nn.Module):
+class PytorchFalconMLPModel(LightweightModule):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
         self.mlp = hf_reference_model.transformer.h[layer_num].mlp

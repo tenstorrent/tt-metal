@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from __future__ import annotations
 
 import torch
 
 
-class AdaLayerNormDummy(torch.nn.Module):
+class AdaLayerNormDummy(LightweightModule):
     def __init__(self, embedding_dim: int, inner_dim: int) -> None:
         super().__init__()
         self.silu = torch.nn.SiLU()
@@ -16,7 +17,7 @@ class AdaLayerNormDummy(torch.nn.Module):
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/normalization.py
-class RmsNorm(torch.nn.Module):
+class RmsNorm(LightweightModule):
     def __init__(self, *, dim: int, eps: float) -> None:
         super().__init__()
 

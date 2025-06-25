@@ -5,8 +5,10 @@
 import torch
 from torch import nn
 
+from models.common.lightweightmodule import LightweightModule
 
-class SegformerMLP(nn.Module):
+
+class SegformerMLP(LightweightModule):
     """
     Linear Embedding.
     """

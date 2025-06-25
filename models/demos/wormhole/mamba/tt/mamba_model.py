@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.wormhole.mamba.reference.args import ModelMode
 from models.demos.wormhole.mamba.tt.residual_block import TtResidualBlock
 
@@ -65,7 +66,7 @@ class TtTensorLoader:
         return load_tt_tensor
 
 
-class MambaTT(torch.nn.Module):
+class MambaTT(LightweightModule):
     def __init__(
         self,
         reference_model,

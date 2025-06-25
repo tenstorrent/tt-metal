@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import argparse
 import logging
 import sys
@@ -23,7 +24,7 @@ except ImportError:
     thop = None
 
 
-class Detect(nn.Module):
+class Detect(LightweightModule):
     stride = None
     export = False
     end2end = False
@@ -95,7 +96,7 @@ class Detect(nn.Module):
         return (box, score)
 
 
-class Model(nn.Module):
+class Model(LightweightModule):
     def __init__(self, cfg=config, ch=3, nc=None, anchors=None):
         super(Model, self).__init__()
         self.traced = False

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
@@ -9,7 +10,7 @@ from typing import List
 import math
 
 
-class ShiftedWindowAttention(nn.Module):
+class ShiftedWindowAttention(LightweightModule):
     def __init__(
         self,
         dim: int,

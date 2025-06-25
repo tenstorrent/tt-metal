@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch.nn as nn
 
 
-class LeNet5(nn.Module):
+class LeNet5(LightweightModule):
     def __init__(self, num_classes):
         super().__init__()
         self.layer1 = nn.Sequential(

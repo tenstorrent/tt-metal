@@ -7,6 +7,13 @@
 # NOTE: changed the device from CUDA to CPU and dtype to float32
 #################################################################################################################
 
+import dataclasses
+from typing import List
+
+import torch
+import torch.nn.functional as F
+from torch import nn
+
 # coding=utf-8
 # Copyright 2023 Mistral AI. All rights reserved.
 #
@@ -21,12 +28,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import dataclasses
-from typing import List
-
-import torch
-import torch.nn.functional as F
-from torch import nn
+from models.common.lightweightmodule import LightweightModule
 
 
 @dataclasses.dataclass
@@ -35,8 +37,8 @@ class MoeArgs:
     num_experts_per_tok: int
 
 
-class MoeLayer(nn.Module):
-    def __init__(self, experts: List[nn.Module], gate: nn.Module, moe_args: MoeArgs):
+class MoeLayer(LightweightModule):
+    def __init__(self, experts: List[LightweightModule], gate: LightweightModule, moe_args: MoeArgs):
         super().__init__()
         assert len(experts) > 0
         self.experts = nn.ModuleList(experts)

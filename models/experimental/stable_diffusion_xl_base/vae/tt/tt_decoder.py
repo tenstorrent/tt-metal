@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 import torch
-import torch.nn as nn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_config, get_DRAM_GN_config
@@ -16,7 +16,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 from loguru import logger
 
 
-class TtDecoder(nn.Module):
+class TtDecoder(LightweightModule):
     def __init__(self, device, state_dict, model_config, gn_fallback=False):
         super().__init__()
 

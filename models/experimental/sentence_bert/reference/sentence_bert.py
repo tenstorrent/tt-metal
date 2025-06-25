@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import math
 from typing import List, Optional, Tuple, Union
 import torch
@@ -58,7 +59,7 @@ class BaseModelOutputWithPastAndCrossAttentions:
             raise KeyError(f"Key {key} not found.")
 
 
-class BertEmbeddings(nn.Module):
+class BertEmbeddings(LightweightModule):
     def __init__(self, config):
         super().__init__()
         self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
@@ -83,7 +84,7 @@ class BertEmbeddings(nn.Module):
         return embeddings
 
 
-class BertSelfAttention(nn.Module):
+class BertSelfAttention(LightweightModule):
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
 
@@ -249,7 +250,7 @@ class BertSdpaSelfAttention(BertSelfAttention):
         return outputs
 
 
-class BertSelfOutput(nn.Module):
+class BertSelfOutput(LightweightModule):
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
@@ -267,7 +268,7 @@ BERT_SELF_ATTENTION_CLASSES = {
 }
 
 
-class BertAttention(nn.Module):
+class BertAttention(LightweightModule):
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
         self.self = BERT_SELF_ATTENTION_CLASSES[config._attn_implementation](
@@ -300,7 +301,7 @@ class BertAttention(nn.Module):
         return outputs
 
 
-class BertIntermediate(nn.Module):
+class BertIntermediate(LightweightModule):
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
@@ -315,7 +316,7 @@ class BertIntermediate(nn.Module):
         return hidden_states
 
 
-class BertOutput(nn.Module):
+class BertOutput(LightweightModule):
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
@@ -327,7 +328,7 @@ class BertOutput(nn.Module):
         return hidden_states
 
 
-class BertLayer(nn.Module):
+class BertLayer(LightweightModule):
     def __init__(self, config):
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
@@ -391,7 +392,7 @@ class BertLayer(nn.Module):
         return outputs
 
 
-class BertEncoder(nn.Module):
+class BertEncoder(LightweightModule):
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -455,7 +456,7 @@ class BertEncoder(nn.Module):
         )
 
 
-class BertPooler(nn.Module):
+class BertPooler(LightweightModule):
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
@@ -468,7 +469,7 @@ class BertPooler(nn.Module):
         return pooled_output
 
 
-class BertModel(nn.Module):
+class BertModel(LightweightModule):
     def __init__(self, config, add_pooling_layer=True):
         super().__init__()
         self.config = config

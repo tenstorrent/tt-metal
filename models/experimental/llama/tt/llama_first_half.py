@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 from typing import List, Optional, Tuple
 
@@ -42,7 +43,7 @@ def build_decoders(
     return decoder_list
 
 
-class TtLlamaModelFirstHFModel(torch.nn.Module):
+class TtLlamaModelFirstHFModel(LightweightModule):
     def __init__(
         self,
         device,

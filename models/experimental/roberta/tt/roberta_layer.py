@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Tuple
 
 import ttnn
@@ -14,7 +14,7 @@ from models.experimental.roberta.tt.roberta_output import TtRobertaOutput
 
 
 # Copied from transformers.models.bert.modeling_bert.BertLayer with Bert->Roberta
-class TtRobertaLayer(nn.Module):
+class TtRobertaLayer(LightweightModule):
     def __init__(
         self,
         config,

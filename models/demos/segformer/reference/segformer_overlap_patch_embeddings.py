@@ -4,8 +4,10 @@
 
 import torch.nn as nn
 
+from models.common.lightweightmodule import LightweightModule
 
-class SegformerOverlapPatchEmbeddings(nn.Module):
+
+class SegformerOverlapPatchEmbeddings(LightweightModule):
     """Construct the overlapping patch embeddings."""
 
     def __init__(self, patch_size, stride, num_channels, hidden_size):

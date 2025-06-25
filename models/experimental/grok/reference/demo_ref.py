@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+from models.common.lightweightmodule import LightweightModule
 import torch
 from loguru import logger
 import json
@@ -10,7 +11,7 @@ from models.experimental.grok.reference.model import Transformer
 from models.experimental.grok.reference.tokenizer import Tokenizer
 
 
-class Emb(torch.nn.Module):
+class Emb(LightweightModule):
     def __init__(self):
         super().__init__()
         self.emb = torch.nn.Embedding(32000, 4096)

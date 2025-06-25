@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import torch.nn as nn
 from models.utility_functions import (
@@ -11,7 +12,7 @@ from models.utility_functions import (
 )
 
 
-class Fire(nn.Module):
+class Fire(LightweightModule):
     def __init__(
         self,
         inplanes: int,
@@ -111,7 +112,7 @@ class Fire(nn.Module):
         return torch.cat([expand1x1_output, expand3x3_output], 1)
 
 
-class SqueezeNet(nn.Module):
+class SqueezeNet(LightweightModule):
     def __init__(
         self,
         version: str = "1_0",

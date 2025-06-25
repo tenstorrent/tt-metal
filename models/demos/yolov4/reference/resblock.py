@@ -5,8 +5,10 @@
 import torch
 import torch.nn as nn
 
+from models.common.lightweightmodule import LightweightModule
 
-class Mish(torch.nn.Module):
+
+class Mish(LightweightModule):
     def __init__(self):
         super().__init__()
 
@@ -15,7 +17,7 @@ class Mish(torch.nn.Module):
         return x
 
 
-class ResBlock(nn.Module):
+class ResBlock(LightweightModule):
     def __init__(self, ch, nblocks=1, shortcut=True):
         super().__init__()
         self.shortcut = shortcut

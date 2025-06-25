@@ -8,6 +8,8 @@ from typing import Optional, Tuple
 import torch
 from torch import nn
 
+from models.common.lightweightmodule import LightweightModule
+
 
 @dataclass
 class ModelArgs:
@@ -63,7 +65,7 @@ def apply_rotary_emb(
     return xq_out.type_as(xq), xk_out.type_as(xk)
 
 
-class Emb(nn.Module):
+class Emb(LightweightModule):
     def __init__(self, vocab_size, hidden_size, pad_id):
         super().__init__()
         self.emb = torch.nn.Embedding(vocab_size, hidden_size, pad_id)
@@ -72,7 +74,7 @@ class Emb(nn.Module):
         return self.emb(x)
 
 
-class Attention(nn.Module):
+class Attention(LightweightModule):
     def __init__(self, args: ModelArgs):
         super().__init__()
         self.args = args
@@ -154,7 +156,7 @@ class Attention(nn.Module):
         return self.o_proj(output)
 
 
-class FeedForward(nn.Module):
+class FeedForward(LightweightModule):
     def __init__(self, args: ModelArgs):
         super().__init__()
 
@@ -170,7 +172,7 @@ class FeedForward(nn.Module):
         return self.down_proj(nn.functional.silu(self.gate_proj(x)) * self.up_proj(x))
 
 
-class RMSNorm(torch.nn.Module):
+class RMSNorm(LightweightModule):
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
@@ -188,7 +190,7 @@ class RMSNorm(torch.nn.Module):
         return output * self.weight
 
 
-class TransformerBlock(nn.Module):
+class TransformerBlock(LightweightModule):
     def __init__(self, args: ModelArgs):
         super().__init__()
         self.n_heads = args.n_heads
@@ -213,7 +215,7 @@ class TransformerBlock(nn.Module):
         return out
 
 
-class Transformer(nn.Module):
+class Transformer(LightweightModule):
     def __init__(self, args: ModelArgs):
         super().__init__()
         self.args = args

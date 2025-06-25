@@ -16,6 +16,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from models.common.lightweightmodule import LightweightModule
 import math
 from collections import OrderedDict
 
@@ -23,7 +24,7 @@ import torch
 from torch import Tensor, nn
 
 
-class GELUActivation(nn.Module):
+class GELUActivation(LightweightModule):
     """
     Original Implementation of the GELU activation function in Google BERT repo when initially created. For
     information: OpenAI GPT's GELU is slightly different (and gives slightly different results): 0.5 * x * (1 +
@@ -62,9 +63,7 @@ def get_activation(activation_string):
     if activation_string in ACT2FN:
         return ACT2FN[activation_string]
     else:
-        raise KeyError(
-            f"function {activation_string} not found in ACT2FN mapping {list(ACT2FN.keys())}"
-        )
+        raise KeyError(f"function {activation_string} not found in ACT2FN mapping {list(ACT2FN.keys())}")
 
 
 # For backwards compatibility with: from activations import gelu_python

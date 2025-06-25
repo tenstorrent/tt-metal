@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
 from models.demos.t3000.llama2_70b.tt.llama_common import (
@@ -33,7 +34,7 @@ from models.utility_functions import skip_for_grayskull
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
-class PytorchLlamaDecoderModel(torch.nn.Module):
+class PytorchLlamaDecoderModel(LightweightModule):
     def __init__(self, hf_reference_model, layer_num, rope_theta, use_scaled_rope):
         super().__init__()
         self.decoder = hf_reference_model.layers[layer_num]

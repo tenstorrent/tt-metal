@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from collections import OrderedDict
 from functools import partial
 from typing import (
@@ -58,13 +59,11 @@ class SSDLiteClassificationHead(SSDScoringHead):
         in_channels: List[int],
         num_anchors: List[int],
         num_classes: int,
-        norm_layer: Callable[..., nn.Module],
+        norm_layer: Callable[..., LightweightModule],
     ):
         cls_logits = nn.ModuleList()
         for channels, anchors in zip(in_channels, num_anchors):
-            cls_logits.append(
-                _prediction_block(channels, num_classes * anchors, 3, norm_layer)
-            )
+            cls_logits.append(_prediction_block(channels, num_classes * anchors, 3, norm_layer))
         _normal_init(cls_logits)
         super().__init__(cls_logits, num_classes)
 
@@ -74,7 +73,7 @@ class SSDLiteRegressionHead(SSDScoringHead):
         self,
         in_channels: List[int],
         num_anchors: List[int],
-        norm_layer: Callable[..., nn.Module],
+        norm_layer: Callable[..., LightweightModule],
     ):
         bbox_reg = nn.ModuleList()
         for channels, anchors in zip(in_channels, num_anchors):
@@ -83,21 +82,17 @@ class SSDLiteRegressionHead(SSDScoringHead):
         super().__init__(bbox_reg, 4)
 
 
-class SSDLiteHead(nn.Module):
+class SSDLiteHead(LightweightModule):
     def __init__(
         self,
         in_channels: List[int],
         num_anchors: List[int],
         num_classes: int,
-        norm_layer: Callable[..., nn.Module],
+        norm_layer: Callable[..., LightweightModule],
     ):
         super().__init__()
-        self.classification_head = SSDLiteClassificationHead(
-            in_channels, num_anchors, num_classes, norm_layer
-        )
-        self.regression_head = SSDLiteRegressionHead(
-            in_channels, num_anchors, norm_layer
-        )
+        self.classification_head = SSDLiteClassificationHead(in_channels, num_anchors, num_classes, norm_layer)
+        self.regression_head = SSDLiteRegressionHead(in_channels, num_anchors, norm_layer)
 
     def forward(self, x: List[Tensor]) -> Dict[str, Tensor]:
         return {
@@ -106,12 +101,12 @@ class SSDLiteHead(nn.Module):
         }
 
 
-class SSDLiteFeatureExtractorMobileNet(nn.Module):
+class SSDLiteFeatureExtractorMobileNet(LightweightModule):
     def __init__(
         self,
-        backbone: nn.Module,
+        backbone: LightweightModule,
         c4_pos: int,
-        norm_layer: Callable[..., nn.Module],
+        norm_layer: Callable[..., LightweightModule],
         width_mult: float = 1.0,
         min_depth: int = 16,
     ):
@@ -123,12 +118,8 @@ class SSDLiteFeatureExtractorMobileNet(nn.Module):
 
         self.features = nn.Sequential(
             # As described in section 6.3 of MobileNetV3 paper
-            nn.Sequential(
-                *backbone[:c4_pos], backbone[c4_pos].block[0]
-            ),  # from start until C4 expansion layer
-            nn.Sequential(
-                backbone[c4_pos].block[1:], *backbone[c4_pos + 1 :]
-            ),  # from C4 depthwise until end
+            nn.Sequential(*backbone[:c4_pos], backbone[c4_pos].block[0]),  # from start until C4 expansion layer
+            nn.Sequential(backbone[c4_pos].block[1:], *backbone[c4_pos + 1 :]),  # from C4 depthwise until end
         )
 
         get_depth = lambda d: max(min_depth, int(d * width_mult))  # noqa: E731
@@ -161,28 +152,18 @@ class SSDLiteFeatureExtractorMobileNet(nn.Module):
 def _mobilenet_extractor(
     backbone: Union[None, MobileNetV3],
     trainable_layers: int,
-    norm_layer: Callable[..., nn.Module],
+    norm_layer: Callable[..., LightweightModule],
 ):
     backbone = backbone.features
     # Gather the indices of blocks which are strided. These are the locations of C1, ..., Cn-1 blocks.
     # The first and last blocks are always included because they are the C0 (conv1) and Cn.
-    stage_indices = (
-        [0]
-        + [i for i, b in enumerate(backbone) if getattr(b, "_is_cn", False)]
-        + [len(backbone) - 1]
-    )
+    stage_indices = [0] + [i for i, b in enumerate(backbone) if getattr(b, "_is_cn", False)] + [len(backbone) - 1]
     num_stages = len(stage_indices)
 
     # find the index of the layer from which we won't freeze
     if not 0 <= trainable_layers <= num_stages:
-        raise ValueError(
-            "trainable_layers should be in the range [0, {num_stages}], instead got {trainable_layers}"
-        )
-    freeze_before = (
-        len(backbone)
-        if trainable_layers == 0
-        else stage_indices[num_stages - trainable_layers]
-    )
+        raise ValueError("trainable_layers should be in the range [0, {num_stages}], instead got {trainable_layers}")
+    freeze_before = len(backbone) if trainable_layers == 0 else stage_indices[num_stages - trainable_layers]
 
     for b in backbone[:freeze_before]:
         for parameter in b.parameters():
@@ -195,7 +176,7 @@ def _prediction_block(
     in_channels: int,
     out_channels: int,
     kernel_size: int,
-    norm_layer: Callable[..., nn.Module],
+    norm_layer: Callable[..., LightweightModule],
 ) -> nn.Sequential:
     return nn.Sequential(
         # 3x3 depthwise with stride 1 and padding 1
@@ -212,9 +193,7 @@ def _prediction_block(
     )
 
 
-def _extra_block(
-    in_channels: int, out_channels: int, norm_layer: Callable[..., nn.Module]
-) -> nn.Sequential:
+def _extra_block(in_channels: int, out_channels: int, norm_layer: Callable[..., LightweightModule]) -> nn.Sequential:
     activation = nn.ReLU6
     intermediate_channels = out_channels // 2
     return nn.Sequential(
@@ -247,7 +226,7 @@ def _extra_block(
     )
 
 
-def _normal_init(conv: nn.Module):
+def _normal_init(conv: LightweightModule):
     for layer in conv.modules():
         if isinstance(layer, nn.Conv2d):
             torch.nn.init.normal_(layer.weight, mean=0.0, std=0.03)
@@ -257,16 +236,12 @@ def _normal_init(conv: nn.Module):
 
 def ssdlite320_mobilenet_v3_large(
     *,
-    weights: Optional[
-        SSDLite320_MobileNet_V3_Large_Weights
-    ] = SSDLite320_MobileNet_V3_Large_Weights.COCO_V1,
+    weights: Optional[SSDLite320_MobileNet_V3_Large_Weights] = SSDLite320_MobileNet_V3_Large_Weights.COCO_V1,
     progress: bool = True,
     num_classes: Optional[int] = None,
-    weights_backbone: Optional[
-        MobileNet_V3_Large_Weights
-    ] = MobileNet_V3_Large_Weights.IMAGENET1K_V1,
+    weights_backbone: Optional[MobileNet_V3_Large_Weights] = MobileNet_V3_Large_Weights.IMAGENET1K_V1,
     trainable_backbone_layers: Optional[int] = None,
-    norm_layer: Optional[Callable[..., nn.Module]] = None,
+    norm_layer: Optional[Callable[..., LightweightModule]] = None,
     **kwargs: Any,
 ) -> SSD:
     weights = SSDLite320_MobileNet_V3_Large_Weights.verify(weights)
@@ -274,9 +249,7 @@ def ssdlite320_mobilenet_v3_large(
 
     if weights is not None:
         weights_backbone = None
-        num_classes = _ovewrite_value_param(
-            "num_classes", num_classes, len(weights.meta["categories"])
-        )
+        num_classes = _ovewrite_value_param("num_classes", num_classes, len(weights.meta["categories"]))
     elif num_classes is None:
         num_classes = 91
 
@@ -305,9 +278,7 @@ def ssdlite320_mobilenet_v3_large(
     )
 
     size = (320, 320)
-    anchor_generator = DefaultBoxGenerator(
-        [[2, 3] for _ in range(6)], min_ratio=0.2, max_ratio=0.95
-    )
+    anchor_generator = DefaultBoxGenerator([[2, 3] for _ in range(6)], min_ratio=0.2, max_ratio=0.95)
     out_channels = retrieve_out_channels(backbone, size)
     num_anchors = anchor_generator.num_anchors_per_location()
     if len(out_channels) != len(anchor_generator.aspect_ratios):
@@ -336,14 +307,12 @@ def ssdlite320_mobilenet_v3_large(
     )
 
     if weights is not None:
-        model.load_state_dict(
-            weights.get_state_dict(progress=progress, check_hash=True)
-        )
+        model.load_state_dict(weights.get_state_dict(progress=progress, check_hash=True))
 
     return model
 
 
-def retrieve_out_channels(model: nn.Module, size: Tuple[int, int]) -> List[int]:
+def retrieve_out_channels(model: LightweightModule, size: Tuple[int, int]) -> List[int]:
     in_training = model.training
     model.eval()
 

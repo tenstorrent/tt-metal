@@ -2,12 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from models.common.lightweightmodule import LightweightModule
 
 MODEL_VERSION = "tiiuae/falcon-7b-instruct"
 
 
-class PytorchFalconCausalLM(torch.nn.Module):
+class PytorchFalconCausalLM(LightweightModule):
     def __init__(self, hf_reference_model, num_layers=None):
         super().__init__()
         self.model = hf_reference_model

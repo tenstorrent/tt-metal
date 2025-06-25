@@ -4,11 +4,12 @@
 
 import torch.nn as nn
 
+from models.common.lightweightmodule import LightweightModule
 from models.demos.segformer.reference.segformer_attention import SegformerAttention
 from models.demos.segformer.reference.segformer_mixffn import SegformerMixFFN
 
 
-class SegformerLayer(nn.Module):
+class SegformerLayer(LightweightModule):
     """This corresponds to the Block class in the original implementation."""
 
     def __init__(self, config, hidden_size, num_attention_heads, sequence_reduction_ratio, mlp_ratio):
