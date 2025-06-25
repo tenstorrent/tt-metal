@@ -42,7 +42,6 @@ jobs:
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_model_perf_tg_device --dispatch-mode ""',
             owner_id: U053W15B6JF # Djordje Ivanovic
           },
-          # skip test until issue resolved https://github.com/tenstorrent/tt-metal/issues/24002
           {
             name: "Llama Galaxy Perf Unit Tests",
             arch: wormhole_b0,
