@@ -1,15 +1,13 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn.functional as F
-
 import ttnn
-from models.experimental.yolov10.tt.performant_runner_infra import YOLOv10PerformanceRunnerInfra
+from models.experimental.yolov7.runner.performant_runner_infra import YOLOv7PerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-class YOLOv10PerformantRunner:
+class YOLOv7PerformantRunner:
     def __init__(
         self,
         device,
@@ -23,7 +21,7 @@ class YOLOv10PerformantRunner:
         self.device = device
         self.resolution = resolution
         self.torch_input_tensor = torch_input_tensor
-        self.runner_infra = YOLOv10PerformanceRunnerInfra(
+        self.runner_infra = YOLOv7PerformanceRunnerInfra(
             device,
             device_batch_size,
             act_dtype,
@@ -40,9 +38,7 @@ class YOLOv10PerformantRunner:
         ) = self.runner_infra.setup_dram_sharded_input(device)
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
-        self._capture_yolov10_trace_2cqs()
-
-    def _capture_yolov10_trace_2cqs(self):
+    def _capture_yolov7_trace_2cqs(self):
         # Initialize the op event so we can write
         self.op_event = ttnn.record_event(self.device, 0)
 
@@ -83,32 +79,27 @@ class YOLOv10PerformantRunner:
         ttnn.end_trace_capture(self.device, self.tid, cq_id=0)
         assert trace_input_addr == self.input_tensor.buffer_address()
 
-    def _execute_yolov10_trace_2cqs_inference(self, tt_inputs_host=None):
+    def _execute_yolov7_trace_2cqs_inference(self, tt_inputs_host=None):
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
         ttnn.wait_for_event(1, self.op_event)
-        ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
+        ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
         # TODO: Add in place support to ttnn to_memory_config
-        self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
+        if self.input_tensor.is_sharded():
+            self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(self.device)
-
-        ttnn_output_tensor = self.runner_infra.output_tensor
-        return ttnn_output_tensor  # get_model_result(ttnn_output_tensor, self.resolution)
+        return self.runner_infra.output_tensor
 
     def _validate(self, input_tensor, result_output_tensor):
         torch_output_tensor = self.runner_infra.torch_output_tensor
         assert_with_pcc(torch_output_tensor, result_output_tensor, 0.99)
 
     def run(self, torch_input_tensor, check_pcc=False):
-        n, h, w, c = torch_input_tensor.shape
-        torch_input_tensor = F.pad(torch_input_tensor, (0, 29), mode="constant", value=0)
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-        output = self._execute_yolov10_trace_2cqs_inference(tt_inputs_host)
-
+        n, c, h, w = torch_input_tensor.shape
+        tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
+        output = self._execute_yolov7_trace_2cqs_inference(tt_inputs_host)
         if check_pcc:
             torch_input_tensor = torch_input_tensor.reshape(n, h, w, c)
             torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
