@@ -45,6 +45,17 @@ struct NDShardingBufferSizeParams {
     size_t expected_num_dev_pages = 0;
     size_t expected_aligned_size_per_bank = 0;
 };
+struct NDShardingCoreInfoParams {
+    Shape shape_in_pages;
+    Shape shard_shape_in_pages;
+    CoreCoord grid_size;
+
+    size_t expected_max_num_shards_per_core = 0;
+    std::vector<size_t> expected_num_shards_per_core;
+    std::vector<CoreCoord> expected_cores_with_data;
+    BufferDistributionSpec::CoreGroup expected_core_group_1;
+    BufferDistributionSpec::CoreGroup expected_core_group_2;
+};
 
 TensorSpec get_nd_sharding_tensor_spec(
     const NDShardingParams& params, BufferType buffer_type, ShardOrientation orientation, IDevice* device) {
@@ -288,6 +299,31 @@ TEST_P(NDShardingBufferSizeTests, TestBufferSize) {
     EXPECT_EQ(buffer->num_pages(), params.expected_num_pages);
     EXPECT_EQ(buffer->num_dev_pages(), params.expected_num_dev_pages);
     EXPECT_EQ(buffer->aligned_size_per_bank(), params.expected_aligned_size_per_bank);
+}
+
+class NDShardingCoreInfoTests : public ::testing::TestWithParam<NDShardingCoreInfoParams> {};
+
+TEST_P(NDShardingCoreInfoTests, TestCoreInfo) {
+    const auto& params = GetParam();
+
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{params.grid_size.x - 1, params.grid_size.y - 1}));
+    BufferDistributionSpec dspec(
+        params.shape_in_pages, params.shard_shape_in_pages, cores, ShardOrientation::ROW_MAJOR);
+
+    EXPECT_EQ(dspec.max_num_shards_per_core(), params.expected_max_num_shards_per_core);
+    EXPECT_EQ(dspec.num_cores(), params.grid_size.x * params.grid_size.y);
+    EXPECT_EQ(dspec.num_cores(), params.expected_num_shards_per_core.size());
+    for (size_t i = 0; i < dspec.num_cores(); i++) {
+        EXPECT_EQ(dspec.num_shards_per_core(i), params.expected_num_shards_per_core[i]);
+    }
+
+    EXPECT_EQ(dspec.get_cores_with_data(), params.expected_cores_with_data);
+
+    auto [core_group_1, core_group_2] = dspec.get_core_groups_by_num_shards();
+    EXPECT_EQ(core_group_1.num_shards, params.expected_core_group_1.num_shards);
+    EXPECT_EQ(core_group_1.cores, params.expected_core_group_1.cores);
+    EXPECT_EQ(core_group_2.num_shards, params.expected_core_group_2.num_shards);
+    EXPECT_EQ(core_group_2.cores, params.expected_core_group_2.cores);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -848,4 +884,109 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_num_pages = 112,
             .expected_num_dev_pages = 3 * 11 * 4,
             .expected_aligned_size_per_bank = 11 * 4 * 32 * 32,
+        }));
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorShardingTests,
+    NDShardingCoreInfoTests,
+    ::testing::Values(
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({2, 2, 2}),
+            .shard_shape_in_pages = Shape({1, 1, 1}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 2,
+            .expected_num_shards_per_core = {2, 2, 2, 2},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}},
+            .expected_core_group_1 = {2, {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}}},
+            .expected_core_group_2 = {},
+        },
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({3, 3, 3}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 2,
+            .expected_num_shards_per_core = {2, 2, 2, 2},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}},
+            .expected_core_group_1 = {2, {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}}},
+            .expected_core_group_2 = {},
+        },
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({0, 0, 0}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 0,
+            .expected_num_shards_per_core = {0, 0, 0, 0},
+            .expected_cores_with_data = {},
+            .expected_core_group_1 = {},
+            .expected_core_group_2 = {},
+        },
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({2, 2, 2}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 1,
+            .expected_num_shards_per_core = {1, 0, 0, 0},
+            .expected_cores_with_data = {CoreCoord{0, 0}},
+            .expected_core_group_1 = {1, {CoreCoord{0, 0}}},
+            .expected_core_group_2 = {},
+        },
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({2, 2, 4}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 1,
+            .expected_num_shards_per_core = {1, 1, 0, 0},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}},
+            .expected_core_group_1 = {1, {CoreCoord{0, 0}, CoreCoord{1, 0}}},
+            .expected_core_group_2 = {},
+        },
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({2, 6, 2}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 1,
+            .expected_num_shards_per_core = {1, 1, 1, 0},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}},
+            .expected_core_group_1 = {1, {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}}},
+            .expected_core_group_2 = {},
+        },
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({8, 2, 2}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 1,
+            .expected_num_shards_per_core = {1, 1, 1, 1},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}},
+            .expected_core_group_1 = {1, {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}}},
+            .expected_core_group_2 = {},
+        },
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({1, 1, 33}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 5,
+            .expected_num_shards_per_core = {5, 4, 4, 4},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}},
+            .expected_core_group_1 = {5, {CoreCoord{0, 0}}},
+            .expected_core_group_2 = {4, {CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}}},
+        },
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({1, 35, 1}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 5,
+            .expected_num_shards_per_core = {5, 5, 4, 4},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}},
+            .expected_core_group_1 = {5, {CoreCoord{0, 0}, CoreCoord{1, 0}}},
+            .expected_core_group_2 = {4, {CoreCoord{0, 1}, CoreCoord{1, 1}}},
+        },
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({37, 1, 1}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 5,
+            .expected_num_shards_per_core = {5, 5, 5, 4},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}},
+            .expected_core_group_1 = {5, {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}}},
+            .expected_core_group_2 = {4, {CoreCoord{1, 1}}},
         }));
