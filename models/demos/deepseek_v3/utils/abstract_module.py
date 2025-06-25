@@ -2,11 +2,31 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
+from enum import Enum
 from pathlib import Path
-from typing import Any, Dict
+from typing import TypedDict
+
+import torch
+from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+
+class InferenceMode(Enum):
+    PREFILL = "prefill"
+    DECODE = "decode"
+
+
+class ModelConfig(TypedDict, total=False):
+    mode: InferenceMode
+
+
+WeightsConfig = dict[str, dict[str, str]]
+
+
+class RunConfig(TypedDict, total=False):
+    mode: InferenceMode
 
 
 class AbstractModule(LightweightModule, ABC):
@@ -42,8 +62,8 @@ class AbstractModule(LightweightModule, ABC):
     @staticmethod
     @abstractmethod
     def convert_weights(
-        hf_config: Any, state_dict: Dict[str, Any], output_path: Path, mesh_device: ttnn.Device
-    ) -> Dict[str, Any]:
+        hf_config: PretrainedConfig, state_dict: dict[str, torch.Tensor], output_path: Path, mesh_device: ttnn.Device
+    ) -> WeightsConfig:
         """Convert PyTorch weights to TTNN format for 1D tensor parallelism.
 
         Args:
@@ -53,12 +73,12 @@ class AbstractModule(LightweightModule, ABC):
             mesh_device: TTNN mesh device
 
         Returns:
-            Dict mapping operation names to their TTNN weight file paths
+            Dict mapping operation names to keyword tensor arguments and their TTNN weight file paths
         """
 
     @staticmethod
     @abstractmethod
-    def prefill_model_config(hf_config: Any, mesh_device: ttnn.Device) -> Dict[str, Any]:
+    def prefill_model_config(hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelConfig:
         """Prefill model config for a module with 1D tensor parallelism.
 
         Args:
@@ -71,7 +91,7 @@ class AbstractModule(LightweightModule, ABC):
 
     @staticmethod
     @abstractmethod
-    def decode_model_config(hf_config: Any, mesh_device: ttnn.Device) -> Dict[str, Any]:
+    def decode_model_config(hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelConfig:
         """Generate decode operator configuration for this module.
 
         Args:
@@ -82,7 +102,7 @@ class AbstractModule(LightweightModule, ABC):
             Dict containing operator configurations for decode mode
         """
 
-    def __init__(self, hf_config: Any, mesh_device: ttnn.Device):
+    def __init__(self, hf_config: PretrainedConfig, mesh_device: ttnn.Device):
         """Initialize the module with the given HuggingFace config and mesh device.
 
         Args:
@@ -91,8 +111,7 @@ class AbstractModule(LightweightModule, ABC):
         """
         super().__init__()
 
-    @abstractmethod
-    def forward(self, x: ttnn.Tensor, cfg: Dict[str, Any], mesh_device: ttnn.Device) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, cfg: RunConfig, mesh_device: ttnn.Device) -> ttnn.Tensor:
         """Forward pass of the module.
 
         Args:
@@ -103,3 +122,42 @@ class AbstractModule(LightweightModule, ABC):
         Returns:
             Output tensor after module computation
         """
+        assert "mode" in cfg and isinstance(
+            cfg["mode"], InferenceMode
+        ), "RunConfig must contain a valid 'mode' key of type InferenceMode"
+
+        if cfg["mode"] == InferenceMode.PREFILL:
+            return self._forward_prefill(x, cfg, mesh_device)
+        else:
+            return self._forward_decode(x, cfg, mesh_device)
+
+    def _forward_prefill(self, x: ttnn.Tensor, cfg: RunConfig, mesh_device: ttnn.Device) -> ttnn.Tensor:
+        """Forward pass for prefill mode.
+
+        Args:
+            x: Input tensor
+            cfg: RunConfig containing weights and op configurations for prefill
+            mesh_device: TTNN mesh device for multi-device operations
+
+        Returns:
+            Output tensor after prefill computation
+        """
+        raise FORWARD_REIMPL_ERR
+
+    def _forward_decode(self, x: ttnn.Tensor, cfg: RunConfig, mesh_device: ttnn.Device) -> ttnn.Tensor:
+        """Forward pass for prefill mode.
+
+        Args:
+            x: Input tensor
+            cfg: RunConfig containing weights and op configurations for prefill
+            mesh_device: TTNN mesh device for multi-device operations
+
+        Returns:
+            Output tensor after prefill computation
+        """
+        raise FORWARD_REIMPL_ERR
+
+
+FORWARD_REIMPL_ERR = NotImplementedError(
+    f"Subclasses of {AbstractModule.__name__} must either reimplement the forward method or both _forward_prefill and _forward_decode methods."
+)

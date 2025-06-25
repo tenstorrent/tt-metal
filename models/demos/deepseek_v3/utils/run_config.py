@@ -2,17 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-from typing import Any, Dict, Optional, Union
+import itertools
+from typing import Any, Optional, Union
 
 import ttnn
+from models.demos.deepseek_v3.utils.abstract_module import ModelConfig, RunConfig, WeightsConfig
+from models.demos.deepseek_v3.utils.config_dataclass import OpConfigBase
 
 
 def create_run_config(
-    model_config: Dict[str, Any],
-    weight_config: Dict[str, Any],
+    model_config: ModelConfig,
+    weight_config: WeightsConfig,
     mesh_device: ttnn.Device,
     layer_num: Optional[int] = None,
-) -> Dict[str, Any]:
+) -> RunConfig:
     """Create a runtime configuration by combining model config with loaded TTNN weights.
 
     This function:
@@ -35,13 +38,16 @@ def create_run_config(
         model_config = _expand_ranges(model_config, layer_num)
         weight_config = _expand_ranges(weight_config, layer_num)
 
-    # Recursively traverse both configs together and load weights
-    result = _merge_configs_and_load_weights(model_config, weight_config, mesh_device)
+    # Load weights from the weight config
+    loaded_weight_config = _load_weight_config(weight_config, mesh_device)
+
+    # Recursively traverse both configs together and
+    result: RunConfig = _merge_model_weight_config(model_config, loaded_weight_config)
     print(pretty_print_run_config(result))
     return result
 
 
-def pretty_print_run_config(run_config: Dict[str, Any], indent: int = 0) -> str:
+def pretty_print_run_config(run_config: dict[str, Any], indent: int = 0) -> str:
     """Pretty print a run_config for human readability.
 
     Args:
@@ -109,7 +115,7 @@ def pretty_print_run_config(run_config: Dict[str, Any], indent: int = 0) -> str:
     return "\n".join(lines)
 
 
-def _format_ttnn_object(value: Any) -> Union[Dict[str, Any], str]:
+def _format_ttnn_object(value: Any) -> Union[dict[str, Any], str]:
     """Format TTNN objects into readable dictionaries or strings.
 
     Args:
@@ -144,7 +150,7 @@ def _format_ttnn_object(value: Any) -> Union[Dict[str, Any], str]:
     return None
 
 
-def _format_memory_config(memory_config) -> Dict[str, Any]:
+def _format_memory_config(memory_config) -> dict[str, Any]:
     """Format MemoryConfig object."""
     return {
         "memory_layout": str(memory_config.memory_layout).split("::")[-1],
@@ -154,7 +160,7 @@ def _format_memory_config(memory_config) -> Dict[str, Any]:
     }
 
 
-def _format_shape(shape) -> Dict[str, Any]:
+def _format_shape(shape) -> dict[str, Any]:
     """Format Shape object."""
     return {
         "dimensions": list(shape),
@@ -167,7 +173,7 @@ def _format_data_type(data_type) -> str:
     return str(data_type).split(".")[-1]
 
 
-def _format_matmul_program_config(class_name, config) -> Dict[str, Any]:
+def _format_matmul_program_config(class_name, config) -> dict[str, Any]:
     """Format MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig object."""
     return {
         "type": class_name,
@@ -178,7 +184,7 @@ def _format_matmul_program_config(class_name, config) -> Dict[str, Any]:
     }
 
 
-def _format_compute_kernel_config(config) -> Dict[str, Any]:
+def _format_compute_kernel_config(config) -> dict[str, Any]:
     """Format WormholeComputeKernelConfig object."""
     return {
         "fp32_dest_acc_en": getattr(config, "fp32_dest_acc_en", None),
@@ -187,7 +193,7 @@ def _format_compute_kernel_config(config) -> Dict[str, Any]:
     }
 
 
-def _format_shard_spec(shard_spec) -> Dict[str, Any]:
+def _format_shard_spec(shard_spec) -> dict[str, Any]:
     """Format ShardSpec object."""
     return {
         "grid": str(shard_spec.grid),
@@ -197,25 +203,25 @@ def _format_shard_spec(shard_spec) -> Dict[str, Any]:
     }
 
 
-def _format_nd_shard_spec(nd_shard_spec) -> Dict[str, Any]:
+def _format_nd_shard_spec(nd_shard_spec) -> dict[str, Any]:
     """Format NdShardSpec object."""
     return {
-        "shard_shape": _format_ttnn_object(nd_shard_spec.shard_shape)
-        if hasattr(nd_shard_spec, "shard_shape")
-        else None,
+        "shard_shape": (
+            _format_ttnn_object(nd_shard_spec.shard_shape) if hasattr(nd_shard_spec, "shard_shape") else None
+        ),
         "grid": str(nd_shard_spec.grid),
         "orientation": str(nd_shard_spec.orientation).split("::")[-1],
     }
 
 
-def _format_unary_op_type(op_type) -> Dict[str, Any]:
+def _format_unary_op_type(op_type) -> dict[str, Any]:
     """Format UnaryOpType object."""
     return {
         "operation": str(op_type).split(".")[-1],
     }
 
 
-def _format_generic_ttnn_object(obj) -> Dict[str, Any]:
+def _format_generic_ttnn_object(obj) -> dict[str, Any]:
     """Format generic TTNN objects by extracting common attributes."""
     result = {"type": obj.__class__.__name__}
 
@@ -368,7 +374,7 @@ def _parse_range(range_str: str) -> tuple[int, int]:
     return start, end
 
 
-def _expand_ranges(config: Dict[str, Any], layer_num: int) -> Dict[str, Any]:
+def _expand_ranges(config: dict[str, Any], layer_num: int) -> dict[str, Any]:
     """Expand range patterns in model config for a specific layer.
 
     Handles patterns like:
@@ -414,118 +420,62 @@ def _expand_ranges(config: Dict[str, Any], layer_num: int) -> Dict[str, Any]:
     return config
 
 
-def _merge_configs_and_load_weights(
-    model_config: Dict[str, Any], weight_config: Dict[str, Any], mesh_device: ttnn.Device
-) -> Dict[str, Any]:
-    """Recursively merge model_config and weight_config, loading weights where weight_config has entries.
+def _merge_model_weight_config(model_value: Any, loaded_weight_value: Any) -> Any:
+    """Recursively merge model_config and weight_config.
 
     Args:
-        model_config: The model configuration dict
-        weight_config: The weight configuration dict mapping to file paths
+        model_config: The model configuration (element)
+        loaded_weight_value: The loaded weight configuration (element)
+
+    Returns:
+        Merged run config
+    """
+
+    if _is_op_config(model_value):
+        return model_value.__class__(**_merge_model_weight_config(dataclasses.asdict(model_value), loaded_weight_value))
+
+    if isinstance(model_value, dict) and isinstance(loaded_weight_value, dict):
+        return {
+            k: _merge_model_weight_config(model_value.get(k, {}), loaded_weight_value.get(k, {}))
+            for k in itertools.chain(model_value.keys(), loaded_weight_value.keys())
+        }
+
+    if isinstance(model_value, list) and isinstance(loaded_weight_value, list):
+        if len(model_value) != len(loaded_weight_value):
+            raise ValueError(
+                f"Cannot merge config lists of different lengths: {len(model_value)} vs {len(loaded_weight_value)}"
+            )
+        return [_merge_model_weight_config(m, w) for m, w in zip(model_value, loaded_weight_value)]
+
+    raise ValueError(f"Cannot merge {model_value} and {loaded_weight_value} config values")
+
+
+def _load_weight_config(weight_value: Any, mesh_device: ttnn.Device) -> Any:
+    """Load weights from the weight config (element).
+
+    Args:
+        weight_value: Either a weight (sub)config, or an element of thereof (to be loaded)
         mesh_device: TTNN device for loading weights
 
     Returns:
-        Merged config with loaded weights added
+        Dictionary with loaded TTNN tensors
     """
-    if isinstance(model_config, dict) and isinstance(weight_config, dict):
-        result = {}
 
-        # Process all keys that exist in either config
-        all_keys = set(model_config.keys()) | set(weight_config.keys())
-
-        for key in all_keys:
-            model_value = model_config.get(key, {})
-            weight_value = weight_config.get(key, {})
-
-            if isinstance(weight_value, dict) and weight_value:
-                # This key has weight entries, load the weights
-                if dataclasses.is_dataclass(model_value):
-                    # Handle dataclass: create a new instance with loaded weights to avoid shared references
-                    merged_value = _merge_dataclass_with_weights(model_value, weight_value, mesh_device)
-                    result[key] = merged_value
-                elif isinstance(model_value, dict):
-                    # Merge model config with loaded weights
-                    merged_value = model_value.copy()
-                    for weight_key, weight_path in weight_value.items():
-                        if isinstance(weight_path, str):
-                            # Load the TTNN tensor from the file path
-                            weight_tensor = ttnn.load_tensor(weight_path, device=mesh_device)
-                            merged_value[weight_key] = weight_tensor
-                        else:
-                            # Keep non-string values as-is (e.g., nested configs)
-                            merged_value[weight_key] = weight_path
-                    result[key] = merged_value
-                else:
-                    # Model config doesn't have this key as a dict, create it with weights
-                    merged_value = {}
-                    for weight_key, weight_path in weight_value.items():
-                        if isinstance(weight_path, str):
-                            weight_tensor = ttnn.load_tensor(weight_path, device=mesh_device)
-                            merged_value[weight_key] = weight_tensor
-                        else:
-                            merged_value[weight_key] = weight_path
-                    result[key] = merged_value
-            else:
-                # No weight entries for this key, recursively process nested dicts
-                if dataclasses.is_dataclass(model_value):
-                    # Even without weights, create a new instance to avoid shared references
-                    result[key] = _copy_dataclass(model_value)
-                elif isinstance(model_value, dict) and isinstance(weight_value, dict):
-                    result[key] = _merge_configs_and_load_weights(model_value, weight_value, mesh_device)
-                else:
-                    # Keep model value as-is
-                    result[key] = model_value
-
-        return result
-
-    elif isinstance(model_config, list) and isinstance(weight_config, list):
-        # Handle lists by processing each element
-        return [_merge_configs_and_load_weights(m, w, mesh_device) for m, w in zip(model_config, weight_config)]
-
+    if isinstance(weight_value, str):
+        return ttnn.load_tensor(weight_value, device=mesh_device)
+    elif isinstance(weight_value, dict):
+        return {key: _load_weight_config(value, mesh_device) for key, value in weight_value.items()}
     else:
-        # Return model_config as-is for non-dict/non-list types
-        return model_config
+        return weight_value
 
 
-def _merge_dataclass_with_weights(
-    dataclass_instance: Any, weight_dict: Dict[str, Any], mesh_device: ttnn.Device
-) -> Any:
-    """Merge a dataclass instance with weights, creating a new instance to avoid shared references.
+def _is_op_config(value: Any) -> bool:
+    """Check if the value is an operator configuration (e.g., LinearConfig, EmbeddingConfig).
 
     Args:
-        dataclass_instance: The dataclass instance to merge with weights
-        weight_dict: Dictionary mapping weight keys to file paths
-        mesh_device: TTNN device for loading weights
+        value: The value to check
 
     Returns:
-        New dataclass instance with weights loaded
+        True if the value is an operator configuration, False otherwise
     """
-    # Get current field values without deep copying (preserves ttnn object references)
-    current_values = {}
-    for field in dataclasses.fields(dataclass_instance):
-        current_values[field.name] = getattr(dataclass_instance, field.name)
-
-    # Load weights and add them to the values
-    for weight_key, weight_path in weight_dict.items():
-        if isinstance(weight_path, str):
-            # Load the TTNN tensor from the file path
-            weight_tensor = ttnn.load_tensor(weight_path, device=mesh_device)
-            current_values[weight_key] = weight_tensor
-        else:
-            # Keep non-string values as-is (e.g., nested configs)
-            current_values[weight_key] = weight_path
-
-    # Create a new instance of the same dataclass type with the merged values
-    return type(dataclass_instance)(**current_values)
-
-
-def _copy_dataclass(dataclass_instance: Any) -> Any:
-    """Create a copy of a dataclass instance to avoid shared references.
-
-    Args:
-        dataclass_instance: The dataclass instance to copy
-
-    Returns:
-        New dataclass instance with the same values
-    """
-    return dataclasses.replace(dataclass_instance)
+    return issubclass(value, OpConfigBase)

@@ -14,7 +14,7 @@ ProgramConfig = Union[
 
 
 @dataclass
-class ConfigBase:
+class OpConfigBase:
     def __getitem__(self, key: str) -> Any:
         return getattr(self, key)
 
@@ -23,7 +23,7 @@ class ConfigBase:
 
 
 @dataclass
-class LinearConfig(ConfigBase):
+class LinearConfig(OpConfigBase):
     """Common parameters for a ttnn.linear layer, weights are in input_tensor_b"""
 
     input_tensor_b: ttnn.Tensor | Path | None = None
@@ -33,7 +33,7 @@ class LinearConfig(ConfigBase):
 
 
 @dataclass
-class EmbeddingConfig(ConfigBase):
+class EmbeddingConfig(OpConfigBase):
     """Common parameters for a ttnn.embedding layer"""
 
     weight: ttnn.Tensor | Path | None = None
@@ -42,13 +42,13 @@ class EmbeddingConfig(ConfigBase):
 
 
 @dataclass
-class MulConfig(ConfigBase):
+class MulConfig(OpConfigBase):
     memory_config: ttnn.MemoryConfig | None = None
     input_tensor_a_activations: list[ttnn.UnaryOpType] | None = None
 
 
 @dataclass
-class AllReduceConfig(ConfigBase):
+class AllReduceConfig(OpConfigBase):
     cluster_axis: int
     dim: int
     num_reduce_scatter_links: int
@@ -59,7 +59,7 @@ class AllReduceConfig(ConfigBase):
 
 
 @dataclass
-class ReshardConfig(ConfigBase):
+class ReshardConfig(OpConfigBase):
     """Simple config for operations that only need memory configuration"""
 
     memory_config: ttnn.MemoryConfig
