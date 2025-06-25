@@ -51,12 +51,20 @@ enum EDMStatus : uint32_t {
 enum NocSendType : uint8_t {
     NOC_UNICAST_WRITE = 0,
     NOC_UNICAST_INLINE_WRITE = 1,
+#ifdef ARCH_WORMHOLE
     NOC_UNICAST_ATOMIC_INC = 2,
     NOC_FUSED_UNICAST_ATOMIC_INC = 3,
     NOC_UNICAST_SCATTER_WRITE = 4,
     NOC_MULTICAST_WRITE = 5,       // mcast has bug
     NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
     NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
+#else
+    NOC_MULTICAST_WRITE = 2,
+    NOC_UNICAST_ATOMIC_INC = 3,
+    NOC_FUSED_UNICAST_ATOMIC_INC = 4,
+    NOC_MULTICAST_ATOMIC_INC = 5,
+    NOC_SEND_TYPE_LAST = NOC_MULTICAST_ATOMIC_INC
+#endif
 };
 // How to send the payload across the cluster
 // 1 bit
@@ -90,12 +98,13 @@ static_assert(
 struct NocUnicastCommandHeader {
     uint64_t noc_address;
 };
-
+#ifdef ARCH_WORMHOLE
 #define NOC_SCATTER_WRITE_MAX_CHUNKS 2
 struct NocUnicastScatterCommandHeader {
     uint64_t noc_address[NOC_SCATTER_WRITE_MAX_CHUNKS];
     uint16_t chunk_size[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];  // last chunk size is implicit
 };
+#endif
 struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
     uint32_t value;
@@ -150,7 +159,9 @@ union NocCommandFields {
     NocUnicastAtomicIncCommandHeader unicast_seminc;
     NocUnicastAtomicIncFusedCommandHeader unicast_seminc_fused;
     NocMulticastAtomicIncCommandHeader mcast_seminc;
+#ifdef ARCH_WORMHOLE
     NocUnicastScatterCommandHeader unicast_scatter_write;
+#endif
 };
 static_assert(sizeof(NocCommandFields) == 24, "CommandFields size is not 24 bytes");
 
@@ -301,6 +312,7 @@ struct PacketHeaderBase {
         return static_cast<volatile Derived*>(this);
     }
 
+#ifdef ARCH_WORMHOLE
     inline volatile Derived* to_noc_unicast_scatter_write(
         const NocUnicastScatterCommandHeader& noc_unicast_scatter_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -323,6 +335,7 @@ struct PacketHeaderBase {
 #endif
         return static_cast<volatile Derived*>(this);
     }
+#endif
 
     inline volatile Derived* to_noc_unicast_inline_write(
         const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) volatile {
