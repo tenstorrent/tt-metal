@@ -26,7 +26,6 @@ MemoryConfig load_memory_config(const std::string& file_name);
 // 1. Tensor metadata is serialized and stored as file "header", while the rest of the file is used as a data region for
 //    tensor data.
 // 2. Metadata includes data offsets and sizes for tensor / tensor shards (multi device context).
-// TODO: #22259 - the format is not yet finalized, and is not stable. Avoid using it in production.
 void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor);
 Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device = nullptr);
 

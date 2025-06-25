@@ -194,8 +194,8 @@ def create_mesh_device(*args, **kwargs):
         close_mesh_device(mesh_device)
 
 
-# TODO: #22258 - Temporary stubs to accomodate migration of Python-based sharding to C++.
-# Remove once migration is complete.
+# Temporary stubs to accomodate migration of Python-based sharding / concatenation to C++.
+# TODO: #24114 - When migration of concatenation is complete, remove these stubs.
 TensorToMesh = ttnn.CppTensorToMesh
 
 

@@ -782,7 +782,7 @@ DeviceStorage to_device_mesh_buffer(
                     return shard_to_mesh_buffer(storage.distributed_buffer(), mesh_buffer, cq_id);
                 } else {
                     // Reshape distributed host buffer.
-                    // TODO: #22169 - there are 2 reasons for this code path - legacy serialization path that stored
+                    // TODO: #24115 - there are 2 reasons for this code path - legacy serialization path that stored
                     // multi device host tensors without the necessary metadata, and `aggregate_as_tensor` calls that
                     // similarly lack the metadata to properly distribute the shards across the mesh.
                     auto* mesh_device = mesh_buffer->device();
