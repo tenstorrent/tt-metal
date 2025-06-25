@@ -166,7 +166,6 @@ add_compile_options(
     # Vars that are used only in Asserts will appear as dead stores in builds
     # where the preprocessor has stripped away the assert.
     "$<$<OR:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU>>:-Wno-unused-but-set-variable>"
-    -Wno-unused-function
     -Wno-unused-variable
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"

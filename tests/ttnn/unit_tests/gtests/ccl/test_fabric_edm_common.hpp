@@ -3215,7 +3215,7 @@ ttnn::ccl::Topology get_topology(FabricTestMode fabric_mode) {
 template <typename T>
 using per_axis_array_t = std::array<T, FullMeshTestParams::MAX_NUM_AXES>;
 
-static void validate_sync_core_is_on_a_worker(
+inline void validate_sync_core_is_on_a_worker(
     const CoreCoord& sync_core_coord,
     const std::unordered_map<size_t, std::vector<CoreCoord>>& worker_cores_per_device) {
     for (const auto& [device, worker_cores_vec] : worker_cores_per_device) {
