@@ -4,24 +4,10 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
-
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "dprint_pages.h"
 
 #include "../common.hpp"
 
-inline void print_uint16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
-            DPRINT << *ptr << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
 
 namespace detail{
 
@@ -47,10 +33,6 @@ void get_device_expert_indices(
         if (mapping_ptr[DeviceIdx] == 1u) {
             *(output_ptr++)=expert_idx;
 
-            // if(DeviceIdx==1){
-            //                 DPRINT<<"MAPPING PAGE: "<<expert_idx<<"\n";
-            //                 print_uint16_pages(mapping_l1_buffer_addr,mapping_page_size/2,1 );
-            //             }
         }
     }
 }
@@ -98,32 +80,19 @@ void kernel_main() {
         mapping_addrgen, mapping_buffer_addr, mapping_page_size_bytes, local_experts_ptr);
     cb_push_back(local_experts_cb_id,1);
 
-    DPRINT << " local experts for DEVICE: " << src_chip_id;
-    for (uint32_t i = 0; i < num_local_experts; ++i) {
-        DPRINT << " " << local_experts_ptr[i] << " ";
-    }
-    DPRINT << "\n";
-
     for(uint32_t b=0;b<batch_size;++b){
         cb_reserve_back(metadata_cb_id,1);
         const uint32_t metadata_l1_addr = get_read_ptr(metadata_cb_id);
         const uint64_t metadata_noc_addr = get_noc_addr(b, metadata_addrgen);
         noc_async_read(metadata_noc_addr, metadata_l1_addr, metadata_page_size_bytes);
         noc_async_read_barrier();
-        //         DPRINT<<"READER METADATA: "<<b<<"\n";
-        //         print_uint16_pages(metadata_l1_addr,metadata_page_size_bytes/2,1);
 
         auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(metadata_l1_addr);
 
         for (uint32_t e = 0; e < num_local_experts; ++e) {
             const auto & expert_idx = local_experts_ptr[e];
 
-            // DPRINT<<"READER 2.5 "<< e << " "<< expert_idx<< "\n";
             if (detail::find_if<uint16_t, selected_experts_k, false>(metadata_ptr, expert_idx)) {
-                // in the future we can encapsulate this with logic that manages coalescing or splitting pages,
-                // taking inspiration from send-receive. This would also require a dedicated receiver kernel.
-                // DPRINT<<"READER FOUND b: "<<b<<" e: "<< e<< " expert: " <<expert_idx<< "\n";
-
                 const uint32_t input_data_page_idx = detail::get_input_data_page_idx<batch_size>(e, b);
 
                 cb_reserve_back(data_cb_id,1);
@@ -131,17 +100,10 @@ void kernel_main() {
                 const uint64_t data_noc_addr = get_noc_addr(input_data_page_idx, data_addrgen);
                 noc_async_read(data_noc_addr,data_l1_addr,data_size_bytes);
                 noc_async_read_barrier();
-                // DPRINT<<"READER 4 "<< e<< "\n";
-
-                // DPRINT <<"Found some weird shit: b: "<<b<<" e: "<<e<<" expert_id: "<<expert_idx<<" page idx:
-                // "<<input_data_page_idx<<"\n"; tt::data_movement::common::print_bf16_pages(data_l1_addr,
-                // data_size_bytes/2,1);
 
                 cb_push_back(data_cb_id, 1);
             }
         }
-        // DPRINT<<"READER 5 "<< b<< "\n";
         cb_push_back(metadata_cb_id,1);
     }
-    // DPRINT << "READER DONE \n";
 }
