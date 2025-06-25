@@ -200,7 +200,6 @@ source python_env/bin/activate
 
   | Card             | Command                              |
   |------------------|--------------------------------------|
-  | Grayskull        | ```export ARCH_NAME=grayskull```     |
   | Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
   | Blackhole        | ```export ARCH_NAME=blackhole```     |
 
@@ -208,11 +207,6 @@ source python_env/bin/activate
   ```
   export TT_METAL_HOME=$(pwd)
   export PYTHONPATH=$(pwd)
-  ```
-
-- Then, try running a programming example:
-  ```
-  python3 -m ttnn.examples.usage.run_op_on_device
   ```
 
 - For more programming examples to try, visit Tenstorrent's [TT-NN Basic Examples Page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [Simple Kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html)
