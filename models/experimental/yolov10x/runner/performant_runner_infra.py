@@ -94,8 +94,9 @@ class YOLOv10PerformanceRunnerInfra:
         n, c, h, w = torch_input_tensor.shape
 
         ## Converting from image based channels (3) to min channels (16)
+        min_channels = 16
         if c == 3:
-            c = 16
+            c = min_channels
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
             ttnn.CoreGrid(x=8, y=8),

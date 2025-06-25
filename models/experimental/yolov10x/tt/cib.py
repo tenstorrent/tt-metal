@@ -15,6 +15,9 @@ class TtnnCIB:
             device,
             parameters.cv1[0],
             self.conv_pt.cv1[0],
+            use_1d_systolic_array=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
 
         self.conv1 = Conv(
@@ -28,7 +31,6 @@ class TtnnCIB:
             parameters.cv1[2],
             self.conv_pt.cv1[2],
             use_1d_systolic_array=False,
-            # auto_shard=True,
         )
 
         self.conv3 = Conv(
@@ -42,6 +44,9 @@ class TtnnCIB:
             device,
             parameters.cv1[4],
             self.conv_pt.cv1[4],
+            use_1d_systolic_array=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
 
     def __call__(self, input_tensor):
