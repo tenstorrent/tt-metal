@@ -1083,7 +1083,9 @@ void run_receiver_channel_step_impl(
             // clear the cached packet header
             receiver_channel_pointers.clear_cached_routing_fields();
         } else {  // cannot process packet, need to cache it
-            receiver_channel_pointers.cache_routing_fields(cached_routing_fields);
+            if (!receiver_channel_pointers.is_cached()) {
+                receiver_channel_pointers.cache_routing_fields(cached_routing_fields);
+            }
         }
     }
 
