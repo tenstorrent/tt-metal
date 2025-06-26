@@ -210,6 +210,7 @@ struct TestTrafficConfig {
     std::optional<CoreCoord> src_logical_core;
     std::optional<CoreCoord> dst_logical_core;
     std::optional<uint32_t> target_address;
+    std::optional<uint32_t> atomic_inc_address;
     // TODO: add later
     // mode - BW, latency etc
 };
@@ -221,6 +222,7 @@ struct TestTrafficSenderConfig {
     std::unordered_map<RoutingDirection, uint32_t> hops;
     CoreCoord dst_logical_core;
     size_t target_address;
+    std::optional<size_t> atomic_inc_address;
     uint32_t dst_noc_encoding;  // TODO: decide if we should keep it here or not
 
     std::vector<uint32_t> get_args() const;
@@ -230,6 +232,7 @@ struct TestTrafficReceiverConfig {
     TrafficParameters parameters;
     uint32_t sender_id;
     size_t target_address;
+    std::optional<size_t> atomic_inc_address;
 
     std::vector<uint32_t> get_args() const;
 };
@@ -308,7 +311,8 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() const {
             args.insert(args.end(), unicast_write_args.begin(), unicast_write_args.end());
         } break;
         case NocSendType::NOC_UNICAST_ATOMIC_INC: {
-            auto atomic_inc_fields = NocUnicastAtomicIncFields(this->target_address, this->dst_noc_encoding);
+            auto atomic_inc_fields =
+                NocUnicastAtomicIncFields(this->atomic_inc_address.value(), this->dst_noc_encoding);
             if (this->parameters.atomic_inc_val.has_value()) {
                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
             }
@@ -321,7 +325,8 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() const {
         case NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
             const auto write_fields = NocUnicastWriteFields(
                 this->parameters.payload_size_bytes, this->target_address, this->dst_noc_encoding);
-            auto atomic_inc_fields = NocUnicastAtomicIncFields(this->target_address, this->dst_noc_encoding);
+            auto atomic_inc_fields =
+                NocUnicastAtomicIncFields(this->atomic_inc_address.value(), this->dst_noc_encoding);
             if (this->parameters.atomic_inc_val.has_value()) {
                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
             }
@@ -361,7 +366,7 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
             break;
         }
         case NocSendType::NOC_UNICAST_ATOMIC_INC: {
-            auto atomic_inc_fields = NocUnicastAtomicIncFields(this->target_address);
+            auto atomic_inc_fields = NocUnicastAtomicIncFields(this->atomic_inc_address.value());
             if (this->parameters.atomic_inc_val.has_value()) {
                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
             }
@@ -374,7 +379,7 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
         }
         case NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
             const auto write_fields = NocUnicastWriteFields(this->parameters.payload_size_bytes, this->target_address);
-            auto atomic_inc_fields = NocUnicastAtomicIncFields(this->target_address);
+            auto atomic_inc_fields = NocUnicastAtomicIncFields(this->atomic_inc_address.value());
             if (this->parameters.atomic_inc_val.has_value()) {
                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
             }

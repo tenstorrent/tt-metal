@@ -40,18 +40,18 @@ using CmdlineParser = tt::tt_fabric::fabric_tests::CmdlineParser;
 using YamlTestConfigSerializer = tt::tt_fabric::fabric_tests::YamlTestConfigSerializer;
 
 using Topology = tt::tt_fabric::Topology;
+using FabricConfig = tt::tt_metal::FabricConfig;
 using RoutingType = tt::tt_fabric::fabric_tests::RoutingType;
 
-const std::
-    unordered_map<std::pair<Topology, RoutingType>, tt::tt_metal::FabricConfig, tt::tt_fabric::fabric_tests::pair_hash>
-        TestFixture::topology_to_fabric_config_map = {
-            {{Topology::Linear, RoutingType::LowLatency}, tt::tt_metal::FabricConfig::FABRIC_1D},
-            {{Topology::Ring, RoutingType::LowLatency}, tt::tt_metal::FabricConfig::FABRIC_1D_RING},
-            {{Topology::Mesh, RoutingType::LowLatency}, tt::tt_metal::FabricConfig::FABRIC_2D},
-            {{Topology::Mesh, RoutingType::Dynamic}, tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC},
+const std::unordered_map<std::pair<Topology, RoutingType>, FabricConfig, tt::tt_fabric::fabric_tests::pair_hash>
+    TestFixture::topology_to_fabric_config_map = {
+        {{Topology::Linear, RoutingType::LowLatency}, FabricConfig::FABRIC_1D},
+        {{Topology::Ring, RoutingType::LowLatency}, FabricConfig::FABRIC_1D_RING},
+        {{Topology::Mesh, RoutingType::LowLatency}, FabricConfig::FABRIC_2D},
+        {{Topology::Mesh, RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC},
 };
 
-// TODO: move this to generated directory
+const std::string output_dir = "generated/fabric";
 const std::string default_built_tests_dump_file = "built_tests.yaml";
 
 class TestContext {
@@ -81,14 +81,10 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
     const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
     auto& src_test_device = this->test_devices_.at(src_coord);
 
-    // All these fields MUST have a value after the allocator has run.
-    TT_FATAL(traffic_config.src_logical_core.has_value(), "Missing src_logical_core in planned traffic config");
-    TT_FATAL(traffic_config.dst_logical_core.has_value(), "Missing dst_logical_core in planned traffic config");
-    TT_FATAL(traffic_config.target_address.has_value(), "Missing target_address in planned traffic config");
-
     CoreCoord src_logical_core = traffic_config.src_logical_core.value();
     CoreCoord dst_logical_core = traffic_config.dst_logical_core.value();
-    uint32_t target_address = traffic_config.target_address.value();
+    uint32_t target_address = traffic_config.target_address.value_or(0);
+    uint32_t atomic_inc_address = traffic_config.atomic_inc_address.value_or(0);
 
     std::vector<FabricNodeId> dst_node_ids;
     std::unordered_map<RoutingDirection, uint32_t> hops;
@@ -113,11 +109,14 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .hops = hops,
         .dst_logical_core = dst_logical_core,
         .target_address = target_address,
-        .dst_noc_encoding = dst_noc_encoding,
-    };
+        .atomic_inc_address = atomic_inc_address,
+        .dst_noc_encoding = dst_noc_encoding};
 
     TestTrafficReceiverConfig receiver_config = {
-        .parameters = traffic_config.parameters, .sender_id = sender_id, .target_address = target_address};
+        .parameters = traffic_config.parameters,
+        .sender_id = sender_id,
+        .target_address = target_address,
+        .atomic_inc_address = atomic_inc_address};
 
     src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
     for (const auto& dst_node_id : dst_node_ids) {
@@ -169,6 +168,7 @@ void TestContext::close_devices() { fixture_->close_devices(); }
 
 void TestContext::process_traffic_config(TestConfig& config) {
     this->allocator_->allocate_resources(config);
+    log_info(tt::LogTest, "Resource allocation complete");
 
     for (const auto& sender : config.senders) {
         for (const auto& pattern : sender.patterns) {
@@ -195,6 +195,7 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 .src_logical_core = sender.core,
                 .dst_logical_core = dest.core,
                 .target_address = dest.target_address,
+                .atomic_inc_address = dest.atomic_inc_address,
             };
 
             if (dest.device.has_value()) {
@@ -216,8 +217,13 @@ int main(int argc, char** argv) {
     fixture->init();
 
     // fixture is passed to both the parsers since it implements the device interface
-
     CmdlineParser cmdline_parser(input_args, *fixture);
+
+    if (cmdline_parser.has_help_option()) {
+        cmdline_parser.print_help();
+        return 0;
+    }
+
     std::vector<TestConfig> raw_test_configs;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
 
@@ -254,38 +260,53 @@ int main(int argc, char** argv) {
     // any gaps/optionals/missing values
     TestConfigBuilder builder(*fixture, *fixture, gen);
 
+    std::ofstream output_stream;
+    bool dump_built_tests = cmdline_parser.dump_built_tests();
+    if (dump_built_tests) {
+        std::filesystem::path dump_file_dir =
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
+        if (!std::filesystem::exists(dump_file_dir)) {
+            std::filesystem::create_directory(dump_file_dir);
+        }
+
+        std::string dump_file = cmdline_parser.get_built_tests_dump_file_name(default_built_tests_dump_file);
+        std::filesystem::path dump_file_path = dump_file_dir / dump_file;
+        output_stream.open(dump_file_path, std::ios::out | std::ios::trunc);
+
+        // dump allocation policies first
+        YamlTestConfigSerializer::dump(allocation_policies, output_stream);
+    }
+
     for (auto& test_config : raw_test_configs) {
         log_info(tt::LogTest, "Running Test Group: {}", test_config.name);
 
         test_context.open_devices(test_config.fabric_setup.topology, test_config.fabric_setup.routing_type.value());
 
-        log_info(tt::LogTest, "building tests");
         auto built_tests = builder.build_tests({test_config});
-        log_info(tt::LogTest, "built {} tests", built_tests.size());
 
         for (auto& built_test : built_tests) {
             log_info(tt::LogTest, "Running Test: {}", built_test.name);
 
             test_context.setup_devices();
+            log_info(tt::LogTest, "Device setup complete");
 
             test_context.process_traffic_config(built_test);
+            log_info(tt::LogTest, "Traffic config processed");
 
             test_context.compile_programs();
+            log_info(tt::LogTest, "Programs compiled");
 
             test_context.launch_programs();
+            log_info(tt::LogTest, "Programs launched");
 
             test_context.wait_for_prorgams();
-
             log_info(tt::LogTest, "Test {} Finished.", built_test.name);
 
             test_context.reset_devices();
         }
 
-        if (cmdline_parser.dump_built_tests()) {
-            log_info(tt::LogTest, "dumping tests");
-            auto dump_path = cmdline_parser.get_built_tests_dump_file_path(default_built_tests_dump_file);
-            YamlTestConfigSerializer::dump(built_tests, allocation_policies, dump_path);
-            log_info(tt::LogTest, "dumped tests");
+        if (dump_built_tests) {
+            YamlTestConfigSerializer::dump(built_tests, output_stream);
         }
     }
 

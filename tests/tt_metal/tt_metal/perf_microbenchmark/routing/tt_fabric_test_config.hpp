@@ -121,8 +121,16 @@ inline TrafficPatternConfig merge_patterns(const TrafficPatternConfig& base, con
         if (base.destination.has_value()) {
             // Both have destinations, merge them.
             DestinationConfig merged_dest;
-            merged_dest.device =
-                specific.destination->device.has_value() ? specific.destination->device : base.destination->device;
+            const auto& base_dest = base.destination.value();
+            const auto& spec_dest = specific.destination.value();
+
+            merged_dest.device = spec_dest.device.has_value() ? spec_dest.device : base_dest.device;
+            merged_dest.core = spec_dest.core.has_value() ? spec_dest.core : base_dest.core;
+            merged_dest.hops = spec_dest.hops.has_value() ? spec_dest.hops : base_dest.hops;
+            merged_dest.target_address =
+                spec_dest.target_address.has_value() ? spec_dest.target_address : base_dest.target_address;
+            merged_dest.atomic_inc_address =
+                spec_dest.atomic_inc_address.has_value() ? spec_dest.atomic_inc_address : base_dest.atomic_inc_address;
             merged.destination = merged_dest;
         } else {
             // Only specific has a destination, use it directly.
@@ -181,7 +189,9 @@ public:
     std::vector<TestConfig> generate_default_configs();
     std::optional<uint32_t> get_master_seed();
     bool dump_built_tests();
-    std::string get_built_tests_dump_file_path(const std::string& default_path);
+    std::string get_built_tests_dump_file_name(const std::string& default_file_name);
+    bool has_help_option();
+    void print_help();
 
 private:
     const std::vector<std::string>& input_args_;
@@ -246,6 +256,9 @@ inline DestinationConfig YamlConfigParser::parse_destination_config(const YAML::
     }
     if (dest_yaml["target_address"]) {
         config.target_address = parse_scalar<uint32_t>(dest_yaml["target_address"]);
+    }
+    if (dest_yaml["atomic_inc_address"]) {
+        config.atomic_inc_address = parse_scalar<uint32_t>(dest_yaml["atomic_inc_address"]);
     }
     return config;
 }
@@ -508,6 +521,8 @@ inline std::vector<TestConfig> CmdlineParser::generate_default_configs() {
     default_test.name = "DefaultCommandLineTest";
     default_test.fabric_setup = fabric_setup;
     default_test.defaults = TrafficPatternConfig{};
+    default_test.defaults->ftype = ChipSendType::CHIP_UNICAST;
+    default_test.defaults->ntype = NocSendType::NOC_UNICAST_WRITE;
 
     return {default_test};
 }
@@ -527,9 +542,73 @@ inline bool CmdlineParser::dump_built_tests() {
     return test_args::has_command_option(input_args_, "--dump-built-tests");
 }
 
-inline std::string CmdlineParser::get_built_tests_dump_file_path(const std::string& default_path) {
-    auto dump_path = test_args::get_command_option(input_args_, "--built-tests-dump-file", default_path);
-    return dump_path;
+inline std::string CmdlineParser::get_built_tests_dump_file_name(const std::string& default_file_name) {
+    auto dump_file = test_args::get_command_option(input_args_, "--built-tests-dump-file", default_file_name);
+    return dump_file;
+}
+
+inline bool CmdlineParser::has_help_option() { return test_args::has_command_option(input_args_, "--help"); }
+
+inline void CmdlineParser::print_help() {
+    log_info(LogTest, "Usage: test_tt_fabric [options]");
+    log_info(LogTest, "This test can be run in two modes:");
+    log_info(
+        LogTest,
+        "1. With a YAML configuration file (--test_config), which provides detailed control over traffic patterns.");
+    log_info(LogTest, "2. With command-line arguments for simpler, predefined test cases.");
+    log_info(LogTest, "");
+    log_info(LogTest, "General Options:");
+    log_info(LogTest, "  --help                                       Print this help message.");
+    log_info(
+        LogTest,
+        "  --test_config <path>                         Path to the YAML test configuration file. See "
+        "test_features.yaml for examples.");
+    log_info(
+        LogTest,
+        "  --master-seed <seed>                         Master seed for all random operations to ensure "
+        "reproducibility.");
+    log_info(LogTest, "");
+    log_info(LogTest, "Options for command-line mode (when --test_config is NOT used):");
+    log_info(LogTest, "  --topology <Linear|Ring|Mesh>                Specify the fabric topology. Default: Linear.");
+    log_info(
+        LogTest,
+        "  --pattern <type>                             Specify a high-level traffic pattern. If not provided, a "
+        "simple unicast test is run.");
+    log_info(
+        LogTest,
+        "                                               Supported types: all_to_all_unicast, "
+        "full_device_random_pairing, all_to_all_multicast.");
+    log_info(
+        LogTest,
+        "  --src-device <id>                            Source device for simple unicast test. "
+        "Default: 0.");
+    log_info(
+        LogTest,
+        "  --dst-device <id>                            Destination device for simple unicast test. "
+        "Default: 1.");
+    log_info(
+        LogTest,
+        "  --iterations <N>                             Number of iterations for high-level patterns (e.g., for "
+        "different random pairings). Default: 1.");
+    log_info(LogTest, "");
+    log_info(LogTest, "Value Overrides (can be used with either mode):");
+    log_info(
+        LogTest,
+        "  --num-packets <N>                            Override the number of packets for all traffic "
+        "patterns.");
+    log_info(
+        LogTest,
+        "  --payload-size <bytes>                       Override the payload size in bytes for all "
+        "traffic patterns.");
+    log_info(LogTest, "");
+    log_info(LogTest, "Debugging and Output Options:");
+    log_info(
+        LogTest,
+        "  --dump-built-tests                           Dump the fully-expanded test configurations to a YAML file.");
+    log_info(
+        LogTest,
+        "  --built-tests-dump-file <filename>           Specify the filename for the dumped tests. Default: "
+        "built_tests.yaml.");
 }
 
 // YamlConfigParser private helpers
@@ -692,6 +771,13 @@ private:
                         p_config.name);
                 }
                 expand_patterns_into_test(iteration_test, p_config.patterns.value(), i);
+            } else if (p_config.defaults.has_value()) {
+                // if we have concrete senders, we still need to apply the defaults to them
+                for (auto& sender : iteration_test.senders) {
+                    for (auto& pattern : sender.patterns) {
+                        pattern = merge_patterns(p_config.defaults.value(), pattern);
+                    }
+                }
             }
 
             // After patterns are expanded, resolve any missing params based on policy
@@ -987,36 +1073,52 @@ private:
     }
 
     void resolve_missing_params(TestConfig& test) {
-        if (!test.on_missing_param_policy.has_value() || test.on_missing_param_policy.value() != "randomize") {
-            return;  // No policy or not 'randomize', do nothing.
-        }
+        if (test.on_missing_param_policy.has_value() && test.on_missing_param_policy.value() == "randomize") {
+            for (auto& sender : test.senders) {
+                for (auto& pattern : sender.patterns) {
+                    if (!pattern.ftype.has_value()) {
+                        pattern.ftype =
+                            get_random_choice<ChipSendType>({ChipSendType::CHIP_UNICAST, ChipSendType::CHIP_MULTICAST});
+                    }
+                    if (!pattern.ntype.has_value()) {
+                        pattern.ntype = get_random_choice<NocSendType>(
+                            {NocSendType::NOC_UNICAST_WRITE, NocSendType::NOC_UNICAST_ATOMIC_INC});
+                    }
+                    if (!pattern.size.has_value()) {
+                        pattern.size = get_random_in_range(64, 2048);
+                    }
+                    if (!pattern.num_packets.has_value()) {
+                        pattern.num_packets = get_random_in_range(10, 1000);
+                    }
 
-        for (auto& sender : test.senders) {
-            for (auto& pattern : sender.patterns) {
-                if (!pattern.ftype.has_value()) {
-                    pattern.ftype =
-                        get_random_choice<ChipSendType>({ChipSendType::CHIP_UNICAST, ChipSendType::CHIP_MULTICAST});
+                    if (!pattern.destination.has_value()) {
+                        if (pattern.ftype.value() == ChipSendType::CHIP_UNICAST) {
+                            FabricNodeId dst_node =
+                                this->route_manager_.get_random_unicast_destination(sender.device, this->gen_);
+                            pattern.destination = DestinationConfig{.device = dst_node};
+                        } else if (pattern.ftype.value() == ChipSendType::CHIP_MULTICAST) {
+                            // For multicast, the random default is an mcast to all devices.
+                            auto hops = this->route_manager_.get_full_mcast_hops(sender.device);
+                            pattern.destination = DestinationConfig{.hops = hops};
+                        }
+                    }
                 }
-                if (!pattern.ntype.has_value()) {
-                    pattern.ntype = get_random_choice<NocSendType>(
-                        {NocSendType::NOC_UNICAST_WRITE, NocSendType::NOC_UNICAST_ATOMIC_INC});
-                }
-                if (!pattern.size.has_value()) {
-                    pattern.size = get_random_in_range(64, 4096);
-                }
-                if (!pattern.num_packets.has_value()) {
-                    pattern.num_packets = get_random_in_range(10, 1000);
-                }
-
-                if (!pattern.destination.has_value()) {
-                    if (pattern.ftype.value() == ChipSendType::CHIP_UNICAST) {
-                        FabricNodeId dst_node =
-                            this->route_manager_.get_random_unicast_destination(sender.device, this->gen_);
-                        pattern.destination = DestinationConfig{.device = dst_node};
-                    } else if (pattern.ftype.value() == ChipSendType::CHIP_MULTICAST) {
-                        // For multicast, the random default is an mcast to all devices.
-                        auto hops = this->route_manager_.get_full_mcast_hops(sender.device);
-                        pattern.destination = DestinationConfig{.hops = hops};
+            }
+        } else {
+            // Not 'randomize', so fill with sane defaults.
+            for (auto& sender : test.senders) {
+                for (auto& pattern : sender.patterns) {
+                    if (!pattern.ftype.has_value()) {
+                        pattern.ftype = ChipSendType::CHIP_UNICAST;
+                    }
+                    if (!pattern.ntype.has_value()) {
+                        pattern.ntype = NocSendType::NOC_UNICAST_WRITE;
+                    }
+                    if (!pattern.size.has_value()) {
+                        pattern.size = 1024;  // Default from cmdline parser
+                    }
+                    if (!pattern.num_packets.has_value()) {
+                        pattern.num_packets = 10;  // A reasonable default
                     }
                 }
             }
@@ -1052,8 +1154,7 @@ private:
 
 class YamlTestConfigSerializer {
 public:
-    static void dump(
-        const std::vector<TestConfig>& test_configs, const AllocatorPolicies& policies, const std::string& dump_path) {
+    static void dump(const AllocatorPolicies& policies, std::ofstream& fout) {
         YAML::Emitter out;
         out << YAML::BeginMap;
 
@@ -1061,7 +1162,16 @@ public:
         out << YAML::Value;
         to_yaml(out, policies);
 
-        out << YAML::Key << "Tests";
+        out << YAML::EndMap;
+
+        fout << out.c_str() << std::endl;
+    }
+
+    static void dump(const std::vector<TestConfig>& test_configs, std::ofstream& fout) {
+        YAML::Emitter out;
+        out << YAML::BeginMap;
+
+        out << YAML::Key << "Test";
         out << YAML::Value;
 
         out << YAML::BeginSeq;
@@ -1072,8 +1182,7 @@ public:
 
         out << YAML::EndMap;
 
-        std::ofstream fout(dump_path);
-        fout << out.c_str();
+        fout << out.c_str() << std::endl;
     }
 
 private:
@@ -1112,6 +1221,10 @@ private:
         if (config.target_address) {
             out << YAML::Key << "target_address";
             out << YAML::Value << config.target_address.value();
+        }
+        if (config.atomic_inc_address) {
+            out << YAML::Key << "atomic_inc_address";
+            out << YAML::Value << config.atomic_inc_address.value();
         }
         out << YAML::EndMap;
     }

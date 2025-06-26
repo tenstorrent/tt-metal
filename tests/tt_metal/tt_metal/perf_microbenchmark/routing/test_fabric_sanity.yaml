@@ -1,5 +1,5 @@
 Tests:
-  - name: "SimpleUnicastLinear1"
+  - name: "SimpleUnicastWriteLinear"
     fabric_setup:
       topology: Linear
 
@@ -9,25 +9,27 @@ Tests:
           - ftype: unicast
             ntype: unicast_write
             size: 1024
-            num_packets: 10
+            num_packets: 100
             destination:
               device: [0, 1]
 
-  - name: "SimpleUnicastLinear2"
+  - name: "TestNocSendTypesLinear"
     fabric_setup:
       topology: Linear
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
 
     senders:
       - device: [0, 0]
         patterns:
           - ftype: unicast
-            ntype: unicast_write
             size: 1024
-            num_packets: 10
+            num_packets: 100
             destination:
-              device: [0, 3]
+              device: [0, 1]
 
-  - name: "AllToAllUnicastLinear"
+  - name: "AllToAllUnicastWriteLinear"
     fabric_setup:
       topology: Linear
 
@@ -35,7 +37,22 @@ Tests:
       ftype: unicast
       ntype: unicast_write
       size: 1024
-      num_packets: 10
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all_unicast
+
+  - name: "AllToAllUnicastTestNocSendTypesLinear"
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+
+    defaults:
+      ftype: unicast
+      size: 1024
+      num_packets: 100
 
     patterns:
       - type: all_to_all_unicast
@@ -48,7 +65,7 @@ Tests:
       ftype: mcast
       ntype: unicast_write
       size: 1024
-      num_packets: 10
+      num_packets: 100
 
     patterns:
       - type: all_to_all_multicast
@@ -61,7 +78,7 @@ Tests:
       ftype: unicast
       ntype: unicast_write
       size: 1024
-      num_packets: 10
+      num_packets: 100
 
     patterns:
       - type: full_device_random_pairing
@@ -77,7 +94,23 @@ Tests:
           - ftype: unicast
             ntype: unicast_write
             size: 1024
-            num_packets: 10
+            num_packets: 100
+            destination:
+              device: [0, 7]
+
+  - name: "TestNocSendTypesMesh"
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            size: 1024
+            num_packets: 100
             destination:
               device: [0, 7]
 
@@ -89,7 +122,22 @@ Tests:
       ftype: unicast
       ntype: unicast_write
       size: 1024
-      num_packets: 10
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all_unicast
+
+  - name: "AllToAllUnicastTestNocSendTypesMesh"
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+
+    defaults:
+      ftype: unicast
+      size: 1024
+      num_packets: 100
 
     patterns:
       - type: all_to_all_unicast
@@ -102,7 +150,7 @@ Tests:
       ftype: unicast
       ntype: unicast_write
       size: 1024
-      num_packets: 10
+      num_packets: 100
 
     patterns:
       - type: full_device_random_pairing

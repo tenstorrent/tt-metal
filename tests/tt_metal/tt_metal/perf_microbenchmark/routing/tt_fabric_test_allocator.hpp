@@ -451,7 +451,10 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
         for (auto& pattern : sender.patterns) {
             auto& dest = pattern.destination.value();
 
-            if (dest.core.has_value() && dest.target_address.has_value()) {
+            if (dest.core.has_value() && dest.target_address.has_value() &&
+                ((pattern.ntype.value() != NocSendType::NOC_UNICAST_ATOMIC_INC &&
+                  pattern.ntype.value() != NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) ||
+                 dest.atomic_inc_address.has_value())) {
                 // Fully specified, just book-keep.
                 auto& device_resources = get_or_create_device_resources(dest.device.value());
                 device_resources.reserve_receiver_core(dest.core);
@@ -525,7 +528,11 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 }
 
                 dest.core = uniform_receiver->first;
-                dest.target_address = uniform_receiver->second;
+                if (pattern.ntype.value() == NocSendType::NOC_UNICAST_WRITE) {
+                    dest.target_address = uniform_receiver->second;
+                } else {
+                    TT_THROW("Multicast atomic/fused atomic not supported yet");
+                }
 
                 // Reserve the found core/address on all destination devices
                 for (const auto& node_id : dst_node_ids) {
@@ -533,7 +540,13 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                     device_resources.reserve_receiver_core(dest.core);
                     auto& core_resources =
                         device_resources.get_or_create_core_resources(dest.core.value(), CoreType::RECEIVER);
-                    core_resources.reserve_payload_chunk(dest.target_address.value());
+                    if (pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC ||
+                        pattern.ntype.value() == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
+                        // TODO: need to allocate from a separate pool?
+                        TT_THROW("Multicast atomic/fused atomic not supported yet");
+                    } else {
+                        core_resources.reserve_payload_chunk(dest.target_address.value());
+                    }
                 }
 
             } else {  // Unicast
@@ -548,19 +561,32 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
 
                 auto& core_resources =
                     device_resources.get_or_create_core_resources(dest.core.value(), CoreType::RECEIVER);
-                TT_FATAL(
-                    pattern.size.value() <= core_resources.payload_chunk_size,
-                    "Requested payload size {} exceeds the per-worker buffer chunk size of {}",
-                    pattern.size.value(),
-                    core_resources.payload_chunk_size);
 
-                if (!core_resources.has_available_payload_chunk()) {
-                    TT_THROW(
-                        "No payload buffer chunk available on device {} core {} for allocation.",
-                        dest.device.value(),
-                        dest.core.value());
+                bool allocate_write_address = true;
+                bool allocate_atomic_inc_address = true;
+                if (pattern.ntype.value() == NocSendType::NOC_UNICAST_WRITE) {
+                    allocate_atomic_inc_address = false;
+                } else if (pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC) {
+                    allocate_write_address = false;
                 }
-                dest.target_address = core_resources.allocate_payload_chunk();
+
+                if (allocate_write_address) {
+                    TT_FATAL(
+                        pattern.size.value() <= core_resources.payload_chunk_size,
+                        "Requested payload size {} exceeds the per-worker buffer chunk size of {}",
+                        pattern.size.value(),
+                        core_resources.payload_chunk_size);
+                    if (!core_resources.has_available_payload_chunk()) {
+                        TT_THROW(
+                            "No payload buffer chunk available on device {} core {} for allocation.",
+                            dest.device.value(),
+                            dest.core.value());
+                    }
+                    dest.target_address = core_resources.allocate_payload_chunk();
+                }
+                if (allocate_atomic_inc_address) {
+                    dest.atomic_inc_address = core_resources.allocate_atomic_counter();
+                }
             }
         }
     }

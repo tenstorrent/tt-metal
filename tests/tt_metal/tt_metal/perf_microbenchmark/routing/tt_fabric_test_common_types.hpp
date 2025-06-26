@@ -26,6 +26,7 @@ struct DestinationConfig {
     std::optional<CoreCoord> core;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
     std::optional<uint32_t> target_address;
+    std::optional<uint32_t> atomic_inc_address;
 };
 
 struct TrafficPatternConfig {
