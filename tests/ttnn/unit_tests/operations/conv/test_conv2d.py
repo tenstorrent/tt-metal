@@ -159,6 +159,8 @@ def test_conv_dram(
     input_layout,
     packer_l1_acc,
 ):
+    # https://github.com/tenstorrent/tt-metal/issues/24072
+    device.disable_and_clear_program_cache()
     if device.core_grid.y == 7:
         pytest.skip("Tests have been configured for N150.")
     config = {
