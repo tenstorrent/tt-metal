@@ -149,6 +149,7 @@ public:
     MeshDevice(MeshDevice&&) = delete;
     MeshDevice& operator=(MeshDevice&&) = delete;
 
+    // IDevice interface implementation
     tt::ARCH arch() const override;
     int id() const override;
     chip_id_t build_id() const override;

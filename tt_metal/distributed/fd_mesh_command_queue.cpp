@@ -49,7 +49,6 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 
-#pragma optimize("", off)
 namespace tt {
 namespace tt_metal {
 struct ProgramCommandSequence;
@@ -207,10 +206,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
         std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
-    reads_processed_cv_.wait(lock, [this] {
-        int num_outstanding_reads = num_outstanding_reads_.load();
-        return num_outstanding_reads == 0;
-    });
+    reads_processed_cv_.wait(lock, [this] { return num_outstanding_reads_.load() == 0; });
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
