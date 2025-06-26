@@ -464,7 +464,7 @@ class TtModelArgs:
         self.from_hf_url = False  # updated below if true
         self.max_prefill_chunk_size = max_seq_len
         self.use_prefetcher = False
-        self.max_top_k = 64
+        self.max_top_k = 32
 
         if self.num_devices == 32:
             self.use_prefetcher = True
