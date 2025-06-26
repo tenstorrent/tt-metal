@@ -662,7 +662,6 @@ int main(int argc, char **argv) {
     initialize_device(device_config.mesh_shape, device_config.device_ids);
 
     auto *device = &ttml::autograd::ctx().get_device();
-    device->enable_program_cache();
 
     struct CachedHostData {
         std::vector<uint32_t> data;

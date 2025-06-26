@@ -37,7 +37,6 @@ model_pipeline = None
 
 def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
     disable_persistent_kernel_cache()
-    device.enable_program_cache()
 
     # Until di/dt issues are resolved
     os.environ["SLOW_MATMULS"] = "1"
@@ -193,7 +192,6 @@ def warmup_model():
     dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
     device_params["dispatch_core_config"] = dispatch_core_config
     device = ttnn.CreateDevice(device_id=device_id, **device_params)
-    device.enable_program_cache()
     num_inference_steps = 50
     image_size = (512, 512)
     create_model_pipeline(device, num_inference_steps, image_size)
