@@ -26,6 +26,7 @@ Resource link - [source](https://github.com/ultralytics/ultralytics/blob/main/ul
 - The model picks up certain configs and weights from Ultralytics pretrained model. We've used weights available [here](https://docs.ultralytics.com/models/yolo-world/#available-models-supported-tasks-and-operating-modes) in YOLOv8s-world row.
 - Batch size :1
 - Supported Input Resolution - (640,640) (Height,Width)
+- Dataset used for evaluation - **coco-2017**
 
 ### How to Run:
 
@@ -48,3 +49,11 @@ Use the following command to run the performant Demo with Trace+2CQs:
 ```
 pytest --disable-warnings models/demos/yolov8s_world/demo/demo.py
 ```
+
+### Performant evaluation with Trace+2CQ
+Use the following command to run the performant evaluation with Trace+2CQs:
+
+```
+pytest models/experimental/yolo_evaluation/yolo_common_evaluation.py::test_yolov8s_world[res0-device_params0-tt_model]
+```
+Note: The model is evaluated with 500 samples.

@@ -9,6 +9,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+#include "ttnn/tensor/types.hpp"
 #include "sharding_utilities.hpp"
 
 namespace tt::tt_metal {
@@ -751,27 +752,114 @@ ShardingConfig get_specs_for_sharding_partition(
 }
 
 namespace sharded_accessor_utils {
+
+bool ShardedAccessorArgs::rank_is_crta() const { return args_config.test(ArgConfig::RankCRTA); }
+bool ShardedAccessorArgs::num_banks_is_crta() const { return args_config.test(ArgConfig::NumBanksCRTA); }
+bool ShardedAccessorArgs::tensor_shape_is_crta() const { return args_config.test(ArgConfig::TensorShapeCRTA); }
+bool ShardedAccessorArgs::shard_shape_is_crta() const { return args_config.test(ArgConfig::ShardShapeCRTA); }
+bool ShardedAccessorArgs::bank_coords_is_crta() const { return args_config.test(ArgConfig::BankCoordsCRTA); }
+
+uint32_t ShardedAccessorArgs::get_rank() const { return rank_is_crta() ? runtime_args[0] : compile_time_args[1]; }
+
+uint32_t ShardedAccessorArgs::get_num_banks() const {
+    const size_t offset = rank_is_crta() ? 1 : 0;
+    return num_banks_is_crta() ? runtime_args[offset] : compile_time_args[offset + 1];
+}
+
+uint32_t ShardedAccessorArgs::get_physical_num_banks() const { return (get_num_banks() + 1) / 2; }
+
+tt::stl::Span<const uint32_t> ShardedAccessorArgs::get_tensor_shape() const {
+    const size_t offset_rt = rank_is_crta() + num_banks_is_crta();
+    const size_t offset_ct = 1 + !rank_is_crta() + !num_banks_is_crta();
+    const uint32_t* data =
+        tensor_shape_is_crta() ? runtime_args.data() + offset_rt : compile_time_args.data() + offset_ct;
+    return {data, get_rank()};
+}
+
+tt::stl::Span<const uint32_t> ShardedAccessorArgs::get_shard_shape() const {
+    const uint32_t rank = get_rank();
+    const size_t offset_rt = rank_is_crta() + num_banks_is_crta() + rank * tensor_shape_is_crta();
+    const size_t offset_ct = 1 + !rank_is_crta() + !num_banks_is_crta() + rank * !tensor_shape_is_crta();
+    const uint32_t* data =
+        shard_shape_is_crta() ? runtime_args.data() + offset_rt : compile_time_args.data() + offset_ct;
+    return {data, rank};
+}
+tt::stl::Span<const uint32_t> ShardedAccessorArgs::get_bank_coords() const {
+    const uint32_t rank = get_rank();
+    const size_t offset_rt =
+        rank_is_crta() + num_banks_is_crta() + rank * (tensor_shape_is_crta() + shard_shape_is_crta());
+    const size_t offset_ct =
+        1 + !rank_is_crta() + !num_banks_is_crta() + rank * (!tensor_shape_is_crta() + !shard_shape_is_crta());
+    const uint32_t* data =
+        bank_coords_is_crta() ? runtime_args.data() + offset_rt : compile_time_args.data() + offset_ct;
+    return {data, get_physical_num_banks()};
+}
+
 ShardedAccessorArgs get_sharded_accessor_args(
     const distributed::MeshDevice& mesh_device,
     const BufferDistributionSpec& buffer_distribution_spec,
-    const CoreType& bank_type) {
+    const CoreType& bank_type,
+    const ArgsConfig& args_config) {
     const auto& tensor_shape = buffer_distribution_spec.get_tensor_shape_in_pages();
     const auto& shard_shape = buffer_distribution_spec.get_shard_shape_in_pages();
     const auto& bank_coords = buffer_distribution_spec.get_cores();
 
-    std::vector<uint32_t> shapes_and_bank_coords;
-    shapes_and_bank_coords.reserve(tensor_shape.size() + shard_shape.size() + bank_coords.size());
-    shapes_and_bank_coords.insert(shapes_and_bank_coords.end(), tensor_shape.cbegin(), tensor_shape.cend());
-    shapes_and_bank_coords.insert(shapes_and_bank_coords.end(), shard_shape.cbegin(), shard_shape.cend());
+    auto rank_rt = args_config.test(ArgConfig::RankCRTA);
+    auto num_banks_rt = args_config.test(ArgConfig::NumBanksCRTA);
+    auto tensor_shape_rt = args_config.test(ArgConfig::TensorShapeCRTA);
+    auto shard_shape_rt = args_config.test(ArgConfig::ShardShapeCRTA);
+    auto bank_coords_rt = args_config.test(ArgConfig::BankCoordsCRTA);
 
-    // Pack each virtual coordinate as a 32-bit value with 16 bits for x and 16 bits for y
-    for (const auto& bank_coord : bank_coords) {
-        const auto virtual_coord = mesh_device.virtual_core_from_logical_core(bank_coord, bank_type);
-        shapes_and_bank_coords.push_back((virtual_coord.x << 16) | (virtual_coord.y & 0xFFFF));
+    size_t rank = tensor_shape.size();
+    size_t n_banks = bank_coords.size();
+    TT_FATAL(
+        rank <= tt::tt_metal::MAX_NUM_DIMENSIONS,
+        "Rank must be less than or equal to {} for rank",
+        tt::tt_metal::MAX_NUM_DIMENSIONS);
+    TT_FATAL(
+        !rank_rt || (tensor_shape_rt && shard_shape_rt),
+        "If rank is runtime, tensor_shape and shard_shape must also be runtime");
+    TT_FATAL(!num_banks_rt || bank_coords_rt, "If num_banks is runtime, bank_coords must also be runtime");
+
+    size_t n_compile_time_args = 1 + !rank_rt + !num_banks_rt + rank * !tensor_shape_rt + rank * !shard_shape_rt +
+                                 n_banks * !bank_coords_rt;  // +1 for the crta config
+    size_t n_runtime_args =
+        rank_rt + num_banks_rt + rank * tensor_shape_rt + rank * shard_shape_rt + n_banks * bank_coords_rt;
+    std::vector<uint32_t> compile_time_args;
+    std::vector<uint32_t> runtime_args;
+    compile_time_args.reserve(n_compile_time_args);
+    runtime_args.reserve(n_runtime_args);
+    auto& rank_args = rank_rt ? runtime_args : compile_time_args;
+    auto& num_banks_args = num_banks_rt ? runtime_args : compile_time_args;
+    auto& tensor_shape_args = tensor_shape_rt ? runtime_args : compile_time_args;
+    auto& shard_shape_args = shard_shape_rt ? runtime_args : compile_time_args;
+    auto& bank_coords_args = bank_coords_rt ? runtime_args : compile_time_args;
+
+    compile_time_args.push_back(args_config.raw());
+    rank_args.push_back(rank);
+    num_banks_args.push_back(n_banks);
+    tensor_shape_args.insert(tensor_shape_args.end(), tensor_shape.cbegin(), tensor_shape.cend());
+    shard_shape_args.insert(shard_shape_args.end(), shard_shape.cbegin(), shard_shape.cend());
+
+    for (size_t i = 0; i < n_banks; i += 2) {
+        const auto virtual_coord1 = mesh_device.virtual_core_from_logical_core(bank_coords[i], bank_type);
+
+        if (i + 1 < n_banks) {
+            // Pack two coordinates into one uint32_t if we have a pair
+            const auto virtual_coord2 = mesh_device.virtual_core_from_logical_core(bank_coords[i + 1], bank_type);
+            bank_coords_args.push_back(
+                ((virtual_coord2.x & 0xFF) << 24) | ((virtual_coord2.y & 0xFF) << 16) |
+                ((virtual_coord1.x & 0xFF) << 8) | (virtual_coord1.y & 0xFF));
+        } else {
+            // Handle odd number of coordinates by setting the second coordinate to zero
+            bank_coords_args.push_back(((virtual_coord1.x & 0xFF) << 8) | (virtual_coord1.y & 0xFF));
+        }
     }
 
     return {
-        .rank = tensor_shape.size(), .num_banks = bank_coords.size(), .shapes_and_bank_coords = shapes_and_bank_coords};
+        .compile_time_args = std::move(compile_time_args),
+        .runtime_args = std::move(runtime_args),
+        .args_config = args_config};
 }
 
 }  // namespace sharded_accessor_utils
