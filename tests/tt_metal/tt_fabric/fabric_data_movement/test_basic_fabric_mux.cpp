@@ -262,8 +262,8 @@ void create_mux_kernel(
     std::vector<uint32_t> mux_ct_args = mux_kernel_config.get_fabric_mux_compile_time_args();
     std::vector<uint32_t> mux_rt_args = {};
     append_fabric_connection_rt_args(
-        device->id(),
-        dest_device->id(),
+        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id()),
+        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dest_device->id()),
         0 /* link_idx (routing plane) */,
         program_handle,
         {mux_logical_core},
