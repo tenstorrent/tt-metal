@@ -76,37 +76,37 @@
 | [Whisper (distil-large-v3)](./models/demos/whisper)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 232       | 58.1  | 45           | 58.1   | [v0.59.0-rc52](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc52) |
 
 
-## Diffusion Models (Image and Video)
-
-| Model                                                                       | Batch | Hardware                                                 | Image/sec     | Target Image/sec | Release     |
+## Diffusion Models
+Sec/
+| Model                                                                       | Batch | Hardware                                                 | Sec/Image     | Target Sec/Image | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
-| [Stable Diffusion 1.4 (512x512)](./models/demos/wormhole/stable_diffusion)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.160   | 0.3        |           |
-| [Stable Diffusion 3.5 Medium (512x512)](https://github.com/tenstorrent/tt-metal/blob/mbahnas/sd35_medium_512_spacelike_feb05/models/experimental/stable_diffusion3)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.06   | 0.3        |             |
-| [Stable Diffusion 3.5 Large (1024x1024)](./models/experimental/stable_diffusion_35_large)  | 1     | [QuietBox](https://tenstorrent.com/hardware/wormhole)        | 0.06   | 0.3        |             |
+| [Stable Diffusion 1.4 (512x512)](./models/demos/wormhole/stable_diffusion)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 6.25   | 3        |           |
+| [Stable Diffusion 3.5 Medium (512x512)](https://github.com/tenstorrent/tt-metal/blob/mbahnas/sd35_medium_512_spacelike_feb05/models/experimental/stable_diffusion3)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 16   | 10        |             |
 
-> **Notes:**
->
->- Stable Diffusion FPS is based on the time elapsed from submitting the input prompt to receiving the image from the VAE decoder.
+
+**Notes:**
+- Stable Diffusion sec/image is based on the time elapsed from submitting the input prompt to receiving the image from the VAE decoder.
+
 
 
 ## CNNs and Vision Transformers
 
 ### Classification models
 
-| Model                                                                       | Batch | Hardware                                                 | fps     | Target fps | Release     |
+| Model                                                                       | Batch | Hardware                                                 | Image/sec    | Target Image/sec | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
 | [ResNet-50 (224x224)](./models/demos/wormhole/resnet50)                     | 16    | [n150](https://tenstorrent.com/hardware/wormhole)        | 4,700   | 7,000      | [v0.59.0](https://github.com/tenstorrent/tt-metal/tree/v0.59.0) |
 | [ResNet-50 (224x224) (DP=2)](./models/demos/t3000/resnet50)                 | 32    | [n300](https://tenstorrent.com/hardware/wormhole)        | 9,200   | 14,000     | [v0.59.0](https://github.com/tenstorrent/tt-metal/tree/v0.59.0) |
 | [ResNet-50 (224x224) (DP=8)](./models/demos/t3000/resnet50)                 | 128   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 35,800  | 56,000     | [v0.59.0](https://github.com/tenstorrent/tt-metal/tree/v0.59.0) |
 | [ResNet-50 (224x224) (DP=32)](./models/demos/tg/resnet50)                   | 512   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 96,800  | 224,000    | [v0.59.0](https://github.com/tenstorrent/tt-metal/tree/v0.59.0) |
-| [ViT-base (224x224)](./models/demos/wormhole/vit)                                | 8     | [n150](https://tenstorrent.com/hardware/wormhole)        | 1,440    | 1,800      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
-| [ViT-base (224x224)  (DP=2)](./models/demos/wormhole/vit)                                | 16     | [n300](https://tenstorrent.com/hardware/wormhole)        | 1370    | 3,600      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
-| [ViT-base (224x224)  (DP=8)](./models/demos/wormhole/vit)                                | 64     | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox)        | 1370    | 14,400      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
+| [ViT-base (224x224)](./models/demos/wormhole/vit)                                | 8     | [n150](https://tenstorrent.com/hardware/wormhole)        | 1,370    | 1,800      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
+| [ViT-base (224x224)  (DP=2)](./models/demos/wormhole/vit)                                | 16     | [n300](https://tenstorrent.com/hardware/wormhole)        | 2,600   | 3,600      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
+| [ViT-base (224x224)  (DP=8)](./models/demos/wormhole/vit)                                | 64     | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox)        | 7,700    | 14,400      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
 | [ViT-base (224x224)  (DP=32)](./models/demos/wormhole/vit)                                | 256     | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | ----    | 57,600      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
 | [mobilenet-v2 (224x224)](./models/demos/mobilenetv2)                     | 10    | [n150](https://tenstorrent.com/hardware/wormhole)        |  1658  | 7,000      |  |
 
 ### Object Detection
-| Model                                                                       | Batch | Hardware                                                 | fps     | Target fps | Release     |
+| Model                                                                       | Batch | Hardware                                                 | Frame/sec (FPS)     | Target FPS | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
 | [YOLOv4 (320x320)](./models/demos/yolov4)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 120     | 420        |             |
 | [YOLOv4 (640x640)](./models/demos/yolov4)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 50      | 100        |             |
@@ -117,18 +117,20 @@
 
 
 ### Segmentation
-| Model                                                                       | Batch | Hardware                                                 | fps     | Target fps | Release     |
+| Model                                                                       | Batch | Hardware                                                 | Frame/sec (FPS)     | Target FPS | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
 | [SegFormer Semantic Segmentation (512x512)](./models/demos/segformer)       | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 90      | 300        |             |
 | [YOLOv9c (640x640)](./models/demos/yolov9c)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 55      | 270        |             |
 | [UNet - VGG19 (256x256)](./models/demos/vgg_unet)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 75      | 150        |             |
 | [ufld_v2 - v2 (480x640)](./models/demos/ufld_v2)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 107      | 250        |             |
+
+
 ## NLPs
 
-| Model                                               | Batch | Hardware                                           | sen/sec | Target sen/sec | Release |
+| Model                                               | Batch | Hardware                                           | Sentence/sec | Target sentence/sec | Release |
 |-----------------------------------------------------|-------|----------------------------------------------------|---------|----------------|---------|
 | [BERT-Large](./models/demos/metal_BERT_large_11/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 270     | 400            |         |
-| [Sentence-Bert (backbone: bert-base)](./models/demos/sentence_bert/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 419     | 800            |         |
+| [Sentence-Bert (backbone: bert-base)](./models/demos/sentence_bert/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 419     | 600            |         |
 
 ## Model Updates
 
