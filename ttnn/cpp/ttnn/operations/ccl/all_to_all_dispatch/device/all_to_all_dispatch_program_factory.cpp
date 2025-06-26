@@ -539,7 +539,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             neighbor_coordinate[1],
             link_id);
         tt::tt_fabric::append_fabric_connection_rt_args(
-            src_physical_device_id, neighbor->id(), link_id, program, sender_core, writer_runtime_args);
+            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_physical_device_id),
+            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(neighbor->id()),
+            link_id,
+            program,
+            sender_core,
+            writer_runtime_args);
     }
 
     tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(0), reader_runtime_args);
