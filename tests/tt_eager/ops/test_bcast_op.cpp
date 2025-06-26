@@ -115,11 +115,9 @@ int main(int argc, char** argv) {
         };
         run_operations();
 
-        device->enable_program_cache();
         run_operations();
         run_operations();
         run_operations();
-        device->disable_and_clear_program_cache();
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message

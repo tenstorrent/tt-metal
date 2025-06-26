@@ -89,7 +89,6 @@ int main(int argc, char **argv) {
 
     auto [steps_per_dataset, vocab_size] = three_tier_arch::get_steps_per_dataset_and_vocab_size(config);
     auto *device = &ttml::autograd::ctx().get_device();
-    device->enable_program_cache();
 
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     auto should_be_divisible_by = (enable_tp ? num_devices : 1U) * 32U;
