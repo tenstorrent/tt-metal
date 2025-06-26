@@ -458,7 +458,6 @@ def test_demo_text(
     optimizations,
     stop_at_eos,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     ci_only,
     data_parallel,

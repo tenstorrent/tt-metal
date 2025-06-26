@@ -38,9 +38,7 @@ class Emb(torch.nn.Module):
         # "256seqlen"
     ),
 )
-def test_mixtral_model_inference(
-    t3k_mesh_device, use_program_cache, reset_seeds, iterations, expected_top1, expected_top5
-):
+def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, iterations, expected_top1, expected_top5):
     # TODO Currently topk test is supporting decode-only mode. Add prefill support.
 
     dtype = ttnn.bfloat8_b

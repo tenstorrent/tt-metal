@@ -77,7 +77,7 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
     ],
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_demo(device, source, model_type, res, use_pretrained_weight, use_program_cache):
+def test_demo(device, source, model_type, res, use_pretrained_weight):
     disable_persistent_kernel_cache()
 
     if model_type == "torch_model":

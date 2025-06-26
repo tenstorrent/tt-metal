@@ -93,7 +93,7 @@ def test_ssm_eltwise_mul(batch, in0_W, in1_W, dtype, in0_mem_config, in1_mem_con
     run_ssm_eltwise_mul_test(batch, in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device)
 
 
-def test_ssm_eltwise_mul_with_program_cache(device, use_program_cache):
+def test_ssm_eltwise_mul_with_program_cache(device):
     mem_config = ttnn.L1_MEMORY_CONFIG
     dtype = ttnn.bfloat16
 

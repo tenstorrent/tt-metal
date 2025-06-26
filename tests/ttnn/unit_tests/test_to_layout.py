@@ -209,7 +209,7 @@ def test_to_from_01d(device, shape):
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
-def test_to_layout_sharded(dtype, device, use_program_cache):
+def test_to_layout_sharded(dtype, device):
     core_grid = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4)),

@@ -33,7 +33,6 @@ def test_unet(
     conv_weights_dtype,
     transformer_weights_dtype,
     iterations,
-    use_program_cache,
     reset_seeds,
 ):
     run_unet_model(

@@ -23,7 +23,7 @@ from functools import reduce
     ],
 )
 @pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
-def test_geglu(device, input_shape, module_path, pcc, use_program_cache, reset_seeds, transformer_weights_dtype):
+def test_geglu(device, input_shape, module_path, pcc, reset_seeds, transformer_weights_dtype):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )

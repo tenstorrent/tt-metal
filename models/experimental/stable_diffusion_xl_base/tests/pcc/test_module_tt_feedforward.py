@@ -23,9 +23,7 @@ from models.utility_functions import torch_random
     ],
 )
 @pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
-def test_feedforward(
-    device, input_shape, block_id, transformer_block_id, pcc, use_program_cache, reset_seeds, transformer_weights_dtype
-):
+def test_feedforward(device, input_shape, block_id, transformer_block_id, pcc, reset_seeds, transformer_weights_dtype):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )

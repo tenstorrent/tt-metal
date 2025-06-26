@@ -26,7 +26,6 @@ if TYPE_CHECKING:
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 716800}], indirect=True)
-@pytest.mark.usefixtures("use_program_cache")
 def test_transformer_block(
     *,
     device: ttnn.Device,

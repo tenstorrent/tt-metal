@@ -120,7 +120,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1824800}], indirect=True
 )
-def test_vit(device, use_program_cache):
+def test_vit(device):
     torch.manual_seed(0)
 
     profiler.clear()

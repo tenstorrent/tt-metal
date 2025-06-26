@@ -21,7 +21,7 @@ from ttnn import ConcatMeshToTensor
         16,
     ),
 )
-def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_seeds, batch):
+def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
     """
     b: batch
     s: sequence length

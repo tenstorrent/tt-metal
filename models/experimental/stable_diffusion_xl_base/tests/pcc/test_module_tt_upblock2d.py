@@ -33,7 +33,6 @@ def test_upblock(
     temb_shape,
     residuals,
     block_id,
-    use_program_cache,
     reset_seeds,
     conv_weights_dtype,
 ):

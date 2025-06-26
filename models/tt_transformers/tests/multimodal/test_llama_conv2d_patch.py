@@ -28,7 +28,6 @@ from ttnn import ConcatMeshToTensor
 )
 def test_conv2d_inference(
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):

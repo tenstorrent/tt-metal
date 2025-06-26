@@ -46,7 +46,7 @@ from models.experimental.yolov10.tt.performant_runner import YOLOv10PerformantRu
         "True",
     ],
 )
-def test_demo_ttnn(device, use_program_cache, source, model_type, use_pretrained_weight):
+def test_demo_ttnn(device, source, model_type, use_pretrained_weight):
     disable_persistent_kernel_cache()
 
     if model_type == "torch_model":

@@ -352,7 +352,6 @@ def test_bert_batch_dram(
 )
 def test_bert_batch_dram_with_program_cache(
     device,
-    use_program_cache,
     model_version,
     batch,
     seq_len,

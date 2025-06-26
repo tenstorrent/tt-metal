@@ -163,7 +163,6 @@ def test_matmul_2d_host_perf(
     tile_w,
     num_warmup_iterations,
     num_measurement_iterations,
-    use_program_cache,
 ):
     ENVS = dict(os.environ)
     TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
@@ -447,7 +446,6 @@ def test_matmul_2d_host_perf_out_of_box(
     tile_w,
     num_warmup_iterations,
     num_measurement_iterations,
-    use_program_cache,
 ):
     ENVS = dict(os.environ)
     TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])

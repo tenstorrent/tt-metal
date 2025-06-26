@@ -21,7 +21,7 @@ from models.perf.perf_utils import prep_perf_report
 BATCH_SIZE = 1
 
 
-def test_perf(device, use_program_cache, model_location_generator):
+def test_perf(device, model_location_generator):
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"

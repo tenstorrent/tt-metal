@@ -435,7 +435,6 @@ def test_multi_core_matmul_1d_in1_dram_wh(
     use_arbitrary_cores,
     in1_is_dram_interleaved,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     run_multi_core_matmul_1d(
@@ -510,7 +509,6 @@ def test_multi_core_matmul_1d_pad_wh(
     hop_grid,
     use_arbitrary_cores,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     run_multi_core_matmul_1d(
@@ -607,7 +605,6 @@ def test_multi_core_matmul_1d_wh(
     grid,
     use_arbitrary_cores,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     run_multi_core_matmul_1d(
@@ -684,7 +681,6 @@ def test_multi_core_matmul_1d_ring_hop_wh(
     hop_grid,
     use_arbitrary_cores,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     run_multi_core_matmul_1d(
@@ -765,7 +761,6 @@ def test_multi_core_matmul_1d_gs(
     grid,
     use_arbitrary_cores,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     run_multi_core_matmul_1d(
@@ -918,7 +913,6 @@ def test_matmul_1d_ring_llama_perf(
     in1_is_dram_interleaved,
     untilize_out,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     # Only run these tests on unharvested TG
@@ -1007,7 +1001,6 @@ def test_matmul_1d_ring_llama_lm_head(
     in1_is_dram_interleaved,
     in1_is_in_dram,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     # Only run these tests on unharvested TG

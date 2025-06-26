@@ -666,7 +666,6 @@ def test_tg_matmul_1d_ring_llama_with_rs_perf(
     in1_is_dram_interleaved,
     untilize_out,
     num_iters,
-    use_program_cache,
     function_level_defaults,
     shard_height,
     shard_width,

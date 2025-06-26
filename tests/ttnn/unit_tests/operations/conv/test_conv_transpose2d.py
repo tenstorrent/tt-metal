@@ -243,7 +243,6 @@ def run_conv_transpose2d(
 @pytest.mark.parametrize("mirror_kernel", [True, False])
 def test_simple_conv_t2d(
     device,
-    use_program_cache,
     activations_dtype,
     weights_dtype,
     batch_size,
@@ -319,7 +318,6 @@ def test_simple_conv_t2d(
 )
 def test_conv_transpose2d_model_fruit(
     device,
-    use_program_cache,
     activations_dtype,
     weights_dtype,
     batch_size,

@@ -30,7 +30,7 @@ def select_torch_dtype(ttnn_dtype):
         (20, 40, 30, 10, ttnn.bfloat16, ttnn.uint32, ttnn.Layout.TILE),
     ],
 )
-def test_tosa_scatter_normal(N, K, W, C, input_dtype, index_dtype, input_layout, device, use_program_cache):
+def test_tosa_scatter_normal(N, K, W, C, input_dtype, index_dtype, input_layout, device):
     input_torch_dtype = select_torch_dtype(input_dtype)
 
     input_shape = [N, K, C]

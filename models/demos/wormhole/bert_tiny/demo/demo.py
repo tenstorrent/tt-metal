@@ -42,7 +42,6 @@ def positional_ids(config, input_ids, past_key_values_length=0):
 
 def run_bert_question_and_answering_inference(
     mesh_device,
-    use_program_cache,
     model_name,
     sequence_size,
     model_location_generator,
@@ -160,7 +159,6 @@ def run_bert_question_and_answering_inference(
 
 def run_bert_question_and_answering_inference_squad_v2(
     mesh_device,
-    use_program_cache,
     model_name,
     sequence_size,
     model_location_generator,
@@ -264,13 +262,11 @@ def test_demo(
     model_name,
     model_location_generator,
     mesh_device,
-    use_program_cache,
 ):
     disable_persistent_kernel_cache()
 
     return run_bert_question_and_answering_inference(
         mesh_device=mesh_device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         sequence_size=sequence_size,
         model_location_generator=model_location_generator,
@@ -292,13 +288,11 @@ def test_demo_squadv2(
     n_iterations,
     model_location_generator,
     mesh_device,
-    use_program_cache,
 ):
     disable_persistent_kernel_cache()
 
     return run_bert_question_and_answering_inference_squad_v2(
         mesh_device=mesh_device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         sequence_size=sequence_size,
         model_location_generator=model_location_generator,

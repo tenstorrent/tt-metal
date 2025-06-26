@@ -56,7 +56,7 @@ def reshape_input_shapes(test_case: str):
         (*reshape_input_shapes("dram"), ttnn.DRAM_MEMORY_CONFIG),
     ],
 )
-def test_stress_reshape(mesh_device, use_program_cache, shapes_memory_config):
+def test_stress_reshape(mesh_device, shapes_memory_config):
     input_shape, output_shape, memory_config = shapes_memory_config
     for _ in range(NUM_REPEATS):
         torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -80,7 +80,7 @@ def sharding_input_shape():
 
 
 @pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
-def test_stress_reshard(mesh_device, use_program_cache):
+def test_stress_reshard(mesh_device):
     input_tensor_shape = sharding_input_shape()
     core_grid = get_device_core_grid(mesh_device)
 

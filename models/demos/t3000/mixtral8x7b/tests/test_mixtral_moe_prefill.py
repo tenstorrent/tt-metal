@@ -24,7 +24,7 @@ from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
         1024 * 32,
     ),
 )
-def test_mixtral_moe_inference(t3k_mesh_device, use_program_cache, reset_seeds, seq_len):
+def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, seq_len):
     pcc = 0.99
     iterations = 1
     dtype = ttnn.bfloat8_b

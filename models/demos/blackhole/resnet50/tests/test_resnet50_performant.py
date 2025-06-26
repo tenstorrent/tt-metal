@@ -21,9 +21,7 @@ from models.utility_functions import run_for_blackhole
     "act_dtype, weight_dtype, math_fidelity",
     ((ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-def test_run_resnet50_inference(
-    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
-):
+def test_run_resnet50_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
     run_resnet50_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator)
 
 
@@ -36,7 +34,6 @@ def test_run_resnet50_inference(
 )
 def test_run_resnet50_trace_inference(
     device,
-    use_program_cache,
     batch_size,
     act_dtype,
     weight_dtype,
@@ -61,7 +58,7 @@ def test_run_resnet50_trace_inference(
     ((ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
 def test_run_resnet50_2cqs_inference(
-    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
+    device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
 ):
     run_resnet50_2cqs_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator)
 
@@ -77,7 +74,6 @@ def test_run_resnet50_2cqs_inference(
 )
 def test_run_resnet50_trace_2cqs_inference(
     device,
-    use_program_cache,
     batch_size,
     act_dtype,
     weight_dtype,

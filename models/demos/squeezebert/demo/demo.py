@@ -42,7 +42,6 @@ def positional_ids(config, input_ids, past_key_values_length=0):
 
 def run_squeezebert_question_and_answering_inference(
     device,
-    use_program_cache,
     model_name,
     batch_size,
     sequence_size,
@@ -159,7 +158,6 @@ def run_squeezebert_question_and_answering_inference(
 
 def run_squeezebert_question_and_answering_inference_squad_v2(
     device,
-    use_program_cache,
     model_name,
     batch_size,
     sequence_size,
@@ -271,12 +269,11 @@ def run_squeezebert_question_and_answering_inference_squad_v2(
     ((["squeezebert/squeezebert-uncased", "models/demos/squeezebert/demo/input_data.json"]),),
 )
 @pytest.mark.parametrize("squeezebert", [ttnn_functional_squeezebert])
-def test_demo(input_loc, batch_size, sequence_size, model_name, squeezebert, device, use_program_cache, reset_seeds):
+def test_demo(input_loc, batch_size, sequence_size, model_name, squeezebert, device, reset_seeds):
     disable_persistent_kernel_cache()
 
     return run_squeezebert_question_and_answering_inference(
         device=device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         batch_size=batch_size,
         sequence_size=sequence_size,
@@ -298,14 +295,11 @@ def test_demo(input_loc, batch_size, sequence_size, model_name, squeezebert, dev
     "n_iterations",
     ((3),),
 )
-def test_demo_squadv2(
-    batch_size, sequence_size, model_name, squeezebert, n_iterations, device, use_program_cache, reset_seeds
-):
+def test_demo_squadv2(batch_size, sequence_size, model_name, squeezebert, n_iterations, device, reset_seeds):
     disable_persistent_kernel_cache()
 
     return run_squeezebert_question_and_answering_inference_squad_v2(
         device=device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         batch_size=batch_size,
         sequence_size=sequence_size,

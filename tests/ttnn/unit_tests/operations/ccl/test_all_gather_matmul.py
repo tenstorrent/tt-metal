@@ -345,7 +345,6 @@ def test_all_gather_matmul_on_t3000_post_commit(
     mem_config_input,
     mem_config_ag,
     mem_config_mm,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_matmul_on_t3000_impl(
@@ -440,7 +439,6 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
     mem_config_input,
     mem_config_ag,
     mem_config_mm,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_matmul_on_t3000_impl(
@@ -567,7 +565,6 @@ def test_all_gather_matmul_1d_llama_selfout_on_t3000_post_commit(
     mem_config_ag,
     mem_config_mm,
     mem_config_weights,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_matmul_on_t3000_impl(
