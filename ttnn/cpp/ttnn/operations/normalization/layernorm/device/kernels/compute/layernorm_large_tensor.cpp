@@ -16,7 +16,6 @@
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "debug/dprint_pages.h"
 
 namespace NAMESPACE {
 
@@ -240,8 +239,6 @@ void MAIN {
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
 
-        UNPACK(tt::compute::common::print_full_tile(cb_ex2pe, 0, true));
-
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             tile_regs_acquire();
             tile_regs_wait();
@@ -298,9 +295,6 @@ void MAIN {
                     pack_reconfig_data_format(cb_out);
                 }
                 cb_wait_front(cb_gamma, blk);
-                if (ncht == 1) {
-                    DPRINT << "\n\n\nFINAL VAL Pre Var Value wt: " << wt << ENDL();
-                }
                 cb_wait_front(cb_xmm, blk);
                 mul_bcast_rows_init_short(cb_xmm, cb_gamma);
                 for (uint32_t j = 0; j < blk; j++) {
@@ -348,7 +342,6 @@ void MAIN {
             }
         }
 
-        UNPACK(DPRINT << "-----NCHt val: " << NCHt << "---------- ncht" << ncht << ENDL());
         cb_xmm = tt::CBIndex::c_24;  // x minus mean
 #ifdef RMSNORM
         cb_pop_front(cb_ex, 1);
