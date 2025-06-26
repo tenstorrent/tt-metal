@@ -325,7 +325,7 @@ Attributes get_attributes(const T& object) {
     }
 }
 
-static std::ostream& operator<<(std::ostream& os, const Attribute& attribute) {
+inline std::ostream& operator<<(std::ostream& os, const Attribute& attribute) {
     os << attribute.to_string();
     return os;
 }
