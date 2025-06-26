@@ -274,7 +274,6 @@ def test_rotary_embedding_llama_with_program_cache(
     datatype,
     pcc,
     all_devices,
-    use_program_cache,
 ):
     devices = all_devices
     compute_grid_size = devices[0].compute_with_storage_grid_size()

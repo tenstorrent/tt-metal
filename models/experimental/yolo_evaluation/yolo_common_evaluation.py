@@ -373,7 +373,6 @@ def evaluation(
 )
 def test_run_yolov4_eval(
     device,
-    use_program_cache,
     batch_size,
     act_dtype,
     weight_dtype,
@@ -468,7 +467,7 @@ def test_yolov8s_world(device, model_type, res, use_program_cache, reset_seeds):
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov8x(device, model_type, res, use_program_cache, reset_seeds):
+def test_yolov8x(device, model_type, res, reset_seeds):
     from models.demos.yolov8x.tests.yolov8x_e2e_performant import Yolov8xTrace2CQ
 
     torch_model = YOLO("yolov8x.pt")
@@ -514,7 +513,7 @@ def test_yolov8x(device, model_type, res, use_program_cache, reset_seeds):
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov10x(device, model_type, res, use_program_cache, reset_seeds):
+def test_yolov10x(device, model_type, res, reset_seeds):
     from models.experimental.yolov10.tt.performant_runner import YOLOv10PerformantRunner
     from models.experimental.yolov10.tests.common import load_torch_model
 
@@ -555,7 +554,7 @@ def test_yolov10x(device, model_type, res, use_program_cache, reset_seeds):
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov9c(device, model_type, res, use_program_cache, reset_seeds):
+def test_yolov9c(device, model_type, res, reset_seeds):
     from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
     from models.demos.yolov9c.demo.demo_utils import load_torch_model
 

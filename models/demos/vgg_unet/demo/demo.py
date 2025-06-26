@@ -48,9 +48,7 @@ filterwarnings("ignore")
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
-def test_demo(
-    device, use_program_cache, model_location_generator, reset_seeds, demo_type, model_type, use_pretrained_weight
-):
+def test_demo(device, model_location_generator, reset_seeds, demo_type, model_type, use_pretrained_weight):
     # https://github.com/tenstorrent/tt-metal/issues/23270
     device.disable_and_clear_program_cache()
     disable_persistent_kernel_cache()

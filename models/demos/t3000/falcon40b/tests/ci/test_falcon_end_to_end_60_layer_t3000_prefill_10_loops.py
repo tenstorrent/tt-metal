@@ -63,7 +63,6 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
     model_location_generator,
     get_tt_cache_path,
     t3k_mesh_device,
-    use_program_cache,
 ):
     num_devices = 8
     llm_mode = "prefill"

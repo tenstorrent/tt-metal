@@ -533,7 +533,6 @@ def test_LlamaAttention_inference(
     paged_attention,
     is_chunked_prefill,
     chunk_size,
-    use_program_cache,
 ):
     if seq_len == 1 and batch != max_batch_size:
         pytest.skip(f"Input batch size should match max_batch_size")

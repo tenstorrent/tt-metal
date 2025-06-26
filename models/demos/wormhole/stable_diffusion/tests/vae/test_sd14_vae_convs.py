@@ -36,7 +36,6 @@ def test_split_conv(
     output_width,
     conv_in_channel_split_factor,
     conv_out_channel_split_factor,
-    use_program_cache,
 ):
     torch_input = torch.randn([1, in_channels, input_height, input_width])
     torch_weights = torch.randn([out_channels, in_channels, 3, 3])

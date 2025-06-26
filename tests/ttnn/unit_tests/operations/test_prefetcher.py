@@ -44,7 +44,6 @@ def test_run_prefetcher_post_commit(
     num_layers,
     num_reader_cores,
     dtypes,
-    use_program_cache,
     function_level_defaults,
 ):
     run_prefetcher_mm(
@@ -91,7 +90,6 @@ def test_run_prefetcher_post_commit_multi_device(
     num_layers,
     num_reader_cores,
     dtypes,
-    use_program_cache,
     function_level_defaults,
 ):
     if mesh_device.get_num_devices() <= 1:

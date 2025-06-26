@@ -99,7 +99,6 @@ def test_llama_demo(
     sampling_params,
     optimizations,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     reset_seeds,
     stress_test,

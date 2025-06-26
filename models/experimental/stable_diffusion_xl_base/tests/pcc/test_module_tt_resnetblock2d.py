@@ -43,7 +43,6 @@ def test_resnetblock2d(
     split_in,
     block,
     pcc,
-    use_program_cache,
     reset_seeds,
     conv_weights_dtype,
 ):

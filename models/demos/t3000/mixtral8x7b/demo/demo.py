@@ -264,7 +264,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
     ],
     ids=["general", "instruct"],
 )
-def test_mixtral8x7b_demo(t3k_mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env):
+def test_mixtral8x7b_demo(t3k_mesh_device, input_prompts, instruct_weights, is_ci_env):
     if is_ci_env and instruct_weights == True:
         pytest.skip("CI demo test only runs general weights to reduce CI pipeline load (both are supported)")
 

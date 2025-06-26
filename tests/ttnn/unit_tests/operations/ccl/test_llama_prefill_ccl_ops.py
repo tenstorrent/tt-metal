@@ -61,7 +61,6 @@ def run_all_gather_impl(
     ag_input_dtype,
     layout,
     all_gather_topology,
-    use_program_cache,
     num_iters=1,
     enable_trace=True,
 ):
@@ -246,7 +245,6 @@ def test_all_gather_async(
     layout,
     enable_trace,
     num_iters,
-    use_program_cache,
     all_gather_topology,
 ):
     run_all_gather_impl(
@@ -257,7 +255,6 @@ def test_all_gather_async(
         num_links,
         ag_input_dtype,
         layout,
-        use_program_cache=use_program_cache,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
@@ -312,7 +309,6 @@ def test_reduce_scatter_async(
     mem_config_rs,
     enable_trace,
     num_iters,
-    use_program_cache,
     rs_topology,
 ):
     run_reduce_scatter_impl(
@@ -325,7 +321,6 @@ def test_reduce_scatter_async(
         layout,
         mem_config_input,
         mem_config_rs,
-        use_program_cache=use_program_cache,
         rs_topology=rs_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,

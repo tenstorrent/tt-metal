@@ -150,7 +150,7 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
 @pytest.mark.parametrize("k", [[10, 15, 20, 25, 30] * 6 + [10, 20]])  # Example of per-user k
 @pytest.mark.parametrize("p", [[0.0, 0.3, 0.5, 0.7, 0.9] * 6 + [0.1, 0.8]])  # Example of per-user p
 @pytest.mark.parametrize("seed", [2024, 11, 123])
-def test_sampling_callback(shape, k, p, seed, device, use_program_cache):
+def test_sampling_callback(shape, k, p, seed, device):
     torch.manual_seed(seed)
     num_program_cache_entries_list = []
     for _ in range(2):
@@ -177,7 +177,7 @@ def test_sampling_callback(shape, k, p, seed, device, use_program_cache):
 @pytest.mark.parametrize(
     "sub_core_grids", [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(8 - 1, 4 - 1))})]
 )
-def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids, use_program_cache):
+def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids):
     torch.manual_seed(seed)
     num_program_cache_entries_list = []
     for _ in range(2):

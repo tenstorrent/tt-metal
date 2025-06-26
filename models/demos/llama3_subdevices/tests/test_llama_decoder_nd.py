@@ -50,7 +50,6 @@ def test_llama_decoder_same(
     max_seq_len,
     batch_size,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):

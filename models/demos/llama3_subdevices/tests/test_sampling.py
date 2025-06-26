@@ -217,7 +217,7 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
     ],
     indirect=True,
 )
-def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_device, use_program_cache, reset_seeds):
+def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_device, reset_seeds):
     use_tracing = False
     load_cached_outputs = True
     num_samples = 10

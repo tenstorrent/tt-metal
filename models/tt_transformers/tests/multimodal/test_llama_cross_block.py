@@ -36,9 +36,7 @@ from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_f
         "batch_2",
     ],
 )
-def test_cross_attention_transformer_block_inference(
-    text_seq_len, batch, mesh_device, use_program_cache, reset_seeds, ensure_gc
-):
+def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
 

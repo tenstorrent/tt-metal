@@ -60,7 +60,6 @@ def test_demo(
     use_weights_from_ultralytics,
     model_type,
     model_task,
-    use_program_cache,
     reset_seeds,
 ):
     disable_persistent_kernel_cache()

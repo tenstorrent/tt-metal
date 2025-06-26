@@ -595,15 +595,6 @@ def get_devices(request):
     return devices
 
 
-# Deprecated, cache is active by default
-@pytest.fixture(scope="function")
-def use_program_cache(request):
-    devices = get_devices(request)
-    yield
-    for dev in devices:
-        dev.disable_and_clear_program_cache()
-
-
 @pytest.fixture(scope="function")
 def tracy_profile():
     from tracy import Profiler

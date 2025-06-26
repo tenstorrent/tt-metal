@@ -31,7 +31,6 @@ def test_crossattnmid(
     query_dim,
     num_attn_heads,
     out_dim,
-    use_program_cache,
     reset_seeds,
     transformer_weights_dtype,
     conv_weights_dtype,

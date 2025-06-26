@@ -62,7 +62,6 @@ def test_decoder(
     upblock_resnet_conv_in_channel_split_factors,
     upblock_upsample_conv_channel_split_factors,
     norm_num_blocks,
-    use_program_cache,
 ):
     torch.manual_seed(0)
 

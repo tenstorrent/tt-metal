@@ -332,7 +332,6 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
 )
 def test_demo(
     mesh_device,
-    use_program_cache,
     is_ci_env,
     prompt,
     num_inference_steps,

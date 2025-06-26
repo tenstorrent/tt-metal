@@ -73,7 +73,7 @@ def test_repeat(device, layout, dtype, shape, repeat_shape):
 @pytest.mark.parametrize("layout", layouts)
 @pytest.mark.parametrize("shape", shapes)
 @pytest.mark.parametrize("repeat_shape", repeat_shapes)
-def test_pc_repeat(device, layout, shape, repeat_shape, use_program_cache):
+def test_pc_repeat(device, layout, shape, repeat_shape):
     # trying to avoid the `buffer not divisible by page size` error. Does this make sense?
     if layout == ttnn.TILE_LAYOUT and (
         prod(shape) % ttnn.TILE_SIZE != 0 or _get_final_size(shape, repeat_shape) % ttnn.TILE_SIZE != 0
@@ -108,7 +108,7 @@ def test_pc_repeat(device, layout, shape, repeat_shape, use_program_cache):
 # 17975 test cases
 
 
-def test_pc_with_different_shapes_in_sequence(device, use_program_cache):
+def test_pc_with_different_shapes_in_sequence(device):
     y = torch.rand((1, 1, 256, 384), dtype=torch.bfloat16)
     y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 

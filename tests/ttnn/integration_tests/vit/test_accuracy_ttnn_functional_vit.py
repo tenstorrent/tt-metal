@@ -55,7 +55,6 @@ def get_imagenet_label_dict():
 @pytest.mark.parametrize("functional_vit", [ttnn_functional_vit])
 def test_accuracy(
     device,
-    use_program_cache,
     model_name,
     batch_size,
     image_size,

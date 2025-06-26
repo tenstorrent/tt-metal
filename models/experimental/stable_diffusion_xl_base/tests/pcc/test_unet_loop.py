@@ -462,7 +462,6 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, cla
 )
 def test_unet_loop(
     device,
-    use_program_cache,
     is_ci_env,
     prompt,
     num_inference_steps,

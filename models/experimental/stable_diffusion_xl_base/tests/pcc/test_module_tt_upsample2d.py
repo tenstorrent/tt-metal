@@ -24,9 +24,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 @pytest.mark.parametrize("dilation", [(1, 1)])
 @pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_upsample2d(
-    device, input_shape, conv_weights_dtype, up_block_id, stride, padding, dilation, use_program_cache, reset_seeds
-):
+def test_upsample2d(device, input_shape, conv_weights_dtype, up_block_id, stride, padding, dilation, reset_seeds):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )

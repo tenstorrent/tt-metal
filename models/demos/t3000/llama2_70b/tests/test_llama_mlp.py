@@ -156,7 +156,6 @@ def test_LlamaMLP_inference(
     max_batch_size,
     max_context_len,
     llama_version,
-    use_program_cache,
 ):
     if seq_len == 1 and batch != max_batch_size:
         pytest.skip(f"Input batch size should match max_batch_size")

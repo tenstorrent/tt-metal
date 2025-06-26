@@ -493,7 +493,7 @@ def test_quantization_per_channel_4d(device, x0, x1, x2, x3, input_dtype):
 # Add tests for per-channel once changing the quantizaiton axis no longer affects the number of
 # kernels used
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
-def test_quantization_per_tensor_program_cache(device, use_program_cache, input_dtype):
+def test_quantization_per_tensor_program_cache(device, input_dtype):
     torch.manual_seed(0)
 
     num_program_cache_entries_list = []

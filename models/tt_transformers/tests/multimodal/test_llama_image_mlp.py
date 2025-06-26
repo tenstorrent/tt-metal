@@ -29,7 +29,7 @@ from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_f
     ],
     indirect=True,
 )
-def test_mlp_inference(batch, num_chunks, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
 
     model_args = ModelArgs(mesh_device)

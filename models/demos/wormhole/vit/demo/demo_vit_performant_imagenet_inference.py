@@ -28,7 +28,6 @@ NUM_VALIDATION_IMAGES_IMAGENET = 49920
 )
 def test_run_vit_trace_2cqs_inference(
     mesh_device,
-    use_program_cache,
     batch_size_per_device,
     iterations,
     imagenet_label_dict,
@@ -135,7 +134,6 @@ def test_run_vit_trace_2cqs_inference(
 @pytest.mark.parametrize("expected_accuracy", [0.80])
 def test_run_vit_trace_2cqs_accuracy(
     mesh_device,
-    use_program_cache,
     batch_size_per_device,
     iterations,
     imagenet_label_dict,
@@ -145,7 +143,6 @@ def test_run_vit_trace_2cqs_accuracy(
 ):
     test_run_vit_trace_2cqs_inference(
         mesh_device,
-        use_program_cache,
         batch_size_per_device,
         iterations,
         imagenet_label_dict,

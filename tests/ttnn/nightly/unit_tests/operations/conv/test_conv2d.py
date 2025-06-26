@@ -529,7 +529,6 @@ def run_conv_with_split(
 def test_conv_features_multi_device(
     mesh_device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -621,7 +620,6 @@ def test_conv_features_multi_device(
 def test_conv_activation(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -826,7 +824,6 @@ def test_conv_dram(
 def test_conv_ws(
     device,
     torch_tensor_map,
-    use_program_cache,
     batch_size,
     output_channels,
     input_channels,
@@ -997,7 +994,6 @@ def test_conv_ws(
 def test_conv_for_segformer_512x512(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -1109,7 +1105,6 @@ def test_conv_for_segformer_512x512(
 def test_resnet50_conv_wh(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -1171,7 +1166,6 @@ def test_resnet50_conv_wh(
 def test_conv_mem_config_wh(
     device,
     torch_tensor_map,
-    use_program_cache,
     batch_size,
     output_channels,
     input_channels,
@@ -1274,7 +1268,6 @@ def test_conv_mem_config_wh(
 def test_resnet50_conv_wh_fp32(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     fp32_accum,
     output_dtype,
@@ -1403,7 +1396,6 @@ def test_resnet50_conv_wh_fp32(
 def test_sd_conv(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -1542,7 +1534,6 @@ def test_sd_conv(
 def test_sd_conv_wh(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -1646,7 +1637,6 @@ def test_sd_conv_wh(
 def test_sd14_vae_conv(
     device,
     torch_tensor_map,
-    use_program_cache,
     input_channels,
     output_channels,
     input_height,
@@ -1749,7 +1739,6 @@ def test_sd14_vae_conv(
 def test_unet_conv_wh(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -1843,7 +1832,6 @@ def test_unet_conv_wh(
 def test_unet_conv_groups_2_wh(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -1939,7 +1927,6 @@ def test_unet_conv_groups_2_wh(
 def test_unet_conv_groups_4_6_wh(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2037,7 +2024,6 @@ def test_unet_conv_groups_4_6_wh(
 def test_unet_conv_groups_8_wh(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2107,7 +2093,6 @@ def test_unet_conv_groups_8_wh(
 def test_halo_reshard_conv(
     device,
     torch_tensor_map,
-    use_program_cache,
     shard_layout,
     batch_size,
     output_channels,
@@ -2166,7 +2151,6 @@ def test_halo_reshard_conv(
 def test_conv_core_nondivis(
     device,
     torch_tensor_map,
-    use_program_cache,
     shard_layout,
     batch_size,
     output_channels,
@@ -2258,7 +2242,6 @@ def test_conv_core_nondivis(
 def test_conv_dilation(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2353,7 +2336,6 @@ def test_conv_dilation(
 def test_conv_groups(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2467,7 +2449,6 @@ def test_conv_groups(
 def test_yolov4_conv_groups_larger_than_one(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2540,7 +2521,6 @@ def test_yolov4_conv_groups_larger_than_one(
 def test_swin_s_conv(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2614,7 +2594,6 @@ def test_swin_s_conv(
 def test_model_k_256x256(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2693,7 +2672,6 @@ def test_model_k_256x256(
 def test_conv_for_vanilla_unet(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2875,7 +2853,6 @@ def test_dram_input_mm_conv(device, torch_tensor_map, tiled_input, input_on_devi
 def test_split_reader_regression(
     device,
     torch_tensor_map,
-    use_program_cache,
     batch_size,
     output_channels,
     input_channels,
@@ -3436,7 +3413,7 @@ def test_conv2d_ws_program_cache(
     fp32_accum,
     packer_l1_acc,
     enable_split_reader,
-    use_program_cache,
+
 ):
 
     config_override = {}
@@ -3699,7 +3676,7 @@ def test_conv2d_with_fold(
 def test_conv_yolov10x(
     device,
     torch_tensor_map,
-    use_program_cache,
+
     math_fidelity,
     activations_dtype,
     weights_dtype,

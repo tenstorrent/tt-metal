@@ -203,7 +203,7 @@ def test_roll_tile_padding(device, input_tensor, shifts, dim, layout, dtype):
         ((1, 1, 32, 32), [1, -1], [2, 3]),
     ],
 )
-def test_roll_with_program_cache(device, shape, shifts, dims, use_program_cache):
+def test_roll_with_program_cache(device, shape, shifts, dims):
     dtype = torch.float32
     torch_input_tensor = torch.arange(1, 1 + torch.tensor(shape).prod().item(), dtype=dtype).reshape(shape)
     torch_output_tensor = torch.roll(torch_input_tensor, shifts=shifts, dims=dims)

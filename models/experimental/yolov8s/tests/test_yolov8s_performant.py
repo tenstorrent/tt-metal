@@ -16,7 +16,6 @@ from models.experimental.yolov8s.tests.yolov8s_performant import (
 def test_run_yolov8s_inference(
     device,
     device_batch_size,
-    use_program_cache,
 ):
     run_yolov8s_inference(
         device,
@@ -29,7 +28,6 @@ def test_run_yolov8s_inference(
 def test_run_yolov8s_trace_inference(
     device,
     device_batch_size,
-    use_program_cache,
 ):
     run_yolov8s_trace_inference(
         device,
@@ -44,7 +42,6 @@ def test_run_yolov8s_trace_inference(
 def test_run_yolov8s_trace_2cq_inference(
     device,
     device_batch_size,
-    use_program_cache,
 ):
     run_yolov8s_trace_2cqs_inference(
         device=device,
