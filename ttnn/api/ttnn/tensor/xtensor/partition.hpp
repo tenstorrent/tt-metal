@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tt_stl/small_vector.hpp>
+#include <vector>
 #include <xtensor/views/xstrided_view.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
@@ -39,10 +41,15 @@ StridedViews<T> chunk_ndim(
     const xt::xexpression<T>& expr, const tt::stl::SmallVector<int>& num_chunks, const tt::stl::SmallVector<int>& dims);
 
 // Concatenates a list of tensors along the specified dimension.
-tt::tt_metal::Tensor concat(const std::vector<tt::tt_metal::Tensor>& tensors, int dim = 0);
-
-// Overload for `xt::xarray`.
 template <typename T>
 xt::xarray<T> concat(const std::vector<xt::xarray<T>>& v, int dim = 0);
+
+// Overload that performs multi-dimensional concatenation.
+// `expressions` are assumed to be laid out in row-major order relative to the supplied `dims`.
+template <typename T>
+xt::xarray<T> concat_ndim(
+    const std::vector<xt::xarray<T>>& expressions,
+    const tt::stl::SmallVector<int>& num_chunks,
+    const tt::stl::SmallVector<int>& dims);
 
 }  // namespace ttnn::experimental::xtensor

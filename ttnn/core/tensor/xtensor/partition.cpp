@@ -39,17 +39,17 @@ tt::stl::SmallVector<int> normalize_dims(const tt::stl::SmallVector<int>& dims, 
 }
 
 template <typename T>
-auto chunk_xexpression(
+auto chunk_ndim_impl(
     const xt::xexpression<T>& expr_base,
     const tt::stl::SmallVector<int>& num_chunks,
     const tt::stl::SmallVector<int>& dims) {
     const auto& expr = expr_base.derived_cast();
+    TT_FATAL(num_chunks.size() == dims.size(), "num_chunks and dims must have the same size");
+
     if (num_chunks.empty()) {
         xt::xstrided_slice_vector indices(expr.dimension(), xt::all());
         return StridedViews<T>{xt::strided_view(expr, indices)};
     }
-
-    TT_FATAL(num_chunks.size() == dims.size(), "num_chunks and dims must have the same size");
 
     const auto normalized_dims = normalize_dims(dims, expr.dimension());
     auto sorted_dims = normalized_dims;
@@ -122,7 +122,7 @@ using AdaptedType = decltype(compute_adapted_type<T>());
 
 template <typename T>
 StridedViews<T> chunk(const xt::xexpression<T>& expr, int num_chunks, int dim) {
-    return chunk_xexpression(expr, {num_chunks}, {dim});
+    return chunk_ndim_impl(expr, {num_chunks}, {dim});
 }
 
 template <typename T>
@@ -130,63 +130,92 @@ StridedViews<T> chunk_ndim(
     const xt::xexpression<T>& expr,
     const tt::stl::SmallVector<int>& num_chunks,
     const tt::stl::SmallVector<int>& dims) {
-    return chunk_xexpression(expr, num_chunks, dims);
+    return chunk_ndim_impl(expr, num_chunks, dims);
 }
 
-// TODO: optimize concat to perform concatenation based off views.
 template <typename T>
 xt::xarray<T> concat(const std::vector<xt::xarray<T>>& v, int dim) {
-    if (v.empty()) {
+    return concat_ndim(v, {v.size()}, {dim});
+}
+
+template <typename T>
+xt::xarray<T> concat_ndim(
+    const std::vector<xt::xarray<T>>& expressions,
+    const tt::stl::SmallVector<int>& num_chunks,
+    const tt::stl::SmallVector<int>& dims) {
+    TT_FATAL(num_chunks.size() == dims.size(), "num_chunks and dims must have the same size");
+
+    if (expressions.empty()) {
         return {};
-    } else if (v.size() == 1) {
-        return v.front();
-    } else {
-        // Make sure all input tensors have the same dimensions except for the concatenation dimension
-        if (dim < 0) {
-            dim += static_cast<int>(v.front().dimension());
-        }
-        TT_FATAL(
-            dim >= 0 && dim < static_cast<int>(v.front().dimension()),
-            "Invalid concatenation dimension {}, tensor dimension: {}",
-            dim,
-            v.front().dimension());
-
-        size_t num_dims = v.front().dimension();
-        auto expected_shape = v.front().shape();
-        for (size_t i = 1; i < v.size(); ++i) {
-            TT_FATAL(v[i].dimension() == num_dims, "All tensors must have the same number of dimensions");
-            for (size_t j = 0; j < num_dims; ++j) {
-                if (j != dim) {
-                    TT_FATAL(
-                        v[i].shape()[j] == expected_shape[j],
-                        "All tensors must have the same shape except for the concatenation dimension. Dimension {} "
-                        "differes, expected: {}, got: {}",
-                        j,
-                        expected_shape[j],
-                        v[i].shape()[j]);
-                }
-            }
-        }
-
-        auto result_shape = v.front().shape();
-        for (size_t i = 1; i < v.size(); ++i) {
-            result_shape[dim] += v[i].shape()[dim];
-        }
-        xt::xarray<T> result;
-        result.resize(result_shape);
-        xt::xdynamic_slice_vector indices(num_dims, xt::all());
-        size_t offset = 0;
-        // TODO: Since source and destination tensors are contiguous. We can potentially optimize
-        // when concatenating along the last dimension and do memcpy.
-        for (size_t i = 0; i < v.size(); ++i) {
-            size_t dim_size = v[i].shape()[dim];
-            indices[dim] = xt::range(offset, offset + dim_size);
-            auto view = xt::dynamic_view(result, indices);
-            view = v[i];
-            offset += dim_size;
-        }
-        return result;
     }
+
+    if (num_chunks.empty()) {
+        TT_FATAL(expressions.size() == 1, "When no dims specified, must have exactly one expression");
+        return expressions.front();
+    }
+
+    const auto& first_expr = expressions.front();
+    const auto& expected_shape = first_expr.shape();
+    const size_t num_dims = first_expr.dimension();
+    for (const auto& expr : expressions) {
+        TT_FATAL(expr.dimension() == num_dims, "All expressions must have the same number of dimensions");
+        TT_FATAL(expr.shape() == first_expr.shape(), "All expressions must have the same shape");
+    }
+    const auto normalized_dims = normalize_dims(dims, num_dims);
+    auto sorted_dims = normalized_dims;
+    std::sort(sorted_dims.begin(), sorted_dims.end());
+    TT_FATAL(std::unique(sorted_dims.begin(), sorted_dims.end()) == sorted_dims.end(), "dims must be unique");
+
+    TT_FATAL(
+        std::all_of(num_chunks.begin(), num_chunks.end(), [](int n) { return n > 0; }),
+        "num_chunks must be > 0; got num_chunks: {}",
+        num_chunks);
+
+    const size_t expected_total = std::accumulate(num_chunks.begin(), num_chunks.end(), 1, std::multiplies<int>());
+    TT_FATAL(
+        expressions.size() == expected_total,
+        "Number of expressions ({}) doesn't match expected ({})",
+        expressions.size(),
+        expected_total);
+
+    auto result_shape = expected_shape;
+    for (size_t i = 0; i < dims.size(); ++i) {
+        const int dim = normalized_dims[i];
+        result_shape[dim] *= num_chunks[i];
+    }
+
+    xt::xarray<T> result;
+    result.resize(result_shape);
+
+    // Get the size of each piece along concatenation dimensions
+    tt::stl::SmallVector<size_t> piece_sizes(dims.size());
+    for (size_t i = 0; i < dims.size(); ++i) {
+        piece_sizes[i] = expected_shape[normalized_dims[i]];
+    }
+
+    // Copy pieces into result in row-major order
+    tt::stl::SmallVector<size_t> current_indices(dims.size(), 0);
+    for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
+        const auto& expr = expressions[expr_idx];
+
+        xt::xdynamic_slice_vector indices(num_dims, xt::all());
+        for (size_t i = 0; i < dims.size(); ++i) {
+            const int dim = normalized_dims[i];
+            const size_t offset = current_indices[i] * piece_sizes[i];
+            indices[dim] = xt::range(offset, offset + piece_sizes[i]);
+        }
+
+        xt::dynamic_view(result, indices) = expr;
+
+        for (int i = static_cast<int>(dims.size()) - 1; i >= 0; --i) {
+            if (++current_indices[i] < num_chunks[i]) {
+                break;
+            }
+            current_indices[i] = 0;
+        }
+    }
+
+    return result;
 }
 
 // Explicit instantiations for the public API.
@@ -202,7 +231,11 @@ xt::xarray<T> concat(const std::vector<xt::xarray<T>>& v, int dim) {
         const xt::xexpression<AdaptedType<const T>>&,                                                                \
         const tt::stl::SmallVector<int>&,                                                                            \
         const tt::stl::SmallVector<int>&);                                                                           \
-    template xt::xarray<T> concat(const std::vector<xt::xarray<T>>& v, int dim);
+    template xt::xarray<T> concat(const std::vector<xt::xarray<T>>& v, int dim);                                     \
+    template xt::xarray<T> concat_ndim(                                                                              \
+        const std::vector<xt::xarray<T>>& v,                                                                         \
+        const tt::stl::SmallVector<int>& num_chunks,                                                                 \
+        const tt::stl::SmallVector<int>& dims);
 
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(bfloat16)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(float)
@@ -213,39 +246,5 @@ EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint16_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint32_t)
 
 #undef EXPLICIT_INSTANTIATIONS_FOR_TYPE
-
-// Adaptor APIs from xtensor to ttnn::Tensor.
-namespace adaptor {
-namespace {
-
-template <typename T>
-Tensor concat_impl(const std::vector<Tensor>& tensors, const tt::tt_metal::TensorLayout& layout, int dim) {
-    std::vector<xt::xarray<T>> xtensors;
-    xtensors.reserve(tensors.size());
-    for (const auto& tensor : tensors) {
-        xtensors.push_back(to_xtensor<T>(tensor));
-    }
-    xt::xarray<T> result = concat(xtensors, dim);
-    return from_xtensor<T>(result, TensorSpec(get_shape_from_xarray(result), layout));
-}
-
-}  // namespace
-}  // namespace adaptor
-
-Tensor concat(const std::vector<Tensor>& tensors, int dim) {
-    TT_FATAL(tensors.size() > 0, "Cannot concatenate an empty list of tensors");
-    const auto& reference_layout = tensors.front().tensor_spec().tensor_layout();
-    switch (reference_layout.get_data_type()) {
-        case tt::tt_metal::DataType::BFLOAT4_B:
-        case tt::tt_metal::DataType::BFLOAT8_B:
-        case tt::tt_metal::DataType::FLOAT32: return adaptor::concat_impl<float>(tensors, reference_layout, dim);
-        case tt::tt_metal::DataType::BFLOAT16: return adaptor::concat_impl<bfloat16>(tensors, reference_layout, dim);
-        case tt::tt_metal::DataType::INT32: return adaptor::concat_impl<int32_t>(tensors, reference_layout, dim);
-        case tt::tt_metal::DataType::UINT8: return adaptor::concat_impl<uint8_t>(tensors, reference_layout, dim);
-        case tt::tt_metal::DataType::UINT16: return adaptor::concat_impl<uint16_t>(tensors, reference_layout, dim);
-        case tt::tt_metal::DataType::UINT32: return adaptor::concat_impl<uint32_t>(tensors, reference_layout, dim);
-        default: TT_THROW("Unsupported data type: {}", reference_layout.get_data_type());
-    }
-}
 
 }  // namespace ttnn::experimental::xtensor
