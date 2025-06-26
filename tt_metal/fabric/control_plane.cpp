@@ -856,6 +856,7 @@ size_t ControlPlane::get_num_live_routing_planes(
 // Only builds the routing table representation, does not actually populate the routing tables in memory of the
 // fabric routers on device
 void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(tt_metal::FabricReliabilityMode reliability_mode) {
+    TT_FATAL(this->fabric_context_ != nullptr, "Must call initialize_fabric_context first");
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
