@@ -275,7 +275,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         output_cores_all,
         reduction_reader_kernel_config);
     if (output_cores_unused.size() > 0) {
-        tt::tt_metal::SetRuntimeArgs(program, reduction_reader_kernel_id, output_cores_unused, {!has_work, 0});
+        tt::tt_metal::SetRuntimeArgs(program, reduction_reader_kernel_id, output_cores_unused, {!has_work, 0, 0, 0});
     }
 
     // Create reduction dataflow kernel
