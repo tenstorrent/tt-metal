@@ -6,7 +6,7 @@
 #include "accessor/sharded_accessor.h"
 
 void kernel_main() {
-    auto args = nd_sharding::make_args<0>(0);
+    auto args = nd_sharding::make_args<0, 0>();
     constexpr uint32_t base_idx_cta = args.compile_time_args_skip();
     uint32_t base_idx_crta = args.runtime_args_skip();
 
@@ -17,7 +17,6 @@ void kernel_main() {
     uint32_t num_dev_pages = get_common_arg_val<uint32_t>(base_idx_crta + 1);
 
     auto sharded_accessor = nd_sharding::make_sharded_accessor_from_args(args, bank_base_address, page_size);
-
     constexpr uint32_t one_tile = 1;
     for (size_t i = 0; i < num_dev_pages; ++i) {
         cb_wait_front(cb_id, one_tile);

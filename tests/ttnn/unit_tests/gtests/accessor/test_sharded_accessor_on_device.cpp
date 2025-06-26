@@ -78,12 +78,12 @@ void test_single_core_reshard(
 
     std::vector<uint32_t> input_compile_time_args = input_accessor.compile_time_args;
     input_compile_time_args.push_back(cb_in0_idx);
+    input_compile_time_args.push_back(aligned_page_size);
 
     std::vector<uint32_t> output_compile_time_args = output_accessor.compile_time_args;
     output_compile_time_args.push_back(cb_in0_idx);
     output_compile_time_args.push_back(aligned_page_size);
 
-    // Create reader kernel
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "tests/ttnn/unit_tests/gtests/accessor/kernels/reader_reshard.cpp",
@@ -94,7 +94,6 @@ void test_single_core_reshard(
             .compile_args = input_compile_time_args,
         });
 
-    // Create writer kernel
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "tests/ttnn/unit_tests/gtests/accessor/kernels/writer_reshard.cpp",
@@ -105,20 +104,16 @@ void test_single_core_reshard(
             .compile_args = output_compile_time_args,
         });
 
-    // Set up runtime args for reader kernel
     std::vector<uint32_t> input_runtime_args = input_accessor.runtime_args;
     input_runtime_args.push_back(input_buffer->address());
-    input_runtime_args.push_back(aligned_page_size);
     input_runtime_args.push_back(input_buffer->num_pages());
     SetCommonRuntimeArgs(program, reader_kernel_id, input_runtime_args);
 
-    // Set up runtime args for writer kernel
     std::vector<uint32_t> output_runtime_args = output_accessor.runtime_args;
     output_runtime_args.push_back(output_buffer->address());
     output_runtime_args.push_back(output_buffer->num_pages());
     SetCommonRuntimeArgs(program, writer_kernel_id, output_runtime_args);
 
-    // Launch program
     auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
     mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
@@ -146,8 +141,6 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
 }
 
 std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
-    // Test cases are similar to MeshBufferReadWriteTests in test_buffer_distribution_spec.cpp
-    // - Output distribution spec is something different from input distribution spec
     std::vector<InputOutputBufferParams> base_params{
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{4, 64, 96},
@@ -168,8 +161,6 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                     .orientation = ShardOrientation::ROW_MAJOR,
                 },
         },
-        // HEIGHT sharding with padding along shard width + random CoreRangeSet; tile layout
-        // page size = 32 x 32 x 1.0625 = 1088 bytes (eg. bfloat8_b)
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{18, 128, 64},
             .layout = Layout::TILE,
@@ -190,8 +181,6 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                     .orientation = ShardOrientation::COL_MAJOR,
                 },
         },
-        // WIDTH sharding with padding along shard height; row major layout with aligned page size
-        // page size = 1 x 16 x 1 = 16 bytes (eg. uint8, int8, etc...)
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{2, 3, 256},
             .layout = Layout::ROW_MAJOR,
@@ -211,9 +200,6 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                     .orientation = ShardOrientation::COL_MAJOR,
                 },
         },
-        // ND sharding with multiple shards per bank; row major layout with non-aligned page size
-        // Coaslescing possible based on shard spec but must be noncoalesced due to non-aligned pages
-        // page size = 1 x 4 x 1 = 4 bytes (eg. uint8, int8, etc...)
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{3, 2, 2, 3, 4},
             .layout = Layout::ROW_MAJOR,
@@ -233,8 +219,6 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                     .orientation = ShardOrientation::ROW_MAJOR,
                 },
         },
-        // ND sharding with multiple shards per bank; tile layout
-        // page size = 32 x 32 x 2 = 2048 bytes (eg. bfloat16, uint16, etc...)
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{5, 2, 2, 64, 96},
             .layout = Layout::TILE,
@@ -270,6 +254,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                 // If number of banks is runtime, bank coordinates must also be runtime
                 continue;
             }
+
             for (int src_interleaved = 0; src_interleaved <= 1; ++src_interleaved) {
                 for (int dst_interleaved = 0; dst_interleaved <= 1; ++dst_interleaved) {
                     auto p = base_param;

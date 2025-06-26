@@ -11,10 +11,10 @@ void kernel_main() {
     uint32_t base_idx_crta = args.runtime_args_skip();
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(base_idx_cta);
+    constexpr uint32_t page_size = get_compile_time_arg_val(base_idx_cta + 1);
 
     const uint32_t bank_base_address = get_common_arg_val<uint32_t>(base_idx_crta);
-    uint32_t page_size = get_common_arg_val<uint32_t>(base_idx_crta + 1);
-    uint32_t num_dev_pages = get_common_arg_val<uint32_t>(base_idx_crta + 2);
+    uint32_t num_dev_pages = get_common_arg_val<uint32_t>(base_idx_crta + 1);
 
     auto sharded_accessor = nd_sharding::make_sharded_accessor_from_args(args, bank_base_address, page_size);
     constexpr uint32_t one_tile = 1;
