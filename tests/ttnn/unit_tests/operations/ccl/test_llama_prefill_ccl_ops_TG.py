@@ -208,7 +208,6 @@ def run_all_gather_on_TG(
         for _ in range(NUM_BUFFERS)
     ]
     try:
-        # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
         if trace_mode:
             ttnn_tensor_out = run_ag_with_trace(
                 input_tensor=ttnn_tensor,
@@ -266,8 +265,6 @@ def run_all_gather_on_TG(
             persistent_tensor.buffer_address() == output_tensor.buffer_address()
         ), "Persistent tensor address mismatch"
 
-    # Repeat the input tensor to represent the fact that the full concatenated input tensor lives across every
-    # device in the line
     repeat_factor = [1] * len(output_golden.shape)
     repeat_factor[dim] = num_devices
     output_golden[:, :, :, :] = full_input_tensor_unfractured.repeat(repeat_factor)
@@ -392,7 +389,6 @@ def run_reduce_scatter_on_TG(
     warmup_iters: int = 0,
     cluster_axis: int = 0,
     trace_mode=False,
-    # New all-gather-async and persistent fabric params
 ):
     per_reduce_scatter_output_shape = list(per_chip_input_shape)
     per_reduce_scatter_output_shape[dim] *= num_devices
@@ -577,7 +573,6 @@ def run_reduce_scatter_on_TG(
     assert passed, f"FAILED: {output}"
 
 
-# Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("seq_len", [128, 4096, 8192], ids=["128_seq", "4k_seq", "8k_seq"])
 @pytest.mark.parametrize(
@@ -620,7 +615,6 @@ def test_all_gather_TG(
     warmup_iters,
     trace_mode,
 ):
-    # Construct the per_chip_output_shape inside the function
     per_chip_output_shape = [1, 1, seq_len, width * num_devices]
 
     run_all_gather_on_TG(
@@ -642,7 +636,6 @@ def test_all_gather_TG(
     )
 
 
-# Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("seq_len", [128, 4096, 8192], ids=["128_seq", "4k_seq", "8k_seq"])
 @pytest.mark.parametrize(
@@ -684,7 +677,6 @@ def test_reduce_scatter_TG(
     warmup_iters,
     trace_mode,
 ):
-    # Construct the rs_input_shape inside the function
     rs_input_shape = [1, 1, seq_len, width]
 
     run_reduce_scatter_on_TG(
