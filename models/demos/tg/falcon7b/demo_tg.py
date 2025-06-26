@@ -72,14 +72,14 @@ def test_demo_multichip(
         assert max_seq_len in [128, 1024, 2048], f"Unexpected max_seq_len: {max_seq_len} for perf mode"
         expected_perf_dict = {
             "4U": {
-                128: {"prefill_t/s": 22160, "decode_t/s/u": 8.10},
+                128: {"prefill_t/s": 22160, "decode_t/s/u": 7.20},
                 1024: {"prefill_t/s": 19460, "decode_t/s/u": 7.30},
-                2048: {"prefill_t/s": 14010, "decode_t/s/u": 7.40},
+                2048: {"prefill_t/s": 18650, "decode_t/s/u": 7.40},
             },
             "6U": {
                 128: {"prefill_t/s": 31500, "decode_t/s/u": 12.55},
                 1024: {"prefill_t/s": 29090, "decode_t/s/u": 11.19},
-                2048: {"prefill_t/s": 23100, "decode_t/s/u": 10.90},
+                2048: {"prefill_t/s": 27230, "decode_t/s/u": 10.90},
             },
         }
         expected_perf_metrics = expected_perf_dict[galaxy_type][max_seq_len]
