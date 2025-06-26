@@ -260,15 +260,16 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
     uint32_t nblocks,
-    std::optional<int32_t> divisor_override) {
+    std::optional<int32_t> divisor_override,
+    uint32_t memory_used) {
     // This should allocate a DRAM buffer on the device
     IDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
-    tt::tt_metal::DeviceStorage reader_indices_storage = reader_indices.device_storage();
+    const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices.device_storage();
     tt::tt_metal::Buffer* dst_dram_buffer = output.buffer();
 
-    const auto input_shape = input.padded_shape();
-    const auto output_shape = output.padded_shape();
+    const auto& input_shape = input.padded_shape();
+    const auto& output_shape = output.padded_shape();
 
     tt::DataFormat in_df = datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
@@ -628,6 +629,19 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
+    uint32_t temporary_size = program.get_cb_memory_size();
+    uint32_t post_allocate_size =
+        input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+    uint32_t l1_usage = calculate_L1_usage(
+        input, kernel_size_h, kernel_size_w, out_h, out_w, input.memory_config(), output.memory_config(), pool_type);
+    uint32_t output_cb_size = post_allocate_size - memory_used;
+
+    TT_FATAL(
+        temporary_size + output_cb_size == l1_usage,
+        "Calculated CB size {} does not match with the actual CB size {}  ",
+        temporary_size + output_cb_size,
+        l1_usage);
+
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
         log_debug(tt::LogOp, "in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
@@ -767,7 +781,8 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         num_shards_c,
         out_mem_config,
         1,
-        divisor_override);
+        divisor_override,
+        op_attr.memory_used);
 }
 
 void Pool2D::MultiCore::override_runtime_arguments(

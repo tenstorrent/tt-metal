@@ -350,6 +350,7 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
     log_info(LogTest, "Devices: {}", chip_seq);
 
     std::vector<tt::tt_metal::IDevice*> devices;
+    devices.reserve(chip_seq.size());
     for (const auto& chip_id : chip_seq) {
         devices.push_back(DevicePool::instance().get_active_device(chip_id));
     }

@@ -373,7 +373,8 @@ constexpr uint32_t launch_msg_buffer_num_entries = 8;
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct subordinate_sync_msg_t subordinate_sync;
-    uint32_t launch_msg_rd_ptr;
+    volatile uint32_t launch_msg_rd_ptr;  // Volatile so this can be manually reset by host. TODO: remove volatile when
+                                          // dispatch init moves to one-shot.
     struct launch_msg_t launch[launch_msg_buffer_num_entries];
     volatile struct go_msg_t go_message;
     struct watcher_msg_t watcher;

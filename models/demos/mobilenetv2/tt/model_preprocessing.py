@@ -14,7 +14,7 @@ from models.demos.mobilenetv2.reference.mobilenetv2 import (  # Import Conv2dNor
 )
 
 
-def create_mobilenetv2_input_tensors(batch=1, input_channels=3, input_height=224, input_width=224):
+def create_mobilenetv2_input_tensors(batch=1, input_channels=3, input_height=224, input_width=224, pad_channels=None):
     torch_input_tensor = torch.randn(batch, input_channels, input_height, input_width)
     ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn_input_tensor.reshape(
@@ -23,6 +23,10 @@ def create_mobilenetv2_input_tensors(batch=1, input_channels=3, input_height=224
         ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
         ttnn_input_tensor.shape[3],
     )
+    if pad_channels:
+        ttnn_input_tensor = torch.nn.functional.pad(
+            ttnn_input_tensor, (0, pad_channels - ttnn_input_tensor.shape[-1]), value=0
+        )
     ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     return torch_input_tensor, ttnn_input_tensor
