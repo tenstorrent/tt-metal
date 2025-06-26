@@ -26,6 +26,7 @@
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "fabric_host_interface.h"
+#include "fabric_types.hpp"
 #include "hal_types.hpp"
 #include "intermesh_constants.hpp"
 #include "impl/context/metal_context.hpp"
@@ -132,7 +133,7 @@ static void build_golden_link_counts(
 
 void ControlPlane::initialize_dynamic_routing_plane_counts(
     const IntraMeshConnectivity& intra_mesh_connectivity, tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
-    if (fabric_config == tt_metal::FabricConfig::CUSTOM) {
+    if (fabric_config == tt_metal::FabricConfig::CUSTOM || fabric_config == tt_metal::FabricConfig::DISABLED) {
         return;
     }
     auto topology = FabricContext::get_topology_from_config(fabric_config);
@@ -963,7 +964,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(tt_meta
     }
 
     this->initialize_dynamic_routing_plane_counts(
-        intra_mesh_connectivity, tt::tt_metal::MetalContext::instance().get_fabric_config(), reliability_mode);
+        intra_mesh_connectivity, this->fabric_context_->get_fabric_config(), reliability_mode);
 
     // Order the ethernet channels so that when we use them for deciding connections, indexing into ports per direction
     // is consistent for each each neighbouring chip.
