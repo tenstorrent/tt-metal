@@ -79,7 +79,6 @@ def run_all_reduce_test(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
     topology=ttnn.Topology.Ring,
@@ -213,7 +212,6 @@ def test_ring_all_reduce_post_commit(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=2,
 ):
@@ -226,7 +224,6 @@ def test_ring_all_reduce_post_commit(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
     )
@@ -275,7 +272,6 @@ def test_ring_all_reduce_post_commit_2chip(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=2,
 ):
@@ -288,7 +284,6 @@ def test_ring_all_reduce_post_commit_2chip(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         topology=ttnn.Topology.Linear,

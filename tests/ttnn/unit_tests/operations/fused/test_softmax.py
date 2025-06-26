@@ -132,7 +132,7 @@ def run_softmax_stable_with_program_cache(
 @pytest.mark.parametrize("fp32_acc_en", [True, False])
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_softmax_stable_with_program_cache(
-    device, batch_size, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype, use_program_cache
+    device, batch_size, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
 ):
     for _ in range(2):
         run_softmax_stable_with_program_cache(
@@ -230,7 +230,7 @@ def run_softmax_sharded_stable(
 @pytest.mark.parametrize("fp32_acc_en", [True, False])
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_softmax_sharded_stable_with_program_cache(
-    device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype, use_program_cache
+    device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
 ):
     for _ in range(2):
         run_softmax_sharded_stable(

@@ -56,7 +56,6 @@ def test_chunked_prefill_single_user(
     page_params,
     optimizations,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
     is_ci_env,

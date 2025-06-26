@@ -49,7 +49,6 @@ def test_demo_multichip(
     model_location_generator,
     get_tt_cache_path,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     ensure_devices_tg,
     galaxy_type,

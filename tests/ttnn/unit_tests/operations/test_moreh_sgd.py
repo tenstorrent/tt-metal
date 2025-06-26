@@ -207,7 +207,6 @@ def test_moreh_sgd_callback(
     npu_dtype,
     cpu_dtype,
     device,
-    use_program_cache,
 ):
     if nesterov and (momentum <= 0 or dampening != 0):
         pytest.skip()
