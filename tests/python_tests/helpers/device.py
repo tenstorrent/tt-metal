@@ -61,11 +61,8 @@ def collect_results(
     return res_from_L1
 
 
-def run_elf_files(testname, core_loc="0,0", run_brisc=True):
+def run_elf_files(testname, core_loc="0,0"):
     BUILD = "../build"
-
-    if run_brisc:
-        run_elf(f"{BUILD}/shared/brisc.elf", core_loc, risc_id=0)
 
     context = check_context()
     device = context.devices[0]
@@ -89,9 +86,8 @@ def run_elf_files(testname, core_loc="0,0", run_brisc=True):
     TRISC_PROFILER_BARRIER = 0x16AFF4
     write_words_to_device(core_loc, TRISC_PROFILER_BARRIER, [0, 0, 0])
 
-    # Clear soft reset
-    soft_reset &= ~0x7800
-    write_words_to_device(core_loc, RISC_DBG_SOFT_RESET0, soft_reset)
+    # Run BRISC
+    run_elf(f"{BUILD}/shared/brisc.elf", core_loc, risc_id=0)
 
 
 def write_stimuli_to_l1(
