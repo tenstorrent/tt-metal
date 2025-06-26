@@ -68,8 +68,8 @@ npu_layout = ttnn.Layout.TILE
         # (torch.float32, ttnn.float32, ttnn.bfloat4_b),
         # (torch.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b),
         # (torch.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b),
-        # (torch.int, ttnn.uint16, ttnn.int32),
-        (torch.int, ttnn.int32, ttnn.uint16),
+        (torch.int, ttnn.uint16, ttnn.int32),
+        # (torch.int, ttnn.int32, ttnn.uint16),
         # (torch.int, ttnn.uint32, ttnn.uint16),
     ),
 )
