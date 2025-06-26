@@ -73,7 +73,6 @@ void MAIN {
 #else
     constexpr uint32_t cb_x = cb_in;
 #endif
-    constexpr uint32_t cb_reduce_im = tt::CBIndex::c_25;  // reduce intermediate cb for pairwise summation
 
     pack_reconfig_data_format(cb_scaler);
     cb_wait_front(cb_scaler, 2);  // comes from the reader
@@ -144,7 +143,7 @@ void MAIN {
          * means = ttnn.sum(x, 3, True, None, None, 1.0/W) # -> NCH1
          */
 
-        pairwise_reduce_cb(cb_x, cb_scaler, cb_reduce_im, cb_ex, Wt, 4);
+        pairwise_reduce_cb(cb_x, cb_scaler, cb_ex, cb_ex, Wt, 4);
 
         /*
          * x - E[x]
@@ -189,7 +188,7 @@ void MAIN {
             REL();
         }
 
-        pairwise_reduce_cb(cb_xmm2, cb_scaler, cb_reduce_im, cb_ex2, Wt, 4);
+        pairwise_reduce_cb(cb_xmm2, cb_scaler, cb_ex2, cb_ex2, Wt, 4);
 
         if constexpr (FLOAT32_DTYPE) {
             reconfig_data_format(cb_ex2, cb_eps);

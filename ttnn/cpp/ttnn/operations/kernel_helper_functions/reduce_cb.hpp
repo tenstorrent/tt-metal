@@ -43,7 +43,9 @@ void pairwise_reduce_cb(
     constexpr uint32_t onetile = 1;
     // binary_op_init_common(cb_in, cb_scaler, cb_intermediate);
     // init_bcast<ELWMUL, BroadcastType::SCALAR>(cb_in, cb_scaler, cb_intermediate);
-    mul_tiles_bcast_scalar_init_short(cb_in, cb_scaler);
+    // mul_tiles_bcast_scalar_init_short(cb_in, cb_scaler);
+    binary_op_init_common(cb_in, cb_scaler, cb_intermediate);
+    mul_tiles_init(cb_in, cb_scaler);
     reconfig_data_format(cb_in, cb_scaler);
     pack_reconfig_data_format(cb_intermediate);
     for (uint32_t tile = 0; tile < cb_length; tile += num_dst_regs) {
@@ -52,9 +54,9 @@ void pairwise_reduce_cb(
         cb_wait_front(cb_in, blk);
         for (uint32_t wtr = 0; wtr < blk; wtr++) {
             // UNPACK(print_full_tile(tt::CBIndex::c_24, 0, true ));
-            mul_tiles_bcast_scalar(cb_in, cb_scaler, wtr, 0, wtr);
-            LocalCBInterface& local_cb = get_local_cb_interface(tt::CBIndex::c_24);
-            UNPACK(print_full_tile(tt::CBIndex::c_24, 0, true));
+            mul_tiles(cb_in, cb_scaler, wtr, 0, wtr);
+            // LocalCBInterface& local_cb = get_local_cb_interface(tt::CBIndex::c_24);
+            // UNPACK(print_full_tile(cb_scaler, 0, true));
         }
         cb_pop_front(cb_in, blk);
         tile_regs_commit();
@@ -62,6 +64,7 @@ void pairwise_reduce_cb(
         cb_reserve_back(cb_intermediate, blk);
         for (uint32_t wtr = 0; wtr < blk; wtr++) {
             pack_tile(wtr, cb_intermediate);
+            PACK(print_full_tile(tt::CBIndex::c_24, 0, true));
         }
         cb_push_back(cb_intermediate, blk);
         tile_regs_release();
@@ -113,7 +116,7 @@ void pairwise_reduce_cb(
     // TODO change this to a cb
     reconfig_data_format(cb_intermediate, cb_scaler);
     pack_reconfig_data_format(cb_out);
-    reduce_init_delta<false, reduce_type, reduce_dim>(cb_intermediate, cb_scaler, cb_out);
+    reduce_init<reduce_type, reduce_dim>(cb_intermediate, cb_scaler, cb_out);
     tile_regs_acquire();
     cb_wait_front(cb_scaler, 2);
     cb_wait_front(cb_intermediate, 1);
@@ -127,5 +130,5 @@ void pairwise_reduce_cb(
     cb_wait_front(cb_out, onetile);
     // UNPACK(print_full_tile(cb_out, 0, true));
     tile_regs_release();
-    reduce_revert_delta<reduce_dim>(cb_out);
+    reduce_uninit();
 }
