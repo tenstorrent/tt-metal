@@ -351,26 +351,7 @@ def to_torch(
     if mesh_composer:
         return mesh_composer.compose(tensor)
 
-    if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
-        raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
-
-    memory_config = tensor.memory_config()
-    if memory_config.is_sharded() and memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
-        raise RuntimeError("ttnn.to_torch: Shard spec must not be None for sharded tensors")
-
-    if (
-        memory_config.is_sharded()
-        and memory_config.shard_spec is not None
-        and memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL
-    ):
-        tensor = tensor.to_torch()
-    else:
-        if (tensor.layout != ttnn.ROW_MAJOR_LAYOUT) and not (
-            tensor.dtype == ttnn.bfloat8_b or tensor.dtype == ttnn.bfloat4_b
-        ):
-            tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT)
-
-        tensor = tensor.to_torch()
+    tensor = tensor.to_torch()
 
     if torch_rank is not None:
         while len(tensor.shape) > torch_rank:
