@@ -589,11 +589,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Note: tuple is used for ::testing::Combine
 using TilizeUntilizeBigBuffersParams = std::tuple<PhysicalSize, TensorLayoutType, TensorLayoutType, bool, bool>;
 
-class TilizeUntilizeBigBufferTestsFixture : public ::testing::TestWithParam<TilizeUntilizeBigBuffersParams> {};
-
-// Disabled by default, since they take a lot of timne to run. To still run them, use --gtest_also_run_disabled_tests
-TEST_P(TilizeUntilizeBigBufferTestsFixture, DISABLED_TilizeUntilizeBigBuffer) {
-    auto params = GetParam();
+void TilizeUntilizeBigBufferImpl(const TilizeUntilizeBigBuffersParams& params) {
     PhysicalSize shape = std::get<0>(params);
     auto from_layout = std::get<1>(params);
     auto to_layout = std::get<2>(params);
@@ -641,6 +637,22 @@ TEST_P(TilizeUntilizeBigBufferTestsFixture, DISABLED_TilizeUntilizeBigBuffer) {
     run_for_type(bfloat16{});
 }
 
+class TilizeUntilizeBigBufferTestsFixture : public ::testing::TestWithParam<TilizeUntilizeBigBuffersParams> {};
+class TilizeUntilizeBigBufferShortTestsFixture : public ::testing::TestWithParam<TilizeUntilizeBigBuffersParams> {};
+
+// Disabled by default, since they take a lot of timne to run. To still run them, use --gtest_also_run_disabled_tests
+TEST_P(TilizeUntilizeBigBufferTestsFixture, DISABLED_TilizeUntilizeBigBuffer) {
+    auto params = GetParam();
+    TilizeUntilizeBigBufferImpl(params);
+}
+
+// The purpose of this test is to be run always to catch any regressions in tilize/untilize logic even though it doesn't
+// cover all layout conversions. It tests the most important Row-major -> Tiled_NFaces conversion.
+TEST_P(TilizeUntilizeBigBufferShortTestsFixture, TilizeUntilizeBigBuffer) {
+    auto params = GetParam();
+    TilizeUntilizeBigBufferImpl(params);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     TilizeUntilizeBigBufferTests,
     TilizeUntilizeBigBufferTestsFixture,
@@ -650,6 +662,15 @@ INSTANTIATE_TEST_SUITE_P(
             TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
         ::testing::Values(
             TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
-        ::testing::Bool(),  // transpose_within_face  true doesn't work even in reference
-        ::testing::Bool()   // transpose_of_faces     true doesn't work even in reference
-        ));
+        ::testing::Bool(),
+        ::testing::Bool()));
+
+INSTANTIATE_TEST_SUITE_P(
+    TilizeUntilizeBigBufferTests,
+    TilizeUntilizeBigBufferShortTestsFixture,
+    ::testing::Combine(
+        ::testing::Values(PhysicalSize{1ULL << 16, 1ULL << 17}),  // shape
+        ::testing::Values(TensorLayoutType::LIN_ROW_MAJOR),
+        ::testing::Values(TensorLayoutType::TILED_NFACES),
+        ::testing::Values(false),
+        ::testing::Values(false)));
