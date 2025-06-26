@@ -197,6 +197,8 @@ void MetalContext::teardown() {
     }
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
+    cluster_.reset();
+    hal_.reset();
 }
 
 MetalContext& MetalContext::instance() {
@@ -217,10 +219,7 @@ distributed::multihost::DistributedContext& MetalContext::get_distributed_contex
     return *distributed_context_;
 }
 
-MetalContext::~MetalContext() {
-    cluster_.reset();
-    hal_.reset();
-}
+MetalContext::~MetalContext() {}
 
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
 
