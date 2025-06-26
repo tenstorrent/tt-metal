@@ -341,7 +341,8 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     const uint32_t all_core_utilization_count = (Wt + number_of_tiles_per_core - 1) / number_of_tiles_per_core;
     std::cout << "Total number of cores: " << total_number_of_cores
               << ", Number of tiles per core: " << number_of_tiles_per_core
-              << ", All core utilization count: " << all_core_utilization_count << ", Wt: " << Wt << std::endl;
+              << ", All core utilization count: " << all_core_utilization_count << ", Wt: " << Wt
+              << std::endl;  // TODO: Remove
 
     TT_FATAL(
         all_core_utilization_count <= total_number_of_cores,
@@ -466,7 +467,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         tt::tt_metal::CreateCircularBuffer(program, core_range, physical_core_lookup_table_cb_config);
 
     // Semaphores
-    const uint32_t semaphore = CreateSemaphore(program, core_range, 0);  // TODO: change name
+    const uint32_t semaphore = CreateSemaphore(program, core_range, 0);  // TODO: change name as needed
 
     // Kernels
     const std::vector<uint32_t> reader_compile_time_args = {
@@ -499,6 +500,8 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y,
         index_tensor_cb_index,
+        value_tensor_cb_index,
+        value_tensor_is_dram,
         Wt,
         Ht,
         number_of_tiles_per_core,
@@ -509,11 +512,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         "writer_hybrid.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program, writer_kernel_path, core_range, tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
-    // SetRuntimeArgs(
-    //     program,
-    //     writer_kernel_id,
-    //     core_range,
-    //     {value_buffer->address(), all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
+    SetRuntimeArgs(program, writer_kernel_id, core_range, {value_buffer->address()});
 
     const std::vector<uint32_t> compute_compile_time_args = {
         compute_with_storage_grid_size.x,
@@ -540,7 +539,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     //     program,
     //     compute_kernel_id,
     //     core_range,
-    //     {all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
+    //     {});
 
     return {std::move(program), {reader_kernel_id, compute_kernel_id, writer_kernel_id, core_range}};
 }
@@ -557,6 +556,7 @@ void SortProgramFactoryHybrid::override_runtime_arguments(
 
     for (const auto& core_range : cached_program.shared_variables.core_range_set.ranges()) {
         for (const auto& core_coord : core_range) {
+            // TODO: Fill as needed
             // auto& reader_runtime_args =
             //     GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core_coord);
             // reader_runtime_args[0] = input_tensor_buffer->address();

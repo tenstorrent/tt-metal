@@ -10,8 +10,12 @@
 #include "compute_kernel_api/eltwise_binary.h"
 
 #include "debug/dprint.h"
+#include "debug/waypoint.h"
+#include "debug/pause.h"
 
 #include "sort_common.hpp"
+
+#include <cstdint>
 
 namespace NAMESPACE {
 void MAIN {
@@ -27,10 +31,19 @@ void MAIN {
     constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(8);
     constexpr uint32_t input_tensor_transposed_cb_index = get_compile_time_arg_val(9);
     constexpr uint32_t index_tensor_transposed_cb_index = get_compile_time_arg_val(10);
+    constexpr uint32_t value_tensor_cb_index = get_compile_time_arg_val(11);
+    constexpr uint32_t index_tensor_output_cb_index = get_compile_time_arg_val(12);
 
     // Constants
     constexpr uint32_t one_tile = 1;
     const uint16_t core_id = get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
+    const uint16_t global_tile_start = core_id * number_of_tiles_per_core;
+    const uint16_t global_tile_end = global_tile_start + number_of_tiles_per_core;
+
+    const uint16_t number_of_pairs_processed_by_each_core = number_of_tiles_per_core / 2;
+    const uint16_t processing_pair_start = core_id * number_of_pairs_processed_by_each_core;
+    const uint16_t processing_pair_end = processing_pair_start + number_of_pairs_processed_by_each_core;
+
     constexpr uint32_t input_dest_start = 0;
     constexpr uint32_t index_dest_start = 2;
     constexpr uint32_t input_dest_end = 1;
@@ -40,6 +53,7 @@ void MAIN {
     transpose_wh_init(input_tensor_cb_index, input_tensor_transposed_cb_index);
 
     for (uint32_t h = 0; h < Ht; h++) {
+        PAUSE();  // TODO: Remove
         // Create input sequence
         sort_Wt_tiles_row_to_bitonic_sequence(
             input_tensor_cb_index,
@@ -55,89 +69,82 @@ void MAIN {
         cb_wait_front(input_tensor_transposed_cb_index, number_of_tiles_per_core);
         cb_wait_front(index_tensor_transposed_cb_index, number_of_tiles_per_core);
 
-        // Tiles for each core placeholder
-        uint16_t core_holds[number_of_cores_used][number_of_tiles_per_core] = {};
-        for (uint16_t core = 0; core < number_of_cores_used; ++core) {
-            for (uint16_t i = 0; i < number_of_tiles_per_core; ++i) {
-                core_holds[core][i] = core * number_of_tiles_per_core + i;
+        // Sort and merge step of bitonic merge sort
+        uint32_t stages = 0;
+        for (uint32_t i = Wt; i > 1; i >>= 1) {
+            stages++;
+        }
+        for (uint32_t stage = 2; stage <= stages; stage++) {
+            for (uint32_t sub = stage; sub > 0; sub--) {
+                uint32_t sub_dist = 1 << (sub - 1);
+                uint16_t pair_id = 0;
+                for (uint32_t i = 0; i < Wt; i++) {
+                    uint32_t j = i ^ sub_dist;
+                    if (j > i) {
+                        if (pair_id >= processing_pair_start && pair_id < processing_pair_end) {
+                            if (i >= global_tile_start && i < global_tile_end && j >= global_tile_start &&
+                                j < global_tile_end) {
+                                // Local sorting
+
+                                // Determine direction for this comparison block
+                                const bool ascending_block = ((i >> stage) & 1) == 0;
+                                const bool dir = ascending_block == ascending;
+
+                                // Get indexes of tiles to compare
+                                const uint32_t left_tile_id = i - global_tile_start;
+                                const uint32_t right_tile_id = j - global_tile_start;
+                                PAUSE();  // TODO: Remove
+                                tile_regs_acquire();
+
+                                copy_tile_to_dst_init_short_with_dt(
+                                    input_tensor_transposed_cb_index, index_tensor_transposed_cb_index);
+                                copy_tile(index_tensor_transposed_cb_index, left_tile_id, index_dest_start);
+                                copy_tile(index_tensor_transposed_cb_index, right_tile_id, index_dest_end);
+
+                                copy_tile_to_dst_init_short_with_dt(
+                                    index_tensor_transposed_cb_index, input_tensor_transposed_cb_index);
+                                copy_tile(input_tensor_transposed_cb_index, left_tile_id, input_dest_start);
+                                copy_tile(input_tensor_transposed_cb_index, right_tile_id, input_dest_end);
+
+                                ckernel::topk_local_sort(0, (int)dir, 5);
+
+                                tile_regs_commit();
+                                tile_regs_wait();
+
+                                pack_reconfig_data_format(input_tensor_transposed_cb_index);
+                                pack_tile<true>(input_dest_start, input_tensor_transposed_cb_index, left_tile_id);
+                                pack_tile<true>(input_dest_end, input_tensor_transposed_cb_index, right_tile_id);
+
+                                pack_reconfig_data_format(index_tensor_transposed_cb_index);
+                                pack_tile<true>(index_dest_start, index_tensor_transposed_cb_index, left_tile_id);
+                                pack_tile<true>(index_dest_end, index_tensor_transposed_cb_index, right_tile_id);
+
+                                tile_regs_release();
+                            } else {
+                                // TODO: Swapping tiles
+                            }
+                        }
+                        pair_id++;
+                    }
+                }
             }
         }
 
-        // Calculate number of stages for bitonic sort
-        uint16_t stages = 0;
-        for (uint16_t i = Wt; i > 1; i >>= 1) {
-            stages++;
-        }
-        // Sort tiles for each core
-        for (uint16_t stage = 2; stage <= stages; ++stage) {
-            // DPRINT << "Stage " << stage << ":" << ENDL();
-            for (uint16_t sub = stage; sub > 0; --sub) {
-                const uint16_t sub_dist = 1 << (sub - 1);
-                // DPRINT << " Sub-stage " << sub << " (compare distance = " << sub_dist << "):" << ENDL();
+        cb_reserve_back(input_tensor_transposed_cb_index, number_of_tiles_per_core);
+        cb_reserve_back(index_tensor_transposed_cb_index, number_of_tiles_per_core);
 
-                std::array<bool, Wt> processed{};
-                for (uint16_t elem = 0; elem < Wt; ++elem) {
-                    if (processed[elem]) {
-                        continue;
-                    }
+        cb_pop_front(input_tensor_transposed_cb_index, number_of_tiles_per_core);
+        cb_pop_front(index_tensor_transposed_cb_index, number_of_tiles_per_core);
 
-                    uint16_t partner = elem ^ sub_dist;
-                    if (partner >= Wt) {
-                        continue;
-                    }
+        cb_push_back(input_tensor_transposed_cb_index, number_of_tiles_per_core);
+        cb_push_back(index_tensor_transposed_cb_index, number_of_tiles_per_core);
 
-                    processed[elem] = processed[partner] = true;
-                    const uint16_t tile_a = std::min(elem, partner);
-                    const uint16_t tile_b = std::max(elem, partner);
+        // Values tensor
+        transpose_and_pack(input_tensor_transposed_cb_index, value_tensor_cb_index, number_of_tiles_per_core);
 
-                    // Lookup cores that hold tile_a and tile_b
-                    int core_a = -1, core_b = -1;
-                    for (uint16_t core = 0; core < number_of_cores_used; ++core) {
-                        for (uint16_t i = 0; i < number_of_tiles_per_core; ++i) {
-                            if (core_holds[core][i] == tile_a) {
-                                core_a = core;
-                            }
-                            if (core_holds[core][i] == tile_b) {
-                                core_b = core;
-                            }
-                        }  // i loop
-                    }  // core loop
-
-                    const bool is_ascending_block = ((tile_a >> stage) & 1) == 0;
-                    const bool sort_direction = (is_ascending_block == ascending);
-
-                    if (core_id == core_a || core_id == core_b) {
-                        const uint16_t this_core = core_id;
-                        const uint16_t other_core = (core_id == core_a) ? core_b : core_a;
-
-                        bool has_a = false, has_b = false;
-                        for (uint16_t i = 0; i < number_of_tiles_per_core; ++i) {
-                            if (core_holds[this_core][i] == tile_a) {
-                                has_a = true;
-                            }
-                            if (core_holds[this_core][i] == tile_b) {
-                                has_b = true;
-                            }
-                        }  // i loop
-
-                        // DPRINT << "  Core " << this_core << " : Compare tile " << tile_a << " with tile " << tile_b
-                        //        << " — " << (sort_direction ? "ASC" : "DESC") << ENDL();
-
-                        if (has_a && has_b) {
-                            // DPRINT << "   L1-local compare of tiles " << tile_a << " and " << tile_b << ENDL();
-                            // TODO: SORTING LOCAL Tiles
-                        } else {
-                            const uint16_t local_tile = has_a ? tile_a : tile_b;
-                            const uint16_t remote_tile = has_a ? tile_b : tile_a;
-                            // DPRINT << "   Indirect step with core " << other_core << " for tiles: " << local_tile
-                            //        << " (L1), " << remote_tile << " (remote)" << ENDL();
-                        }
-                    }  // if core_id == core_a || core_id == core_b
-                }  // elem loop
-            }  // sub loop
-        }  // stage loop
-
+        // Indexes tensor
+        transpose_and_pack(index_tensor_transposed_cb_index, index_tensor_output_cb_index, number_of_tiles_per_core);
     }  // h loop
-    DPRINT << "COMPUTE: Finished reading and sorting tiles." << ENDL();
+    DPRINT << "COMPUTE: Finished reading and sorting tiles." << ENDL();  // TODO: Remove
 }  // MAIN
 }  // namespace NAMESPACE

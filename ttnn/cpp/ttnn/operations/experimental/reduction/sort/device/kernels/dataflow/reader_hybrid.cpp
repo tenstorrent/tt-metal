@@ -89,7 +89,6 @@ void kernel_main() {
     for (uint32_t h = 0; h < Ht; h++) {
         // Read input value data
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
-            DPRINT << "READER: Reading tile: " << w << ENDL();
             cb_reserve_back(input_tensor_cb_index, one_tile);
             const uint32_t l1_write_addr = get_write_ptr(input_tensor_cb_index);
             const uint32_t tile_offset = h * Wt + core_id * number_of_tiles_per_core + w;
@@ -171,8 +170,12 @@ void kernel_main() {
                         } else {
                             const uint16_t local_tile = has_a ? tile_a : tile_b;
                             const uint16_t remote_tile = has_a ? tile_b : tile_a;
+                            const auto [remote_core_x, remote_core_y] =
+                                get_core_physical_coordinates(other_core, physical_core_lookup_table_cb_index);
                             // DPRINT << "   Indirect step with core " << other_core << " for tiles: " << local_tile
                             //    << " (L1), " << remote_tile << " (remote)" << ENDL();
+
+                            // TODO: Implement indirect step with remote core - Exchanging tiles
                         }
                     }  // if core_id == core_a || core_id == core_b
                 }  // elem loop
@@ -181,6 +184,16 @@ void kernel_main() {
 
             }  // sub loop
         }  // stage loop
+
+        // Write output index data
+        for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
+            cb_wait_front(index_tensor_output_cb_index, one_tile);
+            const uint32_t l1_write_addr_index = get_read_ptr(index_tensor_output_cb_index);
+            const uint32_t tile_offset = h * Wt + core_id * number_of_tiles_per_core + w;
+            noc_async_write_tile(tile_offset, index_tensor_output_accessor, l1_write_addr_index);
+            noc_async_write_barrier();
+            cb_pop_front(index_tensor_output_cb_index, one_tile);
+        }  // Wt loop
     }  // h loop
     DPRINT << "READER: Finished reading and sorting tiles." << ENDL();
 }
