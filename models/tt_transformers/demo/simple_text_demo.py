@@ -40,6 +40,7 @@ class TokenAccuracy:
         self.input_prompt = self.reference_tokens[0, :split_point]
         self.gt_tokens = self.reference_tokens[0, split_point:]
         self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
+        self.maxindex = len(self.gt_tokens) -1
 
     def prepare_ref_tokens(self, tokenizer):
         text_data = tokenizer.decode(self.input_prompt.tolist())
@@ -48,7 +49,7 @@ class TokenAccuracy:
     def collect_predicted_tokens(self, tokens):
         self.store_predicted_tokens.append(tokens)
         self.gt_pos += 1
-        return self.gt_tokens[min(self.gt_pos,len(self.gt_tokens))].unsqueeze(-1).unsqueeze(-1)
+        return self.gt_tokens[min(self.gt_pos, self.maxindex)].unsqueeze(-1).unsqueeze(-1)
 
     def compute_accuracy(self):
         count = 0
@@ -798,7 +799,7 @@ def test_demo_text(
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             if token_accuracy:
-                out_tok = token_acc.collect_predicted_tokens(out_tok.item())
+                out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
             # Run decode forward
             logits = generator.decode_forward_text(
