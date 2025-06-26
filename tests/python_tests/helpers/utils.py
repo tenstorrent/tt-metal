@@ -7,6 +7,7 @@ from collections import namedtuple
 import numpy as np
 import torch
 
+from .format_arg_mapping import format_dict
 from .format_config import DataFormat, FormatConfig
 
 torch.set_printoptions(linewidth=500, sci_mode=False, precision=2, threshold=10000)
@@ -177,6 +178,9 @@ def passed_test(golden_tensor, res_tensor, output_data_format=DataFormat.Float16
             raise ValueError(f"Unsupported output data format: {output_data_format}")
 
     tolerance = get_tolerance(output_data_format)
+
+    golden_tensor = golden_tensor.type(format_dict[output_data_format])
+    res_tensor = res_tensor.type(format_dict[output_data_format])
 
     is_close = torch.isclose(
         golden_tensor, res_tensor, rtol=tolerance.rtol, atol=tolerance.atol

@@ -19,11 +19,6 @@ uint32_t face_size                = 128;
 uint32_t tile_size                = 16 * 16 * 4;
 const ckernel::DstSync sync       = ckernel::DstSync::SyncHalf;
 
-// Buffers
-volatile uint32_t* const buffer_A    = reinterpret_cast<volatile uint32_t*>(0x1a000);
-volatile uint32_t* const buffer_B    = reinterpret_cast<volatile uint32_t*>(0x1b000);
-volatile uint32_t* const buffer_Dest = reinterpret_cast<volatile uint32_t*>(0x1c000);
-
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_AB_matmul.h"
@@ -33,7 +28,7 @@ void run_kernel()
 {
     _llk_unpack_AB_matmul_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(UNPACK_A_IN, UNPACK_B_IN, UNPACK_A_OUT, UNPACK_B_OUT);
     _llk_unpack_AB_matmul_init_<>();
-    _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A), L1_ADDRESS(buffer_B), 0, 0, face_size, face_size);
+    _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]), 0, 0, face_size, face_size);
 }
 
 #endif
@@ -64,8 +59,6 @@ void run_kernel()
 
 void run_kernel()
 {
-    std::fill(buffer_Dest, buffer_Dest + tile_size, 0xdeadbeef);
-
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, false>(PACK_IN, PACK_OUT, tile_size);
     _llk_pack_dest_init_<sync, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor>();
@@ -76,7 +69,7 @@ void run_kernel()
     _llk_pack_untilize_init_<ct_dim>(PACK_OUT, FACE_R_DIM, 4);
 #endif
     _llk_packer_wait_for_math_done_();
-    _llk_pack_untilize_<ct_dim>(L1_ADDRESS(buffer_Dest), PACK_OUT, FACE_R_DIM, 4, 0);
+    _llk_pack_untilize_<ct_dim>(L1_ADDRESS(buffer_Res[0]), PACK_OUT, FACE_R_DIM, 4, 0);
     _llk_pack_dest_section_done_<sync, is_fp32_dest_acc_en>();
 }
 

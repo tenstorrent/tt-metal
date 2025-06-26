@@ -31,13 +31,10 @@ const bool row_pool                             = false;
 
 void run_kernel()
 {
-    volatile uint32_t* const buffer_A = reinterpret_cast<volatile uint32_t*>(0x1a000);
-    volatile uint32_t* const buffer_B = reinterpret_cast<volatile uint32_t*>(0x1b000);
-
     _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(
         UNPACK_A_IN, UNPACK_B_IN, UNPACK_A_OUT, UNPACK_B_OUT, FACE_R_DIM, within_face_16x16_transpose);
     _llk_unpack_AB_init_<>(FACE_R_DIM, 4, false, within_face_16x16_transpose, 0);
-    _llk_unpack_AB_<>(L1_ADDRESS(buffer_A), L1_ADDRESS(buffer_B), within_face_16x16_transpose);
+    _llk_unpack_AB_<>(L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]), within_face_16x16_transpose);
 }
 
 #endif
@@ -70,10 +67,6 @@ void run_kernel()
 
 void run_kernel()
 {
-    volatile uint32_t* const buffer_Dest = reinterpret_cast<volatile uint32_t*>(0x1c000);
-
-    std::fill(buffer_Dest, buffer_Dest + 16 * 16 * 4, 0xdeadbeef);
-
     _llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false>(PACK_OUT);
 
 #ifdef ARCH_BLACKHOLE
@@ -91,7 +84,7 @@ void run_kernel()
 #endif
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(0, L1_ADDRESS(buffer_Dest));
+    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(0, L1_ADDRESS(buffer_Res[0]));
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     _llk_pack_reduce_mask_clear_();

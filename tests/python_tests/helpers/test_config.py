@@ -3,13 +3,19 @@
 
 from enum import Enum
 
+from ttexalens.tt_exalens_lib import (
+    read_word_from_device,
+)
+
 from .format_arg_mapping import (
     ApproximationMode,
     DestAccumulation,
+    L1BufferLocations,
     MathFidelity,
     MathOperation,
     ReduceDimension,
     ReducePool,
+    format_tile_sizes,
 )
 from .format_config import FormatConfig, InputOutputFormat
 
@@ -127,28 +133,64 @@ def generate_build_header(
                 f"#define POOL_TYPE {test_config.get('pool_type', ReducePool.No).value}"
             )
 
+    tile_cnt = test_config.get("tile_cnt", 1)
+
     header_content.append("")
     # Multi-tile test configuration
     header_content.append("// Multi-tile test configuration")
-    header_content.append(f"#define TILE_CNT {test_config.get('tile_cnt', 1)}")
+    header_content.append(f"#define TILE_CNT {tile_cnt}")
 
-    # todo: refactor multiple tiles test to remove this
-    # Multiple tiles test specific configuration
-    if test_config.get("testname") == "multiple_tiles_eltwise_test":
-        header_content.extend(
-            [
-                "",
-                "// Multiple tiles test configuration",
-                "#define MULTIPLE_OPS",
-                f"#define KERN_CNT {test_config.get('kern_cnt', 1)}",
-            ]
-        )
-        pack_addr_cnt = test_config.get("pack_addr_cnt")
-        pack_addrs = test_config.get("pack_addrs")
-        if pack_addr_cnt is not None:
-            header_content.append(f"#define PACK_ADDR_CNT {pack_addr_cnt}")
-        if pack_addrs is not None:
-            header_content.append(f"#define PACK_ADDRS {pack_addrs}")
+    # Unpack an result buffer addresses arrrays generations
+    buffer_A_address = read_word_from_device("0,0", L1BufferLocations.srcA.value)
+    buffer_B_address = read_word_from_device("0,0", L1BufferLocations.srcB.value)
+    result_buffer_address = read_word_from_device("0,0", L1BufferLocations.Result.value)
+
+    buffer_A_array = []
+    buffer_B_array = []
+    buffer_res_array = []
+
+    if formats is not None:
+        for i in range(tile_cnt):
+            buffer_A_array.append(
+                buffer_A_address + i * format_tile_sizes[formats.input_format]
+            )
+            buffer_B_array.append(
+                buffer_B_address + i * format_tile_sizes[formats.input_format]
+            )
+            buffer_res_array.append(
+                result_buffer_address + i * format_tile_sizes[formats.output_format]
+            )
+
+    buffer_A_str = ", ".join(
+        f"reinterpret_cast<volatile uint32_t*>({hex(addr)})" for addr in buffer_A_array
+    )
+    buffer_B_str = ", ".join(
+        f"reinterpret_cast<volatile uint32_t*>({hex(addr)})" for addr in buffer_B_array
+    )
+    buffer_res_str = ", ".join(
+        f"reinterpret_cast<volatile uint32_t*>({hex(addr)})"
+        for addr in buffer_res_array
+    )
+    header_content.append(
+        "#if defined(LLK_TRISC_UNPACK) && defined(TEST_KERNEL)\n"
+        "volatile uint32_t* buffer_A[TILE_CNT] = {" + buffer_A_str + "}; \n"
+        "volatile uint32_t* buffer_B[TILE_CNT] = {" + buffer_B_str + "}; \n"
+        "#endif\n"
+        "#if defined(LLK_TRISC_PACK) && defined(TEST_KERNEL)\n"
+        "volatile uint32_t* buffer_Res[TILE_CNT] = {" + buffer_res_str + "}; \n"
+        "#endif\n"
+    )
+
+    input_dimensions = test_config.get("input_dimensions", [32, 32])
+    block_ct_dim = input_dimensions[1] // 32
+    block_rt_dim = input_dimensions[0] // 32
+
+    header_content.append(
+        "#if defined(TEST_KERNEL)\n"
+        f"constexpr uint32_t BLOCK_CT_DIM = {block_ct_dim}; \n"
+        f"constexpr uint32_t BLOCK_RT_DIM = {block_rt_dim}; \n"
+        "#endif\n"
+    )
 
     if perf_run_type := test_config.get("perf_run_type"):
         header_content.append("")

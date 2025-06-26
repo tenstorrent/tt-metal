@@ -60,6 +60,8 @@ OPTIONS_COMPILE += $(INCLUDES)
 
 TO_UPPER = $(shell echo $(1) | tr '[:lower:]' '[:upper:]')
 
+TEST_KERNEL_FLAG := -DTEST_KERNEL
+
 # =========================
 # Targets
 # =========================
@@ -102,7 +104,7 @@ $(SHARED_DIR)/brisc.elf: $(SHARED_DIR)/tmu-crt0.o $(SHARED_DIR)/brisc.o | $(SHAR
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(CHIP_ARCH).ld -T$(LINKER_SCRIPTS)/brisc.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
 
 $(OBJ_DIR)/kernel_%.o: sources/$(testname).cpp | $(OBJ_DIR)
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -MMD -MP -MF $(@:.o=.d) -DLLK_TRISC_$(call TO_UPPER, $*) -c -o $@ $<
+	$(GXX) $(OPTIONS_ALL)  $(TEST_KERNEL_FLAG) $(OPTIONS_COMPILE) -MMD -MP -MF $(@:.o=.d) -DLLK_TRISC_$(call TO_UPPER, $*) -c -o $@ $<
 
 # compiling main for every TRISC core
 $(SHARED_DIR)/main_%.o: $(RISCV_SOURCES)/trisc.cpp | $(SHARED_DIR)

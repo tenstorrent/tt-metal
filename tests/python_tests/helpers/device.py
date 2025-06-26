@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import inspect
 import time
 
 from ttexalens.tt_exalens_lib import (
@@ -14,7 +13,12 @@ from ttexalens.tt_exalens_lib import (
     write_words_to_device,
 )
 
-from .format_arg_mapping import DestAccumulation, Mailbox
+from .format_arg_mapping import (
+    DestAccumulation,
+    L1BufferLocations,
+    Mailbox,
+    format_tile_sizes,
+)
 from .format_config import DataFormat, FormatConfig
 from .pack import (
     pack_bfp8_b,
@@ -34,26 +38,26 @@ from .unpack import (
     unpack_fp32,
     unpack_int8,
     unpack_int32,
+    unpack_res_tiles,
     unpack_uint8,
     unpack_uint16,
     unpack_uint32,
 )
-from .utils import calculate_read_byte_count
 
 MAX_READ_BYTE_SIZE_16BIT = 2048
 
 
 def collect_results(
     formats: FormatConfig,
-    tensor_size: int,
+    tile_count: int,
     address: int = 0x1C000,
     core_loc: str = "0,0",
     sfpu: bool = False,
 ):
 
-    read_bytes_cnt = calculate_read_byte_count(formats, tensor_size, sfpu)
+    read_bytes_cnt = format_tile_sizes[formats.output_format] * tile_count
     read_data = read_from_device(core_loc, address, num_bytes=read_bytes_cnt)
-    res_from_L1 = get_result_from_device(formats, read_data, sfpu)
+    res_from_L1 = unpack_res_tiles(read_data, formats, tile_count=tile_count, sfpu=sfpu)
     return res_from_L1
 
 
@@ -96,19 +100,35 @@ def write_stimuli_to_l1(
     stimuli_A_format,
     stimuli_B_format,
     core_loc="0,0",
-    tile_cnt=1,
+    tile_count=1,
 ):
 
-    BUFFER_SIZE = 4096
-    TILE_SIZE = 1024
+    TILE_ELEMENTS = 1024
 
+    TILE_SIZE_A = format_tile_sizes.get(stimuli_A_format, 2048)
+    TILE_SIZE_B = format_tile_sizes.get(stimuli_A_format, 2048)
+
+    # beginning addresses of srcA, srcB and result buffers in L1
     buffer_A_address = 0x1A000
-    buffer_B_address = 0x1A000 + BUFFER_SIZE * tile_cnt
+    buffer_B_address = 0x1A000 + TILE_SIZE_A * tile_count
+    result_buffer_address = buffer_B_address + TILE_SIZE_B * tile_count
 
-    for i in range(tile_cnt):
+    write_to_device(
+        core_loc, L1BufferLocations.srcA.value, buffer_A_address.to_bytes(4, "little")
+    )
+    write_to_device(
+        core_loc, L1BufferLocations.srcB.value, buffer_B_address.to_bytes(4, "little")
+    )
+    write_to_device(
+        core_loc,
+        L1BufferLocations.Result.value,
+        result_buffer_address.to_bytes(4, "little"),
+    )
 
-        start_index = TILE_SIZE * i
-        end_index = start_index + TILE_SIZE
+    for i in range(tile_count):
+
+        start_index = TILE_ELEMENTS * i
+        end_index = start_index + TILE_ELEMENTS
 
         # if end_index > len(buffer_A) or end_index > len(buffer_B):
         #     raise IndexError("Buffer access out of bounds")
@@ -134,8 +154,10 @@ def write_stimuli_to_l1(
         write_to_device(core_loc, buffer_A_address, pack_function_A(buffer_A_tile))
         write_to_device(core_loc, buffer_B_address, pack_function_B(buffer_B_tile))
 
-        buffer_A_address += BUFFER_SIZE
-        buffer_B_address += BUFFER_SIZE
+        buffer_A_address += TILE_SIZE_A
+        buffer_B_address += TILE_SIZE_B
+
+    return result_buffer_address  # return address where result will be stored
 
 
 def get_result_from_device(

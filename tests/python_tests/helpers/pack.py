@@ -11,20 +11,22 @@ def pack_bfp16(torch_tensor):
     return array.array(
         "B",
         b"".join(
-            struct.pack("<f", value)[2:] for value in torch_tensor
-        ),  # Take high 2 bytes (MSBs)
+            struct.pack("<f", value.item())[2:] for value in torch_tensor.view(-1)
+        ),
     ).tolist()
 
 
 def pack_fp16(torch_tensor):
     return array.array(
-        "B", b"".join(struct.pack("<e", value) for value in torch_tensor)
+        "B",
+        b"".join(struct.pack("<e", value.item()) for value in torch_tensor.view(-1)),
     ).tolist()
 
 
 def pack_fp32(torch_tensor):
     return array.array(
-        "B", b"".join(struct.pack("<f", value) for value in torch_tensor)
+        "B",
+        b"".join(struct.pack("<f", value.item()) for value in torch_tensor.view(-1)),
     ).tolist()
 
 
