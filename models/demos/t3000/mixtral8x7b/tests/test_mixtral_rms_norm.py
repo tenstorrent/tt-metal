@@ -12,7 +12,7 @@ from models.utility_functions import comp_allclose, comp_pcc
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
-def test_mixtral_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+def test_mixtral_rms_norm_inference(t3k_mesh_device, reset_seeds):
     dtype = ttnn.bfloat16
 
     model_args = TtModelArgs(t3k_mesh_device)

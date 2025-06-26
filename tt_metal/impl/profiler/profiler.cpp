@@ -55,7 +55,8 @@ std::vector<uint32_t> read_control_buffer_from_core(
     std::vector<uint32_t> control_buffer;
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active()) {
+    if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active() &&
+        !isGalaxyMMIODevice(device)) {
         if (auto mesh_device = device->get_mesh_device()) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
@@ -94,7 +95,8 @@ void write_control_buffer_to_core(
     const std::vector<uint32_t>& control_buffer) {
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active()) {
+    if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active() &&
+        !isGalaxyMMIODevice(device)) {
         if (auto mesh_device = device->get_mesh_device()) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
@@ -118,8 +120,8 @@ void write_control_buffer_to_core(
     }
 }
 
-bool useSlowDispatchForReading(ProfilerDumpState state) {
-    return state == ProfilerDumpState::FORCE_UMD_READ || onlyProfileDispatchCores(state);
+bool useSlowDispatchForReading(const IDevice* device, ProfilerDumpState state) {
+    return state == ProfilerDumpState::FORCE_UMD_READ || onlyProfileDispatchCores(state) || isGalaxyMMIODevice(device);
 }
 
 void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
@@ -769,6 +771,12 @@ void DeviceProfiler::logNocTracePacketDataToJson(
                 {"timestamp", timestamp},
             };
 
+            // For scatter write operations, include additional scatter information
+            if (ev_md.noc_xfer_type == EMD::NocEventType::FABRIC_UNICAST_SCATTER_WRITE) {
+                data["scatter_address_index"] = fabric_noc_event.mcast_end_dst_x;
+                data["scatter_total_addresses"] = fabric_noc_event.mcast_end_dst_y;
+            }
+
             // handle dst coordinates correctly for different NocEventType
             if (KernelProfilerNocEventMetadata::isFabricUnicastEventType(ev_md.noc_xfer_type)) {
                 auto phys_coord =
@@ -970,9 +978,7 @@ void DeviceProfiler::serializeJsonNocTraces(
                 modified_write_event["dx"] = fabric_event.at("dx").get<int>();
                 modified_write_event["dy"] = fabric_event.at("dy").get<int>();
             } else {
-                log_error(
-                    tt::LogMetal,
-                    "[profiler noc tracing] Noc multicasts in fabric events are not supported!");
+                log_error(tt::LogMetal, "[profiler noc tracing] Noc multicasts in fabric events are not supported!");
                 return std::nullopt;
             }
 
@@ -1181,7 +1187,7 @@ void DeviceProfiler::dumpResults(
         }
 
         if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-            if (useSlowDispatchForReading(state)) {
+            if (useSlowDispatchForReading(device, state)) {
                 issueSlowDispatchReadFromProfilerBuffer(device);
             } else {
                 issueFastDispatchReadFromProfilerBuffer(device);
@@ -1228,7 +1234,7 @@ void DeviceProfiler::dumpResults(
 
                 std::vector<uint32_t> core_l1_data_buffer;
                 if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-                    if (useSlowDispatchForReading(state)) {
+                    if (useSlowDispatchForReading(device, state)) {
                         core_l1_data_buffer = issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
                     } else {
                         core_l1_data_buffer = issueFastDispatchReadFromL1DataBuffer(device, worker_core);
@@ -1563,6 +1569,10 @@ bool getDeviceProfilerState() { return tt::tt_metal::MetalContext::instance().rt
 bool onlyProfileDispatchCores(ProfilerDumpState state) {
     return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
            state == ProfilerDumpState::ONLY_DISPATCH_CORES;
+}
+
+bool isGalaxyMMIODevice(const IDevice* device) {
+    return tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device->is_mmio_capable();
 }
 
 }  // namespace tt_metal

@@ -1563,10 +1563,18 @@ bool ControlPlane::is_intermesh_enabled() const {
     if (not tt_metal::MetalContext::instance().hal().intermesh_eth_links_enabled()) {
         return false;
     }
-    std::vector<uint32_t> config_data(1, 0);
+
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto first_chip_id = *(cluster.all_pci_chip_ids().begin());
-    auto first_eth_core = cluster.get_soc_desc(first_chip_id).logical_eth_core_to_chan_map.begin()->first;
+
+    // Check if there are any ethernet cores available on the first chip
+    const auto& soc_desc = cluster.get_soc_desc(first_chip_id);
+    if (soc_desc.logical_eth_core_to_chan_map.empty()) {
+        return false;
+    }
+
+    std::vector<uint32_t> config_data(1, 0);
+    auto first_eth_core = soc_desc.logical_eth_core_to_chan_map.begin()->first;
     tt_cxy_pair virtual_eth_core(
         first_chip_id,
         cluster.get_virtual_coordinate_from_logical_coordinates(first_chip_id, first_eth_core, CoreType::ETH));
@@ -1626,6 +1634,12 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
     std::unordered_set<CoreCoord> active_ethernet_cores;
     const auto& cluster_desc = cluster.get_cluster_desc();
     const auto& soc_desc = cluster.get_soc_desc(chip_id);
+
+    // Check if there are any ethernet cores available on this chip
+    if (soc_desc.logical_eth_core_to_chan_map.empty()) {
+        return active_ethernet_cores;  // Return empty set if no ethernet cores
+    }
+
     if (cluster.arch() == ARCH::BLACKHOLE) {
         // Can't just use `get_ethernet_cores_grouped_by_connected_chips` because there are some active ethernet cores
         // without links. Only risc1 on these cores is available for Metal and should not be classified as idle
@@ -1692,6 +1706,7 @@ std::unordered_set<CoreCoord> ControlPlane::get_inactive_ethernet_cores(chip_id_
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
     std::unordered_set<CoreCoord> inactive_ethernet_cores;
+
     for (const auto& [eth_core, chan] : cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
         if (active_ethernet_cores.find(eth_core) == active_ethernet_cores.end()) {
             inactive_ethernet_cores.insert(eth_core);

@@ -360,7 +360,6 @@ def test_LlamaModel_demo(
     num_samples,
     perplexity_score,
     llama_version,
-    use_program_cache,
 ):
     logger.info("Running LlamaModel perplexity test")
     ## Get model config

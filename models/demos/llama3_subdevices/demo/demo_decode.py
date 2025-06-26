@@ -37,7 +37,7 @@ TSU_PERF_DROP_LIMIT_PERCENT = 10
 TSU_THRESHOLDS = {
     "4U": {1: {"min": 390, "max": 448}, 10: {"min": 230, "max": 253}, 80: {"min": 52, "max": 56}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
+    "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 62, "max": 66}},
 }
 
 
@@ -750,7 +750,6 @@ def test_llama_demo(
     start_pos,
     optimizations,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     reset_seeds,
     request,

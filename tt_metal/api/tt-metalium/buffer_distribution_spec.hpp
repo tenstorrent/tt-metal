@@ -12,6 +12,11 @@
 
 namespace tt::tt_metal {
 
+namespace detail {
+UncompressedBufferPageMapping compute_page_mapping(
+    const Shape& tensor_shape, const Shape& shard_shape, const std::vector<CoreCoord>& cores);
+}
+
 class BufferDistributionSpec {
 public:
     static BufferDistributionSpec from_shard_spec(
@@ -47,7 +52,9 @@ public:
     };
     std::pair<CoreGroup, CoreGroup> get_core_groups_by_num_shards() const;
 
-    UncompressedBufferPageMapping compute_page_mapping() const;
+    UncompressedBufferPageMapping compute_page_mapping() const {
+        return detail::compute_page_mapping(tensor_shape_in_pages_, shard_shape_in_pages_, cores_);
+    }
 
 private:
     tt::tt_metal::Shape tensor_shape_in_pages_;
