@@ -70,16 +70,17 @@ void kernel_main() {
         .bank_base_address = output_tensor_buffer_addr,
         .page_size = value_tensor_tile_size_bytes,
         .data_format = value_tensor_data_format};
-
+    DPRINT << "WRITER: Starting" << ENDL();  // TODO: remove
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
-            // DPRINT << "WRITER: Generating index tile: " << w << ENDL(); // TODO: Remove
+            DPRINT << "WRITER: Generating index tile: " << w << ENDL();  // TODO: Remove
             generate_index_tile(index_tensor_cb_index, core_id * number_of_tiles_per_core + w);
             // PAUSE(); // TODO: Remove
         }  // w loop
         // Write value tensor to DRAM
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
             cb_wait_front(value_tensor_cb_index, one_tile);
+            DPRINT << "WRITER: Writing tile: " << w << " at h: " << h << ENDL();  // TODO: remove
             const uint32_t l1_write_addr_val = get_read_ptr(value_tensor_cb_index);
             const uint32_t tile_offset = h * Wt + core_id * number_of_tiles_per_core + w;
             noc_async_write_tile(tile_offset, output_tensor_accessor, l1_write_addr_val);
