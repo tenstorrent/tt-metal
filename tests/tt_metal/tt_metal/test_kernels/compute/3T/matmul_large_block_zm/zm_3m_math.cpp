@@ -10,7 +10,7 @@
 namespace NAMESPACE {
 
 inline void tilize_activation(uint32_t in0_subblock_h, uint32_t in0_block_w, uint32_t in0_num_subblocks) {
-    llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, false, BroadcastType::NONE>();
+    llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>();
     for (uint32_t in0_subblock = 0U; in0_subblock < in0_num_subblocks; in0_subblock++) {
         for (uint32_t i = 0U; i < in0_subblock_h; i++) {
             for (uint32_t j = 0U; j < in0_block_w; j++) {
@@ -23,7 +23,7 @@ inline void tilize_activation(uint32_t in0_subblock_h, uint32_t in0_block_w, uin
 }
 
 inline void reblock_and_untilize_output(uint32_t out_subblock_h, uint32_t out_block_w) {
-    llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, false, BroadcastType::NONE>();
+    llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>();
 
     for (uint32_t i = 0; i < out_subblock_h; i++) {
         for (int j = 0; j < 2; j++) {
@@ -88,7 +88,7 @@ void math_main() {
             for (uint32_t in1_subblock = 0U; in1_subblock < in1_num_subblocks; in1_subblock++) {
                 llk_math_wait_for_dest_available();
                 if (enable_reload) {
-                    llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, false, BroadcastType::NONE>();
+                    llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>();
                     for (uint32_t i = 0U; i < out_subblock_num_tiles; i++) {
                         llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(i);
                     }
