@@ -129,7 +129,7 @@ def run_argmax(
     )
 
     op_output_tensor, e2e_perf = profile_ttnn_call(
-        ttnn.argmax, input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config
+        device, ttnn.argmax, input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config
     )
     output_tensor = ttnn.to_torch(op_output_tensor)
     expected_pcc = 0.999

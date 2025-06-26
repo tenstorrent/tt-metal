@@ -141,7 +141,7 @@ def run(
     )
 
     output_tensor, e2e_perf = profile_ttnn_call(
-        ttnn.prod_bw, grad_tensor, input_tensor_a, dim=dim, memory_config=output_memory_config
+        device, ttnn.prod_bw, grad_tensor, input_tensor_a, dim=dim, memory_config=output_memory_config
     )
     output_tensor = ttnn.to_torch(output_tensor[0])
 

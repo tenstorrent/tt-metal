@@ -34,7 +34,7 @@ def run_topk(device, params):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    op_output_tensor, e2e_perf = profile_ttnn_call(ttnn.topk, input_tensor, k)
+    op_output_tensor, e2e_perf = profile_ttnn_call(device, ttnn.topk, input_tensor, k)
     output_tensor = ttnn.to_torch(op_output_tensor)
     expected_pcc = 0.999
     tensors = [input_tensor, op_output_tensor]

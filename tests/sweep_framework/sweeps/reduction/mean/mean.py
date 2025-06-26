@@ -119,7 +119,7 @@ def run(
     )
 
     op_output_tensor, e2e_perf = profile_ttnn_call(
-        ttnn.mean, input_tensor_a, dim=dim, memory_config=output_memory_config
+        device, ttnn.mean, input_tensor_a, dim=dim, memory_config=output_memory_config
     )
     output_tensor = ttnn.to_torch(op_output_tensor)
     expected_pcc = 0.999
