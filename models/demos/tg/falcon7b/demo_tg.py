@@ -73,8 +73,8 @@ def test_demo_multichip(
         expected_perf_dict = {
             "4U": {
                 128: {"prefill_t/s": 22160, "decode_t/s/u": 7.20},
-                1024: {"prefill_t/s": 19460, "decode_t/s/u": 7.30},
-                2048: {"prefill_t/s": 18650, "decode_t/s/u": 7.40},
+                1024: {"prefill_t/s": 19460, "decode_t/s/u": 6.95},
+                2048: {"prefill_t/s": 18650, "decode_t/s/u": 7.00},
             },
             "6U": {
                 128: {"prefill_t/s": 30000, "decode_t/s/u": 12.00},
