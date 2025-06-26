@@ -10,6 +10,7 @@
 #include <memory>
 #include <unordered_set>
 #include <vector>
+#include <string>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program.hpp>
@@ -36,4 +37,23 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     CoreCoord worker_grid_size,
     uint32_t seed,
     const std::unordered_set<CoreCoord>& active_eth_cores = {});
+
+// RAII guard for managing a single environment variable
+class ScopedEnvVar {
+public:
+    ScopedEnvVar(const char* name, const char* value);
+    ~ScopedEnvVar();
+
+    // Delete copy/move to ensure RAII semantics
+    ScopedEnvVar(const ScopedEnvVar&) = delete;
+    ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
+    ScopedEnvVar(ScopedEnvVar&&) = delete;
+    ScopedEnvVar& operator=(ScopedEnvVar&&) = delete;
+
+private:
+    const char* name_;
+    std::string original_value_;
+    bool had_original_ = false;
+};
+
 }  // namespace tt::tt_metal::distributed::test::utils

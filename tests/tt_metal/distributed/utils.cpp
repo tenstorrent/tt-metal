@@ -403,4 +403,29 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     return programs;
 }
 
+ScopedEnvVar::ScopedEnvVar(const char* name, const char* value) : name_(name) {
+    // Save original value
+    const char* original = std::getenv(name);
+    if (original) {
+        original_value_ = original;
+        had_original_ = true;
+    }
+
+    // Set new value
+    if (value) {
+        setenv(name, value, /*overwrite=*/1);
+    } else {
+        unsetenv(name);
+    }
+}
+
+ScopedEnvVar::~ScopedEnvVar() {
+    // Restore original value
+    if (had_original_) {
+        setenv(name_, original_value_.c_str(), /*overwrite=*/1);
+    } else {
+        unsetenv(name_);
+    }
+}
+
 }  // namespace tt::tt_metal::distributed::test::utils
