@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 
 import pytest
 import torch
-import os
 import transformers
 from loguru import logger
 from tqdm import tqdm
