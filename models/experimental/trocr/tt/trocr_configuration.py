@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 
 
-class TtTrOCRConfig(nn.Module):
+class TtTrOCRConfig(LightweightModule):
     model_type = "trocr"
     keys_to_ignore_at_inference = ["past_key_values"]
     attribute_map = {

@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import math
 import torch
-from torch import nn
 
 import ttnn
 from typing import Optional, Tuple
@@ -59,7 +59,7 @@ def test_lamma_shape(device: ttnn.Device):
         logger.warning("llama_shape test Failed!")
 
 
-class LlamaRotaryEmbedding(torch.nn.Module):
+class LlamaRotaryEmbedding(LightweightModule):
     def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
         super().__init__()
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float().to(device) / dim))
@@ -119,7 +119,7 @@ def apply_rotary_pos_emb(
     return q_embed, k_embed
 
 
-class TtLlamaAttention(nn.Module):
+class TtLlamaAttention(LightweightModule):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
     def __init__(

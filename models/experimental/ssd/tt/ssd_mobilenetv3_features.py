@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from torch import nn
 import ttnn
 
@@ -19,7 +20,7 @@ from models.experimental.ssd.tt.ssd_mobilenetv3_inverted_squeeze import (
 )
 
 
-class TtMobileNetV3Features(nn.Module):
+class TtMobileNetV3Features(LightweightModule):
     def __init__(
         self,
         config,

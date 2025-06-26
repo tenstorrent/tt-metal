@@ -6,16 +6,16 @@ import math
 from typing import Optional, Tuple
 
 import torch
-from torch import nn
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
 from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid, get_weights_cached
 from models.utility_functions import is_wormhole_b0, nearest_32
 from ttnn import ReplicateTensorToMesh
 
 
-class TtFalconRotaryEmbedding(torch.nn.Module):
+class TtFalconRotaryEmbedding(LightweightModule):
     def __init__(
         self,
         mesh_device,
@@ -79,7 +79,7 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         return output
 
 
-class TtFalconAttentionPrefill(nn.Module):
+class TtFalconAttentionPrefill(LightweightModule):
     """Mulit-Query Attention: https://arxiv.org/pdf/1911.02150.pdf"""
 
     def __init__(
@@ -475,7 +475,7 @@ class TtFalconAttentionPrefill(nn.Module):
         return attn_outputs, layer_present
 
 
-class TtFalconAttentionDecode(nn.Module):
+class TtFalconAttentionDecode(LightweightModule):
     """Mulit-Query Attention: https://arxiv.org/pdf/1911.02150.pdf"""
 
     def __init__(

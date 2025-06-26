@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch.nn as nn
 from typing import Union, Tuple
 
 import tt_lib.fallback_ops
 
 
-class TtSelectAdaptivePool2d(nn.Module):
+class TtSelectAdaptivePool2d(LightweightModule):
     """Selectable global pooling layer with dynamic input kernel size"""
 
     def __init__(

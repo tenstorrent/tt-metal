@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from torch import nn
+from models.common.lightweightmodule import LightweightModule
 
 
-class DeiTConfig(nn.Module):
+class DeiTConfig(LightweightModule):
     model_type = "deit"
 
     def __init__(

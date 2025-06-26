@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import math
 import torch
 import torch.nn as nn
@@ -19,7 +20,7 @@ from models.utility_functions import (
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
-class TtRobertaSelfAttention(nn.Module):
+class TtRobertaSelfAttention(LightweightModule):
     def __init__(self, config, state_dict, base_address, device, position_embedding_type=None):
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):

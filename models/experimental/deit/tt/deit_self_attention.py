@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from torch import nn
+from models.common.lightweightmodule import LightweightModule
 
 from typing import Optional
 
@@ -13,7 +13,7 @@ from models.helper_funcs import Linear as TtLinear
 from models.experimental.deit.tt.deit_config import DeiTConfig
 
 
-class TtDeiTSelfAttention(nn.Module):
+class TtDeiTSelfAttention(LightweightModule):
     def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):

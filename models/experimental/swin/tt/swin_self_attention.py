@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Tuple
 import torch
-import torch.nn as nn
 import collections.abc
 
 from models.utility_functions import (
@@ -17,7 +17,7 @@ import ttnn
 from tt_lib.fallback_ops import fallback_ops
 
 
-class TtSwinSelfAttention(nn.Module):
+class TtSwinSelfAttention(LightweightModule):
     def __init__(
         self,
         config,

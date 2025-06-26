@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import ttnn
-import torch.nn as nn
 
 
-class TtShiftedWindowAttention(nn.Module):
+class TtShiftedWindowAttention(LightweightModule):
     def __init__(
         self,
         parameters,
