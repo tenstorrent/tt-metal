@@ -48,7 +48,7 @@ class TokenAccuracy:
     def collect_predicted_tokens(self, tokens):
         self.store_predicted_tokens.append(tokens)
         self.gt_pos += 1
-        return self.gt_tokens[self.gt_pos].unsqueeze(-1).unsqueeze(-1)
+        return self.gt_tokens[min(self.gt_pos,len(self.gt_tokens))].unsqueeze(-1).unsqueeze(-1)
 
     def compute_accuracy(self):
         count = 0
