@@ -237,7 +237,7 @@ void RunTestLineMcast(
     sender_runtime_args.insert(sender_runtime_args.end(), mcast_header_rtas.begin(), mcast_header_rtas.end());
     // append the EDM connection rt args
     append_fabric_connection_rt_args(
-        sender_phys_id, mcast_start_phys_id, 0, sender_program, {sender_logical_core}, sender_runtime_args);
+        sender_id, mcast_start_id, 0, sender_program, {sender_logical_core}, sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
@@ -597,17 +597,12 @@ void run_unicast_test_bw_chips(
         *dst_fabric_node_id.mesh_id};
 
     // append the EDM connection rt args
-    const auto& available_links = get_forwarding_link_indices(src_physical_device_id, dst_physical_device_id);
+    const auto& available_links = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
     EXPECT_EQ(available_links.size() > 0, true);
 
     uint32_t link_idx = available_links[0];
     append_fabric_connection_rt_args(
-        src_physical_device_id,
-        dst_physical_device_id,
-        link_idx,
-        sender_program,
-        {sender_logical_core},
-        sender_runtime_args);
+        src_fabric_node_id, dst_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
@@ -883,10 +878,16 @@ void RunTestMCastConnAPI(
     } else {
         dst_chip_id = left_first_hop_phys_chip_id;
     }
-    link_idx = get_forwarding_link_indices(src_phys_chip_id, dst_chip_id)[0];
+    link_idx =
+        get_forwarding_link_indices(src_fabric_node_id, get_fabric_node_id_from_physical_chip_id(dst_chip_id))[0];
+    const auto left_dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_chip_id);
     append_fabric_connection_rt_args(
-        src_phys_chip_id, dst_chip_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
-
+        src_fabric_node_id,
+        left_dst_fabric_node_id,
+        link_idx,
+        sender_program,
+        {sender_logical_core},
+        sender_runtime_args);
     sender_runtime_args.push_back(1); /* bwd_start_distance */
     sender_runtime_args.push_back(bwd_hops); /* bwd_range */
     sender_runtime_args.push_back(right_fabric_node_id.chip_id);
@@ -897,9 +898,16 @@ void RunTestMCastConnAPI(
     } else {
         dst_chip_id = right_first_hop_phys_chip_id;
     }
-    link_idx = get_forwarding_link_indices(src_phys_chip_id, dst_chip_id)[0];
+    link_idx =
+        get_forwarding_link_indices(src_fabric_node_id, get_fabric_node_id_from_physical_chip_id(dst_chip_id))[0];
+    const auto right_dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_chip_id);
     append_fabric_connection_rt_args(
-        src_phys_chip_id, dst_chip_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+        src_fabric_node_id,
+        right_dst_fabric_node_id,
+        link_idx,
+        sender_program,
+        {sender_logical_core},
+        sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
@@ -1129,9 +1137,10 @@ void RunTestChipMCast1D(
 
     // append the EDM connection rt args for fwd connection
     chip_id_t dst_chip_id = first_hop_phys_chip_id;
-    uint32_t link_idx = get_forwarding_link_indices(src_phys_chip_id, dst_chip_id)[0];
+    const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_chip_id);
+    uint32_t link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
     append_fabric_connection_rt_args(
-        src_phys_chip_id, dst_chip_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+        src_fabric_node_id, dst_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
@@ -1396,9 +1405,13 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
                         worker_args.push_back(i % packet_sizes.size());
                         worker_args.push_back(i % message_counts.size());
 
+                        const auto sender_fabric_node_id =
+                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+                        const auto receiver_fabric_node_id =
+                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(receiver_device->id());
                         append_fabric_connection_rt_args(
-                            sender_device->id(),
-                            receiver_device->id(),
+                            sender_fabric_node_id,
+                            receiver_fabric_node_id,
                             0,
                             program,
                             {worker_logical_cores_vec[i]},
