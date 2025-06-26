@@ -103,7 +103,7 @@ Sec/
 | [ViT-base (224x224)  (DP=2)](./models/demos/wormhole/vit)                                | 16     | [n300](https://tenstorrent.com/hardware/wormhole)        | 2,600   | 3,600      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
 | [ViT-base (224x224)  (DP=8)](./models/demos/wormhole/vit)                                | 64     | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox)        | 7,700    | 14,400      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
 | [ViT-base (224x224)  (DP=32)](./models/demos/wormhole/vit)                                | 256     | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | ----    | 57,600      | [v0.60.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc2) |
-| [mobilenet-v2 (224x224)](./models/demos/mobilenetv2)                     | 10    | [n150](https://tenstorrent.com/hardware/wormhole)        |  1658  | 7,000      |  |
+| [MobileNet-v2 (224x224)](./models/demos/mobilenetv2)                     | 10    | [n150](https://tenstorrent.com/hardware/wormhole)        |  2,560  | 3,500      |  |
 
 ### Object Detection
 | Model                                                                       | Batch | Hardware                                                 | Frame/sec (FPS)     | Target FPS | Release     |
