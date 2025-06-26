@@ -56,7 +56,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     // Program
     Program program = CreateProgram();
 
-    assert((test_config.is_multicast && test_config.loopback) || (!test_config.is_multicast && !test_config.is_linked));
+    assert(!test_config.is_multicast && !test_config.is_linked);
 
     // Parameters
     const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
@@ -133,13 +133,14 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
                                             (uint32_t)test_config.bytes_per_page,
                                             (uint32_t)test_config.test_id,
                                             (uint32_t)num_subordinates};
-    std::string sender_kernel_path = "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/";
+    string sender_kernel_path = "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/";
 
     if (test_config.is_multicast) {  // Multicast Sender Kernel
         sender_compile_args.insert(
             sender_compile_args.end(),
             {
              (uint32_t)test_config.is_linked,
+             (uint32_t)test_config.loopback,
              (uint32_t)sub_worker_start_coord.x,
              (uint32_t)sub_worker_start_coord.y,
              (uint32_t)sub_worker_end_coord.x,
@@ -148,6 +149,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     } else {  // Unicast Sender Kernel
         sender_kernel_path += "sender.cpp";
     }
+
     auto sender_kernel = CreateKernel(
         program,
         sender_kernel_path,
@@ -158,10 +160,11 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
             .compile_args = sender_compile_args});
 
     // Runtime Arguments
-    std::vector<uint32_t> sender_runtime_args = {};
+    vector<uint32_t> sender_runtime_args = {};
     sender_runtime_args.insert(sender_runtime_args.end(), sub_worker_coordinates.begin(), sub_worker_coordinates.end());
 
     SetRuntimeArgs(program, sender_kernel, mst_logical_core_set, sender_runtime_args);
+
 
     // Assign unique id
 
