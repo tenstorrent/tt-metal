@@ -10,7 +10,8 @@ from pathlib import Path
 from statistics import mean, variance
 
 from helpers.device import run_elf_files, wait_for_tensix_operations_finished
-from helpers.profiler import Profiler, build_with_profiler
+from helpers.profiler import Profiler
+from helpers.test_config import ProfilerBuild, build_test
 
 
 @dataclass
@@ -127,7 +128,7 @@ def perf_benchmark(test_config, run_types: list[PerfRunType], run_count=8):
         get_timing = RUN_CONFIGURATIONS[type]
 
         test_config["perf_run_type"] = type
-        build_with_profiler(test_config)
+        build_test(test_config, profiler_build=ProfilerBuild.Yes)
 
         runs = []
         for _ in range(run_count):

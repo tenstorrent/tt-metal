@@ -38,7 +38,11 @@ constexpr std::uint16_t hashString16(const char (&s)[N])
  * This section will be processed by the host code to construct a mapping
  * MARKER_ID -> { filename, line, marker } for parsing the profiler buffer.
  */
-#define PROFILER_META(full_marker) __attribute__((section(".profiler_meta"), used)) static const char _profiler_meta_##__COUNTER__[] = full_marker;
+// clang-format off
+#define PROFILER_META(full_marker)                          \
+    __attribute__((section(".profiler_meta"), used))        \
+    static const char _profiler_meta_##__COUNTER__[] = full_marker;
+// clang-format on
 
 #if defined(LLK_PROFILER)
 

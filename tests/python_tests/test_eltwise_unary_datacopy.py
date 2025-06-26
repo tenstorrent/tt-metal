@@ -6,8 +6,6 @@ import torch
 
 from helpers.device import (
     collect_results,
-    run_elf_files,
-    wait_for_tensix_operations_finished,
     write_stimuli_to_l1,
 )
 from helpers.format_arg_mapping import DestAccumulation, format_dict
@@ -20,8 +18,8 @@ from helpers.param_config import (
     input_output_formats,
 )
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import generate_make_command
-from helpers.utils import passed_test, run_shell_command
+from helpers.test_config import run_test
+from helpers.utils import passed_test
 
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [
@@ -85,11 +83,8 @@ def test_unary_datacopy(testname, formats, dest_acc):
         "tile_cnt": tile_cnt,
     }
 
-    make_cmd = generate_make_command(test_config)
-    run_shell_command(f"cd .. && {make_cmd}")
-    run_elf_files(testname)
+    run_test(test_config)
 
-    wait_for_tensix_operations_finished()
     res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
     assert len(res_from_L1) == len(golden_tensor)
 
