@@ -7,7 +7,6 @@
 
 namespace NAMESPACE {
 void MAIN {
-    return;
     constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_in1 = cb_in0;

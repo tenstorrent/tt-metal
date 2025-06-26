@@ -30,6 +30,7 @@ constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_target
 constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
 
 void kernel_main() {
+    /*
     DPRINT << "writer kernel start \n";
     DPRINT << "my_chip_id: " << my_chip_id << "\n";
     DPRINT << "reserved_packet_header_cb_id: " << reserved_packet_header_cb_id << "\n";
@@ -39,6 +40,7 @@ void kernel_main() {
     DPRINT << "tensor0_page_size: " << tensor0_page_size << "\n";
     DPRINT << "num_targets_forward_direction: " << num_targets_forward_direction << "\n";
     DPRINT << "num_targets_backward_direction: " << num_targets_backward_direction << "\n";
+    */
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -61,16 +63,18 @@ void kernel_main() {
     const uint32_t num_mcast_ranges = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t link = get_arg_val<uint32_t>(arg_idx++);
 
-    DPRINT << "reduction_input_cb_id: " << reduction_input_cb_id << "\n";
-    // DPRINT << "out_ready_sem_bank_addr: " << out_ready_sem_bank_addr << "\n";
-    DPRINT << "num_tiles_per_core: " << num_tiles_per_core << "\n";
-    DPRINT << "num_tiles_to_read: " << num_tiles_to_read << "\n";
-    DPRINT << "first_core_tile_start_offset: " << first_core_tile_start_offset << "\n";
-    DPRINT << "num_cores: " << num_cores << "\n";
-    DPRINT << "num_mcast_cores: " << num_mcast_cores << "\n";
-    DPRINT << "out_ready_sem_wait_value: " << out_ready_sem_wait_value << "\n";
-    DPRINT << "reduction_semaphore_send_addr: " << reduction_semaphore_send_addr << "\n";
-    DPRINT << "num_mcast_ranges: " << num_mcast_ranges << "\n";
+    /*
+        DPRINT << "reduction_input_cb_id: " << reduction_input_cb_id << "\n";
+        // DPRINT << "out_ready_sem_bank_addr: " << out_ready_sem_bank_addr << "\n";
+        DPRINT << "num_tiles_per_core: " << num_tiles_per_core << "\n";
+        DPRINT << "num_tiles_to_read: " << num_tiles_to_read << "\n";
+        DPRINT << "first_core_tile_start_offset: " << first_core_tile_start_offset << "\n";
+        DPRINT << "num_cores: " << num_cores << "\n";
+        DPRINT << "num_mcast_cores: " << num_mcast_cores << "\n";
+        DPRINT << "out_ready_sem_wait_value: " << out_ready_sem_wait_value << "\n";
+        DPRINT << "reduction_semaphore_send_addr: " << reduction_semaphore_send_addr << "\n";
+        DPRINT << "num_mcast_ranges: " << num_mcast_ranges << "\n";
+        */
 
     // Set up for mcasting to reduction workers
     volatile tt_l1_ptr uint32_t* reduction_semaphore_send_addr_ptr =
@@ -132,7 +136,7 @@ void kernel_main() {
         uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
         num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
         cb_wait_front(cb0_id, num_tiles_to_read_this_core);
-        DPRINT << "num_tiles_to_read_this_core: " << num_tiles_to_read_this_core << "\n";
+        // DPRINT << "num_tiles_to_read_this_core: " << num_tiles_to_read_this_core << "\n";
         size_t l1_read_addr = get_read_ptr(cb0_id);
 
         uint64_t noc0_dest_noc_addr =
@@ -156,7 +160,8 @@ void kernel_main() {
                 sema_noc_addr,
                 static_cast<uint16_t>(1),
                 static_cast<uint16_t>(32),
-                false);
+                true);
+            noc_async_writes_flushed();
         } else {
             write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
@@ -166,6 +171,7 @@ void kernel_main() {
                 l1_read_addr,
                 num_tiles_to_read_this_core * tensor0_page_size);
         }
+
         if constexpr (dynamic_alternate) {
             std::swap(
                 pkt_hdr_forward->routing_fields.value,
@@ -251,7 +257,7 @@ void kernel_main() {
         fabric_connection.close_finish();
     }
 
-    noc_async_write_barrier();
+    // noc_async_write_barrier();
 
-    DPRINT << "writer done \n";
+    // DPRINT << "writer done \n";
 }
