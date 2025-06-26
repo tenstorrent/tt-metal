@@ -441,7 +441,7 @@ TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMappe
         }
     }();
 
-    // TODO: #22258 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used directly
+    // TODO: #24115 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used directly
     // in Tensor storage.
     const auto distributed_tensor_config = [&config, &distributed_shape]() -> tt::tt_metal::DistributedTensorConfig {
         if (std::all_of(config.placements.begin(), config.placements.end(), [](const auto& p) {

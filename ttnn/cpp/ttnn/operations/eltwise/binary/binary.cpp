@@ -181,7 +181,8 @@ inline auto any_row_broadcasted(const Tensor& a, const auto& b) {
         const auto& a_shape = a.get_logical_shape();
         const auto& b_shape = b.get_logical_shape();
 
-        return (a_shape[-2] == 1 and b_shape[-2] > 1) or (b_shape[-2] == 1 and a_shape[-2] > 1);
+        return (a_shape[-2] == 1 and b_shape[-2] > 1 and a_shape[-1] > 1) or
+               (b_shape[-2] == 1 and a_shape[-2] > 1 and b_shape[-1] > 1);
     }
 
     return false;
@@ -215,6 +216,20 @@ inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b)
             (b_shape[-2] == 1 and a_shape[-2] > 1 or b_shape[-1] == 1 and a_shape[-1] > 1)) {
             return true;
         }
+    }
+
+    return false;
+}
+
+inline auto any_sharded_scalar(const Tensor& a, const auto& b) {
+    const auto& a_shape = a.get_logical_shape();
+    if constexpr (requires {
+                      b.get_logical_shape();
+                      b.is_sharded();
+                  }) {
+        const auto& b_shape = b.get_logical_shape();
+        return (a.is_sharded() or b.is_sharded()) and
+               ((a_shape[-2] == 1 and a_shape[-1] == 1) or (b_shape[-2] == 1 and b_shape[-1] == 1));
     }
 
     return false;
@@ -280,7 +295,8 @@ bool is_legacy_only(
 
     if (detail::any_row_broadcasted(lhs, rhs) or detail::any_sharded_block_format(lhs, rhs) or
         detail::any_subtile_broadcasted_block_format(lhs, rhs) or
-        detail::any_non_height_sharded(lhs, rhs, output_mem_cfg) or detail::any_uneven(lhs, rhs, output)) {
+        detail::any_non_height_sharded(lhs, rhs, output_mem_cfg) or detail::any_uneven(lhs, rhs, output) or
+        detail::any_sharded_scalar(lhs, rhs)) {
         TT_FATAL(
             lhs_activations.size() <= 1,
             "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "

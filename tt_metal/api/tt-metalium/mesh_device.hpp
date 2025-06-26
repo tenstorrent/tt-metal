@@ -49,6 +49,9 @@ struct ProgramCache;
 }  // namespace tt_metal
 }  // namespace tt
 
+namespace tt::tt_fabric {
+class FabricNodeId;
+}
 namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
@@ -258,6 +261,7 @@ public:
     std::vector<IDevice*> get_devices() const;
     IDevice* get_device(chip_id_t physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
+    tt_fabric::FabricNodeId get_device_fabric_node_id(const MeshCoordinate& coord) const;
 
     DeviceIds get_device_ids() const;
 
