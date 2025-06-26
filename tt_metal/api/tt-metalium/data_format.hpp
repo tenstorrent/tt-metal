@@ -20,7 +20,7 @@ enum class ExpPrecision : std::uint8_t {
 
 bool is_valid_conversion(DataFormat input_format, DataFormat output_format);
 bool is_exp_b_format(DataFormat data_format);
-ExpPrecision get_exp_precison(DataFormat data_format);
+ExpPrecision get_exp_precision(DataFormat data_format);
 void dump_data_formats(DataFormat data_format[NUM_CIRCULAR_BUFFERS]);
 
 /*
