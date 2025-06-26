@@ -66,6 +66,7 @@
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/uniform/uniform_pybind.hpp"
+#include "ttnn/operations/rand/rand_pybind.hpp"
 
 namespace ttnn::operations {
 
@@ -185,6 +186,9 @@ void py_module(py::module& module) {
 
     auto m_generic = module.def_submodule("generic", "ttnn generic operation interface");
     generic::bind_generic_operation(m_generic);
+
+    auto m_rand = module.def_submodule("rand", "ttnn rand operation");
+    rand::bind_rand_operation(m_rand);
 }
 }  // namespace ttnn::operations
 
