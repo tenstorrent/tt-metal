@@ -29,6 +29,7 @@
 #include "fabric_edm_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/tt_core_coordinates.h>
+#include <tt-metalium/fabric_node_id.hpp>
 
 namespace tt {
 namespace tt_metal {

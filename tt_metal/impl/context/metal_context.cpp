@@ -22,6 +22,7 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <filesystem>
 #include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/fabric_node_id.hpp>
 
 namespace tt::tt_metal {
 

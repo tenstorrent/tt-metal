@@ -17,6 +17,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/fabric_node_id.hpp>
 
 namespace tt::tt_fabric::fabric_router_tests {
 

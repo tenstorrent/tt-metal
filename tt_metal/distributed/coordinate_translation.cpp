@@ -16,6 +16,7 @@
 #include "mesh_coord.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/cluster_descriptor_types.h>
+#include <tt-metalium/fabric_node_id.hpp>
 
 namespace tt::tt_metal::distributed {
 

@@ -39,6 +39,7 @@
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
 #include "tt_metal/fabric/fabric_context.hpp"
+#include <tt-metalium/fabric_node_id.hpp>
 
 namespace tt::tt_fabric {
 

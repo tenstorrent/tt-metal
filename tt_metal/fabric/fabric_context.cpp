@@ -14,6 +14,7 @@
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/fabric_node_id.hpp>
 
 namespace tt::tt_fabric {
 

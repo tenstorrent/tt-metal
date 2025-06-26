@@ -13,6 +13,7 @@
 
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/fabric_node_id.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::tt_fabric {
@@ -22,20 +23,6 @@ using RoutingTable =
 
 // TODO: first pass at switching over MeshId/chip_id_t to proper struct
 // Need to update the usage in routing table generator
-class FabricNodeId {
-public:
-    explicit FabricNodeId(MeshId mesh_id, std::uint32_t chip_id);
-    MeshId mesh_id{0};
-    std::uint32_t chip_id = 0;
-};
-
-bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator!=(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator<(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator>(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs);
-std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id);
 
 class RoutingTableGenerator {
 public:
@@ -70,12 +57,3 @@ private:
 };
 
 }  // namespace tt::tt_fabric
-
-namespace std {
-template <>
-struct hash<tt::tt_fabric::FabricNodeId> {
-    size_t operator()(const tt::tt_fabric::FabricNodeId& fabric_node_id) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(fabric_node_id.mesh_id, fabric_node_id.chip_id);
-    }
-};
-}  // namespace std
