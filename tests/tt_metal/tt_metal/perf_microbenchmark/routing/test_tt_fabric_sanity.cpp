@@ -467,7 +467,7 @@ struct test_board_t {
         return control_plane->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
     }
 
-    inline std::vector<std::pair<chip_id_t, chan_id_t>> get_route_to_chip(
+    inline std::vector<std::pair<FabricNodeId, chan_id_t>> get_route_to_chip(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) {
         return control_plane->get_fabric_route(src_fabric_node_id, dst_fabric_node_id, src_chan_id);
     }
@@ -658,10 +658,9 @@ struct test_device_t {
 
         // get the potential routers based on the fabric path
         for (auto i = 0; i < router_logical_cores.size(); i++) {
-            std::vector<std::pair<chip_id_t, chan_id_t>> route;
-            std::set<chip_id_t> chips_in_route;
+            std::vector<std::pair<FabricNodeId, chan_id_t>> route;
+            uint8_t num_chips_in_route = 1;  // include first chip
             chan_id_t src_eth_chan = soc_desc.logical_eth_core_to_chan_map.at(router_logical_cores[i]);
-            chips_in_route.insert(physical_chip_id);
             route = _get_route_to_chip(rx_device->mesh_id, rx_device->logical_chip_id, src_eth_chan);
             if (route.empty()) {
                 continue;
@@ -673,13 +672,11 @@ struct test_device_t {
                 // no need to check for path length for default case, all routers can be used
                 select_router = true;
             } else {
-                for (auto& [chip_, chan_] : route) {
-                    chips_in_route.insert(chip_);
-                }
+                num_chips_in_route += route.size();
 
                 // including the origin chip, the distinct number of chips should be num_hops + 1
                 // if 1st noc hop at tx is allowed, the path will be longer
-                if ((chips_in_route.size() == num_hops + 1) &&
+                if ((num_chips_in_route == num_hops + 1) &&
                     (allow_1st_noc_hop || route.size() == shortest_route_length)) {
                     select_router = true;
                 }
@@ -749,7 +746,7 @@ struct test_device_t {
         return result;
     }
 
-    inline std::vector<std::pair<chip_id_t, chan_id_t>> _get_route_to_chip(
+    inline std::vector<std::pair<FabricNodeId, chan_id_t>> _get_route_to_chip(
         MeshId dst_mesh_id, chip_id_t dst_chip_id, chan_id_t src_chan_id) {
         return board_handle->get_route_to_chip(
             FabricNodeId(mesh_id, logical_chip_id), FabricNodeId(dst_mesh_id, dst_chip_id), src_chan_id);

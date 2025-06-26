@@ -53,7 +53,7 @@ public:
         FabricNodeId fabric_node_id, routing_plane_id_t routing_plane_id) const;
 
     // Return path from device to device in the fabric
-    std::vector<std::pair<chip_id_t, chan_id_t>> get_fabric_route(
+    std::vector<std::pair<FabricNodeId, chan_id_t>> get_fabric_route(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) const;
 
     // Returns the direction in which the data should be forwarded from the src to reach the dest
