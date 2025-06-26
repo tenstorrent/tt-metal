@@ -80,8 +80,6 @@ void benchmark_all_args_combinations_single_core(
     const auto input_shard_view = input_mesh_buffer->get_device_buffer(mesh_coordinate);
     const auto local_device = input_shard_view->device();
 
-    const auto input_bank_base_address = input_mesh_buffer->address();
-
     tt::tt_metal::detail::SetDeviceProfilerDir(res_path + "/" + params.test_name);
     tt::tt_metal::detail::FreshProfilerDeviceLog();
     for (uint8_t i = 0; i < 1 << 5; ++i) {
@@ -105,14 +103,10 @@ void benchmark_all_args_combinations_single_core(
         auto program = CreateProgram();
 
         constexpr CoreCoord grid = {0, 0};
-        const auto data_format = params.data_format;
-        const auto aligned_page_size = input_shard_view->aligned_page_size();
 
         // Set up sharded accessor compile-time args for reader kernel
-        const auto& input_buffer_distribution_spec =
-            *input_mesh_buffer->device_local_config().sharding_args.buffer_distribution_spec();
-        const auto sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
-            *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type(), args_loc_cnf);
+        const auto sharded_accessor_args =
+            tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(*input_shard_view, args_loc_cnf);
 
         std::map<std::string, std::string> defines{{"ACCESSOR_CONFIG_NAME", crta_config_str}};
         // Create reader kernel

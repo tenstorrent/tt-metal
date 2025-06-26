@@ -11,12 +11,14 @@
  * @brief Encodes which arguments are compile-time and which are common runtime.
  */
 enum class ArgConfig : uint8_t {
-    CTA = 0,
-    RankCRTA = 1 << 0,
-    NumBanksCRTA = 1 << 1,
-    TensorShapeCRTA = 1 << 2,
-    ShardShapeCRTA = 1 << 3,
-    BankCoordsCRTA = 1 << 4,
+    Interleaved = 0,
+    Sharded = 1 << 0,
+    IsDram = 1 << 1,
+    RankCRTA = 1 << 2,
+    NumBanksCRTA = 1 << 3,
+    TensorShapeCRTA = 1 << 4,
+    ShardShapeCRTA = 1 << 5,
+    BankCoordsCRTA = 1 << 6,
     CRTA = RankCRTA | NumBanksCRTA | TensorShapeCRTA | ShardShapeCRTA | BankCoordsCRTA
 };
 

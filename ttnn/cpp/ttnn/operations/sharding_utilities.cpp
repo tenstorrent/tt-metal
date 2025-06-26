@@ -753,53 +753,12 @@ ShardingConfig get_specs_for_sharding_partition(
 
 namespace sharded_accessor_utils {
 
-bool ShardedAccessorArgs::rank_is_crta() const { return args_config.test(ArgConfig::RankCRTA); }
-bool ShardedAccessorArgs::num_banks_is_crta() const { return args_config.test(ArgConfig::NumBanksCRTA); }
-bool ShardedAccessorArgs::tensor_shape_is_crta() const { return args_config.test(ArgConfig::TensorShapeCRTA); }
-bool ShardedAccessorArgs::shard_shape_is_crta() const { return args_config.test(ArgConfig::ShardShapeCRTA); }
-bool ShardedAccessorArgs::bank_coords_is_crta() const { return args_config.test(ArgConfig::BankCoordsCRTA); }
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+ShardedAccessorArgs prepare_sharded_args(const Buffer& buffer, ArgsConfig args_config) {
+    TT_FATAL(buffer.buffer_distribution_spec(), "Buffer must have a buffer distribution spec");
 
-uint32_t ShardedAccessorArgs::get_rank() const { return rank_is_crta() ? runtime_args[0] : compile_time_args[1]; }
-
-uint32_t ShardedAccessorArgs::get_num_banks() const {
-    const size_t offset = rank_is_crta() ? 1 : 0;
-    return num_banks_is_crta() ? runtime_args[offset] : compile_time_args[offset + 1];
-}
-
-uint32_t ShardedAccessorArgs::get_physical_num_banks() const { return (get_num_banks() + 1) / 2; }
-
-tt::stl::Span<const uint32_t> ShardedAccessorArgs::get_tensor_shape() const {
-    const size_t offset_rt = rank_is_crta() + num_banks_is_crta();
-    const size_t offset_ct = 1 + !rank_is_crta() + !num_banks_is_crta();
-    const uint32_t* data =
-        tensor_shape_is_crta() ? runtime_args.data() + offset_rt : compile_time_args.data() + offset_ct;
-    return {data, get_rank()};
-}
-
-tt::stl::Span<const uint32_t> ShardedAccessorArgs::get_shard_shape() const {
-    const uint32_t rank = get_rank();
-    const size_t offset_rt = rank_is_crta() + num_banks_is_crta() + rank * tensor_shape_is_crta();
-    const size_t offset_ct = 1 + !rank_is_crta() + !num_banks_is_crta() + rank * !tensor_shape_is_crta();
-    const uint32_t* data =
-        shard_shape_is_crta() ? runtime_args.data() + offset_rt : compile_time_args.data() + offset_ct;
-    return {data, rank};
-}
-tt::stl::Span<const uint32_t> ShardedAccessorArgs::get_bank_coords() const {
-    const uint32_t rank = get_rank();
-    const size_t offset_rt =
-        rank_is_crta() + num_banks_is_crta() + rank * (tensor_shape_is_crta() + shard_shape_is_crta());
-    const size_t offset_ct =
-        1 + !rank_is_crta() + !num_banks_is_crta() + rank * (!tensor_shape_is_crta() + !shard_shape_is_crta());
-    const uint32_t* data =
-        bank_coords_is_crta() ? runtime_args.data() + offset_rt : compile_time_args.data() + offset_ct;
-    return {data, get_physical_num_banks()};
-}
-
-ShardedAccessorArgs get_sharded_accessor_args(
-    const distributed::MeshDevice& mesh_device,
-    const BufferDistributionSpec& buffer_distribution_spec,
-    const CoreType& bank_type,
-    const ArgsConfig& args_config) {
+    const auto& buffer_distribution_spec = buffer.buffer_distribution_spec().value();
     const auto& tensor_shape = buffer_distribution_spec.get_tensor_shape_in_pages();
     const auto& shard_shape = buffer_distribution_spec.get_shard_shape_in_pages();
     const auto& bank_coords = buffer_distribution_spec.get_cores();
@@ -841,12 +800,14 @@ ShardedAccessorArgs get_sharded_accessor_args(
     tensor_shape_args.insert(tensor_shape_args.end(), tensor_shape.cbegin(), tensor_shape.cend());
     shard_shape_args.insert(shard_shape_args.end(), shard_shape.cbegin(), shard_shape.cend());
 
+    auto device = buffer.device();
+    auto bank_type = buffer.core_type();
     for (size_t i = 0; i < n_banks; i += 2) {
-        const auto virtual_coord1 = mesh_device.virtual_core_from_logical_core(bank_coords[i], bank_type);
+        const auto virtual_coord1 = device->virtual_core_from_logical_core(bank_coords[i], bank_type);
 
         if (i + 1 < n_banks) {
             // Pack two coordinates into one uint32_t if we have a pair
-            const auto virtual_coord2 = mesh_device.virtual_core_from_logical_core(bank_coords[i + 1], bank_type);
+            const auto virtual_coord2 = device->virtual_core_from_logical_core(bank_coords[i + 1], bank_type);
             bank_coords_args.push_back(
                 ((virtual_coord2.x & 0xFF) << 24) | ((virtual_coord2.y & 0xFF) << 16) |
                 ((virtual_coord1.x & 0xFF) << 8) | (virtual_coord1.y & 0xFF));
@@ -856,10 +817,25 @@ ShardedAccessorArgs get_sharded_accessor_args(
         }
     }
 
+    return {.compile_time_args = std::move(compile_time_args), .runtime_args = std::move(runtime_args)};
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+ShardedAccessorArgs get_sharded_accessor_args(const Buffer& buffer, ArgsConfig args_config) {
+    if (is_sharded(buffer.buffer_layout())) {
+        args_config.set(ArgConfig::Sharded);
+        args_config.set(ArgConfig::IsDram, buffer.is_dram());
+        return CMAKE_UNIQUE_NAMESPACE::prepare_sharded_args(buffer, args_config);
+    }
+
+    args_config = ArgConfig::Interleaved;
+    args_config.set(ArgConfig::IsDram, buffer.is_dram());
+
     return {
-        .compile_time_args = std::move(compile_time_args),
-        .runtime_args = std::move(runtime_args),
-        .args_config = args_config};
+        .compile_time_args = {args_config.raw()},
+        .runtime_args = {},
+    };
 }
 
 }  // namespace sharded_accessor_utils

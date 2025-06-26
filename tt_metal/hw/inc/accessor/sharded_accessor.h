@@ -11,6 +11,7 @@
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "dataflow_api.h"
+#include "dataflow_api_addrgen.h"
 #endif
 
 namespace nd_sharding {
@@ -157,8 +158,20 @@ FORCE_INLINE auto make_args(const size_t crta_base) {
 template <typename ArgsOffsetsT>
 FORCE_INLINE auto make_sharded_accessor_from_args(
     const ArgsOffsetsT& args, const size_t bank_base_address_in, const uint32_t page_size_in) {
-    auto dspec = detail::make_dspec_from_args(args);
-    return ShardedAccessor<decltype(dspec)>(std::move(dspec), bank_base_address_in, page_size_in);
+    if constexpr (ArgsOffsetsT::is_sharded) {
+        auto dspec = detail::make_dspec_from_args(args);
+        return ShardedAccessor<decltype(dspec)>(std::move(dspec), bank_base_address_in, page_size_in);
+    } else {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        constexpr bool is_dram = ArgsOffsetsT::is_dram;
+        return InterleavedAddrGen<is_dram>{
+            .bank_base_address = bank_base_address_in,
+            .page_size = page_size_in,
+        };
+#else
+        static_assert(false, "InterleavedAddrGen is only supported in kernel and fw builds");
+#endif
+    }
 }
 
 template <
