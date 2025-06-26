@@ -11,6 +11,8 @@
 | MobileNetV2  | (224, 224) | 10          | 512     | 68.36%                 | 70.62%                 |
 | VoVNet       | (224, 224) | 1          | 512     | 72.85%                 | 78.12%                 |
 | EfficientNetB0| (224, 224) | 1          | 512     | 75.39%         | 76.76%         |
+| SwinV2       | (512, 512) | 1          | 512     | 75.59%                 | 81.05%                 |
+
 ***Note:*** The accuracy is for the selected random samples from the validation dataset.
 
 Where,
@@ -18,6 +20,19 @@ Where,
 - **Torch Accuracy** refers to the ratio of correct predictions made by torch model to the total number of predictions, calculated by comparing Torch outputs against the ground truth data(Labels given in validation dataset).
 
 ## To run the test of ttnn vs ground truth, please follow the following commands:
+
+ **SwinV2:** <br>
+**_For 512x512,_**<br>
+
+**_Single-Device (BS-1):_**<br>
+ ```sh
+ pytest models/experimental/classification_eval/classification_eval.py::test_swin_v2_image_classification_eval[1-512-tt_model-device_params0]
+ ```
+
+**_Multi-Device (DP-2,N300):_**<br>
+ ```sh
+ pytest models/experimental/classification_eval/classification_eval.py::test_swin_v2_image_classification_eval_dp[wormhole_b0-1-512-tt_model-device_params0]
+ ```
 
 **Vit:** <br>
 **_For 224x224,_**<br>
@@ -110,11 +125,26 @@ Where,
 
 **EfficientNetB0:** <br>
 **_For 224x224,_**<br>
+
 **_Single-Device (BS-1):_**<br>
  ```sh
  pytest models/experimental/classification_eval/classification_eval.py::test_efficientnetb0_image_classification_eval[1-224-torch_model-device_params0]
  ```
- **_Multi-Device (DP-2,N300):_**<br>
+
+**_Multi-Device (DP-2,N300):_**<br>
  ```sh
  pytest models/experimental/classification_eval/classification_eval.py::test_efficientnetb0_image_classification_eval_dp[wormhole_b0-1-224-torch_model-device_params0]
+ ```
+
+**SwinV2:** <br>
+**_For 512x512,_**<br>
+
+**_Single-Device (BS-1):_**<br>
+ ```sh
+ pytest models/experimental/classification_eval/classification_eval.py::test_swin_v2_image_classification_eval[1-512-torch_model-device_params0]
+ ```
+
+**_Multi-Device (DP-2,N300):_**<br>
+ ```sh
+ pytest models/experimental/classification_eval/classification_eval.py::test_swin_v2_image_classification_eval_dp[wormhole_b0-1-512-torch_model-device_params0]
  ```
