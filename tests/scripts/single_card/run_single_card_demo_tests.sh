@@ -250,6 +250,13 @@ run_yolov8s_perf() {
 #
 #}
 
+# commenting out as the test takes imagenet Dataset from HF.
+run_swin_v2_demo() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/swin_v2/demo/demo.py
+
+}
+
 run_yolov8s_world_perf() {
 
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov8s_world/demo/demo.py --timeout 600
