@@ -875,8 +875,10 @@ void HWCommandQueue::record_end() {
             // Wait for the previous node to complete and then clear count
             program_dispatch::reset_expected_num_workers_completed_on_device(
                 device_, node.sub_device_id, expected_workers_completed, id());
-            // Clean state as workers are done and counter is reset to 0
-            this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores = expected_workers_completed;
+            // Number of completion worker cores is just num workers now
+            this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores = num_workers;
+            // Expected workers completed to pass into update_traced_program_dispatch_commands
+            // for the mcast go signal is zero now because we already waited and cleared
             expected_workers_completed = 0;
         }
         // Update the generated dispatch commands based on the state of the CQ and the ring buffer

@@ -2553,7 +2553,7 @@ void reset_expected_num_workers_completed_on_device(
     const auto cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-    const auto populate_dispatch_wait_cmd = [&](uint32_t dispatcher_type) {
+    const auto populate_dispatch_wait_cmd = [&](DispatcherSelect dispatcher_type) {
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
@@ -2563,9 +2563,9 @@ void reset_expected_num_workers_completed_on_device(
     };
 
     if (distributed_dispatcher) {
-        populate_dispatch_wait_cmd(1);
+        populate_dispatch_wait_cmd(DispatcherSelect::DISPATCH_SUBORDINATE);
     }
-    populate_dispatch_wait_cmd(0);
+    populate_dispatch_wait_cmd(DispatcherSelect::DISPATCH_MASTER);
 
     manager.cq_write(cmd_region, cmd_sequence_sizeB, manager.get_issue_queue_write_ptr(cq_id));
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
