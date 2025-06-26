@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 
+from models.utility_functions import get_debug_tensor
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from enum import Enum
 
@@ -613,3 +614,60 @@ def test_mnist_max_pool_s2i(
 
     pcc_thresh = 1.0
     assert_with_pcc(output_pytorch, golden_pytorch, pcc_thresh)
+
+
+@pytest.mark.parametrize(
+    "shape, orientation, core_grid_1, core_grid_2",
+    [
+        ([1, 1, 224, 384], ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=1, x=3), ttnn.CoreGrid(y=1, x=4)),
+        ([1, 1, 64, 384], ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=1, x=3), ttnn.CoreGrid(y=1, x=4)),
+    ],
+)
+def test_reshard_conv(device, shape, orientation, core_grid_1, core_grid_2):
+    torch.manual_seed(0)
+
+    debug = False
+    if not debug:
+        torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    else:
+        num_tiles_width = shape[3] // 32
+        num_tiles_height = shape[2] // 32
+        torch_input_tensor = get_debug_tensor(num_tiles_width, num_tiles_height, dtype=torch.bfloat16)
+        torch.set_printoptions(profile="full")
+        print("Input Tensor:", torch_input_tensor)
+        torch.set_printoptions(profile="default")
+    ttnn_tensor_1 = ttnn.from_torch(
+        torch_input_tensor,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.create_sharded_memory_config(
+            shape=torch_input_tensor.shape,
+            core_grid=core_grid_1,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    out_tensor_1 = ttnn.to_torch(ttnn_tensor_1)
+
+    memory_config_2 = ttnn.create_sharded_memory_config(
+        shape=torch_input_tensor.shape,
+        core_grid=core_grid_2,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    # Interleaved to sharded path
+    ttnn_tensor_1_dram = ttnn.to_memory_config(ttnn_tensor_1, ttnn.DRAM_MEMORY_CONFIG)
+    ttnn_tensor_2_interleaved_to_sharded = ttnn.to_memory_config(ttnn_tensor_1_dram, memory_config_2)
+    out_tensor_2_interleaved_to_sharded = ttnn.to_torch(ttnn_tensor_2_interleaved_to_sharded)
+
+    passing, pcc_msg = assert_with_pcc(out_tensor_1, out_tensor_2_interleaved_to_sharded, pcc=1.0)
+
+    ttnn_tensor_2_resharded = ttnn.reshard(ttnn_tensor_1, memory_config_2)
+    out_tensor_2_resharded = ttnn.to_torch(ttnn_tensor_2_resharded)
+    if debug:
+        torch.set_printoptions(profile="full")
+        print("Output Tensor 2 Resharded:", out_tensor_2_resharded)
+        torch.set_printoptions(profile="default")
+
+    passing, pcc_msg = assert_with_pcc(out_tensor_1, out_tensor_2_resharded, pcc=1.0)
