@@ -6,6 +6,7 @@
 
 #include <tt_stl/indestructible.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "dev_msgs.h"
@@ -62,8 +63,7 @@ public:
         uint8_t num_hw_cqs,
         const BankMapping& l1_bank_remap,
         size_t worker_l1_size,
-        bool minimal = false,
-        bool force_reinit = false);
+        bool minimal = false);
     void reinitialize();
     void teardown();
 
@@ -80,6 +80,8 @@ public:
         std::optional<uint8_t> num_routing_planes = std::nullopt);
     void initialize_fabric_config();
     tt_metal::FabricConfig get_fabric_config() const;
+
+    distributed::multihost::DistributedContext& get_distributed_context();
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
@@ -110,6 +112,7 @@ private:
 
     bool initialized_ = false;
     bool teardown_registered_ = false;
+    bool force_reinit_ = false;
 
     uint8_t num_hw_cqs_ = 0;
     BankMapping l1_bank_remap_;
@@ -136,6 +139,7 @@ private:
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::GlobalControlPlane> global_control_plane_;
     tt_metal::FabricConfig fabric_config_ = tt_metal::FabricConfig::DISABLED;
+    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
     // is expected that any downed devices/links will result in some sort of error condition being

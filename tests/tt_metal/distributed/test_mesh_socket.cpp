@@ -12,7 +12,7 @@
 #include "gmock/gmock.h"
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/control_plane.hpp>
-#include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/socket.h"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -553,10 +553,8 @@ void test_single_connection_multi_device_socket(
     auto recv_virtual_coord = md1->worker_core_from_logical_core(recv_logical_coord);
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
-    auto fabric_max_packet_size = fabric_context.get_fabric_max_payload_size_bytes();
-    auto packet_header_size_bytes = fabric_context.get_fabric_packet_header_size_bytes();
+    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     // Create Socket between Sender and Receiver
     SocketConnection socket_connection = {
@@ -751,11 +749,8 @@ void test_single_connection_multi_device_socket_with_workers(
     auto output_virtual_coord = md1->worker_core_from_logical_core(output_logical_coord);
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
-
-    auto fabric_max_packet_size = fabric_context.get_fabric_max_payload_size_bytes();
-    auto packet_header_size_bytes = fabric_context.get_fabric_packet_header_size_bytes();
+    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     // Create Socket between Sender and Receiver
     SocketConnection socket_connection = {
@@ -938,11 +933,8 @@ std::shared_ptr<Program> create_sender_program(
     chip_id_t sender_physical_device_id,
     chip_id_t recv_physical_device_id,
     uint32_t sender_link_idx) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
-
-    auto fabric_max_packet_size = fabric_context.get_fabric_max_payload_size_bytes();
-    auto packet_header_size_bytes = fabric_context.get_fabric_packet_header_size_bytes();
+    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     const auto reserved_packet_header_CB_index = tt::CB::c_in0;
     auto sender_program = std::make_shared<Program>();
@@ -993,10 +985,7 @@ std::shared_ptr<Program> create_split_reduce_program(
     chip_id_t recv_physical_device_id,
     uint32_t sender0_link_idx,
     uint32_t sender1_link_idx) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
-
-    auto packet_header_size_bytes = fabric_context.get_fabric_packet_header_size_bytes();
+    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     auto reserved_packet_header_CB_index = tt::CB::c_in0;
     auto config0_cb_index = tt::CBIndex::c_1;
@@ -1143,10 +1132,7 @@ std::shared_ptr<Program> create_reduce_program(
     uint32_t sender0_link_idx,
     uint32_t sender1_link_idx,
     uint32_t recv_link_idx) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
-
-    auto packet_header_size_bytes = fabric_context.get_fabric_packet_header_size_bytes();
+    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     auto reserved_receiver_packet_header_CB_index = tt::CBIndex::c_0;
     auto reserved_sender_packet_header_CB_index = tt::CBIndex::c_1;
@@ -1245,10 +1231,7 @@ std::shared_ptr<Program> create_recv_program(
     chip_id_t sender_physical_device_id,
     chip_id_t recv_physical_device_id,
     uint32_t recv_link_idx) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
-
-    auto packet_header_size_bytes = fabric_context.get_fabric_packet_header_size_bytes();
+    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     auto reserved_packet_header_CB_index = tt::CB::c_in0;
 

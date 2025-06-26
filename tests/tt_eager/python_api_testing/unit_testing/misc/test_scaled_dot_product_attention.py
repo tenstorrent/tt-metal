@@ -349,7 +349,7 @@ def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_ch
     (
         [1, 8, 1, 2048, 128],  # Llama2-70B
         [1, 16, 2, 128, 128],  # GQA
-        [1, 16, 16, 4096, 96],  # Llama3.2-11B-Vision
+        [1, 16, 16, 4096, 96],  # Llama-3.2-11B-Vision
         [1, 71, 1, 2048, 64],  # Falcon-7B
         [8, 8, 1, 2048, 128],  # Llama2-70B large batch
     ),
