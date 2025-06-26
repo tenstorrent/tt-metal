@@ -123,7 +123,7 @@ changes to:</p>
 <li><p>What changes (and what doesn’t change) in the API usage to achieve this.</p></li>
 </ul>
 <p>It is important to note that this example builds on top of the previous single core matmul example, so it is recommended to understand the single core matmul example first. The single core matmul example is available under the <code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/matmul_single_core/</span></code> directory.</p>
-<p>The full source code for this example is available under the <code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/matmul_multi_core/</span></code> directory.</p>
+<p>The full source code for this example is available under the <code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/matmul/matmul_multi_core/</span></code> directory.</p>
 <p>Building the example can be done by adding a <code class="docutils literal notranslate"><span class="pre">--build-programming-examples</span></code> flag to the build script or adding the <code class="docutils literal notranslate"><span class="pre">-DBUILD_PROGRAMMING_EXAMPLES=ON</span></code> flag to the cmake command and results in the <code class="docutils literal notranslate"><span class="pre">matmul_multi_core</span></code> executable in the <code class="docutils literal notranslate"><span class="pre">build/programming_examples</span></code> directory. For example:</p>
 <div class="highlight-bash notranslate">
 <div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_HOME</span><span class="o">=</span>&lt;/path/to/tt-metal&gt;
