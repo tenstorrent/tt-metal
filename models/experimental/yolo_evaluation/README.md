@@ -1,4 +1,4 @@
-# Yolov evaluation
+# Yolo evaluation
 
 - Using `coco-2017` validation dataset.
 - Loading the dataset using `fiftyone` package.
@@ -8,7 +8,7 @@
 The following model is evaluated(mAPval 50-95) for 500 samples.:-
 -   YOLOv4(320x320 resolution) - **0.7562**
 -   YOLOv4(640x640 resolution) - **0.7535**
--   YOLOv8s_World(640x640 resolution) - **0.7288**
+-   YOLOv8s_World(640x640 resolution) - **0.7338**
 -   YOLOv8x(640x640 resolution) - **0.7267**
 -   YOLOv10x(640x640 resolution) - **0.7675**
 -   YOLOv9c(640x640 resolution) - **0.7837**
