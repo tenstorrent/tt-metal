@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "debug/dprint.h"
+#include "debug/pause.h"
 namespace NAMESPACE {
 
 void sort_Wt_tiles_row_to_bitonic_sequence(
@@ -22,7 +23,7 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
 
         cb_wait_front(input_cb_index, 2);
         cb_wait_front(index_cb_index, 2);
-
+        // PAUSE();
         // topk_local_sort sorts by columns - transpose input tiles for sorting
         reconfig_data_format_srca(input_cb_index);
         transpose_wh_init_short(input_cb_index);
