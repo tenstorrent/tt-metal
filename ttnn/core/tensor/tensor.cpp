@@ -785,6 +785,41 @@ Layout Tensor::layout() const { return this->tensor_attributes->get_tensor_spec(
 
 const TensorSpec& Tensor::tensor_spec() const { return this->tensor_attributes->get_tensor_spec(); }
 
+bool Tensor::is_empty() const {
+    if (this->get_logical_shape().rank() == 0) {
+        return true;
+    }
+
+    if (auto* device_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage())) {
+        if (device_storage == nullptr) {
+            return true;
+        }
+
+        if (device_storage->get_buffer() == nullptr && device_storage->get_mesh_buffer() == nullptr) {
+            return true;
+        }
+    } else if (auto* host_storage = std::get_if<HostStorage>(&tensor_attributes->get_storage())) {
+        if (host_storage == nullptr) {
+            return true;
+        }
+
+        if (host_storage->buffer.view_bytes().size() == 0) {
+            return true;
+        }
+    } else if (
+        auto* multi_device_host_storage = std::get_if<MultiDeviceHostStorage>(&tensor_attributes->get_storage())) {
+        if (multi_device_host_storage == nullptr) {
+            return true;
+        }
+
+        if (multi_device_host_storage->distributed_buffer().shape().dims() == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 Buffer* Tensor::buffer() const { return device_storage().get_buffer(); }
 
 const DeviceStorage& Tensor::device_storage() const& {

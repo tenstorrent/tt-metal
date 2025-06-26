@@ -234,6 +234,12 @@ public:
     // Throws if the tensor is not allocated on a device.
     Buffer* buffer() const;
 
+    // Returns true if the tensor is empty.
+    // An empty tensor is a tensor with a physical shape of (0, 0)
+    // or with empty buffer.
+    // Filled with zeroes is considered allocated.
+    bool is_empty() const;
+
     // Returns device `Storage`.
     // Throws if the tensor is not on device.
     const DeviceStorage& device_storage() const&;
