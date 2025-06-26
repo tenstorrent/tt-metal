@@ -11,6 +11,59 @@
 
 namespace ttnn {
 
+bool AllGatherAsync::is_tensor_aligned_by_tile(const Tensor& input_tensor) {
+    using namespace tt::constants;
+    auto input_tensor_shape = input_tensor.get_padded_shape();
+    return ((input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2]) % TILE_HEIGHT == 0) &&
+           (input_tensor_shape[3] % TILE_WIDTH == 0);
+}
+
+bool AllGatherAsync::best_effort_interleave(
+    const Tensor& input_tensor,
+    const uint32_t dim,
+    const BufferType output_buffer_type,
+    const uint32_t num_links,
+    bool use_optimized) {
+    using namespace tt::constants;
+    auto input_tensor_shape = input_tensor.get_padded_shape();
+    auto input_tensor_buffer_layout = input_tensor.buffer()->buffer_layout();
+    auto input_tensor_page_layout = input_tensor.layout();
+    auto device = input_tensor.device();
+    const auto& allocator = device->allocator();
+    uint32_t num_banks = allocator->get_num_banks(input_tensor.buffer()->buffer_type());
+
+    bool fit_tile = is_tensor_aligned_by_tile(input_tensor);
+    bool is_dim3_bf16 = false;
+    bool is_dim3_bf8 = false;
+    bool is_dim2 = false;
+    uint32_t dim3_tiles = input_tensor_shape[3] / TILE_WIDTH;
+    if (dim == 3) {
+        is_dim3_bf16 = input_tensor.dtype() == DataType::BFLOAT16 && fit_tile && (dim3_tiles % num_banks) % 2 == 0;
+
+        // DRAM only yet
+        if (output_buffer_type == BufferType::DRAM) {
+            is_dim3_bf8 = input_tensor.dtype() == DataType::BFLOAT8_B && fit_tile && (dim3_tiles % num_banks) % 4 == 0;
+        }
+    }
+    if (0 <= dim && dim < 3) {
+        is_dim2 = fit_tile;
+    }
+
+    bool is_interleaved = input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
+    bool is_tiled = input_tensor_page_layout == tt::tt_metal::Layout::TILE;
+
+    // TODO: implement multi link by width direction if height is not divisible by num_links
+    //       allow remain by dividing by num_links
+    bool multi_link_support = (input_tensor.buffer()->num_pages() / dim3_tiles) % num_links == 0;
+
+    bool canbe_optimized = (is_dim3_bf16 || is_dim3_bf8 || is_dim2) && is_interleaved && is_tiled && multi_link_support;
+    if (use_optimized) {
+        return canbe_optimized;
+    }
+    // allow generic case
+    return canbe_optimized || (fit_tile && is_interleaved && is_tiled && multi_link_support);
+}
+
 void AllGatherAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
@@ -138,10 +191,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] input_shard_num_cores: {}", input_shard_num_cores);
     log_trace(tt::LogOp, "[select_version] output_shard_num_cores: {}", output_shard_num_cores);
 
-    // Check for minimal interleaved case
-    if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
-        input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
-        input_tensor_page_layout == tt::tt_metal::Layout::TILE) {
+    if (AllGatherAsync::best_effort_interleave(input_tensor, dim, output_mem_config.buffer_type(), this->num_links)) {
         return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
     } else if (
         input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 &&
