@@ -257,8 +257,43 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     }
 }
 
+std::optional<LocalMeshBinding> ControlPlane::initialize_local_mesh_binding() {
+    const char* mesh_id_str = std::getenv("TT_MESH_ID");
+    const char* host_rank_str = std::getenv("TT_HOST_RANK");
+    if (mesh_id_str == nullptr || host_rank_str == nullptr) {
+        return std::nullopt;
+    }
+
+    // Requires LocalMeshBinding to be valid to continue since detected in the environment
+    auto local_mesh_binding = LocalMeshBinding{
+        .mesh_id = MeshId{std::stoi(mesh_id_str)},
+        .host_rank = HostRankId{std::stoi(host_rank_str)}};
+
+    log_debug(tt::LogFabric, "Local mesh binding: mesh_id: {}, host_rank: {}", local_mesh_binding.mesh_id, local_mesh_binding.host_rank);
+
+    // Validate the local mesh binding exists in the mesh graph descriptor
+    auto mesh_ids = this->routing_table_generator_->mesh_graph->get_mesh_ids();
+    if (std::find(mesh_ids.begin(), mesh_ids.end(), local_mesh_binding.mesh_id) == mesh_ids.end()) {
+        TT_THROW("Invalid TT_MESH_ID: Local mesh binding mesh_id {} not found in mesh graph descriptor", local_mesh_binding.mesh_id);
+    }
+
+    // Validate host rank (only if mesh_id is valid)
+    const auto& host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(local_mesh_binding.mesh_id);
+    bool is_valid_host_rank = std::find_if(host_ranks.begin(), host_ranks.end(), [&](const auto& coord_rank_pair) {
+        return coord_rank_pair.value() == local_mesh_binding.host_rank;
+    }) != host_ranks.end();
+
+    if (!is_valid_host_rank) {
+        TT_THROW("Invalid TT_HOST_RANK: Local mesh binding host_rank {} not found in mesh graph descriptor", local_mesh_binding.host_rank);
+    }
+
+    return local_mesh_binding;
+}
+
 ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
+    this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
     // Printing, only enabled with log_debug
@@ -277,6 +312,7 @@ ControlPlane::ControlPlane(
     const std::string& mesh_graph_desc_file,
     const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
+    this->local_mesh_binding_ = this->initialize_local_mesh_binding();
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
     // Printing, only enabled with log_debug
@@ -1436,9 +1472,10 @@ std::vector<MeshId> ControlPlane::get_user_physical_mesh_ids() const {
     return physical_mesh_ids;
 }
 
-MeshShape ControlPlane::get_physical_mesh_shape(MeshId mesh_id) const {
-    return this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id);
-};
+MeshShape ControlPlane::get_physical_mesh_shape(MeshId mesh_id, MeshScope scope) const {
+    std::optional<HostRankId> local_host_rank_id = MeshScope::LOCAL == scope ? this->get_local_host_rank_id_binding() : std::nullopt;
+    return this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id, local_host_rank_id);
+}
 
 void ControlPlane::print_routing_tables() const {
     this->print_ethernet_channels();
@@ -1788,6 +1825,19 @@ const IntermeshLinkTable& ControlPlane::get_local_intermesh_link_table() const {
 
 uint64_t ControlPlane::get_asic_id(chip_id_t chip_id) const {
     return chip_id_to_asic_id_.at(chip_id);
+}
+
+std::optional<MeshId> ControlPlane::get_local_mesh_id_binding() const {
+    return this->local_mesh_binding_.has_value() ? std::make_optional(this->local_mesh_binding_->mesh_id) : std::nullopt;
+}
+
+std::optional<HostRankId> ControlPlane::get_local_host_rank_id_binding() const {
+    return this->local_mesh_binding_.has_value() ? std::make_optional(this->local_mesh_binding_->host_rank) : std::nullopt;
+}
+
+MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scope) const {
+    std::optional<HostRankId> local_host_rank_id = MeshScope::LOCAL == scope ? this->get_local_host_rank_id_binding() : std::nullopt;
+    return this->routing_table_generator_->mesh_graph->get_coord_range(mesh_id, local_host_rank_id);
 }
 
 ControlPlane::~ControlPlane() = default;
