@@ -6,16 +6,14 @@
 
 #include "debug/dprint.h"
 
-#include <array>
-#include <algorithm>
 #include <cstdint>
 #include <utility>
 
 FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
     const uint32_t core_id, const uint32_t lookup_table_buffer_cb_index, const uint32_t tile_size = 1024) {
     // Initialize as max to indicate invalid coordinates
-    uint32_t core_x = std::numeric_limits<uint32_t>::max();
-    uint32_t core_y = std::numeric_limits<uint32_t>::max();
+    uint32_t core_x = 0;
+    uint32_t core_y = 0;
 
     if (2 * core_id >= tile_size) {
         return {core_x, core_y};  // Invalid core ID
@@ -54,6 +52,12 @@ void kernel_main() {
     // Constants
     constexpr uint32_t one_tile = 1;
     const uint16_t core_id = get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
+    const uint16_t global_tile_start = core_id * number_of_tiles_per_core;
+    const uint16_t global_tile_end = global_tile_start + number_of_tiles_per_core;
+
+    const uint16_t number_of_pairs_processed_by_each_core = number_of_tiles_per_core / 2;
+    const uint16_t processing_pair_start = core_id * number_of_pairs_processed_by_each_core;
+    const uint16_t processing_pair_end = processing_pair_start + number_of_pairs_processed_by_each_core;
 
     // Input tensor config
     constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
@@ -85,6 +89,7 @@ void kernel_main() {
     uint64_t noc_addr = get_noc_addr(0, physical_core_lookup_table_accessor);
     noc_async_read(noc_addr, physical_core_lookup_table_l1_write_addr, physical_core_lookup_table_tile_size_bytes);
     noc_async_read_barrier();
+    DPRINT << "READER: Starting" << ENDL();  // TODO: Remove
 
     for (uint32_t h = 0; h < Ht; h++) {
         // Read input value data
@@ -97,94 +102,36 @@ void kernel_main() {
             cb_push_back(input_tensor_cb_index, one_tile);
         }  // w loop
 
-        // Tiles for each core placeholder
-        std::array<std::array<uint16_t, number_of_tiles_per_core>, number_of_cores_used> core_holds{};
-        for (uint16_t core = 0; core < number_of_cores_used; ++core) {
-            for (uint16_t i = 0; i < number_of_tiles_per_core; ++i) {
-                core_holds[core][i] = core * number_of_tiles_per_core + i;
+        uint32_t stages = 0;
+        for (uint32_t i = Wt; i > 1; i >>= 1) {
+            stages++;
+        }
+        for (uint32_t stage = 2; stage <= stages; stage++) {
+            for (uint32_t sub = stage; sub > 0; sub--) {
+                uint32_t sub_dist = 1 << (sub - 1);
+                uint16_t pair_id = 0;
+                for (uint32_t i = 0; i < Wt; i++) {
+                    uint32_t j = i ^ sub_dist;
+                    if (j > i) {
+                        if (pair_id >= processing_pair_start && pair_id < processing_pair_end) {
+                            if (i >= global_tile_start && i < global_tile_end && j >= global_tile_start &&
+                                j < global_tile_end) {
+                                // NOTHING
+                            } else {
+                                // TODO: Swapping tiles
+                                // Get second core id
+                                const uint32_t other_core_id = j / number_of_tiles_per_core;
+                                const std::pair<uint32_t, uint32_t> remote_core_physical =
+                                    get_core_physical_coordinates(other_core_id, physical_core_lookup_table_cb_index);
+                            }
+                        }
+                        pair_id++;
+                    }
+                }
             }
         }
 
-        // Calculate number of stages for bitonic sort
-        uint16_t stages = 0;
-        for (uint16_t i = Wt; i > 1; i >>= 1) {
-            stages++;
-        }
-        // Sort tiles for each core
-        for (uint16_t stage = 2; stage <= stages; ++stage) {  // Start from stage 2
-            // DPRINT << "Stage " << stage << ":" << ENDL();
-            for (uint16_t sub = stage; sub > 0; --sub) {
-                uint16_t sub_dist = 1 << (sub - 1);
-                // DPRINT << " Sub-stage " << sub << " (compare distance = " << sub_dist << "):" << ENDL();
-
-                std::array<bool, Wt> processed{};
-                for (uint16_t elem = 0; elem < Wt; ++elem) {
-                    if (processed[elem]) {
-                        continue;
-                    }
-
-                    uint16_t partner = elem ^ sub_dist;
-                    if (partner >= Wt) {
-                        continue;
-                    }
-
-                    processed[elem] = processed[partner] = true;
-                    const uint16_t tile_a = std::min(elem, partner);
-                    const uint16_t tile_b = std::max(elem, partner);
-
-                    // Lookup cores that hold tile_a and tile_b
-                    int core_a = -1, core_b = -1;
-                    for (uint16_t core = 0; core < number_of_cores_used; ++core) {
-                        for (uint16_t i = 0; i < number_of_tiles_per_core; ++i) {
-                            if (core_holds[core][i] == tile_a) {
-                                core_a = core;
-                            }
-                            if (core_holds[core][i] == tile_b) {
-                                core_b = core;
-                            }
-                        }  // i loop
-                    }  // core loop
-
-                    bool is_ascending_block = ((tile_a >> stage) & 1) == 0;
-                    bool sort_direction = (is_ascending_block == ascending);
-
-                    if (core_id == core_a || core_id == core_b) {
-                        const uint16_t this_core = core_id;
-                        const uint16_t other_core = (core_id == core_a) ? core_b : core_a;
-
-                        bool has_a = false, has_b = false;
-                        for (uint16_t i = 0; i < number_of_tiles_per_core; ++i) {
-                            if (core_holds[this_core][i] == tile_a) {
-                                has_a = true;
-                            }
-                            if (core_holds[this_core][i] == tile_b) {
-                                has_b = true;
-                            }
-                        }  // i loop
-
-                        // DPRINT << "  Core " << this_core << " : Compare tile " << tile_a << " with tile " << tile_b
-                        //        << " — " << (sort_direction ? "ASC" : "DESC") << ENDL();
-
-                        if (has_a && has_b) {
-                            // DPRINT << "   L1-local compare of tiles " << tile_a << " and " << tile_b << ENDL();
-                        } else {
-                            const uint16_t local_tile = has_a ? tile_a : tile_b;
-                            const uint16_t remote_tile = has_a ? tile_b : tile_a;
-                            const auto [remote_core_x, remote_core_y] =
-                                get_core_physical_coordinates(other_core, physical_core_lookup_table_cb_index);
-                            // DPRINT << "   Indirect step with core " << other_core << " for tiles: " << local_tile
-                            //    << " (L1), " << remote_tile << " (remote)" << ENDL();
-
-                            // TODO: Implement indirect step with remote core - Exchanging tiles
-                        }
-                    }  // if core_id == core_a || core_id == core_b
-                }  // elem loop
-
-                // DPRINT << ENDL();
-
-            }  // sub loop
-        }  // stage loop
-
+        DPRINT << "READER: AFTER LOGIC:" << ENDL();  // TODO: Remove
         // Write output index data
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
             cb_wait_front(index_tensor_output_cb_index, one_tile);
@@ -194,6 +141,7 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_pop_front(index_tensor_output_cb_index, one_tile);
         }  // Wt loop
+
     }  // h loop
-    DPRINT << "READER: Finished reading and sorting tiles." << ENDL();
+    DPRINT << "READER: Finished reading and sorting tiles." << ENDL();  // TODO: Remove
 }

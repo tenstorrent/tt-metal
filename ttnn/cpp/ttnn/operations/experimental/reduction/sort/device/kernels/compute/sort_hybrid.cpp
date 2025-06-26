@@ -53,7 +53,7 @@ void MAIN {
     transpose_wh_init(input_tensor_cb_index, input_tensor_transposed_cb_index);
 
     for (uint32_t h = 0; h < Ht; h++) {
-        PAUSE();  // TODO: Remove
+        // PAUSE();  // TODO: Remove
         // Create input sequence
         sort_Wt_tiles_row_to_bitonic_sequence(
             input_tensor_cb_index,
@@ -93,7 +93,7 @@ void MAIN {
                                 // Get indexes of tiles to compare
                                 const uint32_t left_tile_id = i - global_tile_start;
                                 const uint32_t right_tile_id = j - global_tile_start;
-                                PAUSE();  // TODO: Remove
+                                // PAUSE();  // TODO: Remove
                                 tile_regs_acquire();
 
                                 copy_tile_to_dst_init_short_with_dt(
