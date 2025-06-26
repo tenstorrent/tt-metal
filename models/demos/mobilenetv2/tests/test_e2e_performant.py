@@ -74,42 +74,59 @@ def test_run_mobilenetv2_trace_2cqs_inference(
 
     op_event = ttnn.record_event(device, 0)
 
-    logger.info(f"Compiling model")
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(host_input_tensor, input_dram_tensor, cq_id=1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
-    input_l1_tensor = ttnn.reshard(input_dram_tensor, input_l1_mem_config)
-    op_event = ttnn.record_event(device, 0)
-    output_tensor = ttnn_model(input_l1_tensor)
+    def compile(run_model, op_event):
+        ttnn.wait_for_event(1, op_event)
+        ttnn.copy_host_to_device_tensor(host_input_tensor, input_dram_tensor, cq_id=1)
+        write_event = ttnn.record_event(device, 1)
+        ttnn.wait_for_event(0, write_event)
+        input_l1_tensor = ttnn.reshard(input_dram_tensor, input_l1_mem_config)
+        op_event = ttnn.record_event(device, 0)
+        output_tensor = run_model(input_l1_tensor)
+        return output_tensor
 
-    logger.info(f"Capturing trace of model")
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(host_input_tensor, input_dram_tensor, cq_id=1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
-    input_l1_tensor = ttnn.reshard(input_dram_tensor, input_l1_mem_config)
-    op_event = ttnn.record_event(device, 0)
-    input_trace_addr = input_l1_tensor.buffer_address()
-    output_tensor.deallocate(force=True)
-    tid = ttnn.begin_trace_capture(device, cq_id=0)
-    output_tensor = ttnn_model(input_l1_tensor)
-    input_l1_tensor = ttnn.allocate_tensor_on_device(input_l1_tensor.spec, device)
-    assert input_trace_addr == input_l1_tensor.buffer_address()
-    ttnn.end_trace_capture(device, tid, cq_id=0)
+    def capture_trace(run_model, op_event, output_tensor):
+        ttnn.wait_for_event(1, op_event)
+        ttnn.copy_host_to_device_tensor(host_input_tensor, input_dram_tensor, cq_id=1)
+        write_event = ttnn.record_event(device, 1)
+        ttnn.wait_for_event(0, write_event)
+        input_l1_tensor = ttnn.reshard(input_dram_tensor, input_l1_mem_config)
+        op_event = ttnn.record_event(device, 0)
+        input_trace_addr = input_l1_tensor.buffer_address()
+        output_tensor.deallocate(force=True)
 
-    outputs = []
-    iterations = 32
-    logger.info(f"Trace captured - running model benchmarks for {iterations} iterations...")
-    start = time.time()
-    for _ in range(iterations):
+        tid = ttnn.begin_trace_capture(device, cq_id=0)
+        output_tensor = run_model(input_l1_tensor)
+        input_l1_tensor = ttnn.allocate_tensor_on_device(input_l1_tensor.spec, device)
+        assert input_trace_addr == input_l1_tensor.buffer_address()
+        ttnn.end_trace_capture(device, tid, cq_id=0)
+
+        return tid, input_l1_tensor, output_tensor
+
+    def execute(trace_id, op_event, input_l1_tensor):
         ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(host_input_tensor, input_dram_tensor, cq_id=1)
         write_event = ttnn.record_event(device, 1)
         ttnn.wait_for_event(0, write_event)
         input_l1_tensor = ttnn.reshard(input_dram_tensor, input_l1_mem_config, input_l1_tensor)
         op_event = ttnn.record_event(device, 0)
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+
+    def run_model(input_tensor):
+        output_tensor = ttnn_model(input_tensor)
+        return output_tensor
+
+    logger.info(f"Compiling model")
+    output_tensor = compile(run_model, op_event)
+
+    logger.info(f"Capturing trace of model")
+    trace_id, input_l1_tensor, output_tensor = capture_trace(run_model, op_event, output_tensor)
+
+    outputs = []
+    iterations = 32
+    logger.info(f"Trace captured - running model benchmarks for {iterations} iterations...")
+    start = time.time()
+    for _ in range(iterations):
+        execute(trace_id, op_event, input_l1_tensor)
         outputs.append(output_tensor.cpu(blocking=False))
     ttnn.synchronize_device(device)
     end = time.time()
