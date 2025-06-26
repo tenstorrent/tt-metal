@@ -34,3 +34,19 @@ Use the following command to run the model :
 ```
 pytest --disable-warnings tests/ttnn/integration_tests/yolov11/test_ttnn_yolov11.py::test_yolov11
 ```
+
+### Performant Model with Trace+2CQ
+- end-2-end perf is 190 FPS
+
+Use the following command to run the performant Model with Trace+2CQs:
+
+```
+pytest --disable-warnings models/experimental/yolov11/tests/test_e2e_performant.py
+```
+### Performant Demo with Trace+2CQ
+
+Use the following command to run the performant Demo with Trace+2CQs:
+
+```
+pytest --disable-warnings models/experimental/yolov11/demo/demo.py::test_demo
+```
