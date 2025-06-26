@@ -7,8 +7,6 @@ import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import (
     collect_results,
-    run_elf_files,
-    wait_for_tensix_operations_finished,
     write_stimuli_to_l1,
 )
 from helpers.format_arg_mapping import DestAccumulation, MathOperation, format_dict
@@ -21,8 +19,8 @@ from helpers.param_config import (
     input_output_formats,
 )
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import generate_make_command
-from helpers.utils import passed_test, run_shell_command
+from helpers.test_config import run_test
+from helpers.utils import passed_test
 
 # SUPPORTED FORMATS FOR TEST
 supported_float_formats = [DataFormat.Float16_b]  # , DataFormat.Float16]
@@ -107,11 +105,7 @@ def test_sfpu_binary(testname, formats, dest_acc, mathop):
         "unpack_to_dest": unpack_to_dest,
     }
 
-    make_cmd = generate_make_command(test_config)
-    run_shell_command(f"cd .. && {make_cmd}")
-
-    run_elf_files(testname)
-    wait_for_tensix_operations_finished()
+    run_test(test_config)
 
     res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
 

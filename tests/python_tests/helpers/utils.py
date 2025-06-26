@@ -40,9 +40,10 @@ def print_faces(operand1):
     print("\n" * 3)
 
 
-def run_shell_command(command: str):
+def run_shell_command(command: str, cwd: str | None = None):
     result = subprocess.run(
         command,
+        cwd=cwd,
         shell=True,
         text=True,
         stdout=subprocess.DEVNULL,

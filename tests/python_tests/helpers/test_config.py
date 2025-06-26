@@ -1,12 +1,15 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from enum import Enum
+from pathlib import Path
 
 from ttexalens.tt_exalens_lib import (
     read_word_from_device,
 )
 
+from .device import run_elf_files, wait_for_tensix_operations_finished
 from .format_arg_mapping import (
     ApproximationMode,
     DestAccumulation,
@@ -18,6 +21,7 @@ from .format_arg_mapping import (
     format_tile_sizes,
 )
 from .format_config import FormatConfig, InputOutputFormat
+from .utils import run_shell_command
 
 
 class ProfilerBuild(Enum):
@@ -214,13 +218,8 @@ def write_build_header(
 def generate_make_command(
     test_config,
     profiler_build: ProfilerBuild = ProfilerBuild.No,
-    generate_header: bool = True,
 ):
-    """Generate make command. Optionally also generate build.h header file."""
-
-    if generate_header:
-        write_build_header(test_config, profiler_build=profiler_build)
-
+    """Generate make command"""
     # Simplified make command - only basic build parameters
     make_cmd = f"make -j 6 --silent testname={test_config.get('testname')} all "
 
@@ -228,3 +227,33 @@ def generate_make_command(
         make_cmd += "profiler "
 
     return make_cmd
+
+
+def build_test(
+    test_config,
+    profiler_build: ProfilerBuild = ProfilerBuild.No,
+):
+    """Only builds the files required to run a test"""
+
+    root = os.environ.get("LLK_HOME")
+    if not root:
+        raise AssertionError("Environment variable LLK_HOME is not set")
+
+    TESTS_DIR = str((Path(root) / "tests").absolute())
+
+    write_build_header(test_config, profiler_build=profiler_build)
+    make_cmd = generate_make_command(test_config, profiler_build=profiler_build)
+    run_shell_command(make_cmd, cwd=TESTS_DIR)
+
+
+def run_test(
+    test_config,
+    profiler_build: ProfilerBuild = ProfilerBuild.No,
+):
+    """Run the test with the given configuration"""
+
+    build_test(test_config, profiler_build=profiler_build)
+
+    # run test
+    run_elf_files(test_config["testname"])
+    wait_for_tensix_operations_finished()
