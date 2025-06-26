@@ -6,7 +6,6 @@
 
 #include "dataflow_api.h"
 #include "debug/assert.h"
-#include "debug/dprint.h"
 #include <array>
 
 struct RingSDPAOpReceiver {
@@ -83,20 +82,9 @@ struct RingSDPAOpReceiver {
         }
 
         // Wait for a sempaphore signal to start processing the tensor slice
-        DPRINT << "sender_ring_id: " << sender_ring_id << ENDL();
-        DPRINT << "curr_dir: " << this->curr_dir << ENDL();
-        DPRINT << "recevied_inputs[curr_dir]: " << this->received_inputs[this->curr_dir] << ENDL();
-        DPRINT << "expected_inputs[curr_dir]: " << this->expected_inputs[this->curr_dir] << ENDL();
-        DPRINT << "sem_wait_val: " << sem_wait_val << ENDL();
 
         if (this->wait_for_op_signal) {
             noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[this->curr_dir], sem_wait_val);
-            // volatile uint32_t counter = 0;
-            // for (uint32_t i = 0; i < 1000000; i++) {
-            //     counter++;
-            // }
-            // DPRINT << "BWD semaphore value: " << *this->signal_op_semaphore_addr_ptrs[0] << ENDL();
-            // DPRINT << "FWD semaphore value: " << *this->signal_op_semaphore_addr_ptrs[1] << ENDL();
         }
 
         if (this->curr_transfer_idx == 0) {

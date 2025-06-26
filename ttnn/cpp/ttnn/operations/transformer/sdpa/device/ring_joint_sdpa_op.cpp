@@ -326,7 +326,7 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         forward_writes_expected = num_targets_backward;
         backward_writes_expected = num_targets_forward;
     } else {
-        TT_FATAL(this->all_gather_struct.topology == ttnn::ccl::Topology::Ring, "Topology must be Linaer or Ring");
+        TT_FATAL(this->all_gather_struct.topology == ttnn::ccl::Topology::Ring, "Topology must be Linear or Ring");
         forward_writes_expected = num_targets_forward - 1;
         backward_writes_expected = num_targets_backward - 1;
     }

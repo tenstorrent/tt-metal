@@ -6,7 +6,6 @@
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
-#include "debug/dprint.h"
 #include <tt-metalium/constants.hpp>
 #include "fused_op_receiver.hpp"
 
@@ -42,9 +41,6 @@ void kernel_main() {
     constexpr uint32_t N_mask_ring_id = mask_chunk_0 / N_k_num_chunks_local;
     // The last iteration will concatenate L, which contains the masked portion of the joint tensor.
     constexpr uint32_t L_mask_ring_id = ring_size - 1;
-
-    // DPRINT << "WRITER: N_mask_ring_id: " << N_mask_ring_id << ENDL();
-    // DPRINT << "WRITER: L_mask_ring_id: " << L_mask_ring_id << ENDL();
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -91,7 +87,6 @@ void kernel_main() {
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
-        DPRINT << "WRITER: ring_id: " << ring_id << ENDL();
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * q_num_chunks);
@@ -106,13 +101,11 @@ void kernel_main() {
                 */
                 if (ring_id == N_mask_ring_id) {
                     if (mask_chunk_0 != (uint32_t)(-1)) {
-                        // DPRINT << "WRITER: N_mask_ring_id: " << ring_id << ENDL();
                         generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, logical_N);
                     }
                 }
                 if (ring_id == L_mask_ring_id) {
                     if (mask_chunk_1 != (uint32_t)(-1)) {
-                        // DPRINT << "WRITER: L_mask_ring_id: " << ring_id << ENDL();
                         generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, logical_L);
                     }
                 }

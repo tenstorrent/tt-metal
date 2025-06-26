@@ -9,9 +9,7 @@
 
 #include "compute_kernel_api.h"
 #include "compute_common.hpp"
-#include "debug/dprint.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -85,7 +83,6 @@ void MAIN {
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        DeviceZoneScopedN("ring_iter");
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         const uint32_t iter_k_num_chunks =
             ring_id == ring_size - 1 ? (N_k_num_chunks_local + L_k_num_chunks) : N_k_num_chunks_local;
@@ -218,7 +215,6 @@ void MAIN {
             /* cb_out_accumulate_im *= cb_cur_sum */
             mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum);
             if (ring_iter > 0) {
-                DeviceZoneScopedN("lse_update");
                 // Update output according to previous and current LSE
                 /**
                  * sig = torch.sigmoid(cur_lse - prev_lse)
