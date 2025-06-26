@@ -27,7 +27,7 @@ void pairwise_reduce_cb(
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;
     binary_op_init_common(cb_in, cb_scaler, cb_intermediate);
-    mul_tiles_init(cb_in, cb_scaler);
+    mul_tiles_bcast_scalar_init_short(cb_in, cb_scaler);
     reconfig_data_format(cb_in, cb_scaler);
     pack_reconfig_data_format(cb_intermediate);
     for (uint32_t tile = 0; tile < cb_length; tile += num_dst_regs) {
@@ -35,7 +35,7 @@ void pairwise_reduce_cb(
         uint32_t blk = tile + num_dst_regs > cb_length ? cb_length - tile : num_dst_regs;
         cb_wait_front(cb_in, blk);
         for (uint32_t wtr = 0; wtr < blk; wtr++) {
-            mul_tiles(cb_in, cb_scaler, wtr, 0, wtr);
+            mul_tiles_bcast_scalar(cb_in, cb_scaler, wtr, 0, wtr);
         }
         cb_pop_front(cb_in, blk);
         tile_regs_commit();

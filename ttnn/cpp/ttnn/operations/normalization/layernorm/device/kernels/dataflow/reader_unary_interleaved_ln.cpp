@@ -71,19 +71,11 @@ void kernel_main() {
     // Generate constant tiles for layernorm compute
     {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-        uint16_t scaler = (uint16_t)get_arg_val<uint32_t>(4);
-        uint32_t write_addr = get_write_ptr(cb_in_2);
-        // volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_addr);
-        // generate_reduce_scaler(cb_in_2, scaler);
-        fill_pad_tile<uint16_t, 0, 0>(write_addr, scaler);
-        cb_push_back(cb_in_2, 1);
+        uint32_t scaler = (uint16_t)get_arg_val<uint32_t>(4);
+        generate_reduce_scaler(cb_in_2, scaler);
         // doubly packed float into a uint32_t = 1.0f;
-        uint16_t one_scaler = 0x3f80;
-        write_addr = get_write_ptr(cb_in_2);
-        // volatile tt_l1_ptr uint16_t* ptr_2 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_addr);
-        fill_pad_tile<uint16_t, 0, 0>(write_addr, one_scaler);
-        cb_push_back(cb_in_2, 1);
-        // generate_reduce_scaler(cb_in_2, one_scaler);
+        uint32_t one_scaler = 0x3f803f80;
+        generate_reduce_scaler(cb_in_2, one_scaler);
     }
     constexpr uint32_t eps_cb_id = 3;
     const uint32_t eps = get_arg_val<uint32_t>(5);
