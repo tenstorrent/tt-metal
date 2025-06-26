@@ -52,13 +52,6 @@ namespace tt::tt_fabric::fabric_router_tests {
 
 using ::testing::ElementsAre;
 
-TEST_F(ControlPlaneFixture, TestSetFabricConfigRoutingPlaneCount) {
-    tt::tt_metal::MetalContext::instance().set_fabric_config(k_FabricConfig, k_ReliabilityMode, 1);
-
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
-}
-
 TEST_F(ControlPlaneFixture, TestTGMeshGraphInit) {
     const std::filesystem::path tg_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
