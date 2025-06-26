@@ -5,7 +5,7 @@
 
 #include <cstdint>
 
-#include "cpp/kernel/kernel_host_utils.hpp"
+#include "ttnn/kernel/kernel_host_utils.hpp"
 
 namespace ttnn::kernel::eltwise::where_args {
 

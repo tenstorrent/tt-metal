@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 #include "elemwise_writer_kernel_args.hpp"
-#include "cpp/kernel/kernel_utils.hpp"
+#include "ttnn/kernel/kernel_utils.hpp"
 
 void kernel_main() {
     using namespace ttnn::kernel_utils;

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "elemwise_where_kernel_args.hpp"
-#include "cpp/kernel/kernel_utils.hpp"
+#include "ttnn/kernel/kernel_utils.hpp"
 
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/cb_api.h"
