@@ -13,9 +13,12 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
+    SDXL_TRACE_REGION_SIZE,
     retrieve_timesteps,
     run_tt_iteration,
     prepare_input_tensors,
+    allocate_input_tensors,
+    create_user_tensors,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 import matplotlib.pyplot as plt
@@ -38,12 +41,10 @@ def run_tt_denoising(
     compile_run=False,
 ):
     B, C, H, W = input_shape
-    # compile_run=True
     if tid is None:
         tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if not compile_run else None
         unet_outputs = []
         tt_latents = tt_latents_device
-        print(tt_latents.buffer_address())
         for unet_slice in range(len(ttnn_prompt_embeds)):
             tt_latent_model_input = tt_latents
             noise_pred, noise_shape = run_tt_iteration(
@@ -58,28 +59,19 @@ def run_tt_denoising(
             C, H, W = noise_shape
 
             unet_outputs.append(noise_pred)
-            print(noise_pred.buffer_address())
 
         noise_pred_uncond, noise_pred_text = unet_outputs
         noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
         noise_pred_text = ttnn.mul_(noise_pred_text, guidance_scale)
         noise_pred = ttnn.add_(noise_pred_uncond, noise_pred_text)
-        print(noise_pred.buffer_address())
 
         tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **extra_step_kwargs, return_dict=False)[0]
 
         ttnn.deallocate(noise_pred_uncond)
         ttnn.deallocate(noise_pred_text)
-        print(tt_latents.buffer_address())
 
         if not compile_run:
             ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
-        else:
-            ttnn.synchronize_device(ttnn_device)
-            torch_tt_latents = ttnn.to_torch(tt_latents)
-            torch_tt_latents = torch.reshape(torch_tt_latents, (B, H, W, C))
-            torch_tt_latents = torch.permute(torch_tt_latents, (0, 3, 1, 2))
-            print(torch_tt_latents)
     else:
         ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=True)
     return tid, tt_latents_device, tt_latents_output, [C, H, W]
@@ -227,6 +219,7 @@ def run_unet_inference(
         None,
         None,
     )
+    B, C, H, W = latents.shape
 
     extra_step_kwargs = pipeline.prepare_extra_step_kwargs(None, 0.0)
     add_text_embeds = pooled_prompt_embeds
@@ -247,64 +240,38 @@ def run_unet_inference(
     )
     negative_add_time_ids = add_time_ids
 
-    ttnn_prompt_embeds = [
-        [
-            ttnn.from_torch(
-                negative_prompt_embed,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-            ),
-            ttnn.from_torch(
-                prompt_embed,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-            ),
-        ]
-        for negative_prompt_embed, prompt_embed in zip(negative_prompt_embeds, prompt_embeds)
-    ]
-    ttnn_add_text_embeds = [
-        [
-            ttnn.from_torch(
-                negative_pooled_prompt_embed,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            ),
-            ttnn.from_torch(
-                add_text_embed,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            ),
-        ]
-        for negative_pooled_prompt_embed, add_text_embed in zip(negative_pooled_prompt_embeds, add_text_embeds)
-    ]
-    ttnn_add_time_ids = [
-        ttnn.from_torch(
-            negative_add_time_ids.squeeze(0),
-            dtype=ttnn.bfloat16,
-            device=ttnn_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        ),
-        ttnn.from_torch(
-            add_time_ids.squeeze(0),
-            dtype=ttnn.bfloat16,
-            device=ttnn_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        ),
-    ]
+    tt_latents = torch.permute(latents, (0, 2, 3, 1))
+    tt_latents = tt_latents.reshape(1, 1, B * H * W, C)
+
+    tt_latents, tt_prompt_embeds, tt_add_text_embeds = create_user_tensors(
+        ttnn_device=ttnn_device,
+        latents=tt_latents,
+        negative_prompt_embeds=negative_prompt_embeds,
+        prompt_embeds=prompt_embeds,
+        negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
+        add_text_embeds=add_text_embeds,
+    )
+
+    tt_latents_device, tt_prompt_embeds_device, tt_text_embeds_device, tt_time_ids_device = allocate_input_tensors(
+        ttnn_device=ttnn_device,
+        tt_latents=tt_latents,
+        tt_prompt_embeds=tt_prompt_embeds,
+        tt_text_embeds=tt_add_text_embeds,
+        tt_time_ids=[negative_add_time_ids, add_time_ids],
+    )
+
     ttnn_added_cond_kwargs = [
         [
             {
                 "text_embeds": ttnn_add_text_embed[0],
-                "time_ids": ttnn_add_time_ids[0],
+                "time_ids": tt_time_ids_device[0],
             },
             {
                 "text_embeds": ttnn_add_text_embed[1],
-                "time_ids": ttnn_add_time_ids[1],
+                "time_ids": tt_time_ids_device[1],
             },
         ]
-        for ttnn_add_text_embed in ttnn_add_text_embeds
+        for ttnn_add_text_embed in tt_add_text_embeds
     ]
 
     prompt_embeds = [torch.cat([t1, t2], dim=0) for t1, t2 in zip(negative_prompt_embeds, prompt_embeds)]
@@ -313,66 +280,15 @@ def run_unet_inference(
     added_cond_kwargs = [{"text_embeds": t1, "time_ids": t2} for t1, t2 in zip(add_text_embeds, add_time_ids)]
 
     logger.info("Performing warmup run, to make use of program caching in actual inference...")
-    B, C, H, W = latents.shape
 
-    # All device code will work with channel last tensors
-    tt_latents = torch.permute(latents, (0, 2, 3, 1))
-    tt_latents = tt_latents.reshape(1, 1, B * H * W, C)
-
-    tt_latents = ttnn.from_torch(
-        tt_latents,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-    )
-
-    tt_latents_device = ttnn.allocate_tensor_on_device(
-        tt_latents.shape,
-        tt_latents.dtype,
-        tt_latents.layout,
-        ttnn_device,
-        ttnn.DRAM_MEMORY_CONFIG,
-    )
-    ttnn_add_text_embeds_device = [
-        ttnn.allocate_tensor_on_device(
-            ttnn_add_text_embeds[0][0].shape,
-            ttnn_add_text_embeds[0][0].dtype,
-            ttnn_add_text_embeds[0][0].layout,
-            ttnn_device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        ),
-        ttnn.allocate_tensor_on_device(
-            ttnn_add_text_embeds[0][1].shape,
-            ttnn_add_text_embeds[0][1].dtype,
-            ttnn_add_text_embeds[0][1].layout,
-            ttnn_device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        ),
-    ]
-    ttnn_prompt_embeds_device = [
-        ttnn.allocate_tensor_on_device(
-            ttnn_prompt_embeds[0][0].shape,
-            ttnn_prompt_embeds[0][0].dtype,
-            ttnn_prompt_embeds[0][0].layout,
-            ttnn_device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        ),
-        ttnn.allocate_tensor_on_device(
-            ttnn_prompt_embeds[0][1].shape,
-            ttnn_prompt_embeds[0][1].dtype,
-            ttnn_prompt_embeds[0][1].layout,
-            ttnn_device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        ),
-    ]
-    print(tt_scheduler.step_index)
     prepare_input_tensors(
         [
             tt_latents,
-            *ttnn_prompt_embeds[0],
+            *tt_prompt_embeds[0],
             ttnn_added_cond_kwargs[0][0]["text_embeds"],
             ttnn_added_cond_kwargs[0][1]["text_embeds"],
         ],
-        [tt_latents_device, *ttnn_prompt_embeds_device, *ttnn_add_text_embeds_device],
+        [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
     )
     run_tt_denoising(
         ttnn_device=ttnn_device,
@@ -381,9 +297,9 @@ def run_unet_inference(
         tt_unet=tt_unet,
         tt_scheduler=tt_scheduler,
         input_shape=[B, C, H, W],
-        ttnn_prompt_embeds=ttnn_prompt_embeds_device,
-        ttnn_add_text_embeds=ttnn_add_text_embeds_device,
-        ttnn_add_time_ids=ttnn_add_time_ids,
+        ttnn_prompt_embeds=tt_prompt_embeds_device,
+        ttnn_add_text_embeds=tt_text_embeds_device,
+        ttnn_add_time_ids=tt_time_ids_device,
         guidance_scale=guidance_scale,
         extra_step_kwargs=extra_step_kwargs,
         tid=None,
@@ -393,11 +309,11 @@ def run_unet_inference(
     prepare_input_tensors(
         [
             tt_latents,
-            *ttnn_prompt_embeds[0],
+            *tt_prompt_embeds[0],
             ttnn_added_cond_kwargs[0][0]["text_embeds"],
             ttnn_added_cond_kwargs[0][1]["text_embeds"],
         ],
-        [tt_latents_device, *ttnn_prompt_embeds_device, *ttnn_add_text_embeds_device],
+        [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
     )
     tid, _, _, _ = run_tt_denoising(
         ttnn_device=ttnn_device,
@@ -406,33 +322,30 @@ def run_unet_inference(
         tt_unet=tt_unet,
         tt_scheduler=tt_scheduler,
         input_shape=[B, C, H, W],
-        ttnn_prompt_embeds=ttnn_prompt_embeds_device,
-        ttnn_add_text_embeds=ttnn_add_text_embeds_device,
-        ttnn_add_time_ids=ttnn_add_time_ids,
+        ttnn_prompt_embeds=tt_prompt_embeds_device,
+        ttnn_add_text_embeds=tt_text_embeds_device,
+        ttnn_add_time_ids=tt_time_ids_device,
         guidance_scale=guidance_scale,
         extra_step_kwargs=extra_step_kwargs,
         tid=None,
     )
-    # tt_scheduler.set_step_index(0)
+
     ttnn.synchronize_device(ttnn_device)
     pcc_per_iter = []
-    # tid = None
     tt_latents_output = None
     logger.info("Starting ttnn inference...")
     for iter in range(len(prompts)):
         prepare_input_tensors(
             [
                 tt_latents,
-                *ttnn_prompt_embeds[iter],
+                *tt_prompt_embeds[iter],
                 ttnn_added_cond_kwargs[iter][0]["text_embeds"],
                 ttnn_added_cond_kwargs[iter][1]["text_embeds"],
             ],
-            [tt_latents_device, *ttnn_prompt_embeds_device, *ttnn_add_text_embeds_device],
+            [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
         )
-        print(f"iter {iter}")
         logger.info(f"Running inference for prompt {iter + 1}/{len(prompts)}: {prompts[iter]}")
         for i, (t, tt_t) in tqdm(enumerate(zip(timesteps, ttnn_timesteps)), total=len(ttnn_timesteps)):
-            print(tt_scheduler.step_index)
             tid, tt_latents_device, tt_latents_output, [C, H, W] = run_tt_denoising(
                 ttnn_device=ttnn_device,
                 tt_latents_device=tt_latents_device,
@@ -440,9 +353,9 @@ def run_unet_inference(
                 tt_unet=tt_unet,
                 tt_scheduler=tt_scheduler,
                 input_shape=[B, C, H, W],
-                ttnn_prompt_embeds=ttnn_prompt_embeds_device,
-                ttnn_add_text_embeds=ttnn_add_text_embeds_device,
-                ttnn_add_time_ids=ttnn_add_time_ids,
+                ttnn_prompt_embeds=tt_prompt_embeds_device,
+                ttnn_add_text_embeds=tt_text_embeds_device,
+                ttnn_add_time_ids=tt_time_ids_device,
                 guidance_scale=guidance_scale,
                 extra_step_kwargs=extra_step_kwargs,
                 tid=tid,
@@ -467,7 +380,6 @@ def run_unet_inference(
             torch_tt_latents = ttnn.to_torch(torch_tt_latents)
             torch_tt_latents = torch.reshape(torch_tt_latents, (B, H, W, C))
             torch_tt_latents = torch.permute(torch_tt_latents, (0, 3, 1, 2))
-            print(torch_tt_latents)
 
             _, pcc_message = comp_pcc(latents, torch_tt_latents, 0.8)
             logger.info(f"PCC of {i}. iteration is: {pcc_message}")
@@ -490,7 +402,7 @@ def run_unet_inference(
 
 @pytest.mark.skipif(not is_wormhole_b0(), reason="SDXL supported on WH only")
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": 25933824}], indirect=True
+    "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True
 )
 @pytest.mark.parametrize(
     "prompt",
