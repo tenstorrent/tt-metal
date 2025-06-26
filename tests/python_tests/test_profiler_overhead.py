@@ -27,13 +27,12 @@ def test_profiler_overhead():
         "testname": "profiler_overhead_test",
     }
 
-    profiler_meta = build_with_profiler(test_config)
-    assert profiler_meta is not None, "Profiler metadata should not be None"
+    build_with_profiler(test_config)
 
     run_elf_files("profiler_overhead_test")
     wait_for_tensix_operations_finished()
 
-    runtime = Profiler.get_data(profiler_meta)
+    runtime = Profiler.get_data(test_config["testname"])
 
     # filter out all zones that dont have marker "OVERHEAD"
     overhead_zones = [x for x in runtime.unpack if x.full_marker.marker == "OVERHEAD"]
