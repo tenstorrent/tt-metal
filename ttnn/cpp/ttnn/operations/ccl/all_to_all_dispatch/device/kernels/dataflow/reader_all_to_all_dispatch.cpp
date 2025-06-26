@@ -31,6 +31,8 @@ void kernel_main() {
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(30);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(31);  // ew_dim
 
+    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(34);
+
 #ifdef AXIS
     constexpr int axis = AXIS;
     constexpr uint32_t dispatch_devices = axis == 0 ? mesh_rows : mesh_cols;
@@ -53,14 +55,14 @@ void kernel_main() {
     const auto indices_addr_gen = get_interleaved_addr_gen<indices_is_dram, indices_page_size>(indices_tensor_address);
     const auto mapping_addr_gen = get_interleaved_addr_gen<mapping_is_dram, mapping_page_size>(mapping_tensor_address);
 
-    // read the table that
+    // read the expert mapping table
+    cb_reserve_back(mapping_tensor_cb_id, mapping_pages);
     for (uint32_t i = 0; i < mapping_pages; i++) {
-        cb_reserve_back(mapping_tensor_cb_id, 1);
-        uint32_t l1_write_addr = get_write_ptr(mapping_tensor_cb_id);
+        uint32_t l1_write_addr = get_write_ptr(mapping_tensor_cb_id) + i * aligned_mapping_page_size;
         noc_async_read_page(i, mapping_addr_gen, l1_write_addr);
-        noc_async_read_barrier();
-        cb_push_back(mapping_tensor_cb_id, 1);
     }
+    noc_async_read_barrier();
+    cb_push_back(mapping_tensor_cb_id, mapping_pages);
 
     ASSERT(indices_pages == input_pages);
     // read the input tokens and the selected experts for each token

@@ -90,9 +90,6 @@ inline void dispatch_metadata_remote_device(
     uint64_t global_noc_semaphore_address,
     volatile PACKET_HEADER_TYPE* metadata_packet_header,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections) {
-    // Clear the header buffer region.
-    zero_l1_buf((uint32_t*)metadata_packet_header, sizeof(PACKET_HEADER_TYPE));
-
     uint32_t route = static_cast<uint32_t>(get_direction(src_chip_id, dest_chip_id, mesh_cols, mesh_rows));
 
     // Populate packet header with routing information
@@ -225,6 +222,15 @@ void kernel_main() {
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
     constexpr std::array<bool, 4> directions = DIRECTIONS;
 
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
+    for (uint32_t i = 0; i < 4; i++) {
+        if (directions[i] == true) {
+            fabric_connections[i] =
+                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+            fabric_connections[i].open_start();
+        }
+    }
+
 #ifdef AXIS
     constexpr int axis = AXIS;
     constexpr uint32_t dispatch_devices = axis == 0 ? mesh_rows : mesh_cols;
@@ -235,15 +241,6 @@ void kernel_main() {
     constexpr uint32_t dispatch_index = src_chip_id;
 #endif
 
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
-    for (uint32_t i = 0; i < 4; i++) {
-        if (directions[i] == true) {
-            fabric_connections[i] =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-            fabric_connections[i].open();
-        }
-    }
-
     auto output_addr_gen = get_interleaved_addr_gen<output_is_dram, output_page_size>(output_tensor_address);
     auto metadata_addr_gen = get_interleaved_addr_gen<metadata_is_dram, metadata_page_size>(metadata_tensor_address);
 
@@ -253,6 +250,12 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
 
     uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
+
+    for (uint32_t i = 0; i < 4; i++) {
+        if (directions[i] == true) {
+            fabric_connections[i].open_finish();
+        }
+    }
 
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
