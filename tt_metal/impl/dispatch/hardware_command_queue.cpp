@@ -793,7 +793,7 @@ void HWCommandQueue::allocate_trace_programs() {
         }
 
         program_dispatch::ProgramDispatchMetadata dispatch_metadata;
-        // Reserve space for this program in the kernel config ring buffer, potentially after a wrap and reset aboe
+        // Reserve space for this program in the kernel config ring buffer, potentially after a wrap and reset above
         program_dispatch::reserve_space_in_kernel_config_buffer(
             get_config_buffer_mgr(sub_device_index),
             program.get_program_config_sizes(),
