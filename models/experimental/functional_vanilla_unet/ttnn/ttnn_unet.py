@@ -3,20 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch
 from models.experimental.functional_vanilla_unet.ttnn.common import Conv, ConvTranspose, ConvSplit
-
-
-def torch_to_ttnn(input, device=None):
-    input = ttnn.from_torch(input, ttnn.bfloat16, device=device)
-    return input
-
-
-def ttnn_to_torch(input):
-    input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
-    input = ttnn.from_device(input)
-    input = ttnn.to_torch(input)
-    return input
 
 
 class TtUnet:
@@ -27,52 +14,119 @@ class TtUnet:
         model,
     ):
         self.model = model
+        self.bn_parameters = parameters["decoder1"]["bn"]
         self.enc1_1 = Conv(
             [1, 1, 1, 1],
             parameters["encoder1"][0],
             act_block_h=64,
+            reshard=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
-        self.enc1_2 = Conv([1, 1, 1, 1], parameters["encoder1"][1], act_block_h=32)
+        self.enc1_2 = Conv(
+            [1, 1, 1, 1],
+            parameters["encoder1"][1],
+            act_block_h=32,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+        )
 
-        self.enc2_1 = Conv([1, 1, 1, 1], parameters["encoder2"][0], reshard=True)
+        self.enc2_1 = Conv(
+            [1, 1, 1, 1],
+            parameters["encoder2"][0],
+            reshard=True,
+        )
         self.enc2_2 = Conv([1, 1, 1, 1], parameters["encoder2"][1], act_block_h=64, auto_shard=True)
 
         self.enc3_1 = Conv([1, 1, 1, 1], parameters["encoder3"][0], auto_shard=True)
-        self.enc3_2 = Conv([1, 1, 1, 1], parameters["encoder3"][1], act_block_h=32, auto_shard=True)
+        self.enc3_2 = Conv(
+            [1, 1, 1, 1],
+            parameters["encoder3"][1],
+            act_block_h=32,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            auto_shard=True,
+        )
 
         self.enc4_1 = Conv(
             [1, 1, 1, 1],
             parameters["encoder4"][0],
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard=True,
         )
-        self.enc4_2 = Conv(
-            [1, 1, 1, 1],
-            parameters["encoder4"][1],
-        )
+        self.enc4_2 = Conv([1, 1, 1, 1], parameters["encoder4"][1])
 
         self.bottleneck_1 = Conv(
             [1, 1, 1, 1],
             parameters["bottleneck"][0],
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             height_sharding=False,
+            reshard=True,
         )
-        self.bottleneck_2 = Conv([1, 1, 1, 1], parameters["bottleneck"][1], height_sharding=False, reshard=True)
+        self.bottleneck_2 = Conv(
+            [1, 1, 1, 1],
+            parameters["bottleneck"][1],
+            height_sharding=False,
+            reshard=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+        )
 
-        self.upconv4 = ConvTranspose([2, 2, 0, 0], parameters["upconv4"], auto_shard=True)
+        self.upconv4 = ConvTranspose([2, 2, 0, 0], parameters["upconv4"], reshard=True)
         self.dec4_1 = Conv([1, 1, 1, 1], parameters["decoder4"][0], auto_shard=True)
         self.dec4_2 = Conv([1, 1, 1, 1], parameters["decoder4"][1], auto_shard=True)
 
-        self.upconv3 = ConvTranspose([2, 2, 0, 0], parameters["upconv3"], auto_shard=True)
-        self.dec3_1 = Conv([1, 1, 1, 1], parameters["decoder3"][0], act_block_h=32)
-        self.dec3_2 = Conv([1, 1, 1, 1], parameters["decoder3"][1], height_sharding=False)
+        self.upconv3 = ConvTranspose(
+            [2, 2, 0, 0],
+            parameters["upconv3"],
+            reshard=True,
+        )
+        self.dec3_1 = Conv(
+            [1, 1, 1, 1],
+            parameters["decoder3"][0],
+            act_block_h=32,
+            reshard=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+        )
+        self.dec3_2 = Conv(
+            [1, 1, 1, 1],
+            parameters["decoder3"][1],
+            height_sharding=False,
+        )
 
-        self.upconv2 = ConvTranspose([2, 2, 0, 0], parameters["upconv2"], auto_shard=True)
+        self.upconv2 = ConvTranspose(
+            [2, 2, 0, 0],
+            parameters["upconv2"],
+            act_block_h=32,
+            reshard=True,
+        )
         self.dec2_1 = Conv([1, 1, 1, 1], parameters["decoder2"][0], act_block_h=32)
         self.dec2_2 = Conv([1, 1, 1, 1], parameters["decoder2"][1], act_block_h=64)
 
-        self.upconv1 = model.upconv1
+        self.upconv1 = ConvTranspose(
+            [2, 2, 0, 0], parameters["upconv1"], act_block_h=32, output_layout=ttnn.TILE_LAYOUT
+        )
         self.dec1_1 = ConvSplit([1, 1, 1, 1], parameters["decoder1"][0], auto_shard=True)
-        self.dec1_2 = Conv([1, 1, 1, 1], parameters["decoder1"][1], act_block_h=32)
+        self.dec1_2 = Conv(
+            [1, 1, 1, 1],
+            parameters["decoder1"][1],
+            act_block_h=32,
+            reshard=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+        )
 
-        self.conv = Conv([1, 1, 0, 0], parameters["conv"], activation="")
+        self.conv = Conv(
+            [1, 1, 0, 0],
+            parameters["conv"],
+            activation="",
+            reshard=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+        )
 
     def __call__(self, device, input_tensor):
         enc1 = self.enc1_1(device, input_tensor)
@@ -124,8 +178,7 @@ class TtUnet:
         pool_2_out_h, pool_2_out_w = int(enc2.shape[1] / 2), int(enc2.shape[2] / 2)
         pool_2 = ttnn.reshape(pool_2, (1, pool_2_out_h, pool_2_out_w, enc2.shape[3]))
         enc2 = ttnn.to_memory_config(enc2, ttnn.DRAM_MEMORY_CONFIG)
-        if pool_2.is_sharded:
-            pool_2 = ttnn.sharded_to_interleaved(pool_2, ttnn.L1_MEMORY_CONFIG)
+
         enc3 = self.enc3_1(device, pool_2)
         ttnn.deallocate(pool_2)
         enc3 = self.enc3_2(device, enc3)  # 0.991
@@ -146,9 +199,6 @@ class TtUnet:
         pool_3_out_h, pool_3_out_w = int(enc3.shape[1] / 2), int(enc3.shape[2] / 2)
         pool_3 = ttnn.reshape(pool_3, (1, pool_3_out_h, pool_3_out_w, enc3.shape[3]))
         enc3 = ttnn.to_memory_config(enc3, ttnn.DRAM_MEMORY_CONFIG)
-
-        if pool_3.is_sharded:
-            pool_3 = ttnn.sharded_to_interleaved(pool_3, ttnn.L1_MEMORY_CONFIG)
 
         enc4 = self.enc4_1(device, pool_3)
         ttnn.deallocate(pool_3)
@@ -172,28 +222,25 @@ class TtUnet:
         pool_4 = ttnn.reshape(pool_4, (1, pool_4_out_h, pool_4_out_w, enc4.shape[3]))
         enc4 = ttnn.to_memory_config(enc4, ttnn.DRAM_MEMORY_CONFIG)
 
-        if pool_4.is_sharded:
-            pool_4 = ttnn.sharded_to_interleaved(pool_4, ttnn.L1_MEMORY_CONFIG)
         bottleneck = self.bottleneck_1(device, pool_4)
         ttnn.deallocate(pool_4)
         bottleneck = self.bottleneck_2(device, bottleneck)  # 0.997
 
-        if bottleneck.is_sharded:
-            bottleneck = ttnn.sharded_to_interleaved(bottleneck, ttnn.L1_MEMORY_CONFIG)
         dec4 = self.upconv4(device, bottleneck)  # 0.9978
 
         if dec4.is_sharded:
             dec4 = ttnn.sharded_to_interleaved(dec4, ttnn.L1_MEMORY_CONFIG)
         if enc4.is_sharded:
             enc4 = ttnn.sharded_to_interleaved(enc4, ttnn.L1_MEMORY_CONFIG)
-        dec4 = ttnn.concat([dec4, enc4], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)  # 0.996
+        dec4 = ttnn.concat(
+            [dec4, enc4], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG
+        )  # 0.996 # after using shard concat pcc dropper to 0.9536950205533733
 
         ttnn.deallocate(enc4)
 
         dec4 = self.dec4_1(device, dec4)
         dec4 = self.dec4_2(device, dec4)  # 0.992
-        if dec4.is_sharded:
-            dec4 = ttnn.sharded_to_interleaved(dec4, ttnn.L1_MEMORY_CONFIG)
+
         dec3 = self.upconv3(device, dec4)  # 0.993
         ttnn.deallocate(dec4)
 
@@ -202,14 +249,14 @@ class TtUnet:
         if enc3.is_sharded:
             enc3 = ttnn.sharded_to_interleaved(enc3, ttnn.L1_MEMORY_CONFIG)
 
-        dec3 = ttnn.concat([dec3, enc3], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)  # 0.993
+        dec3 = ttnn.concat(
+            [dec3, enc3], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG
+        )  # 0.993 # after using shard concat pcc dropper to 0.9439684514680566
         ttnn.deallocate(enc3)
 
         dec3 = self.dec3_1(device, dec3)  # 0.9892
         dec3 = self.dec3_2(device, dec3)  # 0.98766
 
-        if dec3.is_sharded:
-            dec3 = ttnn.sharded_to_interleaved(dec3, ttnn.L1_MEMORY_CONFIG)
         dec2 = self.upconv2(device, dec3)  # 0.992
         ttnn.deallocate(dec3)
 
@@ -218,35 +265,44 @@ class TtUnet:
         if enc2.is_sharded:
             enc2 = ttnn.sharded_to_interleaved(enc2, ttnn.L1_MEMORY_CONFIG)
 
-        dec2 = ttnn.concat([dec2, enc2], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)  # 0.997
+        dec2 = ttnn.concat(
+            [dec2, enc2], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG
+        )  # 0.997 # after using shard concat pcc dropper to 0.23711502730608655
 
         ttnn.deallocate(enc2)
 
         dec2 = self.dec2_1(device, dec2)
         dec2 = self.dec2_2(device, dec2)  # 0.995
 
-        dec2 = ttnn_to_torch(dec2)
-        dec2 = dec2.permute(0, 3, 1, 2)
-        dec2 = dec2.to(torch.float)
-        dec1 = self.upconv1(dec2)
-        dec1 = dec1.permute(0, 2, 3, 1)
-        dec1 = torch_to_ttnn(dec1, device)  # 0.9966
+        dec1 = self.upconv1(device, dec2)
+        ttnn.deallocate(dec2)
+        dec1 = ttnn.to_layout(dec1, ttnn.ROW_MAJOR_LAYOUT)
 
-        if enc1.is_sharded:
-            enc1 = ttnn.sharded_to_interleaved(enc1, ttnn.L1_MEMORY_CONFIG)
+        enc1 = ttnn.to_memory_config(enc1, ttnn.L1_MEMORY_CONFIG)
         if dec1.is_sharded:
             dec1 = ttnn.sharded_to_interleaved(dec1, ttnn.L1_MEMORY_CONFIG)
 
-        dec1 = ttnn.concat([dec1, enc1], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)  # 0.9988
-
+        dec1 = ttnn.concat(
+            [dec1, enc1],
+            dim=3,
+        )  # 0.9988 # after using shard concat facing OOM
         ttnn.deallocate(enc1)
 
-        dec1 = ttnn_to_torch(dec1)
-        dec1 = dec1.permute(0, 3, 1, 2)
-        dec1 = dec1.to(torch.float)
-        dec1 = self.model.decoder1[:3](dec1)
-        dec1 = dec1.permute(0, 2, 3, 1)
-        dec1 = torch_to_ttnn(dec1, device)  # 0.9979
+        dec1 = self.dec1_1(device, dec1)
+        if dec1.is_sharded:
+            dec1 = ttnn.sharded_to_interleaved(dec1, ttnn.L1_MEMORY_CONFIG)
+        dec1 = ttnn.permute(dec1, (0, 3, 1, 2))
+
+        dec1 = ttnn.batch_norm(
+            dec1,
+            running_mean=self.bn_parameters.running_mean,
+            running_var=self.bn_parameters.running_var,
+            eps=self.bn_parameters.eps,
+            weight=self.bn_parameters.weight,
+            bias=self.bn_parameters.bias,
+        )
+        dec1 = ttnn.relu(dec1)
+        dec1 = ttnn.permute(dec1, (0, 2, 3, 1))
         dec1 = self.dec1_2(device, dec1)  # 0.9968
 
         ttnn_output = self.conv(device, dec1)  # 0.9770
