@@ -85,6 +85,7 @@ def test_avg_pool2d_post_commit(
     stride,
     padding,
     ceil_mode,
+    use_program_cache,
     divisor_override,
     count_include_pad,
     shard_scheme,

@@ -185,6 +185,7 @@ def run_avg_pool2d(
 )
 def test_run_avg_pool2d(
     device,
+    use_program_cache,
     tensor_map,
     input_shape,
     kernel_size,

@@ -47,7 +47,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
     num_links,
     input_num_cores,
     output_num_cores,
-    False,
     num_iters=1,
     warmup_iters=0,
     trace_mode=True,
