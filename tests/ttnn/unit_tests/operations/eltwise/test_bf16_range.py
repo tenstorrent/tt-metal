@@ -56,14 +56,14 @@ operations_dict = {
         torch.maximum,
         ttnn.maximum,
         None,
-        1.0,
+        [0.0, 1.0, -1.0, -0.0],
         "maximum",
     ),
     "minimum": (
         torch.minimum,
         ttnn.minimum,
         None,
-        1.0,
+        [1.0],
         "minimum",
     ),
 }
@@ -106,180 +106,184 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
     ttnn_output = ttnn.zeros(size, dtype=TTNN_TYPE, device=device, layout=ttnn.TILE_LAYOUT)
 
     # Get the operations to test
-    (torch_unary_op, ttnn_unary_op, python_unary_op, scalar, parent_op) = operations_dict[operation_name]
+    (torch_unary_op, ttnn_unary_op, python_unary_op, scalar_list, parent_op) = operations_dict[operation_name]
 
-    # Create scalar tensor for torch
-    scalar_tensor_f64 = torch.full(size, scalar, dtype=torch.float64)
+    for scalar in scalar_list:
+        print(f"  Testing with scalar = {scalar}")
+        # Create scalar tensor for torch
+        scalar_tensor_f64 = torch.full(size, scalar, dtype=torch.float64)
 
-    # Initialize arrays for measurements
-    [
-        x_array,
-        y_array,
-        yref_array,
-        max_abs_error_array,
-        mean_abs_error_array,
-        max_ulp_error_array,
-        mean_ulp_error_array,
-        max_rel_error_array,
-        mean_rel_error_array,
-    ] = [np.zeros([sub_batches], dtype=np.float64) for _ in range(9)]
+        # Initialize arrays for measurements
+        [
+            x_array,
+            y_array,
+            yref_array,
+            max_abs_error_array,
+            mean_abs_error_array,
+            max_ulp_error_array,
+            mean_ulp_error_array,
+            max_rel_error_array,
+            mean_rel_error_array,
+        ] = [np.zeros([sub_batches], dtype=np.float64) for _ in range(9)]
 
-    start_time = time.time()
+        start_time = time.time()
 
-    # Launch TTNN operation
-    def launch_ttnn_op(torch_tensor, scalar, ttnn_unary, ttnn_output):
-        ttnn_value = ttnn.from_torch(torch_tensor, device=device, dtype=TTNN_TYPE, layout=ttnn.TILE_LAYOUT)
-        ttnn_output = ttnn_unary(ttnn_value, scalar, output_tensor=ttnn_output)
-        return ttnn.to_torch(ttnn_output)
+        # Launch TTNN operation
+        def launch_ttnn_op(torch_tensor, scalar, ttnn_unary, ttnn_output):
+            ttnn_value = ttnn.from_torch(torch_tensor, device=device, dtype=TTNN_TYPE, layout=ttnn.TILE_LAYOUT)
+            ttnn_output = ttnn_unary(ttnn_value, scalar, output_tensor=ttnn_output)
+            return ttnn.to_torch(ttnn_output)
 
-    # Run reference and actual operations
-    torch_golden_f64 = torch_unary_op(torch_input_f64, scalar_tensor_f64, out=torch_output_ref)
-    torch_ttnn_output_bf16 = launch_ttnn_op(torch_input_bf16, scalar, ttnn_unary_op, ttnn_output)
+        # Run reference and actual operations
+        torch_golden_f64 = torch_unary_op(torch_input_f64, scalar_tensor_f64, out=torch_output_ref)
+        torch_ttnn_output_bf16 = launch_ttnn_op(torch_input_bf16, scalar, ttnn_unary_op, ttnn_output)
 
-    torch_golden_bf16 = torch_golden_f64.to(torch.bfloat16)
-    torch_ttnn_output_f64 = torch_ttnn_output_bf16.to(torch.float64)
+        torch_golden_bf16 = torch_golden_f64.to(torch.bfloat16)
+        torch_ttnn_output_f64 = torch_ttnn_output_bf16.to(torch.float64)
 
-    # Compute errors
-    np_golden_f64 = torch_golden_f64.flatten().numpy()
-    np_ttnn_output_f64 = torch_ttnn_output_f64.flatten().numpy()
-    np_diff = np.abs(np_golden_f64 - np_ttnn_output_f64)
+        # Compute errors
+        np_golden_f64 = torch_golden_f64.flatten().numpy()
+        np_ttnn_output_f64 = torch_ttnn_output_f64.flatten().numpy()
+        np_diff = np.abs(np_golden_f64 - np_ttnn_output_f64)
 
-    torch_ulp_value = utils.ulp_bf16(torch_golden_bf16).to(torch.float64)
-    torch_eps = torch.full(torch_input_bf16.size(), EPSILON, dtype=torch.float64)
-    np_eps = np.full(2**16, EPSILON)
+        torch_ulp_value = utils.ulp_bf16(torch_golden_bf16).to(torch.float64)
+        torch_eps = torch.full(torch_input_bf16.size(), EPSILON, dtype=torch.float64)
+        np_eps = np.full(2**16, EPSILON)
 
-    np_rel_error = np_diff / np.maximum(np.abs(np_golden_f64), np_eps)
-    np_ulp_error = np_diff / torch_ulp_value.flatten().numpy()
+        np_rel_error = np_diff / np.maximum(np.abs(np_golden_f64), np_eps)
+        np_ulp_error = np_diff / torch_ulp_value.flatten().numpy()
 
-    finite_mask = np.isfinite(np_golden_f64) & np.isfinite(np_ttnn_output_f64)  # Don't compute PCC on NaN and infinity
-    pcc = scipy.stats.pearsonr(np_golden_f64[finite_mask], np_ttnn_output_f64[finite_mask])
+        finite_mask = np.isfinite(np_golden_f64) & np.isfinite(
+            np_ttnn_output_f64
+        )  # Don't compute PCC on NaN and infinity
+        pcc = scipy.stats.pearsonr(np_golden_f64[finite_mask], np_ttnn_output_f64[finite_mask])
 
-    # Flatten tensors and convert to ndarray for analysis
-    np_flat_input = torch_input_f64.flatten().numpy()
-    np_flat_output = torch_ttnn_output_f64.flatten().numpy()
-    np_flat_golden = torch_golden_f64.flatten().numpy()
+        # Flatten tensors and convert to ndarray for analysis
+        np_flat_input = torch_input_f64.flatten().numpy()
+        np_flat_output = torch_ttnn_output_f64.flatten().numpy()
+        np_flat_golden = torch_golden_f64.flatten().numpy()
 
-    # Process each sub-batch
-    for j in range(0, sub_batches):
-        chunk_size = TENSOR_WIDTH * TENSOR_HEIGHT // sub_batches
-        (beg_index, end_index) = (j * chunk_size, (j + 1) * chunk_size)
+        # Process each sub-batch
+        for j in range(0, sub_batches):
+            chunk_size = TENSOR_WIDTH * TENSOR_HEIGHT // sub_batches
+            (beg_index, end_index) = (j * chunk_size, (j + 1) * chunk_size)
 
-        # Get sub-range
-        np_sub_input = np_flat_input[beg_index:end_index]
-        np_sub_output = np_flat_output[beg_index:end_index]
-        np_sub_ref = np_flat_golden[beg_index:end_index]
-        np_sub_diff = np_diff[beg_index:end_index]
-        np_sub_rel_error = np_rel_error[beg_index:end_index]
-        np_sub_ulp_error = np_ulp_error[beg_index:end_index]
+            # Get sub-range
+            np_sub_input = np_flat_input[beg_index:end_index]
+            np_sub_output = np_flat_output[beg_index:end_index]
+            np_sub_ref = np_flat_golden[beg_index:end_index]
+            np_sub_diff = np_diff[beg_index:end_index]
+            np_sub_rel_error = np_rel_error[beg_index:end_index]
+            np_sub_ulp_error = np_ulp_error[beg_index:end_index]
 
-        # Calculate errors
+            # Calculate errors
 
-        finite_mask = np.isfinite(np_sub_diff)
-        if np.any(finite_mask):
-            max_abs_error = np.max(np_sub_diff[finite_mask])
-            mean_abs_error = np.mean(np_sub_diff[finite_mask])
+            finite_mask = np.isfinite(np_sub_diff)
+            if np.any(finite_mask):
+                max_abs_error = np.max(np_sub_diff[finite_mask])
+                mean_abs_error = np.mean(np_sub_diff[finite_mask])
 
-            max_ulp_error = np.max(np_sub_ulp_error[finite_mask])
-            mean_ulp_error = np.mean(np_sub_ulp_error[finite_mask])
+                max_ulp_error = np.max(np_sub_ulp_error[finite_mask])
+                mean_ulp_error = np.mean(np_sub_ulp_error[finite_mask])
 
-            max_rel_error = np.max(np_sub_rel_error[finite_mask])
-            mean_rel_error = np.mean(np_sub_rel_error[finite_mask])
+                max_rel_error = np.max(np_sub_rel_error[finite_mask])
+                mean_rel_error = np.mean(np_sub_rel_error[finite_mask])
 
-        else:
-            max_abs_error = np.max(np_sub_diff)
-            mean_abs_error = np.mean(np_sub_diff)
+            else:
+                max_abs_error = np.max(np_sub_diff)
+                mean_abs_error = np.mean(np_sub_diff)
 
-            max_ulp_error = np.max(np_sub_ulp_error)
-            mean_ulp_error = np.mean(np_sub_ulp_error)
+                max_ulp_error = np.max(np_sub_ulp_error)
+                mean_ulp_error = np.mean(np_sub_ulp_error)
 
-            max_rel_error = np.max(np_sub_rel_error)
-            mean_rel_error = np.mean(np_sub_rel_error)
+                max_rel_error = np.max(np_sub_rel_error)
+                mean_rel_error = np.mean(np_sub_rel_error)
 
-        # Store results
-        x_array[j] = np_sub_input[0].item()
-        y_array[j] = np_sub_output[0].item()
-        yref_array[j] = np_sub_ref[0].item()
-        max_abs_error_array[j] = max_abs_error.item()
-        mean_abs_error_array[j] = mean_abs_error.item()
-        max_ulp_error_array[j] = max_ulp_error.item()
-        mean_ulp_error_array[j] = mean_ulp_error.item()
-        max_rel_error_array[j] = max_rel_error.item()
-        mean_rel_error_array[j] = mean_rel_error.item()
+            # Store results
+            x_array[j] = np_sub_input[0].item()
+            y_array[j] = np_sub_output[0].item()
+            yref_array[j] = np_sub_ref[0].item()
+            max_abs_error_array[j] = max_abs_error.item()
+            mean_abs_error_array[j] = mean_abs_error.item()
+            max_ulp_error_array[j] = max_ulp_error.item()
+            mean_ulp_error_array[j] = mean_ulp_error.item()
+            max_rel_error_array[j] = max_rel_error.item()
+            mean_rel_error_array[j] = mean_rel_error.item()
 
-    # Create and save DataFrame
-    accuracy_df = pd.DataFrame(
-        {
-            "base_x": x_array,
-            "base_y": y_array,
-            "base_yref": yref_array,
-            "max_abs_error": max_abs_error_array,
-            "mean_abs_error": mean_abs_error_array,
-            "max_ulp_error": max_ulp_error_array,
-            "mean_ulp_error": mean_ulp_error_array,
-            "max_rel_error": max_rel_error_array,
-            "mean_rel_error": mean_rel_error_array,
-        }
-    )
-    accuracy_df["operation"] = operation_name
-    accuracy_df["dtype"] = "bfloat16"
-    accuracy_df["parent_op"] = parent_op
+        # Create and save DataFrame
+        accuracy_df = pd.DataFrame(
+            {
+                "base_x": x_array,
+                "base_y": y_array,
+                "base_yref": yref_array,
+                "max_abs_error": max_abs_error_array,
+                "mean_abs_error": mean_abs_error_array,
+                "max_ulp_error": max_ulp_error_array,
+                "mean_ulp_error": mean_ulp_error_array,
+                "max_rel_error": max_rel_error_array,
+                "mean_rel_error": mean_rel_error_array,
+            }
+        )
+        accuracy_df["operation"] = operation_name
+        accuracy_df["dtype"] = "bfloat16"
+        accuracy_df["parent_op"] = parent_op
 
-    # Compute PCC on [-1e5; 1e5]
-    np_finite_mask = np.isfinite(np_flat_output) & np.isfinite(np_flat_golden)
-    df = pd.DataFrame(
-        {
-            "x": np_flat_input[np_finite_mask],
-            "y": np_flat_output[np_finite_mask],
-            "yref": np_flat_golden[np_finite_mask],
-        }
-    )
+        # Compute PCC on [-1e5; 1e5]
+        np_finite_mask = np.isfinite(np_flat_output) & np.isfinite(np_flat_golden)
+        df = pd.DataFrame(
+            {
+                "x": np_flat_input[np_finite_mask],
+                "y": np_flat_output[np_finite_mask],
+                "yref": np_flat_golden[np_finite_mask],
+            }
+        )
 
-    df = df[df["x"].between(-1e5, 1e5)]
-    pcc = scipy.stats.pearsonr(df["y"], df["yref"])
+        df = df[df["x"].between(-1e5, 1e5)]
+        pcc = scipy.stats.pearsonr(df["y"], df["yref"])
 
-    golden_std = np.std(np_flat_golden)
-    ttnn_std = np.std(np_flat_output)
+        golden_std = np.std(np_flat_golden)
+        ttnn_std = np.std(np_flat_output)
 
-    np_finite_ulp_mask = np.isfinite(np_ulp_error) & (
-        np.greater(np_flat_input, -(2**6)) & np.less(np_flat_input, 2**6)
-    )
-    mean_ulp_error = np.mean(np_ulp_error[np_finite_ulp_mask])
-    print(f"Finite ulp error = {np_ulp_error[np_finite_ulp_mask]}")
+        np_finite_ulp_mask = np.isfinite(np_ulp_error) & (
+            np.greater(np_flat_input, -(2**6)) & np.less(np_flat_input, 2**6)
+        )
+        mean_ulp_error = np.mean(np_ulp_error[np_finite_ulp_mask])
+        print(f"Finite ulp error = {np_ulp_error[np_finite_ulp_mask]}")
 
-    print(f"Mean ulp error = {mean_ulp_error}")
+        print(f"Mean ulp error = {mean_ulp_error}")
 
-    covar = np.cov(np_flat_golden, np_flat_output)
-    print(f"Golden std = {golden_std}, TTNN std = {ttnn_std}")
-    print(f"Covar = {covar}")
+        covar = np.cov(np_flat_golden, np_flat_output)
+        print(f"Golden std = {golden_std}, TTNN std = {ttnn_std}")
+        print(f"Covar = {covar}")
 
-    # accuracy_df.to_csv(f"{dest_dir}/{operation_name}-bfloat16-[{group_size}].csv", na_rep="NaN", index_label="index")
-    filename = f"{operation_name}-bfloat16_{group_size}.csv"
-    csv_path = os.path.join(dest_dir, filename)
-    accuracy_df.to_csv(csv_path, na_rep="NaN", index_label="index")
-    print(f"--> Results written to: {csv_path}")
+        # accuracy_df.to_csv(f"{dest_dir}/{operation_name}-bfloat16-[{group_size}].csv", na_rep="NaN", index_label="index")
+        filename = f"{operation_name}-bfloat16_{scalar}_{group_size}.csv"
+        csv_path = os.path.join(dest_dir, filename)
+        accuracy_df.to_csv(csv_path, na_rep="NaN", index_label="index")
+        print(f"--> Results written to: {csv_path}")
 
-    end_time = time.time()
-    elapsed_s = end_time - start_time
-    print(f"{operation_name} [bfloat16] PCC = {pcc[0]}, Duration = {elapsed_s:.4f}s")
+        end_time = time.time()
+        elapsed_s = end_time - start_time
+        print(f"{operation_name} [bfloat16] PCC = {pcc[0]}, Duration = {elapsed_s:.4f}s")
 
-    # Plot Mean ULP Error vs Input Value (base_x)
-    plot_df = pd.read_csv(csv_path)
-    plt.figure(figsize=(10, 5))
-    plt.plot(plot_df["base_x"], plot_df["mean_ulp_error"], label="Mean ULP Error", color="blue")
-    plt.title(f"TTNN vs PyTorch: Mean ULP Error for {operation_name}")
-    plt.xlabel("Input Value (base_x)")
-    plt.ylabel("Mean ULP Error")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    parent_dir = os.path.dirname(dest_dir.rstrip("/"))
-    plot_dir = os.path.join(parent_dir, "plots")
-    os.makedirs(plot_dir, exist_ok=True)
-    plot_filename = f"{operation_name}-bfloat16_{group_size}.png"
-    plot_path = os.path.join(plot_dir, plot_filename)
-    plt.savefig(plot_path)
-    plt.close()
-    print(f"--> Plot saved to: {plot_path}")
+        # Plot Mean ULP Error vs Input Value (base_x) for individual scalar values
+        plot_df = pd.read_csv(csv_path)
+        plt.figure(figsize=(10, 5))
+        plt.plot(plot_df["base_x"], plot_df["mean_ulp_error"], label="Mean ULP Error", color="blue")
+        plt.title(f"TTNN vs PyTorch: Mean ULP Error for {operation_name}")
+        plt.xlabel("Input Value (base_x)")
+        plt.ylabel("Mean ULP Error")
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+        parent_dir = os.path.dirname(dest_dir.rstrip("/"))
+        plot_dir = os.path.join(parent_dir, "plots")
+        os.makedirs(plot_dir, exist_ok=True)
+        plot_filename = f"{operation_name}-bfloat16_{scalar}_{group_size}.png"
+        plot_path = os.path.join(plot_dir, plot_filename)
+        plt.savefig(plot_path)
+        plt.close()
+        print(f"--> Plot saved to: {plot_path}")
 
 
 def main(args):
