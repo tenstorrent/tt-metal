@@ -165,7 +165,6 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fwd_packet_header;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* bwd_packet_header;
 
-<<<<<<< HEAD
     /***************** setup forward dir *****************/
     uint32_t eth_channel = get_arg_val<uint32_t>(rt_args_idx++);
     fwd_fabric_connection =
