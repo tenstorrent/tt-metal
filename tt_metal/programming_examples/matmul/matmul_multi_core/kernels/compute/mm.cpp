@@ -36,8 +36,8 @@ namespace NAMESPACE {
  * the appropriate tiles for each output tile computation.
  */
 void MAIN {
-    uint32_t num_output_tiles = get_arg_val<uint32_t>(0);    // number of output tiles to produce
-    uint32_t Kt = get_arg_val<uint32_t>(1);                  // number of tiles in K dimension for dot product
+    uint32_t num_output_tiles = get_arg_val<uint32_t>(0);  // number of output tiles to produce
+    uint32_t Kt = get_arg_val<uint32_t>(1);                // number of tiles in K dimension for dot product
 
     constexpr tt::CBIndex cb_in0 = tt::CBIndex::c_0;
     constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
