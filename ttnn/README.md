@@ -19,26 +19,37 @@ This includes options to specify data format for mixed-precision, tensor layout 
 → See some model bringup guides: [General](https://github.com/tenstorrent/tt-metal/blob/0c0528ef1b395127c535edc0152a3ba2558fcfa4/tech_reports/ttnn/TTNN-model-bringup.md) | [LLMs](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/LLMs/llms.md) | [CNNs](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md)
 
 ## Key Features
-### High-Level Neural Network Operations
-Optimized implementations of key neural net components: matrix multiplication, convolution, attention mechanisms, data movement, collective communications (CCLs), element-wise ops, reductions, losses, pooling, and more. APIs are PyTorch-style but expose hardware-specific options.
+* **High-Level Neural Network Operations:**<br> Optimized implementations of key neural net components: matrix multiplication, convolution, attention mechanisms, data movement, collective communications (CCLs), element-wise ops, reductions, losses, pooling, and more. APIs are PyTorch-style but expose hardware-specific options.
+* **Tensor Library:**<br> A flexible tensor abstraction for managing multidimensional arrays across host and device. Developers can precisely control data layout across a cluster of Tenstorrent accelerators via Tensor APIs.
+* **Native Multi-Device Support:**<br> TT-NN seamlessly virtualizes multiple Tenstorrent devices into a single logical unit, enabling effortless scaling across device clusters.
 
-### Tensor Library
-A flexible tensor abstraction for managing multidimensional arrays across host and device. Developers can precisely control data layout across a cluster of Tenstorrent accelerators via Tensor APIs.
+## Getting Started
+Assuming you completed the installation of the hardware and drivers, you can simply install TT-NN from PyPi 
+```
+pip install ttnn
+```
+To check that installation was successful run a simple script
+```
+import ttnn
+device = ttnn.open_device(device_id=0)
+a = ttnn.full([5, 5, 5], fill_value=1.0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+b = ttnn.full([1], fill_value=2.0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+c = a * b
+print(c)
+```
 
-### Native Multi-Device Support
-TT-NN seamlessly virtualizes multiple Tenstorrent devices into a single logical unit, enabling effortless scaling across device clusters.
+There is a collection of tutorials written with [Jupyter Notebooks](https://jupyter.org/install) to help you ramp up your skillset for using TT-NN.
+These notebooks can be found under [ttnn/tutorials](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials).
 
-## 
-### Quick Start
-`pip install ttnn`
+From within the `ttnn/tutorials` directory, launch the notebooks with: 
+```
+jupyter lab --no-browser --port=8888
+```
 
-### Start with Jupyter Notebooks
-* There is a collection of tutorials written with Jupyter Notebooks to help you ramp up your skillset for using TT-NN. These
-notebooks can be found under [ttnn/tutorials](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials).
-* From within the `ttnn/tutorials` directory, launch the notebooks with: `jupyter lab --no-browser --port=8888`
+## For Contributors
 
-
-## Contributors Onboarding
+### Build from Sources
+TBD
 
 ### FAQ
 #### Where are the tests for ttnn?
