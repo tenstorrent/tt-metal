@@ -331,6 +331,10 @@ std::vector<ttnn::Tensor> ExecuteBackwardLogaddexp::invoke(
     const Tensor& input_a,
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(
+        !(is_block_format_dtype(input_a) || is_block_format_dtype(grad) || is_block_format_dtype(other)),
+        "BFLOAT8_B/BFLOAT4_B dtypes are not supported !!");
+
     std::vector<Tensor> grad_tensor;
     Tensor opexp = ttnn::add(
         ttnn::exp(ttnn::subtract(other, input_a, std::nullopt, output_mem_config), false, output_mem_config),
