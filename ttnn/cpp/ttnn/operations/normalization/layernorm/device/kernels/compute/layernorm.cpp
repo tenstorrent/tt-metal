@@ -20,10 +20,6 @@
 #include "compute_kernel_api/eltwise_unary/fill.h"
 #include "ttnn/cpp/ttnn/operations/kernel_helper_functions/reduce_cb.hpp"
 
-#include "debug/dprint.h"
-#include "dprint_tensix.h"
-#include "debug/dprint_pages.h"
-
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
@@ -215,7 +211,6 @@ void MAIN {
          * just need to bcast_mul xmm with cb_ex2pe
          */
         cb_wait_front(cb_ex2pe, 1);
-        print_full_tile(cb_ex2pe, 0, true);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             reconfig_data_format(cb_xmm, cb_ex2pe);
             if constexpr (do_gamma == 0 && do_beta == 0) {

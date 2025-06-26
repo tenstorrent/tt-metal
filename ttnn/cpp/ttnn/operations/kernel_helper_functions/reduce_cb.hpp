@@ -9,21 +9,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
 
-#include "dprint_tensix.h"
-
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT << "======" << ENDL();
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
-        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
-        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
-               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
-
 // Requirements:
 // len(cb_in) == cb_length
 // len(cb_interdiate) == cb_length == len(cb_in)
@@ -41,9 +26,6 @@ void pairwise_reduce_cb(
     const uint32_t num_dst_regs) {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;
-    // binary_op_init_common(cb_in, cb_scaler, cb_intermediate);
-    // init_bcast<ELWMUL, BroadcastType::SCALAR>(cb_in, cb_scaler, cb_intermediate);
-    // mul_tiles_bcast_scalar_init_short(cb_in, cb_scaler);
     binary_op_init_common(cb_in, cb_scaler, cb_intermediate);
     mul_tiles_init(cb_in, cb_scaler);
     reconfig_data_format(cb_in, cb_scaler);
@@ -53,10 +35,7 @@ void pairwise_reduce_cb(
         uint32_t blk = tile + num_dst_regs > cb_length ? cb_length - tile : num_dst_regs;
         cb_wait_front(cb_in, blk);
         for (uint32_t wtr = 0; wtr < blk; wtr++) {
-            // UNPACK(print_full_tile(tt::CBIndex::c_24, 0, true ));
             mul_tiles(cb_in, cb_scaler, wtr, 0, wtr);
-            // LocalCBInterface& local_cb = get_local_cb_interface(tt::CBIndex::c_24);
-            // UNPACK(print_full_tile(cb_scaler, 0, true));
         }
         cb_pop_front(cb_in, blk);
         tile_regs_commit();
@@ -64,7 +43,6 @@ void pairwise_reduce_cb(
         cb_reserve_back(cb_intermediate, blk);
         for (uint32_t wtr = 0; wtr < blk; wtr++) {
             pack_tile(wtr, cb_intermediate);
-            PACK(print_full_tile(tt::CBIndex::c_24, 0, true));
         }
         cb_push_back(cb_intermediate, blk);
         tile_regs_release();
@@ -128,7 +106,6 @@ void pairwise_reduce_cb(
     pack_tile(dst0, cb_out);
     cb_push_back(cb_out, 1);
     cb_wait_front(cb_out, onetile);
-    // UNPACK(print_full_tile(cb_out, 0, true));
     tile_regs_release();
     reduce_uninit();
 }
