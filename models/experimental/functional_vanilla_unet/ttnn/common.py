@@ -18,9 +18,14 @@ class Conv:
         activation="relu",
         dtype=ttnn.bfloat16,
         auto_shard=False,
+        enable_act_double_buffer=False,
+        enable_weights_double_buffer=False,
     ) -> None:
         self.weights = parameters["weight"]
-        self.bias = parameters["bias"]
+        if parameters["bias"] is not None:
+            self.bias = parameters["bias"]
+        else:
+            self.bias = None
 
         self.kernel_size = (self.weights.shape[2], self.weights.shape[3])
         self.conv_params = conv_params
@@ -36,6 +41,8 @@ class Conv:
         )
         if auto_shard:
             self.shard_layout = None
+        self.enable_act_double_buffer = enable_act_double_buffer
+        self.enable_weights_double_buffer = enable_weights_double_buffer
 
     def __call__(self, device, input_tensor):
         compute_config = ttnn.init_device_compute_kernel_config(
@@ -54,6 +61,8 @@ class Conv:
             deallocate_activation=self.deallocate,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
             reallocate_halo_output=False,
+            enable_act_double_buffer=self.enable_act_double_buffer,
+            enable_weights_double_buffer=self.enable_weights_double_buffer,
         )
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
@@ -99,6 +108,7 @@ class ConvTranspose:
         height_sharding=True,
         dtype=ttnn.bfloat16,
         auto_shard=False,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
     ) -> None:
         self.weights = parameters["weight"]
         self.bias = parameters["bias"]
@@ -111,6 +121,7 @@ class ConvTranspose:
         self.deallocate = deallocate
         self.groups = 1
         self.dtype = dtype
+        self.output_layout = output_layout
         self.shard_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
@@ -131,11 +142,11 @@ class ConvTranspose:
             shard_layout=self.shard_layout,
             reshard_if_not_optimal=self.reshard,
             deallocate_activation=self.deallocate,
-            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            enable_subblock_padding=False,
+            output_layout=self.output_layout,
         )
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
-
         output_tensor, [_out_height, _out_width], [self.weights, self.bias] = ttnn.conv_transpose2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
@@ -185,7 +196,7 @@ class ConvSplit:
     ) -> None:
         self.split_factor = split_factor
         self.weights = parameters["weight"]
-        self.bias = parameters["bias"]
+        # self.bias = parameters["bias"]
 
         self.kernel_size = (self.weights.shape[2], self.weights.shape[3])
         self.conv_params = conv_params
@@ -207,9 +218,10 @@ class ConvSplit:
         assert input_channels % self.split_factor == 0
         split_input_channels = input_channels // self.split_factor
 
-        split_input_tensors = ttnn.split(input_tensor, self.split_factor, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        split_input_tensors = ttnn.split(input_tensor, split_input_channels, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(input_tensor)
-        split_weight_tensors = ttnn.split(self.weights, self.split_factor, 1)
+        self.weights = ttnn.from_torch(self.weights, dtype=ttnn.bfloat16, device=device)
+        split_weight_tensors = ttnn.split(self.weights, split_input_channels, 1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -232,10 +244,11 @@ class ConvSplit:
         tt_weight_tensor = split_weight_tensors
         for i in range(self.split_factor):
             input_tensor = split_input_tensors[i]
+            tt_weight_tensor[i] = ttnn.from_device(tt_weight_tensor[i])
             tt_output_tensor_on_device, [_out_height, _out_width], [self.weights, self.bias] = ttnn.conv2d(
                 input_tensor=input_tensor,
                 weight_tensor=tt_weight_tensor[i],
-                bias_tensor=self.bias,
+                bias_tensor=None,
                 in_channels=input_tensor.shape[3],
                 out_channels=tt_weight_tensor[i].shape[0],
                 device=device,
@@ -260,7 +273,10 @@ class ConvSplit:
                 output_tensor = conv_output_tensor
             else:
                 output_tensor = ttnn.add(output_tensor, conv_output_tensor)
+                ttnn.deallocate(conv_output_tensor)
 
             del _out_height, _out_width
+            ttnn.deallocate(split_input_tensors[i])
+            ttnn.deallocate(split_weight_tensors[i])
 
         return output_tensor

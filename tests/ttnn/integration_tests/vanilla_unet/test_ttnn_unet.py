@@ -72,7 +72,7 @@ def create_custom_preprocessor(device):
                     torch.reshape(getattr(model, f"upconv{i}").bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
                 )
 
-            for i in range(4, 0, -1):
+            for i in range(4, 1, -1):
                 parameters[f"decoder{i}"] = {}
                 parameters[f"decoder{i}"][0] = {}
                 conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
@@ -100,6 +100,64 @@ def create_custom_preprocessor(device):
                     dtype=ttnn.bfloat16,
                 )
 
+            parameters[f"decoder1"] = {}
+            parameters[f"decoder1"][0] = {}
+            parameters[f"decoder1"][0]["weight"] = model.decoder1[0].weight
+            parameters[f"decoder1"][0]["bias"] = model.decoder1[0].weight
+
+            bn_layer = model.decoder1[1]  # BatchNorm2d layer
+            channel_size = bn_layer.num_features
+
+            # Extract PyTorch tensors
+            weight_torch = bn_layer.weight if bn_layer.affine else None
+            bias_torch = bn_layer.bias if bn_layer.affine else None
+            batch_mean_torch = bn_layer.running_mean
+            batch_var_torch = bn_layer.running_var
+
+            # Reshape for broadcast compatibility (1, C, 1, 1)
+            batch_mean_torch = batch_mean_torch.view(1, channel_size, 1, 1)
+            batch_var_torch = batch_var_torch.view(1, channel_size, 1, 1)
+            weight_torch = weight_torch.view(1, channel_size, 1, 1) if weight_torch is not None else None
+            bias_torch = bias_torch.view(1, channel_size, 1, 1) if bias_torch is not None else None
+
+            parameters["decoder1"]["bn"] = {}
+            weight = (
+                ttnn.from_torch(weight_torch, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+                if weight_torch is not None
+                else None
+            )
+            parameters["decoder1"]["bn"]["weight"] = ttnn.to_device(weight, device)
+
+            bias = (
+                ttnn.from_torch(bias_torch, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+                if bias_torch is not None
+                else None
+            )
+            parameters["decoder1"]["bn"]["bias"] = ttnn.to_device(bias, device)
+
+            running_mean = ttnn.from_torch(
+                batch_mean_torch, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
+            )
+            parameters["decoder1"]["bn"]["running_mean"] = ttnn.to_device(running_mean, device)
+
+            running_var = ttnn.from_torch(batch_var_torch, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+            parameters["decoder1"]["bn"]["running_var"] = ttnn.to_device(running_var, device)
+
+            parameters["decoder1"]["bn"]["eps"] = bn_layer.eps  # scalar, used directly in ops
+
+            parameters[f"decoder1"][1] = {}
+            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
+                getattr(model, f"decoder1")[3], getattr(model, f"decoder1")[4]
+            )
+            parameters[f"decoder1"][1]["weight"] = ttnn.from_torch(
+                conv_weight,
+                dtype=ttnn.bfloat16,
+            )
+            parameters[f"decoder1"][1]["bias"] = ttnn.from_torch(
+                torch.reshape(conv_bias, (1, 1, 1, -1)),
+                dtype=ttnn.bfloat16,
+            )
+
             parameters["conv"] = {}
             parameters["conv"]["weight"] = ttnn.from_torch(
                 model.conv.weight,
@@ -114,7 +172,7 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65553}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 3 * 8192}], indirect=True)
 @skip_for_grayskull()
 def test_unet(device, reset_seeds, model_location_generator):
     weights_path = "models/experimental/functional_vanilla_unet/unet.pt"
@@ -142,7 +200,7 @@ def test_unet(device, reset_seeds, model_location_generator):
     torch_output_tensor = reference_model(torch_input_tensor)
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(None), device=None
+        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
     )
 
     ttnn_model = TtUnet(device=device, parameters=parameters, model=reference_model)

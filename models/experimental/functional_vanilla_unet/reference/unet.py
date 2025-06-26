@@ -87,7 +87,7 @@ class UNet(nn.Module):
         self.upconv1 = nn.ConvTranspose2d(features * 2, features, kernel_size=2, stride=2)
         self.decoder1 = nn.Sequential(
             nn.Conv2d(features * 2, features, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(num_features=features),
+            nn.BatchNorm2d(num_features=features).eval(),
             nn.ReLU(inplace=True),
             nn.Conv2d(features, features, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(num_features=features),
