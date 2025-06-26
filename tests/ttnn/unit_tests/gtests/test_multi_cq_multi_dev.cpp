@@ -81,9 +81,7 @@ TEST_F(MultiCommandQueueT3KFixture, DISABLED_Test2CQMultiDeviceProgramsOnCQ1) {
             for (auto& dev : this->devs) {
                 auto dev_idx = dev.first;
                 auto device = dev.second;
-                if (i == 0 and outer_loop == 0) {
-                    device->enable_program_cache();
-                }
+
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
@@ -139,9 +137,7 @@ TEST_F(MultiCommandQueueT3KFixture, DISABLED_Test2CQMultiDeviceProgramsOnCQ0) {
             for (auto& dev : this->devs) {
                 auto dev_idx = dev.first;
                 auto device = dev.second;
-                if (i == 0 and outer_loop == 0) {
-                    device->enable_program_cache();
-                }
+
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
@@ -193,9 +189,6 @@ TEST_F(MultiCommandQueueT3KFixture, DISABLED_Test2CQMultiDeviceWithCQ1Only) {
             for (auto& dev : this->devs) {
                 auto dev_idx = dev.first;
                 auto device = dev.second;
-                if (i == 0 and outer_loop == 0) {
-                    device->enable_program_cache();
-                }
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
