@@ -83,7 +83,6 @@ def run_reduce_scatter_test(
     dtype=ttnn.bfloat8_b,
     profiler=BenchmarkProfiler(),
 ):
-    mesh_device.enable_program_cache()
     num_pages_per_packet = 4
     cyclic_buffer_size = 8
 
@@ -463,7 +462,7 @@ def test_rs_create_heads_6u_trace(mesh_device, trace_mode, dtype, use_program_ca
     ],
     indirect=True,
 )
-def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype, use_program_cache):
+def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -510,7 +509,7 @@ def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype, use_program_ca
     ],
     indirect=True,
 )
-def test_rs_create_heads_tg_no_trace(mesh_device, trace_mode, dtype, use_program_cache):
+def test_rs_create_heads_tg_no_trace(mesh_device, trace_mode, dtype):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):

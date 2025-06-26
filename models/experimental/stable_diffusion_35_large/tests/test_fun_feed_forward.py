@@ -29,7 +29,6 @@ from ..tt.parallel_config import ParallelConfig, create_dit_parallel_config
         (32, 128, 256),
     ],
 )
-@pytest.mark.usefixtures("use_program_cache")
 def test_feed_forward(
     *,
     mesh_device: ttnn.MeshDevice,

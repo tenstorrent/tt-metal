@@ -33,7 +33,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 )
 def test_run_mobilenetv2_trace_2cqs_inference(
     device,
-    use_program_cache,
     batch_size,
     model_location_generator,
 ):

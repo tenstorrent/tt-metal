@@ -23,7 +23,7 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_decoder_inference(mesh_device, use_program_cache, reset_seeds):
+def test_decoder_inference(mesh_device, reset_seeds):
     model_args = ModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 

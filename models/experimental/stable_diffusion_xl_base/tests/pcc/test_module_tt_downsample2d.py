@@ -32,7 +32,6 @@ def test_downsample2d(
     stride,
     padding,
     dilation,
-    use_program_cache,
     reset_seeds,
     conv_weights_dtype,
 ):

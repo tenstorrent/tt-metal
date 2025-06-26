@@ -281,26 +281,20 @@ def from_torch(
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
 
-    if memory_config is not None:
-        if device is None:
-            raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
+    if memory_config is not None and device is None:
+        raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
 
-    if mesh_mapper:
-        # TODO: #22258 - supply device to pytensor constructor directly.
-        tensor = ttnn.Tensor(
-            tensor,
-            dtype,
-            mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
-            tile,
-            layout,
-            memory_config,
-            pad_value,
-        )
-        if device is not None:
-            tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
-        return tensor
-    else:
-        return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile, cq_id, pad_value)
+    return ttnn.Tensor(
+        tensor=tensor,
+        data_type=dtype,
+        device=device,
+        layout=layout,
+        mem_config=memory_config,
+        tile=tile,
+        cq_id=cq_id,
+        pad_value=pad_value,
+        mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
+    )
 
 
 def _golden_function(tensor, *, torch_rank=None, **kwargs):
@@ -357,26 +351,7 @@ def to_torch(
     if mesh_composer:
         return mesh_composer.compose(tensor)
 
-    if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
-        raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
-
-    memory_config = tensor.memory_config()
-    if memory_config.is_sharded() and memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
-        raise RuntimeError("ttnn.to_torch: Shard spec must not be None for sharded tensors")
-
-    if (
-        memory_config.is_sharded()
-        and memory_config.shard_spec is not None
-        and memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL
-    ):
-        tensor = tensor.to_torch()
-    else:
-        if (tensor.layout != ttnn.ROW_MAJOR_LAYOUT) and not (
-            tensor.dtype == ttnn.bfloat8_b or tensor.dtype == ttnn.bfloat4_b
-        ):
-            tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT)
-
-        tensor = tensor.to_torch()
+    tensor = tensor.to_torch()
 
     if torch_rank is not None:
         while len(tensor.shape) > torch_rank:

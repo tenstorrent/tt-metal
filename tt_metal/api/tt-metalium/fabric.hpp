@@ -24,7 +24,7 @@ class MeshDevice;
 }  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_fabric {
-
+class FabricNodeId;
 size_t get_tt_fabric_channel_buffer_size_bytes();
 size_t get_tt_fabric_packet_header_size_bytes();
 size_t get_tt_fabric_max_payload_size_bytes();
@@ -53,8 +53,8 @@ size_t get_tt_fabric_max_payload_size_bytes();
 // connection appropriately. The API will not perform any checks to ensure that the
 // connection is indeed a 1D connection b/w all the workers.
 void append_fabric_connection_rt_args(
-    chip_id_t src_chip_id,
-    chip_id_t dst_chip_id,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,

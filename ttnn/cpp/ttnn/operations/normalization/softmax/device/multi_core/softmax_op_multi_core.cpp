@@ -26,13 +26,8 @@ namespace ttnn::operations::normalization {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) {
-    return input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
-}
-inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
-    return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
-}
-inline bool is_dram(const tt::tt_metal::Buffer* b) { return b->buffer_type() == tt::tt_metal::BufferType::DRAM; }
+
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)

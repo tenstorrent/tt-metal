@@ -210,9 +210,9 @@ public:
         if (shard_dims.empty()) {
             const TensorSpec tensor_spec(shape, layout);
             tt::tt_metal::HostBuffer replicated_buffer;
-            if (const bool pydata_borrowable = tensor_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
-                                               tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
-                                               tensor_spec.data_type() == tt::tt_metal::convert_to_data_type<T>()) {
+            if (tensor_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
+                tensor_spec.data_type() == tt::tt_metal::convert_to_data_type<T>()) {
                 replicated_buffer = tt::tt_metal::HostBuffer(span, buffer_pin);
             } else {
                 replicated_buffer = tt::tt_metal::host_buffer::get_host_buffer(Tensor::from_span(
@@ -441,7 +441,7 @@ TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMappe
         }
     }();
 
-    // TODO: #22258 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used directly
+    // TODO: #24115 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used directly
     // in Tensor storage.
     const auto distributed_tensor_config = [&config, &distributed_shape]() -> tt::tt_metal::DistributedTensorConfig {
         if (std::all_of(config.placements.begin(), config.placements.end(), [](const auto& p) {
