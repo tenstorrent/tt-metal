@@ -174,7 +174,6 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
         expected_num_workers_completed_[*sub_device_id] = 0;
     }
 
-    // Block after clearing counter(s) on dispatcher
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
         std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
@@ -427,6 +426,11 @@ void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids)
     for (auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         sub_device_cq_owner[*sub_device_id].finished(this->id_);
     }
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
+    if (thread_exception_ptr_) {
+        TT_THROW("TIMEOUT: potential hang detected, please check the graph capture");
+    }
+#endif
 }
 
 void FDMeshCommandQueue::write_shard_to_device(
@@ -615,35 +619,50 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
 
 void FDMeshCommandQueue::read_completion_queue() {
     while (true) {
-        {
-            std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);
-            reader_thread_cv_.wait(lock, [this] { return num_outstanding_reads_ or exit_condition_; });
-        }
-        if (exit_condition_) {
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
+        try {
+#endif
+            {
+                std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);
+                reader_thread_cv_.wait(lock, [this] { return num_outstanding_reads_ or exit_condition_; });
+            }
+            if (exit_condition_) {
+                return;
+            } else {
+                uint32_t num_reads = num_outstanding_reads_.load();
+                for (uint32_t i = 0; i < num_reads; i++) {
+                    auto mesh_read_descriptor = *(completion_queue_reads_.pop());
+                    std::visit(
+                        [&](auto&& mesh_read_descriptor) {
+                            using T = std::decay_t<decltype(mesh_read_descriptor)>;
+                            if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
+                                this->copy_buffer_data_to_user_space(mesh_read_descriptor);
+                            } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
+                                this->read_completion_queue_event(mesh_read_descriptor);
+                            } else {
+                                this->read_l1_data_from_completion_queue(mesh_read_descriptor);
+                            }
+                        },
+                        mesh_read_descriptor);
+                }
+                std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
+                num_outstanding_reads_.fetch_sub(num_reads);
+                if (num_outstanding_reads_ == 0) {
+                    reads_processed_cv_.notify_one();
+                }
+            }
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
+        } catch (std::runtime_error e) {
+            // Let's clean up the state so the main thread can handle it.
+            thread_exception_ptr_ = std::current_exception();
+            exit_condition_.store(true);
+            exit_condition_.notify_all();
+            num_outstanding_reads_.store(0);
+            num_outstanding_reads_.notify_all();
+            reads_processed_cv_.notify_all();
             return;
-        } else {
-            uint32_t num_reads = num_outstanding_reads_.load();
-            for (uint32_t i = 0; i < num_reads; i++) {
-                auto mesh_read_descriptor = *(completion_queue_reads_.pop());
-                std::visit(
-                    [&](auto&& mesh_read_descriptor) {
-                        using T = std::decay_t<decltype(mesh_read_descriptor)>;
-                        if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
-                            this->copy_buffer_data_to_user_space(mesh_read_descriptor);
-                        } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
-                            this->read_completion_queue_event(mesh_read_descriptor);
-                        } else {
-                            this->read_l1_data_from_completion_queue(mesh_read_descriptor);
-                        }
-                    },
-                    mesh_read_descriptor);
-            }
-            std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
-            num_outstanding_reads_.fetch_sub(num_reads);
-            if (num_outstanding_reads_ == 0) {
-                reads_processed_cv_.notify_one();
-            }
         }
+#endif
     }
 }
 
