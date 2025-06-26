@@ -91,6 +91,91 @@ operations_dict = {
 }
 
 
+def measure_op_accuracy_bf16_eq_only(operation_name, dest_dir):
+    parameters = datatypes_parameters["bfloat16"]
+
+    # Create 2^9 x 2^7 tensor (2^16 elements total)
+    TENSOR_WIDTH = 2**7
+    TENSOR_HEIGHT = 2**9
+    size = [TENSOR_HEIGHT, TENSOR_WIDTH]
+
+    SIGN_BITS = parameters["sign_bits"]  # should be 1
+    EXPONENT_BITS = parameters["exponent_bits"]
+    MANTISSA_BITS = parameters["mantissa_bits"]
+
+    NUMPY_TYPE = parameters["numpy_type"]
+    NUMPY_INT_TYPE = parameters["numpy_int_type"]
+    TORCH_TYPE = parameters["torch_type"]
+    TORCH_INT_TYPE = parameters["torch_int_type"]
+    TTNN_TYPE = parameters["ttnn_type"]
+
+    # Create input tensors
+    input_np = np.arange(0, 2**16, dtype=NUMPY_INT_TYPE)  # All possible bfloat16 values
+    torch_value = torch.from_numpy(input_np).reshape(size)
+    torch_input_bf16 = torch_value.view(TORCH_TYPE)  # reinterpret data as bfloat16
+    # torch_input_bf16[torch.isnan(torch_input_bf16)] = 0.0 # replace nan to 0.0
+
+    torch_output_ref = torch.zeros(size, dtype=torch.float64)
+    ttnn_output = ttnn.zeros(size, dtype=TTNN_TYPE, device=device, layout=ttnn.TILE_LAYOUT)
+
+    (torch_op, ttnn_op, _, scalar_list, parent_op) = operations_dict[operation_name]
+
+    match_percentages = []
+    scalar_labels = []
+
+    for scalar in scalar_list:
+        print(f"  Testing with scalar = {scalar}")
+        scalar_tensor = torch.full(size, scalar, dtype=TORCH_TYPE)
+
+        torch_output_ref = torch_op(torch_input_bf16, scalar_tensor)
+
+        ttnn_output = ttnn.zeros(size, dtype=TTNN_TYPE, device=device, layout=ttnn.TILE_LAYOUT)
+
+        def launch_ttnn_op(x):
+            ttnn_value = ttnn.from_torch(x, device=device, dtype=TTNN_TYPE, layout=ttnn.TILE_LAYOUT)
+            return ttnn.to_torch(ttnn_op(ttnn_value, scalar, output_tensor=ttnn_output))
+
+        torch_output_actual = launch_ttnn_op(torch_input_bf16)
+
+        match_mask = torch.eq(torch_output_ref, torch_output_actual)
+        percent_match = 100.0 * match_mask.sum().item() / match_mask.numel()
+        print(f"\t Match % for scalar {scalar}: {percent_match:.2f}%")
+
+        # Save to CSV
+        df = pd.DataFrame(
+            {
+                "Input": torch_input_bf16.flatten().tolist(),
+                "Torch result": torch_output_ref.flatten().tolist(),
+                "TTNN Result": torch_output_actual.flatten().tolist(),
+                "Equal check": match_mask.flatten().tolist(),
+            }
+        )
+        filename = f"{operation_name}-bfloat16-eq-scalar={scalar}.csv"
+        csv_path = os.path.join(dest_dir, filename)
+        df.to_csv(csv_path, index_label="index")
+        print(f"\t Saved results to {csv_path}")
+
+        scalar_labels.append(str(scalar))
+        match_percentages.append(percent_match)
+
+    # Plot bar graph of scalar vs match %
+    plt.figure(figsize=(10, 6))
+    plt.bar(scalar_labels, match_percentages, color="skyblue")
+    plt.title(f"{operation_name} - Equality Match % per Scalar (bfloat16)")
+    plt.xlabel("Scalar")
+    plt.ylabel("Match Percentage (%)")
+    plt.xticks(rotation=45)
+    plt.grid(True, axis="y")
+
+    plot_dir = os.path.join(os.path.dirname(dest_dir.rstrip("/")), "plots")
+    os.makedirs(plot_dir, exist_ok=True)
+    plot_path = os.path.join(plot_dir, f"{operation_name}-bfloat16-eq-barplot.png")
+    plt.tight_layout()
+    plt.savefig(plot_path)
+    plt.close()
+    print(f"----> Overall result : Bar plot saved to: {plot_path}")
+
+
 def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
     # Use bfloat16 parameters
     parameters = datatypes_parameters["bfloat16"]
@@ -334,7 +419,7 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
     plot_path = os.path.join(plot_dir, f"{operation_name}-bfloat16_all_scalars_{group_size}.png")
     plt.savefig(plot_path)
     plt.close()
-    print(f"--> Combined scalar plot saved to: {plot_path}")
+    print(f"----> Combined scalar plot saved to: {plot_path}")
 
 
 def main(args):
@@ -346,9 +431,14 @@ def main(args):
     np.seterr(invalid="ignore")
     np.seterr(over="ignore")
 
-    all_operations = [
+    #   Ops that require equal check
+    equal_check_operations = [
         "maximum",
         "minimum",
+    ]
+
+    all_operations = [
+        #
     ]
 
     highres_operations = [
@@ -364,6 +454,18 @@ def main(args):
 
     cnt = 0
     total_operation_cnt = len(all_operations) + len(highres_operations)
+
+    for operation in equal_check_operations:
+        cnt += 1
+        print(f"\nRunning operation {operation}  #{cnt}/{total_operation_cnt}")
+        try:
+            measure_op_accuracy_bf16_eq_only(operation, dest_dir)
+            success_count += 1
+            successfull_operations.append(operation)
+        except Exception as e:
+            print(f"{RED}Could not run operation {operation}: {e}{RESET}")
+            print(f"{RED}{traceback.format_exc()}{RESET}")
+            failed_operations.append(operation)
 
     for operation in all_operations:
         cnt += 1
