@@ -265,7 +265,9 @@ void create_mux_kernel(
     tt::tt_metal::Program& program_handle) {
     std::vector<uint32_t> mux_ct_args = mux_kernel_config.get_fabric_mux_compile_time_args();
     std::vector<uint32_t> mux_rt_args = {};
-    const auto& available_links = get_forwarding_link_indices(device->id(), dest_device->id());
+    const auto src_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+    const auto dst_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dest_device->id());
+    const auto& available_links = get_forwarding_link_indices(src_node_id, dst_node_id);
     TT_FATAL(
         available_links.size() > 0,
         "Couldnt find any forwarding routing planes from: {} to: {}",
@@ -273,9 +275,7 @@ void create_mux_kernel(
         dest_device->id());
 
     append_fabric_connection_rt_args(
-        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id()),
-        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dest_device->id()),
-        available_links[0], program_handle, {mux_logical_core}, mux_rt_args);
+        src_node_id, dst_node_id, available_links[0], program_handle, {mux_logical_core}, mux_rt_args);
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {
         std::make_pair(mux_kernel_config.get_start_address_to_clear(), mux_kernel_config.get_num_bytes_to_clear())};
