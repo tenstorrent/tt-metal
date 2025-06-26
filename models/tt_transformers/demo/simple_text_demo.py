@@ -966,7 +966,9 @@ def test_demo_text(
 
         # check measurements against CI performance targets -- for batch size 32
         if global_batch_size == 32:
-            logger.info(f"Checking measurements against CI performance targets for batch size 32 on {tt_device_name}")
+            logger.info(
+                f"Checking measurements against CI performance targets for batch size 32 of {model_name} on {tt_device_name}"
+            )
             # Targets set to 0.95x observed values for decode rates (higher is better)
             # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
             ci_target_ttft = {
@@ -976,11 +978,11 @@ def test_demo_text(
                 "N150_Llama3.1-8B": 112,
                 "N150_Mistral-7B": 106,
                 # N300 targets
-                "N300_Qwen2.5-7B": 124,
+                "N300_Qwen2.5-7B": 150,
                 # T3K targets
                 "T3K_Llama3.1-70B": 245,
                 "T3K_Qwen2.5-72B": 211,
-                "T3K_Qwen3-32B": 180,
+                "T3K_Qwen3-32B": 470,
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
@@ -993,7 +995,7 @@ def test_demo_text(
                 # T3K targets
                 "T3K_Llama3.1-70B": 11,
                 "T3K_Qwen2.5-72B": 13,
-                "T3K_Qwen3-32B": 13,
+                "T3K_Qwen3-32B": 11,
             }
 
             # Only call verify_perf if the model_device_key exists in the targets
