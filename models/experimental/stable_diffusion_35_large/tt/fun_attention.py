@@ -319,6 +319,7 @@ def sd_joint_attention(
             cluster_axis=parallel_manager.dit_parallel_config.ulysses_parallel.mesh_axis,
             mesh_device=device,
             topology=parallel_manager.dit_parallel_config.topology,
+            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, "spatial_buffer"),
             multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
         )
         prompt = unpadded_all_gather_async(
@@ -327,6 +328,7 @@ def sd_joint_attention(
             cluster_axis=parallel_manager.dit_parallel_config.ulysses_parallel.mesh_axis,
             mesh_device=device,
             topology=parallel_manager.dit_parallel_config.topology,
+            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, "prompt_buffer"),
             multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
         )
 

@@ -80,11 +80,12 @@ class TtLinearParameters:
             # Shard the bias of a linear operation on the first dimension.
             # A single device receive the bias as is, while the other ones receive zero tensors of the same
             # shape so that the bias is not added multiple times after gathering.
-            # TODO: Fix axes
             mesh_height, mesh_width = device.shape
             zeros = torch.zeros_like(bias)
             bias = torch.cat([bias] + [zeros] * (mesh_width - 1), dim=0)
-            bias_mm = ttnn.ShardTensor2dMesh(device, mesh_shape=(mesh_height, mesh_width), dims=(None, 0))
+            bias_dims = [None, None]
+            bias_dims[parallel_config.tensor_parallel.mesh_axis] = 0
+            bias_mm = ttnn.ShardTensor2dMesh(device, mesh_shape=(mesh_height, mesh_width), dims=bias_dims)
         elif shard_dim in [1, -1]:
             bias_dims = [None, None]
             bias_dims[parallel_config.tensor_parallel.mesh_axis] = shard_dim
@@ -283,7 +284,7 @@ class TtLinearParameters:
                 weight,
                 mesh_device=device,
                 mesh_shape=tuple(device.shape),
-                dims=[shard_dim, None]
+                dims=[shard_dim, None],
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
             ),

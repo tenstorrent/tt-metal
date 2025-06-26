@@ -325,7 +325,7 @@ class TtStableDiffusion3Pipeline:
                 if self.parallel_manager.dit_parallel_config.cfg_parallel.factor == 2
                 else prompt_embeds,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 device=submesh_device,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     submesh_device, self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape, dims=[None, None]

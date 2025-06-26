@@ -298,6 +298,7 @@ def unpadded_all_gather_async(
     multi_device_global_semaphore,
     memory_config=None,
     num_links=1,
+    persistent_output_tensor=None,
 ):
     shape = list(x.shape)
 
@@ -310,6 +311,7 @@ def unpadded_all_gather_async(
         multi_device_global_semaphore=multi_device_global_semaphore,
         memory_config=memory_config,
         num_links=num_links,
+        persistent_output_tensor=persistent_output_tensor,
     )
 
     shape[dim] = x.shape[dim]

@@ -122,7 +122,7 @@ def sd_layer_norm(
     program_config: ttnn.ProgramConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
     cfg_index: int = 0,
-    sync=False,
+    is_spatial: bool = True,
 ) -> ttnn.Tensor:
     if not parameters.distributed:
         return ttnn.layer_norm(
@@ -146,22 +146,22 @@ def sd_layer_norm(
         dtype=ttnn.bfloat16,
     )
 
-    # if sync:
-    # ttnn.synchronize_device(stats.device())
-    stats = ttnn.experimental.all_gather_async(
+    buffer_name = "spatial_layernorm_buffer" if is_spatial else "prompt_layernorm_buffer"
+    stats_gathered = ttnn.experimental.all_gather_async(
         stats,
         dim=len(x.shape) - 1,
         cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
         mesh_device=x.device(),
         topology=parallel_manager.dit_parallel_config.topology,
         multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
+        persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, buffer_name),
         memory_config=memory_config,
         num_links=1,
     )
 
     x = ttnn.layer_norm_post_all_gather(
         x,
-        stats,
+        stats_gathered,
         weight=parameters.weight,
         bias=parameters.bias,
         epsilon=parameters.eps,

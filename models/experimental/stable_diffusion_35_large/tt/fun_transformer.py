@@ -139,7 +139,9 @@ def sd_transformer(
     full_seq_len = spatial_B1NsDt.shape[2] * parallel_manager.dit_parallel_config.sequence_parallel.factor
     kv_gathered_shape = [spatial_B1NsDt.shape[0], local_heads, full_seq_len, spatial_B1NsDt.shape[3] // local_heads]
 
-    parallel_manager.maybe_init_persistent_buffers(kv_gathered_shape)
+    parallel_manager.maybe_init_persistent_buffers(
+        kv_gathered_shape, list(spatial_B1NsDt.padded_shape), list(prompt_B1LDt.padded_shape)
+    )
     for i, block in enumerate(parameters.transformer_blocks, start=1):
         spatial_B1NsDt, prompt_out_B1LDt = sd_transformer_block(
             spatial=spatial_B1NsDt,
@@ -167,6 +169,7 @@ def sd_transformer(
             mesh_device=spatial.device(),
             topology=parallel_manager.dit_parallel_config.topology,
             multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
+            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, "spatial_seq_gather_buffer"),
             num_links=1,
         )
         spatial = spatial_B1NDt
@@ -179,6 +182,7 @@ def sd_transformer(
             mesh_device=spatial.device(),
             topology=parallel_manager.dit_parallel_config.topology,
             multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
+            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, "spatial_tensor_gather_buffer"),
             num_links=1,
         )
         spatial = spatial_B1ND

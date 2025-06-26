@@ -176,6 +176,7 @@ def sd_dual_attn_block(
             mesh_device=device,
             topology=parallel_manager.dit_parallel_config.topology,
             multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
+            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, "spatial_buffer"),
         )
         prompt_scaled = unpadded_all_gather_async(
             prompt_scaled,
@@ -184,6 +185,7 @@ def sd_dual_attn_block(
             mesh_device=device,
             topology=parallel_manager.dit_parallel_config.topology,
             multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
+            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, "prompt_buffer"),
         )
 
     spatial_attn, prompt_attn = sd_joint_attention(
@@ -211,11 +213,13 @@ def sd_gated_ff_block(
     gate: ttnn.Tensor,
     scale: ttnn.Tensor,
     shift: ttnn.Tensor,
+    is_spatial: bool = True,
 ) -> ttnn.Tensor:
     device = inp.device()
 
     scaled = inp * (1 + scale) + shift
     if parallel_manager.is_tensor_parallel:
+        buffer_name = "spatial_buffer" if is_spatial else "prompt_buffer"
         scaled = unpadded_all_gather_async(
             scaled,
             dim=3,
@@ -223,6 +227,7 @@ def sd_gated_ff_block(
             mesh_device=device,
             topology=parallel_manager.dit_parallel_config.topology,
             multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
+            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, buffer_name),
         )
     result = gate * sd_feed_forward(
         scaled,
@@ -276,7 +281,6 @@ def sd_transformer_block(  # noqa: PLR0915
 
     context_pre_only = parameters.prompt_ff is None
     if context_pre_only:
-        # print(f"chunking prompt_time for context pre only: {prompt_time.shape}")
         [
             prompt_scale_attn,
             prompt_shift_attn,
@@ -287,7 +291,6 @@ def sd_transformer_block(  # noqa: PLR0915
         prompt_scale_ff = None
         prompt_gate_ff = None
     else:
-        # print(f"not context pre only: {prompt_time.shape}")
         [
             prompt_shift_attn,
             prompt_scale_attn,
@@ -298,13 +301,11 @@ def sd_transformer_block(  # noqa: PLR0915
         ] = chunk_time(prompt_time, 6)
 
     spatial_normed = sd_layer_norm(
-        spatial, parameters.spatial_norm_1, parallel_manager=parallel_manager, cfg_index=cfg_index
+        spatial, parameters.spatial_norm_1, parallel_manager=parallel_manager, cfg_index=cfg_index, is_spatial=True
     )
-    # ttnn.synchronize_device(spatial_normed.device())
     prompt_normed = sd_layer_norm(
-        prompt, parameters.prompt_norm_1, parallel_manager=parallel_manager, cfg_index=cfg_index
+        prompt, parameters.prompt_norm_1, parallel_manager=parallel_manager, cfg_index=cfg_index, is_spatial=False
     )
-    # ttnn.synchronize_device(prompt_normed.device())
     spatial_attn, prompt_attn = sd_dual_attn_block(
         spatial=spatial_normed,
         prompt=prompt_normed,
@@ -321,7 +322,6 @@ def sd_transformer_block(  # noqa: PLR0915
         L=L,
         cfg_index=cfg_index,
     )
-    # ttnn.synchronize_device(spatial_attn.device())
     spatial += spatial_attn
 
     if parameters.spatial_attn is not None:
@@ -340,9 +340,8 @@ def sd_transformer_block(  # noqa: PLR0915
         )
 
     spatial_normed = sd_layer_norm(
-        spatial, parameters.spatial_norm_2, parallel_manager=parallel_manager, cfg_index=cfg_index
+        spatial, parameters.spatial_norm_2, parallel_manager=parallel_manager, cfg_index=cfg_index, is_spatial=True
     )
-    # ttnn.synchronize_device(spatial_normed.device())
     spatial += sd_gated_ff_block(
         spatial_normed,
         parameters=parameters.spatial_ff,
@@ -351,8 +350,8 @@ def sd_transformer_block(  # noqa: PLR0915
         gate=spatial_gate_ff,
         scale=spatial_scale_ff,
         shift=spatial_shift_ff,
+        is_spatial=True,
     )
-    # ttnn.synchronize_device(spatial.device())
     if context_pre_only:
         return spatial, None
 
@@ -362,9 +361,8 @@ def sd_transformer_block(  # noqa: PLR0915
 
     prompt += prompt_attn
     prompt_normed = sd_layer_norm(
-        prompt, parameters.prompt_norm_2, parallel_manager=parallel_manager, cfg_index=cfg_index, sync=False
+        prompt, parameters.prompt_norm_2, parallel_manager=parallel_manager, cfg_index=cfg_index, is_spatial=False
     )
-    # ttnn.synchronize_device(prompt_normed.device())
     prompt += sd_gated_ff_block(
         prompt_normed,
         parameters=parameters.prompt_ff,
@@ -373,8 +371,8 @@ def sd_transformer_block(  # noqa: PLR0915
         gate=prompt_gate_ff,
         scale=prompt_scale_ff,
         shift=prompt_shift_ff,
+        is_spatial=False,
     )
-    # ttnn.synchronize_device(prompt.device())
     return spatial, prompt
 
 

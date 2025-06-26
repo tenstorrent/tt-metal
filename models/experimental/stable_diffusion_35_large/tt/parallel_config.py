@@ -146,7 +146,7 @@ class StableDiffusionParallelManager:
         self._init_subdevice()
 
         # SD35-specific semaphores
-        semaphore_names = [("ping_pong", 2), ("ring_sdpa", 2), ("rs_from", None), ("rs_to", None)]
+        semaphore_names = [("ping_pong", 4), ("ring_sdpa", 2), ("rs_from", None), ("rs_to", None)]
         self._init_semaphores(semaphore_names)
         self.ping_pong_idx = 0
 
@@ -189,14 +189,40 @@ class StableDiffusionParallelManager:
 
         self.cfg_semaphores = cfg_semaphores
 
-    def maybe_init_persistent_buffers(self, KV_shape):
+    def maybe_init_persistent_buffers(self, KV_shape, spatial_shape, prompt_shape):
         """
         Create persistent buffers for RingJointAttention given expected KV shape
 
         KV_shape: [B, H, N, D] where H is fractured by `ulysses_parallel` factor
         """
-        if not self.is_ring_parallel:
-            return
+
+        spatial_buffer_shape = spatial_shape[:]
+        spatial_buffer_shape[3] *= self.dit_parallel_config.tensor_parallel.factor
+        prompt_buffer_shape = prompt_shape[:]
+        prompt_buffer_shape[3] *= self.dit_parallel_config.tensor_parallel.factor
+
+        spatial_layernorm_buffer_shape = spatial_shape[:]
+        spatial_layernorm_buffer_shape[3] = 64 * self.dit_parallel_config.tensor_parallel.factor
+        prompt_layernorm_buffer_shape = prompt_shape[:]
+        prompt_layernorm_buffer_shape[3] = 64 * self.dit_parallel_config.tensor_parallel.factor
+
+        spatial_seq_gather_buffer_shape = spatial_shape[:]
+        spatial_seq_gather_buffer_shape[2] *= self.dit_parallel_config.sequence_parallel.factor
+        spatial_tensor_gather_buffer_shape = spatial_seq_gather_buffer_shape[:]
+        spatial_tensor_gather_buffer_shape[3] *= self.dit_parallel_config.tensor_parallel.factor
+
+        ping_pong_buffers = [
+            "spatial_buffer",
+            "prompt_buffer",
+            "spatial_seq_gather_buffer",
+            "spatial_tensor_gather_buffer",
+            "spatial_layernorm_buffer",
+            "prompt_layernorm_buffer",
+        ]
+        self._ping_pong_buffer_indices = [
+            {buffer_name: 0 for buffer_name in ping_pong_buffers}
+            for _ in range(self.dit_parallel_config.cfg_parallel.factor)
+        ]
 
         if len(self.persistent_buffers[0]) == 0 or KV_shape != self.persistent_buffers[0]["K_gathered"].shape:
             print("Generating persistent buffers for RingJointAttention")
@@ -211,10 +237,54 @@ class StableDiffusionParallelManager:
                         mesh_mapper=ttnn.ShardTensor2dMesh(sm, mesh_shape=tuple(sm.shape), dims=[None, None]),
                     )
 
+        for cfg_idx in range(self.dit_parallel_config.cfg_parallel.factor):
+            sm = self.submesh_devices[cfg_idx]
+            for buffer_name, buffer_shape in zip(
+                ping_pong_buffers,
+                [
+                    spatial_buffer_shape,
+                    prompt_buffer_shape,
+                    spatial_seq_gather_buffer_shape,
+                    spatial_tensor_gather_buffer_shape,
+                    spatial_layernorm_buffer_shape,
+                    prompt_layernorm_buffer_shape,
+                ],
+            ):
+                if (
+                    buffer_name not in self.persistent_buffers[cfg_idx]
+                    or buffer_shape != self.persistent_buffers[cfg_idx][buffer_name][0].shape
+                ):
+                    self.persistent_buffers[cfg_idx][buffer_name] = [
+                        ttnn.from_torch(
+                            torch.empty(buffer_shape),
+                            device=sm,
+                            layout=ttnn.TILE_LAYOUT,
+                            dtype=ttnn.bfloat16,
+                            mesh_mapper=ttnn.ShardTensor2dMesh(sm, mesh_shape=tuple(sm.shape), dims=[None, None]),
+                        )
+                        for _ in range(2)
+                    ]  # double buffer
+
     def get_ping_pong_semaphore(self, cfg_index):
         cur_idx = self.ping_pong_idx
-        self.ping_pong_idx = 1 - self.ping_pong_idx
-        return self.cfg_semaphores[cfg_index]["ping_pong"][cur_idx]
+        self.ping_pong_idx = 2 - self.ping_pong_idx
+        return self.cfg_semaphores[cfg_index]["ping_pong"][cur_idx : cur_idx + 2]
+
+    def get_ping_pong_buffer(self, cfg_index, buffer_name):
+        cur_idx = self._ping_pong_buffer_indices[cfg_index][buffer_name]
+        self._ping_pong_buffer_indices[cfg_index][buffer_name] = (
+            1 - self._ping_pong_buffer_indices[cfg_index][buffer_name]
+        )
+        return self.persistent_buffers[cfg_index][buffer_name][cur_idx]
+
+    def reset_global_semaphores(self):
+        for cfg_idx in range(self.dit_parallel_config.cfg_parallel.factor):
+            for sems in self.cfg_semaphores[cfg_idx].values():
+                if isinstance(sems, list):
+                    for sem in sems:
+                        ttnn.reset_global_semaphore_value(sem, 0)
+                else:
+                    ttnn.reset_global_semaphore_value(sems, 0)
 
     @property
     def is_ring_parallel(self):
