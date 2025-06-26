@@ -27,6 +27,7 @@ class TTSampling(LightweightModule):
         self.num_devices = args.num_devices
         self.max_batch_size = args.max_batch_size
         self.max_top_k = args.max_top_k
+        self.temperature = temperature
 
         max_num_gather_links = 4 if is_RING_6U else 3
         self.num_gather_links = (
@@ -34,12 +35,14 @@ class TTSampling(LightweightModule):
         )
 
         # Prepare temperature reciprocal tensor
-        if temperature is None:
+        if temperature is None or temperature == 0.0:
             temperature_reciprocal_scalar = [1.0] * self.max_batch_size
         elif isinstance(temperature, float):
             temperature_reciprocal_scalar = [1.0 / temperature] * self.max_batch_size
         else:
-            temperature_reciprocal_scalar = [1.0 / temperature_i for temperature_i in temperature]
+            temperature_reciprocal_scalar = [
+                1.0 / temperature_i if temperature_i != 0.0 else 1.0 for temperature_i in temperature
+            ]
 
         temperature_reciprocal_tensor_torch = torch.ones(
             [1, 1, self.max_batch_size, self.args.max_top_k * self.args.cluster_shape[0]], dtype=torch.bfloat16
@@ -89,6 +92,11 @@ class TTSampling(LightweightModule):
         assert all(k_i <= self.max_top_k for k_i in k)
         assert type(k) == list and len(k) == x.shape[2]
         assert type(p) == list and len(p) == x.shape[2]
+
+        if isinstance(self.temperature, float) and self.temperature == 0.0:
+            k = [1] * x.shape[2]
+        elif isinstance(self.temperature, list):
+            k = [k[i] if self.temperature[i] != 0.0 else 1 for i in range(len(self.temperature))]
 
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.args.sub_core_grids)
 
