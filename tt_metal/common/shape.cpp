@@ -81,7 +81,7 @@ tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape) {
         return tt::stl::SmallVector<size_t>(shape.rank(), 0);
     }
 
-    ttnn::SmallVector<size_t> strides;
+    tt::stl::SmallVector<size_t> strides;
     for (size_t index = 0; index < shape.rank(); index++) {
         num_elements /= static_cast<size_t>(shape[index]);
         strides.push_back(num_elements);

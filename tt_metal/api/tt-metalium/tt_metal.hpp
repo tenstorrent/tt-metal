@@ -332,7 +332,7 @@ uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, 
  * | [DRAM_UNRESERVED_BASE, dram_size)         | Yes      | | host_buffer  | Buffer on host to copy data from |
  * std::vector<uint32_t> | Host buffer must be fully fit DRAM buffer | Yes      |
  */
-bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint64_t address, std::vector<uint32_t>& host_buffer);
+bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer);
 
 /**
  * Copy data from a device DRAM channel to a host buffer
@@ -350,7 +350,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint64_t addres
  * | Buffer on host to copy data into                             | std::vector<uint32_t> | | Yes      |
  */
 bool ReadFromDeviceDRAMChannel(
-    IDevice* device, int dram_channel, uint64_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
+    IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
 
 /**
  * Copy data from a host buffer into an L1 buffer. (Note: Current Can not be a CircularBuffer.)
