@@ -63,8 +63,6 @@ void append_fabric_connection_rt_args(
 
 FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id);
 
-size_t get_fabric_max_payload_size_bytes();
-
 namespace experimental {
 size_t get_number_of_available_routing_planes(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t cluster_axis, size_t row_or_col);
