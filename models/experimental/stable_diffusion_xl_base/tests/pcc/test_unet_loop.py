@@ -74,6 +74,12 @@ def run_tt_denoising(
 
         if not compile_run:
             ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
+        else:
+            ttnn.synchronize_device(ttnn_device)
+            torch_tt_latents = ttnn.to_torch(tt_latents)
+            torch_tt_latents = torch.reshape(torch_tt_latents, (B, H, W, C))
+            torch_tt_latents = torch.permute(torch_tt_latents, (0, 3, 1, 2))
+            print(torch_tt_latents)
     else:
         ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=True)
     return tid, tt_latents_device, tt_latents_output, [C, H, W]
@@ -358,7 +364,7 @@ def run_unet_inference(
             ttnn.DRAM_MEMORY_CONFIG,
         ),
     ]
-
+    print(tt_scheduler.step_index)
     prepare_input_tensors(
         [
             tt_latents,
@@ -383,10 +389,34 @@ def run_unet_inference(
         tid=None,
         compile_run=True,
     )
-    tt_scheduler.set_step_index(0)
+
+    prepare_input_tensors(
+        [
+            tt_latents,
+            *ttnn_prompt_embeds[0],
+            ttnn_added_cond_kwargs[0][0]["text_embeds"],
+            ttnn_added_cond_kwargs[0][1]["text_embeds"],
+        ],
+        [tt_latents_device, *ttnn_prompt_embeds_device, *ttnn_add_text_embeds_device],
+    )
+    tid, _, _, _ = run_tt_denoising(
+        ttnn_device=ttnn_device,
+        tt_latents_device=tt_latents_device,
+        tt_latents_output=None,
+        tt_unet=tt_unet,
+        tt_scheduler=tt_scheduler,
+        input_shape=[B, C, H, W],
+        ttnn_prompt_embeds=ttnn_prompt_embeds_device,
+        ttnn_add_text_embeds=ttnn_add_text_embeds_device,
+        ttnn_add_time_ids=ttnn_add_time_ids,
+        guidance_scale=guidance_scale,
+        extra_step_kwargs=extra_step_kwargs,
+        tid=None,
+    )
+    # tt_scheduler.set_step_index(0)
     ttnn.synchronize_device(ttnn_device)
     pcc_per_iter = []
-    tid = None
+    # tid = None
     tt_latents_output = None
     logger.info("Starting ttnn inference...")
     for iter in range(len(prompts)):
@@ -399,8 +429,10 @@ def run_unet_inference(
             ],
             [tt_latents_device, *ttnn_prompt_embeds_device, *ttnn_add_text_embeds_device],
         )
+        print(f"iter {iter}")
         logger.info(f"Running inference for prompt {iter + 1}/{len(prompts)}: {prompts[iter]}")
         for i, (t, tt_t) in tqdm(enumerate(zip(timesteps, ttnn_timesteps)), total=len(ttnn_timesteps)):
+            print(tt_scheduler.step_index)
             tid, tt_latents_device, tt_latents_output, [C, H, W] = run_tt_denoising(
                 ttnn_device=ttnn_device,
                 tt_latents_device=tt_latents_device,
@@ -426,13 +458,16 @@ def run_unet_inference(
                 extra_step_kwargs=extra_step_kwargs,
             )
 
+            ttnn.synchronize_device(ttnn_device)
             if i < (len(ttnn_timesteps) - 1):
                 tt_scheduler.inc_step_index()
 
+            torch_tt_latents = tt_latents_device.cpu(blocking=False)
             ttnn.synchronize_device(ttnn_device)
-            torch_tt_latents = ttnn.to_torch(tt_latents_device)
+            torch_tt_latents = ttnn.to_torch(torch_tt_latents)
             torch_tt_latents = torch.reshape(torch_tt_latents, (B, H, W, C))
             torch_tt_latents = torch.permute(torch_tt_latents, (0, 3, 1, 2))
+            print(torch_tt_latents)
 
             _, pcc_message = comp_pcc(latents, torch_tt_latents, 0.8)
             logger.info(f"PCC of {i}. iteration is: {pcc_message}")
