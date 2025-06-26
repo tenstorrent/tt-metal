@@ -38,8 +38,18 @@ tt::stl::SmallVector<int> normalize_dims(const tt::stl::SmallVector<int>& dims, 
     return normalized_dims;
 }
 
+// Helper to compute adapted types for explicit instantiations per data type `T`.
+template <typename T>
+auto compute_adapted_type() -> decltype(xt::adapt(
+    std::declval<T*>(), std::declval<size_t>(), xt::no_ownership(), std::declval<std::vector<size_t>>()));
+
+template <typename T>
+using AdaptedType = decltype(compute_adapted_type<T>());
+
+}  // namespace
+
 template <typename Expression>
-auto chunk_ndim_impl(
+StridedViews<Expression> chunk_ndim(
     const xt::xexpression<Expression>& expr_base,
     const tt::stl::SmallVector<int>& num_chunks,
     const tt::stl::SmallVector<int>& dims) {
@@ -110,32 +120,9 @@ auto chunk_ndim_impl(
     return chunk_views;
 }
 
-// Helper to compute adapted types for explicit instantiations per data type `T`.
-template <typename T>
-auto compute_adapted_type() -> decltype(xt::adapt(
-    std::declval<T*>(), std::declval<size_t>(), xt::no_ownership(), std::declval<std::vector<size_t>>()));
-
-template <typename T>
-using AdaptedType = decltype(compute_adapted_type<T>());
-
-}  // namespace
-
 template <typename Expression>
 StridedViews<Expression> chunk(const xt::xexpression<Expression>& expr, int num_chunks, int dim) {
-    return chunk_ndim_impl(expr, {num_chunks}, {dim});
-}
-
-template <typename Expression>
-StridedViews<Expression> chunk_ndim(
-    const xt::xexpression<Expression>& expr,
-    const tt::stl::SmallVector<int>& num_chunks,
-    const tt::stl::SmallVector<int>& dims) {
-    return chunk_ndim_impl(expr, num_chunks, dims);
-}
-
-template <typename Expression>
-xt::xarray<typename Expression::value_type> concat(const std::vector<Expression>& v, int dim) {
-    return concat_ndim<Expression>(v, {v.size()}, {dim});
+    return chunk_ndim(expr, {num_chunks}, {dim});
 }
 
 template <typename Expression>
@@ -216,6 +203,11 @@ xt::xarray<typename Expression::value_type> concat_ndim(
     }
 
     return result;
+}
+
+template <typename Expression>
+xt::xarray<typename Expression::value_type> concat(const std::vector<Expression>& v, int dim) {
+    return concat_ndim<Expression>(v, {v.size()}, {dim});
 }
 
 // Explicit instantiations for the public API.
