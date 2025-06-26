@@ -446,7 +446,7 @@ concept IntType =
     std::is_same_v<T, unsigned short> || std::is_same_v<T, unsigned int> || std::is_same_v<T, unsigned long> ||
     std::is_same_v<T, unsigned long long>;
 
-static void seed(std::size_t seed) { RANDOM_GENERATOR = std::mt19937(seed); }
+inline void seed(std::size_t seed) { RANDOM_GENERATOR = std::mt19937(seed); }
 
 template <typename T>
 static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layout = Layout::ROW_MAJOR) {
@@ -478,7 +478,7 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
     return Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);
 }
 
-static Tensor random(
+inline Tensor random(
     const ttnn::Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR) {
     switch (data_type) {
         case DataType::UINT16: return uniform(uint16_t(0), uint16_t(1), shape, layout);
@@ -492,7 +492,7 @@ static Tensor random(
 }  // namespace random
 
 namespace detail {
-static bool nearly_equal(float a, float b, float epsilon = 1e-5f, float abs_threshold = 1e-5f) {
+inline bool nearly_equal(float a, float b, float epsilon = 1e-5f, float abs_threshold = 1e-5f) {
     auto diff = std::abs(a - b);
     auto norm = std::min((std::abs(a) + std::abs(b)), std::numeric_limits<float>::max());
     auto result = diff < std::max(abs_threshold, epsilon * norm);

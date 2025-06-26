@@ -525,7 +525,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
     uint32_t in_channels,
     uint32_t out_channels,
     bool is_mm_conv) {
-    ttnn::Tensor input_tensor = input_tensor_;  // tensor to return
+    const ttnn::Tensor& input_tensor = input_tensor_;  // tensor to return
     bool input_tensor_on_device = tt::tt_metal::is_device_tensor(input_tensor_);
     bool needs_shard_or_reshard = false;
     if (conv_config.override_sharding_config && conv_config.reshard_if_not_optimal) {
@@ -679,7 +679,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     const auto flattened_padded_input_shape = flatten_4d_shape(input_tensor.padded_shape());
 
     input_tensor = ttnn::reshape(input_tensor, flattened_input_shape, flattened_padded_input_shape);
-    const ttnn::Shape input_shape = flattened_input_shape;
+    const ttnn::Shape& input_shape = flattened_input_shape;
 
     if (needs_shard_or_reshard) {
         uint32_t tensor_height = input_shape[2];
@@ -702,7 +702,12 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
             if (is_mm_conv && input_tensor.layout() == Layout::ROW_MAJOR &&
                 parallel_config.shard_scheme != TensorMemoryLayout::HEIGHT_SHARDED) {
                 // Workaround #13979 ttnn::tilize doesn't support BLOCK_SHARDED layout
-                input_tensor = ttnn::to_layout(input_tensor, Layout::TILE);
+                Tensor input_tensor_tilized = ttnn::to_layout(input_tensor, Layout::TILE);
+                if (conv_config.deallocate_activation) {
+                    input_tensor.deallocate(/*force*/ true);
+                    input_tensor_tilized = ttnn::move(input_tensor_tilized);
+                }
+                input_tensor = input_tensor_tilized;
             }
             if (!auto_shard_mm) {
                 ttnn::MemoryConfig input_tensor_sharded_memory_config_to_layout = input_tensor_sharded_memory_config;

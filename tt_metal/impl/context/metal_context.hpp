@@ -6,6 +6,7 @@
 
 #include <tt_stl/indestructible.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "dev_msgs.h"
@@ -16,7 +17,6 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
-#include <magic_enum/magic_enum.hpp>
 
 #include <array>
 #include <unordered_set>
@@ -59,7 +59,13 @@ public:
     }
 
     void initialize(
-        const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, const BankMapping& l1_bank_remap);
+        const DispatchCoreConfig& dispatch_core_config,
+        uint8_t num_hw_cqs,
+        const BankMapping& l1_bank_remap,
+        size_t worker_l1_size,
+        bool minimal = false);
+    void reinitialize();
+    void teardown();
 
     // Control plane accessors
     tt::tt_fabric::ControlPlane& get_control_plane();
@@ -75,11 +81,12 @@ public:
     void initialize_fabric_config();
     tt_metal::FabricConfig get_fabric_config() const;
 
+    distributed::multihost::DistributedContext& get_distributed_context();
+
 private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
     ~MetalContext();
-    void teardown();
 
     void clear_l1_state(chip_id_t device_id);
     void clear_dram_state(chip_id_t device_id);
@@ -87,16 +94,41 @@ private:
     void initialize_control_plane();
     void teardown_fabric_config();
 
+    void reset_cores(chip_id_t device_id);
+    void assert_cores(chip_id_t device_id);
+
+    // Functions used to init/run firmware on devices
+    CoreCoord virtual_noc0_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoord coord);
+    void generate_device_bank_to_noc_tables(chip_id_t device_id);
+    void initialize_device_bank_to_noc_tables(
+        chip_id_t device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core);
+    void initialize_firmware(
+        chip_id_t device_id,
+        const HalProgrammableCoreType& core_type,
+        CoreCoord virtual_core,
+        launch_msg_t* launch_msg,
+        go_msg_t* go_msg);
+    void initialize_and_launch_firmware(chip_id_t device_id);
+
     bool initialized_ = false;
     bool teardown_registered_ = false;
+    bool force_reinit_ = false;
 
     uint8_t num_hw_cqs_ = 0;
     BankMapping l1_bank_remap_;
     DispatchCoreConfig dispatch_core_config_;
+    size_t worker_l1_size_ = 0;
+    size_t worker_l1_unreserved_start_ = 0;
     size_t fw_compile_hash_ = 0;  // To check if FW recompilation is needed
 
     // Used to track which FW has been built already
     std::unordered_set<uint32_t> firmware_built_keys_;
+
+    // Written to device as part of FW init, device-specific
+    std::unordered_map<chip_id_t, std::vector<int32_t>> dram_bank_offset_map_;
+    std::unordered_map<chip_id_t, std::vector<int32_t>> l1_bank_offset_map_;
+    std::unordered_map<chip_id_t, std::vector<uint16_t>> dram_bank_to_noc_xy_;
+    std::unordered_map<chip_id_t, std::vector<uint16_t>> l1_bank_to_noc_xy_;
 
     llrt::RunTimeOptions rtoptions_;
     std::unique_ptr<Cluster> cluster_;
@@ -104,9 +136,10 @@ private:
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
     std::unique_ptr<inspector::Data> inspector_data_;
-    std::array<std::unique_ptr<DispatchMemMap>, magic_enum::enum_count<CoreType>()> dispatch_mem_map_;
+    std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::GlobalControlPlane> global_control_plane_;
     tt_metal::FabricConfig fabric_config_ = tt_metal::FabricConfig::DISABLED;
+    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
     // is expected that any downed devices/links will result in some sort of error condition being

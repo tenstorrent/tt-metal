@@ -31,7 +31,7 @@ ttnn::global_semaphore::MultiDeviceGlobalSemaphore create_global_semaphore(const
 }
 
 std::vector<IDevice*> get_line_devices(distributed::MeshDevice* mesh_device) {
-    auto view = mesh_device->get_view();
+    const auto& view = mesh_device->get_view();
     return {
         view.get_device(distributed::MeshCoordinate(0, 0)),
         view.get_device(distributed::MeshCoordinate(0, 1)),
@@ -54,7 +54,6 @@ protected:
 };
 
 TEST_F(T3000MultiCQMeshDeviceFixture, AllGather) {
-    mesh_device_->enable_program_cache();
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
 
     std::vector<ttnn::Tensor> tensors;
@@ -76,7 +75,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AllGather) {
 }
 
 TEST_F(T3000MultiCQFabricMeshDeviceFixture, AllGatherAsync) {
-    mesh_device_->enable_program_cache();
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
 
     std::vector<ttnn::Tensor> tensors;
@@ -100,7 +98,6 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AllGatherAsync) {
 }
 
 TEST_F(T3000MultiCQMeshDeviceFixture, ReduceScatter) {
-    mesh_device_->enable_program_cache();
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
 
     std::vector<ttnn::Tensor> tensors;
@@ -122,7 +119,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, ReduceScatter) {
 }
 
 TEST_F(T3000MultiCQMeshDeviceFixture, AllReduce) {
-    mesh_device_->enable_program_cache();
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
 
     std::vector<ttnn::Tensor> tensors;

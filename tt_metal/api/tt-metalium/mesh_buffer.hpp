@@ -27,11 +27,7 @@ struct DeviceLocalBufferConfig {
     // Can be DRAM, L1, SYSTEM_MEMORY, L1_SMALL, TRACE.
     BufferType buffer_type = BufferType::DRAM;
 
-    // Can be INTERLEAVED, HEIGHT_SHARDED, WIDTH_SHARDED or BLOCK_SHARDED.
-    TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED;
-
-    // Must be set for sharded buffer layouts.
-    std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>> shard_parameters;
+    BufferShardingArgs sharding_args;
 
     // The direction in which memory for this buffer is allocated.
     std::optional<bool> bottom_up;

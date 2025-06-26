@@ -7,11 +7,12 @@
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
+#include <string>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include "ttnn/operations/sharding_utilities.hpp"
+#include "ttnn/cpp/ttnn/operations/sharding_utilities.hpp"
 
 namespace accessor_benchmarks {
 
@@ -51,8 +52,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_m
     const tt::tt_metal::distributed::DeviceLocalBufferConfig input_device_local_config{
         .page_size = page_size,
         .buffer_type = inputs.input_shard_spec.buffer_type,
-        .buffer_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
-        .shard_parameters = input_buffer_distribution_spec,
+        .sharding_args = input_buffer_distribution_spec,
     };
     const auto input_mesh_buffer =
         tt::tt_metal::distributed::MeshBuffer::create(mesh_buffer_config, input_device_local_config, mesh_device);
@@ -67,9 +67,11 @@ using namespace tt::tt_metal;
 
 class AccessorBenchmarks : public GenericMeshDeviceFixture, public ::testing::WithParamInterface<InputBufferParams> {};
 
-TEST_P(AccessorBenchmarks, Generic) {
-    const auto& params = GetParam();
-
+void benchmark_all_args_combinations_single_core(
+    const InputBufferParams& params,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_,
+    const std::string& res_path,
+    const std::string& kernel_path) {
     // Create input and output replicated mesh buffers across generic mesh device; tests will only use first device
     const auto input_mesh_buffer = create_replicated_input_mesh_buffer_from_inputs(params, mesh_device_.get());
 
@@ -80,17 +82,26 @@ TEST_P(AccessorBenchmarks, Generic) {
 
     const auto input_bank_base_address = input_mesh_buffer->address();
 
-    /* CREATE AND LAUNCH PROGRAM ON DEVICE
-     * - This program uses a single reader kernel to measure get_noc_addr overhead with different accessors
-     * - It does not actually do any reads, so no CBs are needed
-     * - Input buffers are set up with actual ND ShardSpec, but for interleaved we use same buffer
-     *   -  ie. Calculations are definitely wrong/nonsense for interleaved, but it's ok to use for benchmarking
-     *   - TODO: We can properly setup the input buffers and try reading from them as well
-     */
-    tt::tt_metal::detail::SetDeviceProfilerDir("accessor_benchmarks/" + params.test_name);
+    tt::tt_metal::detail::SetDeviceProfilerDir(res_path + "/" + params.test_name);
     tt::tt_metal::detail::FreshProfilerDeviceLog();
-    {
-        log_info(tt::LogTest, "Creating single-core benchmarking program");
+    for (uint8_t i = 0; i < 1 << 5; ++i) {
+        ArgsConfig args_loc_cnf(i);
+        if (args_loc_cnf.test(ArgConfig::RankCRTA) and
+            (!args_loc_cnf.test(ArgConfig::TensorShapeCRTA) or !args_loc_cnf.test(ArgConfig::ShardShapeCRTA))) {
+            // If rank is runtime, tensor and shard shapes must also be runtime
+            continue;
+        }
+        if (args_loc_cnf.test(ArgConfig::NumBanksCRTA) and !args_loc_cnf.test(ArgConfig::BankCoordsCRTA)) {
+            // If number of banks is runtime, bank coordinates must also be runtime
+            continue;
+        }
+        auto args_bitmask = args_loc_cnf.raw();
+
+        std::string crta_config_str = fmt::format("\"SHARDED_ACCESSOR_{:05b}\"", args_bitmask);
+        log_info(
+            tt::LogTest,
+            "Creating single-core benchmarking program with the following args config: {}",
+            crta_config_str);
         auto program = CreateProgram();
 
         constexpr CoreCoord grid = {0, 0};
@@ -99,34 +110,24 @@ TEST_P(AccessorBenchmarks, Generic) {
 
         // Set up sharded accessor compile-time args for reader kernel
         const auto& input_buffer_distribution_spec =
-            std::get<BufferDistributionSpec>(input_mesh_buffer->device_local_config().shard_parameters.value());
-        const auto input_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
-            *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type());
-        std::vector<uint32_t> input_compile_time_args = {
-            (uint32_t)data_format,
-            aligned_page_size,
-            input_sharded_accessor_args.rank,
-            input_sharded_accessor_args.num_banks};
-        input_compile_time_args.insert(
-            input_compile_time_args.end(),
-            input_sharded_accessor_args.shapes_and_bank_coords.cbegin(),
-            input_sharded_accessor_args.shapes_and_bank_coords.cend());
+            *input_mesh_buffer->device_local_config().sharding_args.buffer_distribution_spec();
+        const auto sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
+            *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type(), args_loc_cnf);
 
+        std::map<std::string, std::string> defines{{"ACCESSOR_CONFIG_NAME", crta_config_str}};
         // Create reader kernel
         KernelHandle reader_kernel_id = CreateKernel(
             program,
-            "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_benchmark.cpp",
+            kernel_path,
             grid,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
-                .compile_args = input_compile_time_args});
+                .compile_args = sharded_accessor_args.compile_time_args,
+                .defines = defines});
 
         // Set up runtime args for reader kernel
-        std::vector<uint32_t> input_runtime_args = {
-            input_bank_base_address,
-        };
-        SetRuntimeArgs(program, reader_kernel_id, grid, input_runtime_args);
+        SetCommonRuntimeArgs(program, reader_kernel_id, sharded_accessor_args.runtime_args);
 
         // Launch program
         auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();
@@ -142,6 +143,22 @@ TEST_P(AccessorBenchmarks, Generic) {
     tt::tt_metal::detail::DumpDeviceProfileResults(local_device);
 }
 
+TEST_P(AccessorBenchmarks, GetNocAddr) {
+    benchmark_all_args_combinations_single_core(
+        GetParam(),
+        mesh_device_,
+        "accessor_get_noc_addr_benchmarks",
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_get_noc_addr_page_id_benchmark.cpp");
+}
+
+TEST_P(AccessorBenchmarks, Constructor) {
+    benchmark_all_args_combinations_single_core(
+        GetParam(),
+        mesh_device_,
+        "accessor_constructor_benchmarks",
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_constructor_benchmark.cpp");
+}
+
 INSTANTIATE_TEST_SUITE_P(
     AccessorTests,
     AccessorBenchmarks,
@@ -153,7 +170,7 @@ INSTANTIATE_TEST_SUITE_P(
         // - Try out other accessors as well, especially legacy ShardedAddrGen
         InputBufferParams{
             .test_name = "rank_2",
-            .physical_tensor_shape = tt::tt_metal::Shape{160, 160},
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
             .page_shape = tt::tt_metal::Shape2D{32, 32},
             .bytes_per_element = 2,
             .data_format = tt::DataFormat::Float16,
@@ -168,7 +185,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InputBufferParams{
             .test_name = "rank_3",
-            .physical_tensor_shape = tt::tt_metal::Shape{5, 160, 160},
+            .physical_tensor_shape = tt::tt_metal::Shape{5, 160, 320},
             .page_shape = tt::tt_metal::Shape2D{32, 32},
             .bytes_per_element = 2,
             .data_format = tt::DataFormat::Float16,
@@ -176,6 +193,21 @@ INSTANTIATE_TEST_SUITE_P(
             .input_shard_spec =
                 InputBufferParams::DistributionSpecParams{
                     .physical_shard_shape = tt::tt_metal::Shape{3, 96, 96},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        InputBufferParams{
+            .test_name = "rank_4",
+            .physical_tensor_shape = tt::tt_metal::Shape{5, 5, 160, 160},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{3, 3, 96, 96},
                     .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,
@@ -191,6 +223,21 @@ INSTANTIATE_TEST_SUITE_P(
             .input_shard_spec =
                 InputBufferParams::DistributionSpecParams{
                     .physical_shard_shape = tt::tt_metal::Shape{3, 3, 3, 96, 96},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        InputBufferParams{
+            .test_name = "rank_6",
+            .physical_tensor_shape = tt::tt_metal::Shape{3, 3, 3, 3, 160, 160},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{2, 2, 2, 2, 96, 96},
                     .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,

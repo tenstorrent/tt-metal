@@ -245,6 +245,12 @@ void py_module(py::module& module) {
                Enable program cache across all devices in the mesh.
            )doc")
         .def(
+            "clear_program_cache",
+            &MeshDevice::clear_program_cache,
+            R"doc(
+               Clear program cache across all devices in the mesh.
+           )doc")
+        .def(
             "disable_and_clear_program_cache",
             &MeshDevice::disable_and_clear_program_cache,
             R"doc(
@@ -426,10 +432,20 @@ void py_module(py::module& module) {
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
 
     auto py_placement_shard = static_cast<py::class_<MeshMapperConfig::Shard>>(module.attr("PlacementShard"));
-    py_placement_shard.def(py::init([](size_t dim) { return MeshMapperConfig::Shard{dim}; }));
+    py_placement_shard.def(py::init([](int dim) { return MeshMapperConfig::Shard{dim}; }))
+        .def("__repr__", [](const MeshMapperConfig::Shard& shard) {
+            std::ostringstream str;
+            str << shard;
+            return str.str();
+        });
     auto py_placement_replicate =
         static_cast<py::class_<MeshMapperConfig::Replicate>>(module.attr("PlacementReplicate"));
-    py_placement_replicate.def(py::init([]() { return MeshMapperConfig::Replicate{}; }));
+    py_placement_replicate.def(py::init([]() { return MeshMapperConfig::Replicate{}; }))
+        .def("__repr__", [](const MeshMapperConfig::Replicate& replicate) {
+            std::ostringstream str;
+            str << replicate;
+            return str.str();
+        });
     auto py_mesh_mapper_config = static_cast<py::class_<MeshMapperConfig>>(module.attr("MeshMapperConfig"));
 
     py_mesh_mapper_config

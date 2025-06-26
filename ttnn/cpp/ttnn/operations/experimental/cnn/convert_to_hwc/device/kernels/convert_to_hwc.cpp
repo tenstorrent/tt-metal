@@ -51,6 +51,7 @@ void MAIN {
     constexpr uint32_t total_sticks_per_block = get_compile_time_arg_val(5);
     constexpr uint32_t is_input_in_dram = get_compile_time_arg_val(6);
 
+    compute_kernel_hw_startup(cb_in, cb_tiled_in);
     if constexpr (!is_input_in_dram) {
         cb_push_back(cb_in, total_sticks_per_block);
     }

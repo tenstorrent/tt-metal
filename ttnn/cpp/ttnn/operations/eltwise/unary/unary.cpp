@@ -77,6 +77,7 @@ ComplexTensor ExecuteUnary<UnaryOpType::RECIP>::invoke(
 }
 template struct ExecuteUnary<UnaryOpType::ACOS>;
 template struct ExecuteUnary<UnaryOpType::ASIN>;
+template struct ExecuteUnary<UnaryOpType::ASINH>;
 template struct ExecuteUnary<UnaryOpType::ATAN>;
 template struct ExecuteUnary<UnaryOpType::COS>;
 template struct ExecuteUnary<UnaryOpType::ACOSH>;
