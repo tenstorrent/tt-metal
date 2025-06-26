@@ -3,6 +3,8 @@
 
 import time
 
+from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.debug_tensix import TensixDebug
 from ttexalens.tt_exalens_lib import (
     check_context,
     load_elf,
@@ -46,6 +48,10 @@ from .unpack import (
 
 MAX_READ_BYTE_SIZE_16BIT = 2048
 
+# Constants for soft reset operation
+RISC_DBG_SOFT_RESET0 = "RISCV_DEBUG_REG_SOFT_RESET_0"
+TRISC_SOFT_RESET_MASK = 0x7800  # Reset mask for TRISCs (unpack, math, pack)
+
 
 def collect_results(
     formats: FormatConfig,
@@ -61,33 +67,39 @@ def collect_results(
     return res_from_L1
 
 
+def perform_tensix_soft_reset(core_loc="0,0"):
+    context = check_context()
+    device = context.devices[0]
+    chip_coordinate = OnChipCoordinate.create(core_loc, device=device)
+    tensix_debug = TensixDebug(chip_coordinate, 0, context)
+
+    # Read current soft reset register, set TRISC reset bits, and write back
+    soft_reset = tensix_debug.read_tensix_register(RISC_DBG_SOFT_RESET0)
+    soft_reset |= TRISC_SOFT_RESET_MASK
+    tensix_debug.write_tensix_register(RISC_DBG_SOFT_RESET0, soft_reset)
+
+
 def run_elf_files(testname, core_loc="0,0"):
     BUILD = "../build"
 
-    context = check_context()
-    device = context.devices[0]
-    RISC_DBG_SOFT_RESET0 = device.get_tensix_register_address(
-        "RISCV_DEBUG_REG_SOFT_RESET_0"
-    )
-
     # Perform soft reset
-    soft_reset = read_word_from_device(core_loc, RISC_DBG_SOFT_RESET0)
-    soft_reset |= 0x7800
-    write_words_to_device(core_loc, RISC_DBG_SOFT_RESET0, soft_reset)
+    perform_tensix_soft_reset(core_loc)
 
     # Load TRISC ELF files
     TRISC = ["unpack", "math", "pack"]
     for i in range(3):
         load_elf(
-            f"{BUILD}/tests/{testname}/elf/{TRISC[i]}.elf", core_loc, risc_id=i + 1
+            elf_file=f"{BUILD}/tests/{testname}/elf/{TRISC[i]}.elf",
+            core_loc=core_loc,
+            risc_name=f"trisc{i}",
         )
 
     # Reset the profiler barrier
-    TRISC_PROFILER_BARRIER = 0x16AFF4
-    write_words_to_device(core_loc, TRISC_PROFILER_BARRIER, [0, 0, 0])
+    TRISC_PROFILER_BARRIE_ADDRESS = 0x16AFF4
+    write_words_to_device(core_loc, TRISC_PROFILER_BARRIE_ADDRESS, [0, 0, 0])
 
     # Run BRISC
-    run_elf(f"{BUILD}/shared/brisc.elf", core_loc, risc_id=0)
+    run_elf(f"{BUILD}/shared/brisc.elf", core_loc, risc_name="brisc")
 
 
 def write_stimuli_to_l1(
