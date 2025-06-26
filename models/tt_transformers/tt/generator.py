@@ -430,7 +430,13 @@ class Generator:
                 num_vision_tokens = vision_tokens.shape[2]
                 cross_page_table = self._get_prefill_user_page_table(cross_page_table, kv_cache, num_vision_tokens)
         else:
-            vision_tokens, prefill_cross_attention_masks, prefill_full_text_row_masked_out_mask, decode_cross_attention_masks, decode_full_text_row_masked_out_mask = None, None, None, None, None
+            (
+                vision_tokens,
+                prefill_cross_attention_masks,
+                prefill_full_text_row_masked_out_mask,
+                decode_cross_attention_masks,
+                decode_full_text_row_masked_out_mask,
+            ) = (None, None, None, None, None)
 
         if page_table is not None:
             page_table = self._get_prefill_user_page_table(page_table, kv_cache, prefill_len)
@@ -472,7 +478,14 @@ class Generator:
         del tt_page_table
         del tt_cross_page_table
 
-        return xattn_caches, prefill_cross_attention_masks, prefill_full_text_row_masked_out_mask, decode_cross_attention_masks, decode_full_text_row_masked_out_mask, tt_logits
+        return (
+            xattn_caches,
+            prefill_cross_attention_masks,
+            prefill_full_text_row_masked_out_mask,
+            decode_cross_attention_masks,
+            decode_full_text_row_masked_out_mask,
+            tt_logits,
+        )
 
     # Note: This function is called by vLLM
     def prefill_forward(
@@ -565,7 +578,13 @@ class Generator:
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
-        return output_logits, prefill_output_xattn_masks, prefill_output_full_text_row_masked_out_masks, decode_output_xattn_masks, decode_output_full_text_row_masked_out_masks
+        return (
+            output_logits,
+            prefill_output_xattn_masks,
+            prefill_output_full_text_row_masked_out_masks,
+            decode_output_xattn_masks,
+            decode_output_full_text_row_masked_out_masks,
+        )
 
     # Note: This function is called by vLLM
     def decode_forward(
@@ -589,7 +608,8 @@ class Generator:
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         prefill_cross_attention_masks = [
-            prefill_cross_attention_masks[i * batch_per_device : (i + 1) * batch_per_device] for i in range(data_parallel)
+            prefill_cross_attention_masks[i * batch_per_device : (i + 1) * batch_per_device]
+            for i in range(data_parallel)
         ]
         prefill_full_text_row_masked_out_mask = [
             prefill_full_text_row_masked_out_mask[i * batch_per_device : (i + 1) * batch_per_device]

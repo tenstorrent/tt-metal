@@ -206,8 +206,8 @@ class CrossAttentionTransformer(torch.nn.Module):
             vision_tokens = self.vision_model(stacked_images, aspect_ratios)
             chunk_seq_len = self.configuration.vision_chunk_ntok
             # NOTE: slicing up to chunk_seq_len is necessary because padding information is lost by this point
-            vision_tokens = (
-                ttnn.reshape(vision_tokens[0, :, :chunk_seq_len], (bsz, max_num_images, self.max_num_chunks, -1, self.model_dim))
+            vision_tokens = ttnn.reshape(
+                vision_tokens[0, :, :chunk_seq_len], (bsz, max_num_images, self.max_num_chunks, -1, self.model_dim)
             )
 
         bsz, nimg, nchunk, ntok, image_token_dim = tuple(vision_tokens.shape)
@@ -216,9 +216,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         # Prepare vision tokens for TT text_model
         vision_tokens_squeeze = ttnn.reshape(vision_tokens, (1, bsz, -1, image_token_dim))
         vision_tokens_squeeze = ttnn.pad(
-            vision_tokens_squeeze, 
-            [(0, 0), (0, 0), (0, padded_seq_len - vision_tokens_squeeze.shape[2]), (0, 0)],
-            0
+            vision_tokens_squeeze, [(0, 0), (0, 0), (0, padded_seq_len - vision_tokens_squeeze.shape[2]), (0, 0)], 0
         )
 
         prefill_padded_masks, decode_padded_masks = _pad_masks(  # torch.Size([1, 512, 1, 4])
@@ -242,8 +240,14 @@ class CrossAttentionTransformer(torch.nn.Module):
             vision_tokens=vision_tokens,
             cross_attention_masks=decode_padded_masks,
         )
-        
-        return (vision_tokens_squeeze, prefill_cross_attention_masks, prefill_full_text_row_masked_out_mask, decode_cross_attention_masks, decode_full_text_row_masked_out_mask)
+
+        return (
+            vision_tokens_squeeze,
+            prefill_cross_attention_masks,
+            prefill_full_text_row_masked_out_mask,
+            decode_cross_attention_masks,
+            decode_full_text_row_masked_out_mask,
+        )
 
     def validate_inputs(self, tokens, position_ids):
         batch, seq_len = tokens.shape[:2]
@@ -498,10 +502,11 @@ class CrossAttentionTransformer(torch.nn.Module):
         xattn_mask = []
         full_text_mask = []
         for i in range(unpadded_batch_size):
-            text_only_user = prefill_cross_attention_masks[i] is None and prefill_full_text_row_masked_out_mask[i] is None
+            text_only_user = (
+                prefill_cross_attention_masks[i] is None and prefill_full_text_row_masked_out_mask[i] is None
+            )
             if not text_only_user:
                 if prefill_cross_attention_masks[i].shape[2] > position_id[i].item():
-
                     xattn_mask_i = torch.nn.functional.pad(
                         prefill_cross_attention_masks[i][:, :, position_id[i]],
                         (0, self.num_vision_tokens - prefill_cross_attention_masks[i].shape[3]),
