@@ -313,34 +313,19 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binar
                       b.is_sharded();
                       b.get_logical_shape();
                   }) {
-        if (a.dtype() == DataType::INT32 or b.dtype() == DataType::INT32) {
-            if (any_row_broadcasted(a, b)) {
-                return true;
-            }
-            if (binary_op_type == BinaryOpType::NE or binary_op_type == BinaryOpType::EQ or
-                binary_op_type == BinaryOpType::GTE or binary_op_type == BinaryOpType::LTE or
-                binary_op_type == BinaryOpType::GT or binary_op_type == BinaryOpType::LT) {
-                return true;
-            }
-        }
-
-        if ((a.is_sharded() or b.is_sharded()) and (a.dtype() == DataType::UINT16 or b.dtype() == DataType::UINT16)) {
+        if (a.dtype() == DataType::INT32 or b.dtype() == DataType::INT32 or a.dtype() == DataType::UINT32 or
+            b.dtype() == DataType::UINT32 or a.dtype() == DataType::UINT16 or b.dtype() == DataType::UINT16 or
+            a.dtype() == DataType::UINT8 or b.dtype() == DataType::UINT8) {
             return true;
         }
 
         if (any_row_broadcasted(a, b) and
-            (/*binary_op_type == BinaryOpType::POWER*/ binary_op_type != BinaryOpType::ADD and
-             binary_op_type != BinaryOpType::SUB and binary_op_type != BinaryOpType::MUL)) {
+            (binary_op_type != BinaryOpType::ADD and binary_op_type != BinaryOpType::SUB and
+             binary_op_type != BinaryOpType::MUL)) {
             return true;
         }
 
         if (a.get_logical_shape().rank() > 4 or b.get_logical_shape().rank() > 4) {
-            return true;
-        }
-
-        if ((a.is_sharded() or b.is_sharded()) and
-            (/*a.dtype() == DataType::FLOAT32 or b.dtype() == DataType::FLOAT32 or*/
-             a.dtype() == DataType::INT32 or b.dtype() == DataType::INT32)) {
             return true;
         }
 

@@ -2439,3 +2439,21 @@ def test_add_i32(device):
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert torch.equal(torch_add, output_tensor)
+
+
+def test_add_error(device):
+    pytest.skip("Test is skipped because issue not fixed yet")
+    # Create input tensors with specified shapes
+    input_shape = [1, 1, 1, 39576]
+    bias_shape = [1, 39576]
+
+    # Create random tensors
+    torch_input = torch.randn(*input_shape, dtype=torch.bfloat16)
+    torch_bias = torch.randn(*bias_shape, dtype=torch.bfloat16)
+
+    # Convert to TTNN tensors with tile layout
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_bias = ttnn.from_torch(torch_bias, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Perform the add operation with the specified memory config
+    ttnn_result = ttnn.add(ttnn_input, ttnn_bias, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, use_legacy=None)
