@@ -1154,9 +1154,9 @@ eth_chan_directions ControlPlane::get_eth_chan_direction(FabricNodeId fabric_nod
     TT_THROW("Cannot Find Ethernet Channel Direction");
 }
 
-std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
+std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) const {
-    std::vector<std::pair<chip_id_t, chan_id_t>> route;
+    std::vector<std::pair<FabricNodeId, chan_id_t>> route;
     int i = 0;
     // Find any eth chan on the plane id
     while (src_fabric_node_id != dst_fabric_node_id) {
@@ -1168,7 +1168,6 @@ std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
         if (i >= tt::tt_fabric::MAX_MESH_SIZE * tt::tt_fabric::MAX_NUM_MESHES) {
             return {};
         }
-        auto physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
         chan_id_t next_chan_id = 0;
         if (src_mesh_id != dst_mesh_id) {
             // Inter-mesh routing
@@ -1183,14 +1182,14 @@ std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
         }
         if (src_chan_id != next_chan_id) {
             // Chan to chan within chip
-            route.push_back({physical_chip_id, next_chan_id});
+            route.push_back({src_fabric_node_id, next_chan_id});
         }
 
         std::tie(src_fabric_node_id, src_chan_id) =
             this->get_connected_mesh_chip_chan_ids(src_fabric_node_id, next_chan_id);
         auto connected_physical_chip_id =
             this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
-        route.push_back({connected_physical_chip_id, src_chan_id});
+        route.push_back({src_fabric_node_id, src_chan_id});
     }
 
     return route;
