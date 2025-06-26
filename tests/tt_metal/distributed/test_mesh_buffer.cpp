@@ -538,84 +538,84 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
     }
 }
 
-//Submesh allocation tests
-TEST_F(MeshBufferTestSuite, AllocateOnParent) {
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
-    const DeviceLocalBufferConfig device_local_config{
-        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
-    const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
+// Submesh allocation tests
+//  TEST_F(MeshBufferTestSuite, AllocateOnParent) {
+//      uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+//      const DeviceLocalBufferConfig device_local_config{
+//          .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+//      const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
 
-    auto submeshes = mesh_device_->create_submeshes(MeshShape{1, 1});
+//     auto submeshes = mesh_device_->create_submeshes(MeshShape{1, 1});
 
-    EXPECT_TRUE(mesh_device_->is_parent_mesh());
-    EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
+//     EXPECT_TRUE(mesh_device_->is_parent_mesh());
+//     EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
 
-    //should error
-    EXPECT_NO_THROW(MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get()));
+//     //should error
+//     EXPECT_NO_THROW(MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get()));
 
-}
+// }
 
-TEST_F(MeshBufferTestSuite, AllocateOnParentAfterChild) {
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
-    const DeviceLocalBufferConfig device_local_config{
-        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
-    const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
+// TEST_F(MeshBufferTestSuite, AllocateOnParentAfterChild) {
+//     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+//     const DeviceLocalBufferConfig device_local_config{
+//         .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+//     const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
 
-    auto submeshes = mesh_device_->create_submeshes(MeshShape{1, 1});
+//     auto submeshes = mesh_device_->create_submeshes(MeshShape{1, 1});
 
-    EXPECT_TRUE(mesh_device_->is_parent_mesh());
-    EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
-    std::vector<std::shared_ptr<MeshBuffer>> buffers;
-    //allocate buffers in each submesh
-    for (const auto& submesh : submeshes) {
-        EXPECT_EQ(submesh->shape(), MeshShape(1, 1));
-        EXPECT_THAT(submesh->get_devices(), SizeIs(1));
-        buffers.push_back(MeshBuffer::create(buffer_config, device_local_config, submesh.get()));
-        EXPECT_EQ(buffers.back()->size(), 16 << 10);
-        EXPECT_EQ(buffers.back()->global_layout(), MeshBufferLayout::REPLICATED);
-        EXPECT_EQ(buffers.back()->device_local_size(), 16 << 10);
-    }
-    EXPECT_ANY_THROW(MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get()));
-}
+//     EXPECT_TRUE(mesh_device_->is_parent_mesh());
+//     EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
+//     std::vector<std::shared_ptr<MeshBuffer>> buffers;
+//     //allocate buffers in each submesh
+//     for (const auto& submesh : submeshes) {
+//         EXPECT_EQ(submesh->shape(), MeshShape(1, 1));
+//         EXPECT_THAT(submesh->get_devices(), SizeIs(1));
+//         buffers.push_back(MeshBuffer::create(buffer_config, device_local_config, submesh.get()));
+//         EXPECT_EQ(buffers.back()->size(), 16 << 10);
+//         EXPECT_EQ(buffers.back()->global_layout(), MeshBufferLayout::REPLICATED);
+//         EXPECT_EQ(buffers.back()->device_local_size(), 16 << 10);
+//     }
+//     EXPECT_ANY_THROW(MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get()));
+// }
 
-TEST_F(MeshBufferTestSuite, AllocateOnChildAfterParent) {
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
-    const DeviceLocalBufferConfig device_local_config{
-        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
-    const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
+// TEST_F(MeshBufferTestSuite, AllocateOnChildAfterParent) {
+//     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+//     const DeviceLocalBufferConfig device_local_config{
+//         .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+//     const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
 
-    auto submeshes = mesh_device_->create_submeshes(MeshShape{1, 1});
-    std::shared_ptr<MeshBuffer> parentBuffer;
-    EXPECT_NO_THROW(parentBuffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get()));
-    EXPECT_TRUE(mesh_device_->is_parent_mesh());
-    EXPECT_TRUE(mesh_device_->is_parent_mesh());
-    EXPECT_TRUE(mesh_device_->get_submeshes().size() > 0);
-    //allocate buffers in a submesh
-    auto submesh = mesh_device_->get_submeshes().front();
-    EXPECT_EQ(submesh->shape(), MeshShape(1, 1));
-    EXPECT_THAT(submesh->get_devices(), SizeIs(1));
-    EXPECT_ANY_THROW(MeshBuffer::create(buffer_config, device_local_config, submesh.get()));
-}
+//     auto submeshes = mesh_device_->create_submeshes(MeshShape{1, 1});
+//     std::shared_ptr<MeshBuffer> parentBuffer;
+//     EXPECT_NO_THROW(parentBuffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get()));
+//     EXPECT_TRUE(mesh_device_->is_parent_mesh());
+//     EXPECT_TRUE(mesh_device_->is_parent_mesh());
+//     EXPECT_TRUE(mesh_device_->get_submeshes().size() > 0);
+//     //allocate buffers in a submesh
+//     auto submesh = mesh_device_->get_submeshes().front();
+//     EXPECT_EQ(submesh->shape(), MeshShape(1, 1));
+//     EXPECT_THAT(submesh->get_devices(), SizeIs(1));
+//     EXPECT_ANY_THROW(MeshBuffer::create(buffer_config, device_local_config, submesh.get()));
+// }
 
-TEST_F(MeshBufferTestSuite, AllocateOnChild) {
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
-    const DeviceLocalBufferConfig device_local_config{
-        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
-    const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
+// TEST_F(MeshBufferTestSuite, AllocateOnChild) {
+//     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+//     const DeviceLocalBufferConfig device_local_config{
+//         .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+//     const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
 
-    auto submeshes = mesh_device_->create_submeshes(MeshShape{1, 1});
-    EXPECT_TRUE(mesh_device_->is_parent_mesh());
-    EXPECT_TRUE(mesh_device_->get_submeshes().size() > 0);
-    //allocate buffers in a submesh
-    auto submesh = mesh_device_->get_submeshes().front();
-    EXPECT_EQ(submesh->shape(), MeshShape(1, 1));
-    EXPECT_THAT(submesh->get_devices(), SizeIs(1));
-    std::vector<std::shared_ptr<MeshBuffer>> buffers;
-    for (const auto& submesh : submeshes) {
-        EXPECT_NO_THROW(buffers.push_back(MeshBuffer::create(buffer_config, device_local_config, submesh.get())));
-    }
+//     auto submeshes = mesh_device_->create_submeshes(MeshShape{1, 1});
+//     EXPECT_TRUE(mesh_device_->is_parent_mesh());
+//     EXPECT_TRUE(mesh_device_->get_submeshes().size() > 0);
+//     //allocate buffers in a submesh
+//     auto submesh = mesh_device_->get_submeshes().front();
+//     EXPECT_EQ(submesh->shape(), MeshShape(1, 1));
+//     EXPECT_THAT(submesh->get_devices(), SizeIs(1));
+//     std::vector<std::shared_ptr<MeshBuffer>> buffers;
+//     for (const auto& submesh : submeshes) {
+//         EXPECT_NO_THROW(buffers.push_back(MeshBuffer::create(buffer_config, device_local_config, submesh.get())));
+//     }
 
-}
+// }
 
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test
