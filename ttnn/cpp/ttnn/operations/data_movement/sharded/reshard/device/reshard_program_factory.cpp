@@ -109,13 +109,10 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
                             break;
                         }
                         // next page is padding
-                        consecutive_it = consecutive_it + 1;
                         last_it_consec = consecutive_it;
+                        consecutive_it = consecutive_it + 1;
                     }
-                    uint32_t stride_size = std::distance(it, last_it_consec);
-                    if (last_it_consec == it) {
-                        stride_size = 1;
-                    }
+                    uint32_t stride_size = std::distance(it, last_it_consec) + 1;
                     auto stride_it = it + stride_size;
                     auto last_it_stride = it;
 
