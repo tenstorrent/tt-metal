@@ -36,7 +36,6 @@
 #include "core_coord.hpp"
 #include "data_types.hpp"
 #include "dev_msgs.h"
-#include "dprint_server.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "impl/context/metal_context.hpp"
@@ -769,7 +768,9 @@ void DumpDeviceProfileResults(
             return;
         }
 
-        TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
+        TT_FATAL(
+            not tt::tt_metal::MetalContext::instance().dprint_server(),
+            "Debug print server is running, cannot dump device profiler data");
 
         auto profiler_it = tt_metal_device_profiler_map.find(device->id());
         if (profiler_it != tt_metal_device_profiler_map.end()) {

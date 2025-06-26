@@ -9,85 +9,48 @@
 #pragma once
 
 #include <umd/device/types/cluster_descriptor_types.h>
+#include <llrt/rtoptions.hpp>
+#include <memory>
 
 namespace tt::tt_metal {
 
-/*
-@brief Attaches a device to be monitored by the print server. If no devices were present on the
-    print server, also initializes the print server and launches the thread it runs on.
+class DPrintServer {
+public:
+    // Constructor/destructor, reads dprint options from RTOptions.
+    DPrintServer(llrt::RunTimeOptions& rtoptions);
+    ~DPrintServer();
 
-@param device Pointer to the device to attach to the print server. The cores/harts to be monitored
-    on this device are determined by the environment variables read out in RTOptions.
+    // Sets whether the print server is muted. Calling this function while a kernel is running may
+    // result in a loss of print data.
+    void set_mute(bool mute_print_server);
 
-This call is not thread safe, and there is only one instance of print server supported at a time.
-*/
-void DprintServerAttach(chip_id_t device_id);
+    // Waits for the print server to finish processing any current print data.
+    void await();
 
-/*
-@brief Detach a device so it is no longer monitored by the print server. If no devices are present
-    after detatching, also stops the print server.
+    // Attach all enabled devices (via RTOptions) to the print server
+    void attach_devices();
 
-@param device Pointer to device to detatch, will throw if trying to detatch a device that is not
-    currently attached to the server.
+    // Detach all devices from the print server
+    void detach_devices();
 
-Note that this api call is not thread safe at the moment.
-*/
-void DprintServerDetach(chip_id_t device_id);
+    // Clears the log file of a currently-running print server.
+    void clear_log_file();
 
-/**
-@brief Set device side profiler state.
+    // Clears any raised signals (so they can be used again in a later run).
+    void clear_signals();
 
-@param profile_device true if profiling, false if not profiling
-*/
-void DprintServerSetProfilerState(bool profile_device);
+    bool reads_dispatch_cores(chip_id_t device_id);
 
-/**
-@brief Return if the instance debug print server is running or not.
-*/
-bool DprintServerIsRunning();
+    // Check whether a print hand has been detected by the server.
+    // The print server tries to determine if a core is stalled due to the combination of (1) a WAIT
+    // print command and (2) no new print data coming through. An invalid WAIT command and the print
+    // buffer filling up afterwards can cause the core to spin forever. In this case this function will
+    // return true and the print server will be terminated.
+    bool hang_detected();
 
-/**
-@brief Set whether the debug print server should be muted.
-
-Note that (1) muting the print server does not disable prints on the device or reading the data back
-to the host (the print data is simply discarded instead of emitted), and (2) calling this function
-while a kernel is running may result in loss of print data.
-
-@param mute_print_server true to mute the print server, false to unmute
-*/
-void DprintServerSetMute(bool mute_print_server);
-
-/**
-@brief Wait until the debug print server is not currently processing data.
-
-Note that this function does not actually check whether the device will continue producing print
-data, it only checks whether the print server to finish with any data it is currently processing.
-*/
-void DprintServerAwait();
-
-/**
-@brief Check whether a print hang has been detected by the print server.
-
-The print server tries to determine if a core is stalled due to the combination of (1) a WAIT
-print command and (2) no new print data coming through. An invalid WAIT command and the print
-buffer filling up afterwards can cause the core to spin forever. In this case this function will
-return true and the print server will be terminated.
-*/
-bool DPrintServerHangDetected();
-
-/**
-@brief Clears the print server log file.
-*/
-void DPrintServerClearLogFile();
-
-/**
-@brief Clears any RAISE signals in the print server, so they can be used again in a later run.
-*/
-void DPrintServerClearSignals();
-
-/**
-@brief Returns true if the DPRINT server reads any dispatch cores on a given device.
-*/
-bool DPrintServerReadsDispatchCores(chip_id_t device_id);
+private:
+    class Impl;
+    std::unique_ptr<Impl> impl_;  // Pointer to implementation
+};
 
 }  // namespace tt::tt_metal
