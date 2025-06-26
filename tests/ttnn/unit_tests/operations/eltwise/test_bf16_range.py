@@ -14,6 +14,7 @@ import traceback
 import scipy
 import utils
 import matplotlib.pyplot as plt
+import random
 
 
 device_id = 0
@@ -22,6 +23,27 @@ device = ttnn.open_device(device_id=device_id)
 EPSILON = 2**-9
 
 # ttnn.enable_program_cache(device)  # Useful: we are going to call the same kernel several times
+
+
+def generate_bfloat16_scalars(num_of_scalar=5):
+    raw_uint16_array = np.array(
+        random.sample(range(0, 2**16), num_of_scalar), dtype=np.uint16
+    )  # Generate randim bf16 values
+    raw_int16_array = raw_uint16_array.view(np.int16)
+    torch_int16_tensor = torch.from_numpy(raw_int16_array)
+    bfloat16_tensor = torch_int16_tensor.view(torch.bfloat16)
+    float_list = bfloat16_tensor.tolist()
+
+    # Add special values to the list
+    float_list += [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        0.0,
+        -0.0,
+    ]
+
+    return float_list
 
 
 datatypes_parameters = {
@@ -56,14 +78,14 @@ operations_dict = {
         torch.maximum,
         ttnn.maximum,
         None,
-        [0.0, 1.0, -1.0, -0.0],
+        generate_bfloat16_scalars(3),
         "maximum",
     ),
     "minimum": (
         torch.minimum,
         ttnn.minimum,
         None,
-        [0.0, 1.0, -1.0, -0.0],
+        generate_bfloat16_scalars(),
         "minimum",
     ),
 }
@@ -154,10 +176,13 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         np_rel_error = np_diff / np.maximum(np.abs(np_golden_f64), np_eps)
         np_ulp_error = np_diff / torch_ulp_value.flatten().numpy()
 
-        finite_mask = np.isfinite(np_golden_f64) & np.isfinite(
-            np_ttnn_output_f64
-        )  # Don't compute PCC on NaN and infinity
-        pcc = scipy.stats.pearsonr(np_golden_f64[finite_mask], np_ttnn_output_f64[finite_mask])
+        finite_mask = np.isfinite(np_golden_f64) & np.isfinite(np_ttnn_output_f64)
+        # pcc = scipy.stats.pearsonr(np_golden_f64[finite_mask], np_ttnn_output_f64[finite_mask])
+        if np.count_nonzero(finite_mask) >= 2:
+            pcc = scipy.stats.pearsonr(np_golden_f64[finite_mask], np_ttnn_output_f64[finite_mask])
+        else:
+            pcc = (float("nan"), float("nan"))
+            print(f"{operation_name} [bfloat16] PCC could not be computed due to insufficient finite values.")
 
         # Flatten tensors and convert to ndarray for analysis
         np_flat_input = torch_input_f64.flatten().numpy()
@@ -240,7 +265,14 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         )
 
         df = df[df["x"].between(-1e5, 1e5)]
-        pcc = scipy.stats.pearsonr(df["y"], df["yref"])
+        # pcc = scipy.stats.pearsonr(df["y"], df["yref"])
+        if len(df) >= 2:
+            pcc = scipy.stats.pearsonr(df["y"], df["yref"])
+        else:
+            pcc = (float("nan"), float("nan"))
+            print(
+                f"{operation_name} [bfloat16] PCC could not be computed after filtering (length={len(df)}). Duration = {elapsed_s:.4f}s"
+            )
 
         golden_std = np.std(np_flat_golden)
         ttnn_std = np.std(np_flat_output)
