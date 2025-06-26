@@ -116,18 +116,40 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
             directions[dir] = true;
         };
 
-        // Positive direction (East for rows, South for columns)
-        if (next_neighbor_idx < size) {
-            add_neighbor(axis_val == 1 ? Direction::East : Direction::South, next_neighbor_idx);
-        } else if (is_ring) {
-            add_neighbor(axis_val == 1 ? Direction::East : Direction::South, first_device);
-        }
+        if (axis_val == 1) {
+            // For horizontal axis (rows): process East then West
+            // Positive direction (East)
+            if (next_neighbor_idx < size) {
+                log_debug(tt::LogOp, "Adding East neighbor: {}", next_neighbor_idx);
+                add_neighbor(Direction::East, next_neighbor_idx);
+            } else if (is_ring) {
+                add_neighbor(Direction::East, first_device);
+            }
 
-        // Negative direction (West for rows, North for columns)
-        if (idx > 0) {
-            add_neighbor(axis_val == 1 ? Direction::West : Direction::North, prev_neighbor_idx);
-        } else if (is_ring) {
-            add_neighbor(axis_val == 1 ? Direction::West : Direction::North, last_device);
+            // Negative direction (West)
+            if (idx > 0) {
+                log_debug(tt::LogOp, "Adding West neighbor: {}", prev_neighbor_idx);
+                add_neighbor(Direction::West, prev_neighbor_idx);
+            } else if (is_ring) {
+                add_neighbor(Direction::West, last_device);
+            }
+        } else {
+            // For vertical axis (columns): process North then South to maintain correct order
+            // Negative direction (North)
+            if (idx > 0) {
+                log_debug(tt::LogOp, "Adding North neighbor: {}", prev_neighbor_idx);
+                add_neighbor(Direction::North, prev_neighbor_idx);
+            } else if (is_ring) {
+                add_neighbor(Direction::North, last_device);
+            }
+
+            // Positive direction (South)
+            if (next_neighbor_idx < size) {
+                log_debug(tt::LogOp, "Adding South neighbor: {}", next_neighbor_idx);
+                add_neighbor(Direction::South, next_neighbor_idx);
+            } else if (is_ring) {
+                add_neighbor(Direction::South, first_device);
+            }
         }
     };
 
