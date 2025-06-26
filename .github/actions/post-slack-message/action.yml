@@ -1,0 +1,15 @@
+name: 'Post Slack Message'
+description: 'Sends messages to Slack'
+inputs:
+  slack-webhook-url:
+    description: 'Slack webhook URL for sending notifications'
+    required: true
+  message-title:
+    description: 'Title of the message'
+    required: true
+  message-data:
+    description: 'JSON string containing the message data to send'
+    required: true
+runs:
+  using: 'node16'
+  main: 'post-slack-message.js'
