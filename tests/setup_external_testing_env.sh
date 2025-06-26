@@ -90,17 +90,14 @@ if [[ "$REUSE" == false ]]; then
 
     # Install tt-exalens
     echo "Installing tt-exalens..."
-    if [[ $PYTHON_VERSION == "3.8"* ]]; then
-        EXALENS_WHEEL="ttexalens-0.1.250326+dev.0c4381a-cp38-cp38-linux_x86_64.whl"
-        echo "Python 3.8 detected, using pre-built wheel for tt-exalens $EXALENS_WHEEL"
-    elif [[ $PYTHON_VERSION == "3.10"* ]]; then
-        EXALENS_WHEEL="ttexalens-0.1.250326+dev.0c4381a-cp310-cp310-linux_x86_64.whl"
+    if [[ $PYTHON_VERSION == "3.10"* ]]; then
+        EXALENS_WHEEL="ttexalens-0.1.250626+dev.7538f60-cp310-cp310-linux_x86_64.whl"
         echo "Python 3.10 detected, using pre-built wheel for tt-exalens $EXALENS_WHEEL"
     else
         echo "Unsupported Python version: $PYTHON_VERSION"
         exit 1
     fi
-    wget -O $EXALENS_WHEEL https://github.com/tenstorrent/tt-exalens/releases/download/0.1/$EXALENS_WHEEL
+    wget -O $EXALENS_WHEEL https://github.com/tenstorrent/tt-exalens/releases/download/0.1.250626/$EXALENS_WHEEL
     if [ ! -f $EXALENS_WHEEL ]; then
         echo "Failed to download tt-exalens wheel file"
         exit 1

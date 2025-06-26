@@ -5,7 +5,10 @@
 
 set -e
 
-wget -O ttexalens-0.1.250514+dev.d45dfb0-cp310-cp310-linux_x86_64.whl \
-    https://github.com/tenstorrent/tt-exalens/releases/download/0.1.250514/ttexalens-0.1.250514+dev.d45dfb0-cp310-cp310-linux_x86_64.whl
-pip install --no-cache-dir ttexalens-0.1.250514+dev.d45dfb0-cp310-cp310-linux_x86_64.whl
-rm ttexalens-0.1.250514+dev.d45dfb0-cp310-cp310-linux_x86_64.whl
+EXALENS_VERSION="0.1.250626+dev.7538f60-cp310-cp310-linux_x86_64"
+EXALENS_WHEEL="ttexalens-${EXALENS_VERSION}.whl"
+
+wget -O ${EXALENS_WHEEL} \
+    https://github.com/tenstorrent/tt-exalens/releases/download/0.1.250626/${EXALENS_WHEEL}
+pip install --no-cache-dir ${EXALENS_WHEEL}
+rm ${EXALENS_WHEEL}
