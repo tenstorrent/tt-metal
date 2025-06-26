@@ -279,6 +279,7 @@ int main(int argc, char** argv) {
     uint32_t dram_bandwidth_spec = 0;
     uint32_t num_banks = 1;
     uint32_t bank_start_id = 1;
+    int device_id = 0;
 
     log_info(tt::LogTest, "start DRAM benchmark");
 
@@ -314,6 +315,8 @@ int main(int argc, char** argv) {
             std::tie(bank_start_id, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--bank-start-id", 0);
 
+            std::tie(device_id, input_args) =
+                test_args::get_command_option_int32_and_remaining_args(input_args, "--device-id", 0);
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
@@ -370,7 +373,6 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
 
@@ -398,11 +400,12 @@ int main(int argc, char** argv) {
         log_info(
             LogTest,
             "Measuring DRAM bandwidth for input_size = {} bytes ({:.3f} MB, "
-            "{} tiles), using {} cores",
+            "{} tiles), using {} cores device{}",
             input_size,
             static_cast<double>(input_size) / 1024 / 1024,
             num_tiles,
-            num_cores);
+            num_cores,
+            device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Input Setup

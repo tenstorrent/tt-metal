@@ -443,9 +443,9 @@ void dump_eth_link_stats(
             "Iteration,Sender Device ID,Sender Eth,S Retrain Count,S CRC Errs,S PCS Faults,S Total Corr,S Total "
             "Uncorr,S Retrain by PCS,S Retrain by CRC");
         log_file << fmt::format(
-                        ",Receiver Device ID,Receiver Eth,R Retrain Count,R CRC Errs,R PCS Faults,R Total "
-                        "Corr,R Total Uncorr,R Retrain by PCS,R Retrain by CRC")
-                 << std::endl;
+            ",Receiver Device ID,Receiver Eth,R Retrain Count,R CRC Errs,R PCS Faults,R Total "
+            "Corr,R Total Uncorr,R Retrain by PCS,R Retrain by CRC");
+        log_file << fmt::format(",External Cable") << std::endl;
     } else {
         log_file.open(log_path, std::ios_base::app);
     }
@@ -461,6 +461,15 @@ void dump_eth_link_stats(
         auto receiver_virtual =
             receiver_device->virtual_core_from_logical_core(CoreCoord(link.receiver.x, link.receiver.y), CoreType::ETH);
 
+        auto is_external_cable = tt::tt_metal::MetalContext::instance().get_cluster().is_external_cable(
+            link.sender.chip, CoreCoord(link.sender.x, link.sender.y));
+        log_info(
+            tt::LogTest,
+            "Iteration {} Reading stats for link {} -> {} (is_external_cable: {})",
+            iteration,
+            link.sender.str(),
+            link.receiver.str(),
+            is_external_cable);
         tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             link_stats.data(),
             link_stats.size() * sizeof(uint32_t),
@@ -529,17 +538,17 @@ void dump_eth_link_stats(
                 s.retrains_triggered_by_crcs);
 
             log_file << fmt::format(
-                            ",{},{},{},{},{},{},{},{},{}",
-                            link.receiver.chip,
-                            link.receiver.y,
-                            r.retrain_count,
-                            r.crc_errs,
-                            r.pcs_faults,
-                            r.total_corr_cw,
-                            r.total_uncorr_cw,
-                            r.retrains_triggered_by_pcs,
-                            r.retrains_triggered_by_crcs)
-                     << std::endl;
+                ",{},{},{},{},{},{},{},{},{}",
+                link.receiver.chip,
+                link.receiver.y,
+                r.retrain_count,
+                r.crc_errs,
+                r.pcs_faults,
+                r.total_corr_cw,
+                r.total_uncorr_cw,
+                r.retrains_triggered_by_pcs,
+                r.retrains_triggered_by_crcs);
+            log_file << fmt::format(",{}", is_external_cable ? "external" : "internal") << std::endl;
         }
     }
 

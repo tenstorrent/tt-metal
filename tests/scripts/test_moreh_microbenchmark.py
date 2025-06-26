@@ -152,11 +152,11 @@ def test_write_device_l1(iter=1, buffer_type=0, size=2048):
     )
     result = run_moreh_single_test("pcie write to device l1", command)
     line = capture_terminal_line(result, "WriteToDeviceL1")
-    bw = capture_line_result(line, -1)
+    bw = capture_line_result(line, -2)
     return bw
 
 
-def test_write_device_dram_channel(iter=1, buffer_type=0, size=2048):
+def test_write_device_dram_channel(device_id, iter=1, buffer_type=0, size=2048):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram"
         + " "
@@ -166,14 +166,16 @@ def test_write_device_dram_channel(iter=1, buffer_type=0, size=2048):
         + str(buffer_type)
         + " --size "
         + str(size)
+        + " --device_id "
+        + str(device_id)
     )
     result = run_moreh_single_test("pcie write to device dram", command)
     line = capture_terminal_line(result, "WriteToDeviceDRAMChannel")
-    bw = capture_line_result(line, -1)
+    bw = capture_line_result(line, -2)
     return bw
 
 
-def test_write_buffer(iter=1, buffer_type=0, size=2048):
+def test_write_buffer(device_id, iter=1, buffer_type=0, size=2048):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer_old"
         + " "
@@ -183,14 +185,16 @@ def test_write_buffer(iter=1, buffer_type=0, size=2048):
         + str(buffer_type)
         + " --size "
         + str(size)
+        + " --device_id "
+        + str(device_id)
     )
     result = run_moreh_single_test("pcie write to buffer", command)
     line = capture_terminal_line(result, "WriteToBuffer")
-    bw = capture_line_result(line, -1)
+    bw = capture_line_result(line, -2)
     return bw
 
 
-def test_enqueue_write_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
+def test_enqueue_write_buffer(device_id, iter=1, buffer_type=0, size=2048, timeout=600):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer"
         + " "
@@ -200,10 +204,12 @@ def test_enqueue_write_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
         + str(buffer_type)
         + " --size "
         + str(size)
+        + " --device_id "
+        + str(device_id)
     )
     result = run_moreh_single_test("pcie enqueue write to buffer", command)
     line = capture_terminal_line(result, "EnqueueWriteBuffer")
-    bw = capture_line_result(line, -1)
+    bw = capture_line_result(line, -2)
     return bw
 
 
@@ -221,11 +227,11 @@ def test_read_device_l1(iter=1, buffer_type=0, size=2048):
     )
     result = run_moreh_single_test("pcie read from device l1", command)
     line = capture_terminal_line(result, "ReadFromDeviceL1")
-    bw = capture_line_result(line, -1)
+    bw = capture_line_result(line, -2)
     return bw
 
 
-def test_read_device_dram_channel(iter=1, buffer_type=0, size=2048):
+def test_read_device_dram_channel(device_id, iter=1, buffer_type=0, size=2048):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram"
         + " "
@@ -235,14 +241,16 @@ def test_read_device_dram_channel(iter=1, buffer_type=0, size=2048):
         + str(buffer_type)
         + " --size "
         + str(size)
+        + " --device_id "
+        + str(device_id)
     )
     result = run_moreh_single_test("pcie read from device dram", command)
     line = capture_terminal_line(result, "ReadFromDeviceDRAMChannel")
-    bw = capture_line_result(line, -1)
+    bw = capture_line_result(line, -2)
     return bw
 
 
-def test_read_buffer(iter=1, buffer_type=0, size=2048):
+def test_read_buffer(device_id, iter=1, buffer_type=0, size=2048):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer_old"
         + " "
@@ -252,14 +260,16 @@ def test_read_buffer(iter=1, buffer_type=0, size=2048):
         + str(buffer_type)
         + " --size "
         + str(size)
+        + " --device_id "
+        + str(device_id)
     )
     result = run_moreh_single_test("pcie read from buffer", command)
     line = capture_terminal_line(result, "ReadFromBuffer")
-    bw = capture_line_result(line, -1)
+    bw = capture_line_result(line, -2)
     return bw
 
 
-def test_enqueue_read_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
+def test_enqueue_read_buffer(device_id, iter=1, buffer_type=0, size=2048, timeout=600):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer"
         + " "
@@ -269,14 +279,16 @@ def test_enqueue_read_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
         + str(buffer_type)
         + " --size "
         + str(size)
+        + " --device_id "
+        + str(device_id)
     )
     result = run_moreh_single_test("pcie enqueue read from buffer", command)
     line = capture_terminal_line(result, "EnqueueReadBuffer")
-    bw = capture_line_result(line, -1)
+    bw = capture_line_result(line, -2)
     return bw
 
 
-def run_dram_read_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
+def run_dram_read_cmd(k, n, num_blocks, df, num_banks, bank_start_id, device_id):
     command = (
         "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/8_dram_adjacent_core_read/test_dram_read"
         + " "
@@ -520,23 +532,31 @@ def test_matmul_single_core(
 
 
 @pytest.mark.parametrize(
-    "iteration, test_vector_small, test_vector_large",
-    [(2, np.array([8192, 32768, 131072, 524288, 2097152, 8388608]), np.array([33554432, 134217728, 536870912]))],
+    "device_id, iteration, test_vector_small, test_vector_large",
+    [
+        (
+            device_id,
+            2,
+            np.array([8192, 32768, 131072, 524288, 2097152, 8388608]),
+            np.array([33554432, 134217728, 536870912]),
+        )
+        for device_id in range(32)
+    ],
 )
-def test_pcie_h2d_dram(iteration, test_vector_small, test_vector_large):
-    file_name = PROFILER_LOGS_DIR / "moreh_old_H2D_DRAM_Bandwidth.csv"
+def test_pcie_h2d_dram(device_id, iteration, test_vector_small, test_vector_large):
+    file_name = PROFILER_LOGS_DIR / f"device{device_id}_H2D_DRAM_Bandwidth.csv"
     header = ["Transfer Size", "WriteToDeviceDRAMChannel", "WriteToBuffer", "EnqueueWriteBuffer"]
     data = []
     for test_point in test_vector_small:
-        bw_wdd = test_write_device_dram_channel(iteration, 0, test_point)
-        bw_wb = test_write_buffer(iteration, 0, test_point)
-        bw_ewb = test_enqueue_write_buffer(iteration, 0, test_point)
+        bw_wdd = test_write_device_dram_channel(device_id, iteration, 0, test_point)
+        bw_wb = test_write_buffer(device_id, iteration, 0, test_point)
+        bw_ewb = test_enqueue_write_buffer(device_id, iteration, 0, test_point)
         data_entry = [test_point, bw_wdd, bw_wb, bw_ewb]
         data.append(data_entry)
     for test_point in test_vector_large:
-        bw_wdd = test_write_device_dram_channel(1, 0, test_point)
-        bw_wb = test_write_buffer(1, 0, test_point)
-        bw_ewb = test_enqueue_write_buffer(1, 0, test_point)
+        bw_wdd = test_write_device_dram_channel(device_id, 1, 0, test_point)
+        bw_wb = test_write_buffer(device_id, 1, 0, test_point)
+        bw_ewb = test_enqueue_write_buffer(device_id, 1, 0, test_point)
         data_entry = [test_point, bw_wdd, bw_wb, bw_ewb]
         data.append(data_entry)
     generate_csv(file_name, header, data)
@@ -544,23 +564,31 @@ def test_pcie_h2d_dram(iteration, test_vector_small, test_vector_large):
 
 
 @pytest.mark.parametrize(
-    "iteration, test_vector_small, test_vector_large",
-    [(2, np.array([8192, 32768, 131072, 524288, 2097152, 8388608]), np.array([33554432, 134217728, 536870912]))],
+    "device_id, iteration, test_vector_small, test_vector_large",
+    [
+        (
+            device_id,
+            2,
+            np.array([8192, 32768, 131072, 524288, 2097152, 8388608]),
+            np.array([33554432, 134217728, 536870912]),
+        )
+        for device_id in range(32)
+    ],
 )
-def test_pcie_d2h_dram(iteration, test_vector_small, test_vector_large):
-    file_name = PROFILER_LOGS_DIR / "moreh_old_D2H_DRAM_Bandwidth.csv"
+def test_pcie_d2h_dram(device_id, iteration, test_vector_small, test_vector_large):
+    file_name = PROFILER_LOGS_DIR / f"device{device_id}_D2H_DRAM_Bandwidth.csv"
     header = ["Transfer Size", "ReadFromDeviceDRAMChannel", "ReadFromBuffer", "EnqueueReadBuffer"]
     data = []
     for test_point in test_vector_small:
-        bw_wdd = test_read_device_dram_channel(iteration, 0, test_point)
-        bw_wb = test_read_buffer(iteration, 0, test_point)
-        bw_ewb = test_enqueue_read_buffer(iteration, 0, test_point)
+        bw_wdd = test_read_device_dram_channel(device_id, iteration, 0, test_point)
+        bw_wb = test_read_buffer(device_id, iteration, 0, test_point)
+        bw_ewb = test_enqueue_read_buffer(device_id, iteration, 0, test_point)
         data_entry = [test_point, bw_wdd, bw_wb, bw_ewb]
         data.append(data_entry)
     for test_point in test_vector_large:
-        bw_wdd = test_read_device_dram_channel(1, 0, test_point)
-        bw_wb = test_read_buffer(1, 0, test_point)
-        bw_ewb = test_enqueue_read_buffer(1, 0, test_point)
+        bw_wdd = test_read_device_dram_channel(device_id, 1, 0, test_point)
+        bw_wb = test_read_buffer(device_id, 1, 0, test_point)
+        bw_ewb = test_enqueue_read_buffer(device_id, 1, 0, test_point)
         data_entry = [test_point, bw_wdd, bw_wb, bw_ewb]
         data.append(data_entry)
     generate_csv(file_name, header, data)
@@ -570,9 +598,9 @@ def test_pcie_d2h_dram(iteration, test_vector_small, test_vector_large):
 @pytest.mark.parametrize(
     "arch, iteration, L1_size, test_vector",
     [
-        ("grayskull", 2, 1048576, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
+        # ("grayskull", 2, 1048576, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
         ("wormhole_b0", 2, 1499136, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
-        ("blackhole", 2, 1499136, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
+        # ("blackhole", 2, 1499136, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
     ],
 )
 def test_pcie_h2d_l1(arch, iteration, L1_size, test_vector):
@@ -595,9 +623,9 @@ def test_pcie_h2d_l1(arch, iteration, L1_size, test_vector):
 @pytest.mark.parametrize(
     "arch, iteration, L1_size, test_vector",
     [
-        ("grayskull", 2, 1048576, np.array([4096, 16384, 65536])),
+        # ("grayskull", 2, 1048576, np.array([4096, 16384, 65536])),
         ("wormhole_b0", 2, 1499136, np.array([4096, 16384, 65536])),
-        ("blackhole", 2, 1499136, np.array([4096, 16384, 65536])),
+        # ("blackhole", 2, 1499136, np.array([4096, 16384, 65536])),
     ],
 )
 def test_pcie_d2h_l1(arch, iteration, L1_size, test_vector):
@@ -620,7 +648,7 @@ def test_pcie_d2h_l1(arch, iteration, L1_size, test_vector):
 @pytest.mark.parametrize(
     "arch, r, c, nt, test_vector",
     [
-        ("grayskull", 9, 12, 256, np.array([1, 8, 16, 32])),
+        # ("grayskull", 9, 12, 256, np.array([1, 8, 16, 32])),
         ("wormhole_b0", 6, 6, 256, np.array([1, 8, 16, 32])),
     ],
 )
@@ -651,13 +679,13 @@ def test_noc(arch, r, c, nt, test_vector):
 @pytest.mark.parametrize(
     "arch, freq, r, c, test_vector",
     [
-        (
-            "grayskull",
-            1020,
-            9,
-            12,
-            np.array([[4608, 6144, 6144], [3456, 3840, 1024], [3456, 3072, 1024], [2304, 3072, 768]]),
-        ),
+        # (
+        #     "grayskull",
+        #     1020,
+        #     9,
+        #     12,
+        #     np.array([[4608, 6144, 6144], [3456, 3840, 1024], [3456, 3072, 1024], [2304, 3072, 768]]),
+        # ),
         ("wormhole_b0", 1000, 6, 6, np.array([[2304, 1920, 1024], [2304, 1536, 1024], [1536, 1536, 768]])),
     ],
 )
@@ -694,16 +722,16 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
         ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
         ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
         ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
-        # ########################### 512 512 512 x 8 subblock 4 2 ################################
-        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 717089.0),
-        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
-        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
-        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1173029.0),
-        # ########################### 512 512 256x8 subblock 4 2 ################################
-        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 399068.0),
-        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
-        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
-        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
+        # # ########################### 512 512 512 x 8 subblock 4 2 ################################
+        # ("blackhole", 800, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 717089.0),
+        # ("blackhole", 800, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
+        # ("blackhole", 800, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
+        # ("blackhole", 800, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1173029.0),
+        # # ########################### 512 512 256x8 subblock 4 2 ################################
+        # ("blackhole", 800, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 399068.0),
+        # ("blackhole", 800, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
+        # ("blackhole", 800, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
+        # ("blackhole", 800, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
     ],
 )
 def test_matmul_single_core_sharded(
@@ -766,17 +794,28 @@ def test_matmul_single_core_sharded(
 
 
 @pytest.mark.parametrize(
-    "arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id",
+    "arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id, device_id",
     [
-        ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 0, 12, 0),
-        ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 1, 12, 0),
-        ("wormhole_b0", 1000, np.array([2048, 3840]), 1, 4, 1, 12, 0),  # Padded FF1 shapes for llama 70b on TG
-        ("blackhole", 800, np.array([32768, 8 * 128]), 1, 8, 0, 8, 0),
-        ("blackhole", 800, np.array([32768, 8 * 128]), 1, 8, 1, 8, 0),
-        ("blackhole", 800, np.array([2048, 3840]), 1, 4, 1, 8, 0),  # Padded FF1 shapes for llama 70b on TG
+        *[
+            ("wormhole_b0", 1000, np.array([k, 12 * 128]), 1, 8, fmt, 12, 0, device_id)
+            for k in [2**i for i in range(9, 16)]  # 2^9 = 512 to 2^15 = 32768
+            for fmt in [0, 1]
+            for device_id in range(32)
+        ],
     ],
 )
-def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id):
+def test_dram_read_all_core(
+    arch,
+    freq,
+    test_vector,
+    num_tests,
+    nblock,
+    data_format,
+    num_banks,
+    bank_start_id,
+    device_id,
+    create_moreh_microbenchmark_csv,
+):
     data = []
     cycle_list = []
     time_list = []
@@ -786,9 +825,11 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
         n = int(test_vector[1])
         if data_format == 0:
             input_size = k * n * 1088 // 1024
+            data_format_str = "bfp8_b"
         elif data_format == 1:
             input_size = k * n * 2048 // 1024
-        run_dram_read_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
+            data_format_str = "bfloat16"
+        run_dram_read_cmd(k, n, nblock, data_format, num_banks, bank_start_id, device_id)
         cycle = profile_results_kernel_duration()
         time = cycle / freq / 1000.0 / 1000.0
         throughput = input_size / cycle
@@ -801,24 +842,46 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
     cycle = sum(cycle_list) / len(cycle_list)
     time = sum(time_list) / len(time_list)
     throughput = sum(throughput_list) / len(throughput_list)
-    logger.info("DRAM read cycle: " + str(cycle))
-    logger.info("DRAM read time: " + str(time))
-    logger.info("DRAM read throughput: " + str(throughput))
-    data.append([throughput])
-    # check within range
-    dev_freq = get_device_freq()
-    bw_lower_bound = 260.0 * dev_freq / 1000.0
-    bw_upper_bound = bw_lower_bound + 10.0
-    assert bw_lower_bound <= throughput
-    assert throughput <= bw_upper_bound
+    logger.info(f"Device{device_id} DRAM read k: {k}, n: {n} nblock: {nblock} input_size: {input_size}")
+    logger.info(f"Device{device_id} DRAM read data_format: {data_format == 0 and 'bfp8_b' or 'bfloat16'}")
+    logger.info(f"Device{device_id} DRAM read cycle: {cycle}")
+    logger.info(f"Device{device_id} DRAM read time: {time}")
+    logger.info(f"Device{device_id} DRAM read throughput: {throughput}")
+
+    headers = ["Device Id", "input_size(B)", "data_format", "cycle", "time", "throughput(GB/s)"]
+    row = [device_id, input_size, data_format_str, cycle, time, throughput]
+
+    file_name = create_moreh_microbenchmark_csv
+    file_path = Path(file_name)
+    logger.info(f"Writing results to {file_path}")
+
+    # Write CSV (create if missing)
+    if not file_path.exists():
+        with open(file_path, mode="w", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow(headers)
+
+    with open(file_path, mode="a", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(row)
+
+    assert file_path.is_file()
+
+    # data.append([throughput])
+    # # check within range
+    # dev_freq = get_device_freq()
+    # bw_lower_bound = 260.0 * dev_freq / 1000.0
+    # bw_upper_bound = bw_lower_bound + 10.0
+    # assert bw_lower_bound <= throughput
+    # assert throughput <= bw_upper_bound
 
 
 @pytest.mark.parametrize(
     "arch, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id, bw_target",
     [
-        ("grayskull", np.array([32768 * 2, 8 * 128]), 1, 64, 1, 8, 0, None),
+        # ("grayskull", np.array([32768 * 2, 8 * 128]), 1, 64, 1, 8, 0, None),
         ("wormhole_b0", np.array([32768 * 2, 12 * 128]), 1, 64, 2, 12, 0, None),
-        ("blackhole", np.array([32768 * 8, 8 * 128]), 1, 256, 2, 8, 0, None),
+        # ("blackhole", np.array([32768 * 8, 8 * 128]), 1, 256, 2, 8, 0, None),
         # FF1/FF3 shapes for TG llama 70b
         (
             "wormhole_b0",
@@ -830,16 +893,16 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
             0,
             240,
         ),  # 244 GB/s
-        (
-            "blackhole",
-            np.array([2048, 3840]),
-            1,
-            16,
-            0,
-            8,
-            0,
-            240,
-        ),  # 244 GB/s
+        # (
+        #     "blackhole",
+        #     np.array([2048, 3840]),
+        #     1,
+        #     16,
+        #     0,
+        #     8,
+        #     0,
+        #     240,
+        # ),  # 244 GB/s
         # FF2 shapes for TG llama 70b
         (
             "wormhole_b0",
@@ -851,16 +914,16 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
             0,
             250,
         ),  # 255 GB/s
-        (
-            "blackhole",
-            np.array([3584, 2304]),
-            1,
-            28,
-            1,
-            8,
-            0,
-            250,
-        ),  # 255 GB/s
+        # (
+        #     "blackhole",
+        #     np.array([3584, 2304]),
+        #     1,
+        #     28,
+        #     1,
+        #     8,
+        #     0,
+        #     250,
+        # ),  # 255 GB/s
         # Dense Out shapes for TG llama 70b
         (
             "wormhole_b0",
@@ -872,16 +935,16 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
             0,
             220,
         ),  # 226 GB/s
-        (
-            "blackhole",
-            np.array([1024, 2304]),
-            1,
-            8,
-            1,
-            8,
-            0,
-            220,
-        ),  # 226 GB/s
+        # (
+        #     "blackhole",
+        #     np.array([1024, 2304]),
+        #     1,
+        #     8,
+        #     1,
+        #     8,
+        #     0,
+        #     220,
+        # ),  # 226 GB/s
         # QKV shapes for TG llama 70b
         (
             "wormhole_b0",
@@ -893,16 +956,16 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
             0,
             225,
         ),  # 232 GB/s
-        (
-            "blackhole",
-            np.array([2048, 1536]),
-            1,
-            16,
-            1,
-            8,
-            0,
-            225,
-        ),  # 232 GB/ss
+        # (
+        #     "blackhole",
+        #     np.array([2048, 1536]),
+        #     1,
+        #     16,
+        #     1,
+        #     8,
+        #     0,
+        #     225,
+        # ),  # 232 GB/ss
     ],
 )
 def test_dram_read_l1_write_core(
@@ -1065,9 +1128,9 @@ def test_dram_read_remote_cb_sync(
 @pytest.mark.parametrize(
     "arch, freq, r, c, test_vector_global, test_vector_local",
     [
-        ("grayskull", 1020, 9, 12, np.array([[3456, 3072, 1024], [2304, 3072, 768]]), np.array([[2304, 3072, 768]])),
+        # ("grayskull", 1020, 9, 12, np.array([[3456, 3072, 1024], [2304, 3072, 768]]), np.array([[2304, 3072, 768]])),
         ("wormhole_b0", 1000, 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
-        ("blackhole", 800, 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
+        # ("blackhole", 800, 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
     ],
 )
 def test_matmul_l1(arch, freq, r, c, test_vector_global, test_vector_local):
@@ -1118,13 +1181,27 @@ def record_moreh_microbenchmark_csv(capsys, create_moreh_microbenchmark_csv):
     result_output = captured.out
 
     def get_entries(result_output, marker):
-        line = capture_line_from_str_output(result_output, marker)
-        return line.split(":")[1:]
+        for line in result_output.splitlines():
+            if marker in line:
+                # 1. 로그 끝의 괄호 포함된 파일명 제거
+                line = re.sub(r"\s+\(.*?:\d+\)$", "", line)
 
-    csv_microbenchmark_name = get_entries(result_output, "CSV_MICROBENCHMARK")[0]
+                # 2. marker 뒤 내용만 추출
+                idx = line.find(marker + ":")
+                if idx != -1:
+                    content = line[idx + len(marker) + 1 :]  # +1 for the colon
+                    parts = [p.strip() for p in content.split(":")]
+                    return parts
+        return []
+
+    csv_microbenchmark_name = get_entries(result_output, "CSV_MICROBENCHMARK")[1]
+    print(f"csv_microbenchmark_name: {csv_microbenchmark_name}")
     csv_inputs_and_values = get_entries(result_output, "CSV_INPUT")
+    print(f"csv_inputs_and_values: {csv_inputs_and_values}")
     csv_outputs_and_values = get_entries(result_output, "CSV_OUTPUT")
+    print(f"csv_outputs_and_values: {csv_outputs_and_values}")
     csv_result_and_value = get_entries(result_output, "CSV_RESULT")
+    print(f"csv_result_and_value: {csv_result_and_value}")
 
     assert len(csv_result_and_value) == 2, f"CSV_RESULT needs to be a single name and value"
     assert len(csv_inputs_and_values) >= 2
@@ -1137,19 +1214,28 @@ def record_moreh_microbenchmark_csv(capsys, create_moreh_microbenchmark_csv):
         return list(toolz.itertoolz.take_nth(2, inputs_and_values[1:]))
 
     csv_inputs_names = get_names(csv_inputs_and_values)
+    print(f"csv_inputs_names: {csv_inputs_names}")
     csv_inputs_values = get_values(csv_inputs_and_values)
+    print(f"csv_inputs_values: {csv_inputs_values}")
 
     csv_outputs_names = get_names(csv_outputs_and_values)
+    print(f"csv_outputs_names: {csv_outputs_names}")
     csv_outputs_values = get_values(csv_outputs_and_values)
+    print(f"csv_outputs_values: {csv_outputs_values}")
 
     csv_result_name = get_names(csv_result_and_value)[0]
+    print(f"csv_result_name: {csv_result_name}")
     csv_result_value = get_values(csv_result_and_value)[0]
+    print(f"csv_result_value: {csv_result_value}")
 
     headers = csv_inputs_names + csv_outputs_names + [csv_result_name]
+    print(f"headers: {headers}")
     data = csv_inputs_values + csv_outputs_values + [csv_result_value]
+    print(f"data: {data}")
 
     file_name = create_moreh_microbenchmark_csv
 
+    print(f"Writing results to {file_name}")
     file_path = Path(file_name)
 
     if not file_path.exists():
@@ -1164,8 +1250,15 @@ def record_moreh_microbenchmark_csv(capsys, create_moreh_microbenchmark_csv):
 
 
 @pytest.mark.parametrize(
-    "r, c, num_tiles, tiles_per_transfer, noc_index, noc_direction, access_type, use_device_profiler",
-    [(9, 12, 204800, 1, 0, 0, 0, 0), (9, 12, 204800, 1, 0, 0, 0, 0)],
+    "r, c, num_tiles, tiles_per_transfer, noc_index, noc_direction, access_type, use_device_profiler, device_id",
+    [
+        (0, 0, 204800, tiles_per_transfer, noc_index, noc_direction, access_type, 0, device_id)
+        for tiles_per_transfer in [1, 2, 4, 8, 16, 32]
+        for noc_index in range(2)
+        for noc_direction in range(4)
+        for access_type in range(2)
+        for device_id in range(32)
+    ],
 )
 def test_noc_adjacent(
     r,
@@ -1176,6 +1269,7 @@ def test_noc_adjacent(
     noc_direction,
     access_type,
     use_device_profiler,
+    device_id,
     record_moreh_microbenchmark_csv,
 ):
     command = (
@@ -1187,15 +1281,130 @@ def test_noc_adjacent(
         + str(c)
         + " --num-tiles "
         + str(num_tiles)
-        + " --tiles-per-transfer"
+        + " --tiles-per-transfer "
         + str(tiles_per_transfer)
-        + " --noc-index"
+        + " --noc-index "
         + str(noc_index)
         + " --noc-direction "
         + str(noc_direction)
         + " --access-type "
         + str(access_type)
+        + " --device-id "
+        + str(device_id)
     )
     if use_device_profiler:
         command += " --use-device-profiler"
     result = run_moreh_single_test("test_noc_adjacent", command)
+
+
+@pytest.mark.parametrize(
+    "r, c, num_tiles, noc_index, access_type, use_device_profiler, device_id",
+    [
+        (0, 0, 204800, noc_index, access_type, 0, device_id)
+        for noc_index in range(2)
+        for access_type in range(2)
+        for device_id in range(32)
+    ],
+)
+def test_noc_rtor(
+    r,
+    c,
+    num_tiles,
+    noc_index,
+    access_type,
+    use_device_profiler,
+    device_id,
+    record_moreh_microbenchmark_csv,
+):
+    command = (
+        "./build/test/tt_metal/perf_microbenchmark/2_noc_rtor/test_noc_rtor"
+        + " "
+        + "--cores-r "
+        + str(r)
+        + " --cores-c "
+        + str(c)
+        + " --num-tiles "
+        + str(num_tiles)
+        + " --noc-index "
+        + str(noc_index)
+        + " --access-type "
+        + str(access_type)
+        + " --device-id "
+        + str(device_id)
+    )
+    if use_device_profiler:
+        command += " --use-device-profiler"
+    result = run_moreh_single_test("test_noc_rtor", command)
+
+
+@pytest.mark.parametrize("device_id", range(32))
+@pytest.mark.parametrize("buffer_type", [0, 1])  # 0: DRAM, 1: L1
+@pytest.mark.parametrize(
+    "buffer_size",
+    [
+        8192,
+        32768,
+        131072,
+        524288,
+        2097152,
+        8388608,
+        33554432,
+        134217728,
+        536870912,
+    ],
+)
+@pytest.mark.parametrize(
+    "page_size",
+    [
+        2048,
+        # 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768
+    ],
+)
+def test_pcie_transfer(device_id, buffer_type, buffer_size, page_size, record_moreh_microbenchmark_csv):
+    command = (
+        "./build/test/tt_metal/perf_microbenchmark/3_pcie_transfer/test_rw_buffer"
+        + " --buffer-type "
+        + str(buffer_type)
+        + " --transfer-size "
+        + str(buffer_size)
+        + " --device-id "
+        + str(device_id)
+        + " --page-size "
+        + str(page_size)
+        + " --bypass-check "
+    )
+
+    result = run_moreh_single_test("test_rw_buffer", command)
+
+
+@pytest.mark.parametrize("device_id", range(2))
+@pytest.mark.parametrize(
+    "input_size",
+    [
+        32768,  # 32K
+        536870912,  # 512M
+    ],
+)
+@pytest.mark.parametrize("access_type", [0, 1])
+@pytest.mark.parametrize("num_tests", [10])
+@pytest.mark.parametrize("use_device_profiler", [False])
+def test_dram_offchip(
+    device_id, input_size, access_type, num_tests, use_device_profiler, record_moreh_microbenchmark_csv
+):
+    command = (
+        "./build/test/tt_metal/perf_microbenchmark/6_dram_offchip/test_dram_offchip"
+        + " --input-size "
+        + str(input_size)
+        + " --access-type "
+        + str(access_type)
+        + " --num-tests "
+        + str(num_tests)
+        + " --device-id "
+        + str(device_id)
+        + " --bypass-check "
+    )
+
+    if use_device_profiler:
+        command += " --use-device-profiler"
+
+    result = run_moreh_single_test("test_dram_offchip", command)

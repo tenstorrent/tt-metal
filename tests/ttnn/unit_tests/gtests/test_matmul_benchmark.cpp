@@ -127,14 +127,14 @@ struct MatmulShape {
 };
 
 class Matmul2DHostPerfTestFixture : public ttnn::TTNNFixtureWithDevice,
-                                    public testing::WithParamInterface<std::tuple<MatmulTestConfig, MatmulShape>> {
+                                    public testing::WithParamInterface<std::tuple<MatmulTestConfig, MatmulShape, int>> {
 public:
     Matmul2DHostPerfTestFixture() :
-        ttnn::TTNNFixtureWithDevice(/*trace_region_size=*/65536, /*l1_small_size=*/200000) {}
+        ttnn::TTNNFixtureWithDevice(std::get<2>(GetParam()), /*trace_region_size=*/65536, /*l1_small_size=*/200000) {}
 };
 
 TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
-    GTEST_SKIP() << "Benchmark is not intended to be run as part of CI and can be manually run locally";
+    // GTEST_SKIP() << "Benchmark is not intended to be run as part of CI and can be manually run locally";
 
     // Parse test config
     const MatmulTestConfig& test_config = std::get<0>(GetParam());
@@ -162,6 +162,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     const int tile_h = MatmulShape.tile_shape.height();
     const int tile_w = MatmulShape.tile_shape.width();
 
+    const int device_id = std::get<2>(GetParam());
     const int m = MatmulShape.m;
     const int k = MatmulShape.k;
     const int n = MatmulShape.n;
@@ -191,10 +192,17 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         file_name += ".csv";
     }
 
-    std::ofstream file(file_name);
-    file << "m,k,n,use_trace,grid_size,in0_sharded,out_sharded,in0_storage_type,in1_storage_type,out_storage_type,"
-            "dtype,math_fidelity,inference_time_avg (ns),TFLOPs (avg),Utilization (vs user grid),Utilization (vs 8x8 "
-            "full grid)\n";
+    bool file_exists = std::filesystem::exists(file_name);
+
+    std::ofstream file(file_name, std::ios::app);
+
+    if (!file_exists) {
+        file << "device_id,m,k,n,use_trace,grid_size,in0_sharded,out_sharded,in0_storage_type,in1_storage_type,out_"
+                "storage_type,"
+                "dtype,math_fidelity,inference_time_avg (ns),TFLOPs (avg),Utilization (vs user grid),Utilization (vs "
+                "8x8 "
+                "full grid)\n";
+    }
 
     log_info(
         tt::LogTest, "Running test with dtype: {}, math_fidelity: {}, use_trace: {}", dtype, math_fidelity, use_trace);
@@ -387,11 +395,11 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         utilization_user_grid_percentage,
         utilization_full_grid_percentage);
 
-    file << m << "," << k << "," << n << "," << (use_trace ? "true" : "false") << "," << grid_size.height() << "x"
-         << grid_size.width() << "," << in0_sharded << "," << out_sharded << "," << in0_storage_type << ","
-         << in1_storage_type << "," << out_storage_type << "," << dtype_to_string(dtype) << "," << math_fidelity << ","
-         << inference_time_avg_s * 1e9 << "," << tflops << "," << utilization_user_grid_percentage << ","
-         << utilization_full_grid_percentage << "\n";
+    file << device_id << "," << m << "," << k << "," << n << "," << (use_trace ? "true" : "false") << ","
+         << grid_size.height() << "x" << grid_size.width() << "," << in0_sharded << "," << out_sharded << ","
+         << in0_storage_type << "," << in1_storage_type << "," << out_storage_type << "," << dtype_to_string(dtype)
+         << "," << math_fidelity << "," << inference_time_avg_s * 1e9 << "," << tflops << ","
+         << utilization_user_grid_percentage << "," << utilization_full_grid_percentage << "\n";
 
     // Deallocate input tensors
     input_tensor_0.deallocate();
@@ -529,7 +537,15 @@ INSTANTIATE_TEST_SUITE_P(
              /*out_sharded=*/false,
              /*in0_block_w_div=*/4,
              /*num_out_blocks_h=*/8,
-             /*num_out_blocks_w=*/8}})));
+             /*num_out_blocks_w=*/8}}),
+        // Device IDs to use
+        ::testing::ValuesIn([]() {
+            std::vector<int> device_ids;
+            for (int i = 0; i < 32; ++i) {
+                device_ids.push_back(i);
+            }
+            return device_ids;
+        }())));
 
 INSTANTIATE_TEST_SUITE_P(
     MatmulTests_BFLOAT8B,
@@ -654,7 +670,15 @@ INSTANTIATE_TEST_SUITE_P(
              /*out_sharded=*/false,
              /*in0_block_w_div=*/4,
              /*num_out_blocks_h=*/8,
-             /*num_out_blocks_w=*/8}})));
+             /*num_out_blocks_w=*/8}}),
+        // Device IDs to use
+        ::testing::ValuesIn([]() {
+            std::vector<int> device_ids;
+            for (int i = 0; i < 32; ++i) {
+                device_ids.push_back(i);
+            }
+            return device_ids;
+        }())));
 
 INSTANTIATE_TEST_SUITE_P(
     MatmulTests_BFLOAT4B,
@@ -785,4 +809,12 @@ INSTANTIATE_TEST_SUITE_P(
              /*out_sharded=*/false,
              /*in0_block_w_div=*/4,
              /*num_out_blocks_h=*/4,
-             /*num_out_blocks_w=*/4}})));
+             /*num_out_blocks_w=*/4}}),
+        // Device IDs to use
+        ::testing::ValuesIn([]() {
+            std::vector<int> device_ids;
+            for (int i = 0; i < 32; ++i) {
+                device_ids.push_back(i);
+            }
+            return device_ids;
+        }())));

@@ -525,15 +525,15 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::DispatchCoreConfig dispatch_core_config;
-        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::GRAYSKULL) {
-            dispatch_core_config =
-                tt_metal::DispatchCoreConfig{tt_metal::DispatchCoreType::WORKER, tt_metal::DispatchCoreAxis::ROW};
-        } else {
-            dispatch_core_config =
-                tt_metal::DispatchCoreConfig{tt_metal::DispatchCoreType::WORKER, tt_metal::DispatchCoreAxis::ROW};
-        }
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id, 1, 0, 0, dispatch_core_config);
+        // tt_metal::DispatchCoreConfig dispatch_core_config;
+        // if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::GRAYSKULL) {
+        //     dispatch_core_config =
+        //         tt_metal::DispatchCoreConfig{tt_metal::DispatchCoreType::WORKER, tt_metal::DispatchCoreAxis::ROW};
+        // } else {
+        //     dispatch_core_config =
+        //         tt_metal::DispatchCoreConfig{tt_metal::DispatchCoreType::WORKER, tt_metal::DispatchCoreAxis::ROW};
+        // }
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);  // , 1, 0, 0, dispatch_core_config);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
 
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();

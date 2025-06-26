@@ -56,9 +56,10 @@ class TTNNFixtureWithDevice : public TTNNFixtureBase {
 protected:
     tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
+    int device_id_ = 0;
 
     void SetUp() override {
-        device_holder_ = ttnn::open_mesh_device(/*device_id=*/0, l1_small_size_, trace_region_size_);
+        device_holder_ = ttnn::open_mesh_device(device_id_, l1_small_size_, trace_region_size_);
         device_ = device_holder_.get();
     }
 
@@ -66,8 +67,8 @@ protected:
 
     TTNNFixtureWithDevice() : TTNNFixtureBase() {}
 
-    TTNNFixtureWithDevice(int trace_region_size, int l1_small_size) :
-        TTNNFixtureBase(trace_region_size, l1_small_size) {}
+    TTNNFixtureWithDevice(int device_id, int trace_region_size, int l1_small_size) :
+        TTNNFixtureBase(trace_region_size, l1_small_size), device_id_(device_id) {}
 };
 
 class MultiCommandQueueSingleDeviceFixture : public TTNNFixtureBase {

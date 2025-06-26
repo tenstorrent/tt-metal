@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
     int32_t buffer_type = 0;
     uint32_t transfer_size;
     uint32_t page_size;
-    uint32_t device_id = 0;
+    int32_t device_id = 0;
 
     try {
         // Input arguments parsing
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
                 test_args::has_command_option_and_remaining_args(input_args, "--skip-write");
 
             std::tie(device_id, input_args) =
-                test_args::get_command_option_uint32_and_remaining_args(input_args, "--device");
+                test_args::get_command_option_int32_and_remaining_args(input_args, "--device-id", 0);
 
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
@@ -127,10 +127,11 @@ int main(int argc, char** argv) {
         log_info(
             LogTest,
             "Measuring host-to-device and device-to-host bandwidth for "
-            "buffer_type={}, transfer_size={} bytes, page_size={} bytes",
+            "buffer_type={}, transfer_size={} bytes, page_size={} bytes device_id={}",
             buffer_type == 0 ? "DRAM" : "L1",
             transfer_size,
-            page_size);
+            page_size,
+            device_id);
 
         log_info(LogTest, "Num tests {}", num_tests);
         float best_write_bw = 0.0f;
@@ -235,7 +236,8 @@ int main(int argc, char** argv) {
     log_info(tt::LogTest, "CSV_MICROBENCHMARK:title:test_rw_buffer");
     log_info(
         tt::LogTest,
-        "CSV_INPUT:buffer-type:{}:transfer-size:{}",
+        "CSV_INPUT:device-id:{}:buffer-type:{}:transfer-size:{}",
+        device_id,
         BUFFER_TYPEToString(static_cast<BUFFER_TYPE>(buffer_type)),
         transfer_size);
     log_info(

@@ -110,6 +110,7 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
                                 r_total_uncorr = row["R Total Uncorr"]
                                 r_pcs_retrains = row["R Retrain by PCS"]
                                 r_crc_retrains = row["R Retrain by CRC"]
+                                external_cables = row["External Cable"]
                             link_stats[run_host_id] = [
                                 s_retrain_count,
                                 s_crc_errs,
@@ -125,6 +126,7 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
                                 r_total_uncorr,
                                 r_pcs_retrains,
                                 r_crc_retrains,
+                                external_cables,
                             ]
                         else:
                             link_stats[run_host_id] = []
@@ -166,6 +168,7 @@ def write_results_to_csv(file_name, test_latency):
             "Sender Eth Channel",
             "Receiver Device ID",
             "Receiver Eth Channel",
+            "External Cable",
             "Num Packets",
             "Packet Size (B)",
             "Latency (ns)",
@@ -199,6 +202,7 @@ def write_results_to_csv(file_name, test_latency):
             "Sender Eth Channel",
             "Receiver Device ID",
             "Receiver Eth Channel",
+            "External Cable",
             "Num Packets",
             "Packet Size (B)",
             "BW (GB/s)",
@@ -236,6 +240,7 @@ def write_results_to_csv(file_name, test_latency):
         receiver_info, benchmark_type, num_packets, packet_size, measurements, link_stats = data_to_write
         assert len(measurements) == len(link_stats)
         for measurement, link_stat in zip(measurements, link_stats):
+            *link_stat_without_cable, external_cable = link_stat
             append_to_csv(
                 file_name,
                 [
@@ -245,10 +250,11 @@ def write_results_to_csv(file_name, test_latency):
                     sender_info[1],
                     receiver_info[0],
                     receiver_info[1],
+                    external_cable,
                     num_packets,
                     packet_size,
                     measurement,
-                    *link_stat,
+                    *link_stat_without_cable,
                 ],
             )
         min_val = min(measurements)
@@ -262,8 +268,9 @@ def write_results_to_csv(file_name, test_latency):
         summary_stats[3] = sender_info[1]
         summary_stats[4] = receiver_info[0]
         summary_stats[5] = receiver_info[1]
-        summary_stats[6] = num_packets
-        summary_stats[7] = packet_size
+        summary_stats[6] = link_stats[0][-1]  # External Cable
+        summary_stats[7] = num_packets
+        summary_stats[8] = packet_size
         summary_stats[-1] = std_dev
         summary_stats[-2] = mean
         summary_stats[-3] = max_val

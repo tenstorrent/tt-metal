@@ -67,7 +67,7 @@ namespace {
 
 int generate_unique_mesh_id() {
     static std::atomic<int> next_id{0};
-    return next_id++;
+    return next_id++ % 32;
 }
 
 std::shared_ptr<ThreadPool> create_default_thread_pool(const std::vector<IDevice*>& physical_devices) {

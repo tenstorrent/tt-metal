@@ -85,6 +85,7 @@ int main(int argc, char** argv) {
     uint32_t num_tests = 10;
     bool use_device_profiler = false;
     bool bypass_check = false;
+    int device_id = 0;
     try {
         std::tie(num_cores_r, input_args) =
             test_args::get_command_option_uint32_and_remaining_args(input_args, "--cores-r", 0);
@@ -115,11 +116,13 @@ int main(int argc, char** argv) {
         std::tie(bypass_check, input_args) =
             test_args::has_command_option_and_remaining_args(input_args, "--bypass-check");
 
+        std::tie(device_id, input_args) =
+            test_args::get_command_option_int32_and_remaining_args(input_args, "--device-id", 0);
+
         test_args::validate_remaining_args(input_args);
     } catch (const std::exception& e) {
         log_error(tt::LogTest, "Command line arguments found exception", e.what());
     }
-
     if (num_tiles % tiles_per_transfer != 0) {
         log_error(
             LogTest,
@@ -157,7 +160,6 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         int clock_freq_mhz = get_tt_npu_clock(device);
@@ -291,8 +293,10 @@ int main(int argc, char** argv) {
     log_info(tt::LogTest, "CSV_MICROBENCHMARK:title:test_noc_adjacent");
     log_info(
         tt::LogTest,
-        "CSV_INPUT:num-cores-r:{}:num-cores-c:{}:num-tiles:{}:tiles-per-transfer:{}:noc-index:{}:noc-direction:{}:"
+        "CSV_INPUT:device-id:{}:num-cores-r:{}:num-cores-c:{}:num-tiles:{}:tiles-per-transfer:{}:noc-index:{}:noc-"
+        "direction:{}:"
         "access-type:{}:use-device-profiler:{}",
+        device_id,
         num_cores_r,
         num_cores_c,
         num_tiles,

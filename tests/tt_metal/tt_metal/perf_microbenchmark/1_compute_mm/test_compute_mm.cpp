@@ -590,8 +590,8 @@ int main(int argc, char** argv) {
         unsigned long elapsed_us;
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);
-        log_debug(LogTest, "number of matmul ops: {}", num_of_matmul_ops);
-
+        log_info(LogTest, "number of matmul ops: {}", num_of_matmul_ops);
+        log_info(LogTest, "tt_npu_clock: {}MHz", tt_npu_clock);
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             if (!fast_dispatch_mode) {
@@ -626,9 +626,14 @@ int main(int argc, char** argv) {
                     double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
                     auto execution_time = t0_to_any_riscfw_end * cycle_time;
                     rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte);
-
-                    log_debug(LogTest, "cycle time {:.8f}s", cycle_time);
-                    log_debug(LogTest, "t0_to_any_riscfw_end {}", t0_to_any_riscfw_end);
+                    log_info(
+                        LogTest,
+                        "single core test execution time: {:.5}us ({}cycles) rmax_tflops {:.2f}",
+                        execution_time,
+                        t0_to_any_riscfw_end,
+                        rmax_tflops[i]);
+                    log_info(LogTest, "cycle time {:.8f}s", cycle_time);
+                    log_info(LogTest, "t0_to_any_riscfw_end {}", t0_to_any_riscfw_end);
                     log_info(
                         LogTest,
                         "time duration: {:.5}us ({}cycles) rmax_tflops {:.2f}",
@@ -764,7 +769,7 @@ double get_tt_npu_rpeak_tflops(tt::ARCH arch, CoreCoord grid_size, int tt_npu_cl
             BH_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
     }
 
-    log_debug(LogTest, "Rpeak {} TFLOPS", rpeak_tflops);
+    log_info(LogTest, "Rpeak {} TFLOPS", rpeak_tflops);
     return rpeak_tflops;
 }
 
