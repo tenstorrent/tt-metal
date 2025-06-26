@@ -69,9 +69,9 @@ def run_reduction(device, tensor_shape, dim, keepdim, op, dtype) -> list:
     ttnn_errored = False
     try:
         if dim is not None:
-            op_output_tensor, e2e_perf = profile_ttnn_call(ttnn_op, ttnn_tensor, dim=dim, keepdim=keepdim)
+            op_output_tensor, e2e_perf = profile_ttnn_call(device, ttnn_op, ttnn_tensor, dim=dim, keepdim=keepdim)
         else:
-            op_output_tensor, e2e_perf = profile_ttnn_call(ttnn_op, ttnn_tensor)
+            op_output_tensor, e2e_perf = profile_ttnn_call(device, ttnn_op, ttnn_tensor)
         output_tensor = ttnn.to_torch(ttnn.from_device(op_output_tensor))
     except RuntimeError:
         ttnn_errored = True

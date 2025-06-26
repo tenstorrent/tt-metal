@@ -63,10 +63,10 @@ def run_argmax(device, tensor_shape, dim, keepdim, use_multicore) -> list:
     try:
         if dim is not None:
             op_output_tensor, e2e_perf = profile_ttnn_call(
-                ttnn_op, ttnn_tensor, dim=dim, keepdim=keepdim, use_multicore=use_multicore
+                device, ttnn_op, ttnn_tensor, dim=dim, keepdim=keepdim, use_multicore=use_multicore
             )
         else:
-            op_output_tensor, e2e_perf = profile_ttnn_call(ttnn_op, ttnn_tensor, use_multicore=use_multicore)
+            op_output_tensor, e2e_perf = profile_ttnn_call(device, ttnn_op, ttnn_tensor, use_multicore=use_multicore)
         output_tensor = ttnn.to_torch(ttnn.from_device(op_output_tensor))
     except RuntimeError as e:
         ttnn_errored = True

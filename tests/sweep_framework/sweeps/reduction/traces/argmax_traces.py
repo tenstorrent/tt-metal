@@ -32,7 +32,7 @@ def run_argmax(device, height, width, dim, dtype, layout):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=layout, device=device)
 
-    op_output_tensor, e2e_perf = profile_ttnn_call(ttnn.argmax, input_tensor, dim=dim)
+    op_output_tensor, e2e_perf = profile_ttnn_call(device, ttnn.argmax, input_tensor, dim=dim)
     output_tensor = ttnn.to_torch(op_output_tensor)
     expected_pcc = 0.999
     tensors = [input_tensor, op_output_tensor]

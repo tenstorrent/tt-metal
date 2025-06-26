@@ -158,7 +158,7 @@ def run(
     )
 
     (output_values, output_indices), e2e_perf = profile_ttnn_call(
-        ttnn.topk, input_tensor_a, k=k, dim=dim, largest=largest, sorted=True
+        device, ttnn.topk, input_tensor_a, k=k, dim=dim, largest=largest, sorted=True
     )
 
     output_values, output_indices = ttnn.to_torch(output_values), ttnn.to_torch(output_indices).to(torch.int64)

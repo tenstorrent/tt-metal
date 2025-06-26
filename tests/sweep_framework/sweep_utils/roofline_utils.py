@@ -59,7 +59,10 @@ def update_check_result(check_result, metrics):
 def get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf, flop_counts=None):
     check_result = check_with_pcc(torch_output_tensor, output_tensor, expected_pcc)
     metrics = get_roofline_metrics(tensors)
-    metrics.update({"E2E_PERF": e2e_perf})
+    if isinstance(e2e_perf, dict):
+        metrics.update(e2e_perf)
+    else:
+        metrics.update({"E2E_PERF": e2e_perf})
     if flop_counts:
         metrics.update({"FLOP_COUNT": get_product(flop_counts)})
     updated_check_result = update_check_result(check_result, metrics)

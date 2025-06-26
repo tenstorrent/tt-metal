@@ -636,7 +636,7 @@ def run_sum(device, params):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    op_output_tensor, e2e_perf = profile_ttnn_call(ttnn.sum, input_tensor, dim=dim, keepdim=keepdim)
+    op_output_tensor, e2e_perf = profile_ttnn_call(device, ttnn.sum, input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(op_output_tensor)
     expected_pcc = 0.999
     tensors = [input_tensor, op_output_tensor]

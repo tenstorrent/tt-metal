@@ -49,7 +49,7 @@ def run_sum(
     )
 
     op_output_tensor, e2e_perf = profile_ttnn_call(
-        ttnn.sum, input_tensor_a, keepdim=keepdim, dim=dim, memory_config=output_memory_config
+        device, ttnn.sum, input_tensor_a, keepdim=keepdim, dim=dim, memory_config=output_memory_config
     )
     output_tensor = ttnn.to_torch(op_output_tensor)
     expected_pcc = 0.999
@@ -87,7 +87,7 @@ def run_prod(
     )
 
     op_output_tensor, e2e_perf = profile_ttnn_call(
-        ttnn.prod, input_tensor_a, keepdim=keepdim, dim=dim, memory_config=output_memory_config
+        device, ttnn.prod, input_tensor_a, keepdim=keepdim, dim=dim, memory_config=output_memory_config
     )
     output_tensor = ttnn.to_torch(op_output_tensor)
     expected_pcc = 0.999
