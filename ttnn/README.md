@@ -51,8 +51,8 @@ jupyter lab --no-browser --port=8888
 ### Linking TT-NN with your C++ projects
 We are actively working to make it easy for you to consume TT-NN in your own projects.
 Current best example can be found in the training framework here:
-* Must manually align 3rdparty dependencies via CPM<br> https://github.com/tenstorrent/tt-metal/tree/238c49be0ad0f76b669c760d58143b73838e16f3/tt-train/cmake
-* Must manually align includepath and other optons<br> https://github.com/tenstorrent/tt-metal/blob/238c49be0ad0f76b669c760d58143b73838e16f3/tt-train/sources/ttml/CMakeLists.txt#L81-L154
+* Must manually align [3rdparty dependencies via CPM](https://github.com/tenstorrent/tt-metal/tree/main/tt-train/cmake)
+* Must manually align [includepath and other optons](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/CMakeLists.txt#L81-L154)
 
 ### FAQ
 #### Where are the tests for ttnn?
