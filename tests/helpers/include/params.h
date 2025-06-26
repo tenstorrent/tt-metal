@@ -115,17 +115,3 @@ constexpr auto SFPU_OPERATION = SfpuType::reciprocal;
 #ifdef SFPU_OP_CELU
 constexpr auto SFPU_OPERATION = SfpuType::celu;
 #endif
-
-inline void process_addresses(volatile uint32_t* buffer_Dest[], int n, int first, ...)
-{
-    buffer_Dest[0] = reinterpret_cast<volatile uint32_t*>(first);
-
-    va_list args;
-    va_start(args, first);
-    for (int i = 1; i < n; ++i)
-    {
-        int num        = va_arg(args, int);
-        buffer_Dest[i] = reinterpret_cast<volatile uint32_t*>(num);
-    }
-    va_end(args);
-}

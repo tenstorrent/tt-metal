@@ -71,7 +71,9 @@ def test_matmul_unpack_tilize(testname, formats, dest_acc, math_fidelity):
 
     torch_format = format_dict[formats.output_format]
 
-    src_A, src_B = generate_stimuli(formats.input_format, formats.input_format)
+    src_A, src_B, tile_cnt = generate_stimuli(
+        formats.input_format, formats.input_format
+    )
 
     generate_golden = get_golden_generator(MatmulGolden)
     golden_tensor = tilize(
@@ -79,7 +81,7 @@ def test_matmul_unpack_tilize(testname, formats, dest_acc, math_fidelity):
     )
     golden_tensor = golden_tensor.to(torch_format)
 
-    write_stimuli_to_l1(
+    res_address = write_stimuli_to_l1(
         src_A,
         src_B,
         formats.input_format,
@@ -99,9 +101,7 @@ def test_matmul_unpack_tilize(testname, formats, dest_acc, math_fidelity):
     run_elf_files(testname)
 
     wait_for_tensix_operations_finished()
-    res_from_L1 = collect_results(
-        formats, tensor_size=len(src_A), address=buffer_dest_address
-    )
+    res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
     assert len(res_from_L1) == len(golden_tensor)
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)

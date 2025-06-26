@@ -56,7 +56,7 @@ def generate_random_face_ab(
 def generate_stimuli(
     stimuli_format_A=DataFormat.Float16_b,
     stimuli_format_B=DataFormat.Float16_b,
-    tile_cnt=1,
+    input_dimensions=[32, 32],
     const_face=False,
     const_value_A=1,
     const_value_B=1,
@@ -64,6 +64,8 @@ def generate_stimuli(
 
     srcA = []
     srcB = []
+
+    tile_cnt = input_dimensions[0] // 32 * input_dimensions[1] // 32
 
     for _ in range(4 * tile_cnt):
         face_a, face_b = generate_random_face_ab(
@@ -82,4 +84,8 @@ def generate_stimuli(
         if stimuli_format_B != DataFormat.Bfp8_b
         else torch.bfloat16
     )
-    return torch.tensor(srcA, dtype=dtype_A), torch.tensor(srcB, dtype=dtype_B)
+    return (
+        torch.tensor(srcA, dtype=dtype_A),
+        torch.tensor(srcB, dtype=dtype_B),
+        tile_cnt,
+    )

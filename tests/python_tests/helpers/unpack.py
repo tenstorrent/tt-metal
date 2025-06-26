@@ -4,15 +4,18 @@
 # unpack.py
 
 import struct
+from itertools import chain
 
 import torch
 
+from .format_arg_mapping import DataFormat, format_dict, format_tile_sizes
 
-def unpack_fp16(packed_list, unpack_src, pack_dst):
+
+def unpack_fp16(packed_list):
     return [val[0] for val in struct.iter_unpack("<e", bytes(packed_list))]
 
 
-def unpack_bfp16(packed_list, unpack_src, pack_dst):
+def unpack_bfp16(packed_list):
     # Step 1: Promote each 2-byte bfloat16 to 4-byte float32
     # Place bfloat16 in high 2 bytes (little-endian)
     padded_bytes = bytearray()
@@ -85,7 +88,7 @@ def bfp8_to_float_block(exponent, bfp8_mantissas, unpacked_bfp8):
     return bfloat16_values
 
 
-def unpack_bfp8_b(bfp8_block, unpack_src, pack_dst, sfpu=False):
+def unpack_bfp8_b(bfp8_block, sfpu=False):
 
     if not sfpu:
         exponents = bfp8_block[:64]
@@ -106,3 +109,43 @@ def unpack_bfp8_b(bfp8_block, unpack_src, pack_dst, sfpu=False):
         bfloat16_values.extend(block_bfloat16_values)
 
     return torch.tensor(bfloat16_values, dtype=torch.bfloat16)
+
+
+_UNPACKERS = {
+    DataFormat.Float16: unpack_fp16,
+    DataFormat.Float16_b: unpack_bfp16,
+    DataFormat.Float32: unpack_fp32,
+    DataFormat.Int32: unpack_int32,
+    DataFormat.UInt32: unpack_uint32,
+    DataFormat.UInt16: unpack_uint16,
+    DataFormat.Int8: unpack_int8,
+    DataFormat.UInt8: unpack_uint8,
+}
+
+
+def unpack_res_tiles(packed_list, formats, tile_count=1, sfpu=False):
+    output_format = formats.output_format
+    tile_size = format_tile_sizes[output_format]
+    output_dtype = format_dict[output_format]
+
+    total_elements_needed = tile_count * tile_size
+    if total_elements_needed > len(packed_list):
+        raise IndexError("Buffer access out of bounds")
+
+    if output_format == DataFormat.Bfp8_b:
+        unpack_func = unpack_bfp16 if sfpu else unpack_bfp8_b
+    else:
+        unpack_func = _UNPACKERS[output_format]
+
+    all_tiles_data = packed_list[:total_elements_needed]
+
+    reshaped_data = [
+        all_tiles_data[i : i + tile_size]
+        for i in range(0, total_elements_needed, tile_size)
+    ]
+
+    unpacked_data = list(
+        chain.from_iterable(unpack_func(tile_data) for tile_data in reshaped_data)
+    )
+
+    return torch.tensor(unpacked_data, dtype=output_dtype)

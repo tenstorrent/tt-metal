@@ -79,17 +79,23 @@ param_ids = generate_param_ids(all_params)
 @pytest.mark.parametrize(
     "testname, formats, dest_acc, mathop", clean_params(all_params), ids=param_ids
 )
-def test_all(testname, formats, dest_acc, mathop):
+def test_sfpu_binary(testname, formats, dest_acc, mathop):
+
+    input_dimensions = [32, 32]
 
     chip_arch = get_chip_architecture()
     if chip_arch == ChipArchitecture.WORMHOLE and mathop == MathOperation.SfpuElwsub:
         pytest.skip("Not currently supported in tests")
 
-    src_A, src_B = generate_stimuli(formats.input_format, formats.input_format)
+    src_A, src_B, tile_cnt = generate_stimuli(
+        formats.input_format, formats.input_format, input_dimensions=input_dimensions
+    )
 
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_tensor = generate_golden(mathop, src_A, src_B, formats.output_format)
-    write_stimuli_to_l1(src_A, src_B, formats.input_format, formats.input_format)
+    res_address = write_stimuli_to_l1(
+        src_A, src_B, formats.input_format, formats.input_format, tile_count=tile_cnt
+    )
 
     unpack_to_dest = formats.input_format.is_32_bit()
 
@@ -107,7 +113,7 @@ def test_all(testname, formats, dest_acc, mathop):
     run_elf_files(testname)
     wait_for_tensix_operations_finished()
 
-    res_from_L1 = collect_results(formats, tensor_size=len(src_A))
+    res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
 
     assert len(res_from_L1) == len(golden_tensor)
 

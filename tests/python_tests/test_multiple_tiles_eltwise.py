@@ -24,9 +24,9 @@ from helpers.param_config import (
     generate_params,
     input_output_formats,
 )
-from helpers.stimuli_generator import flatten_list, generate_stimuli
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import generate_make_command
-from helpers.utils import format_kernel_list, passed_test, run_shell_command
+from helpers.utils import passed_test, run_shell_command
 
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
@@ -64,31 +64,34 @@ all_params = generate_params(
 param_ids = generate_param_ids(all_params)
 
 
-@pytest.mark.parametrize("tile_cnt", range(1, 4))
+@pytest.mark.parametrize("input_dimensions", [[32, 32], [32, 64], [64, 64]])
 @pytest.mark.parametrize(
     "testname, formats, dest_acc, mathop, math_fidelity",
     clean_params(all_params),
     ids=param_ids,
 )
-def test_multiple_tiles(testname, formats, dest_acc, mathop, math_fidelity, tile_cnt):
+def test_multiple_tiles(
+    testname, formats, dest_acc, mathop, math_fidelity, input_dimensions
+):
 
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
-    pack_start_address = 0x1A000 + 2 * 4096 * tile_cnt
-    pack_addresses = [pack_start_address + 0x1000 * i for i in range(tile_cnt)]
-    pack_addresses_formatted = format_kernel_list(pack_addresses, as_hex=True)
-
-    src_A, src_B = generate_stimuli(
-        formats.input_format, formats.input_format, tile_cnt=tile_cnt
+    src_A, src_B, tile_cnt = generate_stimuli(
+        formats.input_format, formats.input_format, input_dimensions=input_dimensions
     )
 
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
     golden_tensor = generate_golden(
         mathop, src_A, src_B, formats.output_format, math_fidelity
     )
-    write_stimuli_to_l1(
-        src_A, src_B, formats.input_format, formats.input_format, "0,0", tile_cnt
+    res_address = write_stimuli_to_l1(
+        src_A,
+        src_B,
+        formats.input_format,
+        formats.input_format,
+        "0,0",
+        tile_count=tile_cnt,
     )
 
     test_config = {
@@ -96,10 +99,8 @@ def test_multiple_tiles(testname, formats, dest_acc, mathop, math_fidelity, tile
         "testname": testname,
         "dest_acc": dest_acc,
         "mathop": mathop,
-        "kern_cnt": tile_cnt,
-        "pack_addr_cnt": len(pack_addresses),
-        "pack_addrs": pack_addresses_formatted,
         "math_fidelity": math_fidelity,
+        "tile_cnt": tile_cnt,
     }
 
     make_cmd = generate_make_command(test_config)
@@ -108,19 +109,10 @@ def test_multiple_tiles(testname, formats, dest_acc, mathop, math_fidelity, tile
     run_elf_files(testname)
     wait_for_tensix_operations_finished()
 
-    # check resluts from multiple tiles
-    res_from_L1 = []
+    res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
+    assert len(res_from_L1) == len(golden_tensor)
 
-    for address in pack_addresses:
-        res_from_L1.append(
-            collect_results(
-                formats, tensor_size=len(src_A) // len(pack_addresses), address=address
-            )
-        )
-
-    res_from_L1 = flatten_list(res_from_L1)
-
-    torch_format = format_dict.get(formats.output_format)
+    torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
