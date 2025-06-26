@@ -60,10 +60,8 @@ FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::Cluster
 }
 
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
-    chip_id_t src_chip_id, chip_id_t dst_chip_id, RoutingDirection direction) {
-    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_chip_id);
-    const auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const bool is_2d_fabric = control_plane.get_fabric_context().get_fabric_topology() == Topology::Mesh;
 
     const std::vector<chan_id_t>& fabric_channels =
@@ -75,6 +73,8 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         forwarding_channels =
             control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
     } else {
+        chip_id_t src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+        chip_id_t dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
         // for 1D check if each port has an active connection to the dst_chip_id
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& soc_desc = cluster.get_soc_desc(src_chip_id);
@@ -99,10 +99,9 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     return link_indices;
 }
 
-std::vector<uint32_t> get_forwarding_link_indices(chip_id_t src_chip_id, chip_id_t dst_chip_id) {
-    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_chip_id);
-    const auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
+std::vector<uint32_t> get_forwarding_link_indices(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // find the forwarding direction b/w src and dest chip
     const auto& forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
@@ -110,7 +109,8 @@ std::vector<uint32_t> get_forwarding_link_indices(chip_id_t src_chip_id, chip_id
         return {};
     }
 
-    return get_forwarding_link_indices_in_direction(src_chip_id, dst_chip_id, forwarding_direction.value());
+    return get_forwarding_link_indices_in_direction(
+        src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
 }
 
 void set_routing_mode(uint16_t routing_mode) {
