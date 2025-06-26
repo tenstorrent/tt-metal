@@ -11,7 +11,7 @@
   - [Tenstorrent hardware for GPU experts](#tenstorrent-hardware-for-gpu-experts)
   - [Tenstorrent hardware for CPU experts](#tenstorrent-hardware-for-cpu-experts)
   - [Scaling beyond one chip](#scaling-beyond-one-chip)
-- [tt-Metalium](#tt-metalium)
+- [TT-Metalium](#tt-metalium)
   - [Running code on device](#running-code-on-device)
   - [Register control and Data Flow within the Compute Kernels](#register-control-and-data-flow-within-the-compute-kernels)
   - [Compute APIs](#compute-apis)
@@ -20,23 +20,25 @@
 
 ## Executive Summary
 
-This guide introduces developers to Tenstorrent's AI processor architecture and the Metalium programming model. Unlike traditional GPUs that rely on massive thread parallelism, Tenstorrent chips use a grid of specialized compute nodes called Tensix cores. Each Tensix contains five small RISC-V CPUs for control and instruction dispatch, dedicated hardware units for matrix operations (FPU) and vector operations (SFPU), data packing/unpacking units, and 1.5MB of local SRAM.
+This guide introduces developers to Tenstorrent's AI accelerator (called the Tensix Processor) architecture and the TT-Metalium™ programming model. Unlike traditional GPUs that rely on massive thread parallelism, Tensix Processors use a grid of specialized compute nodes called Tensix cores. Each Tensix core contains five small RISC-V CPUs for control and instruction dispatch, dedicated hardware units for matrix operations (FPU) and vector operations (SFPU), data packing/unpacking units, and 1.5MB of local SRAM.
 
-The typical data flow uses Network-on-Chip (NoC) interfaces to bring data into a Tensix, where it gets unpacked, processed by the compute units, packed, and sent out via the NoC to DRAM or other Tensix cores. This design prioritizes efficient data movement and local SRAM usage, reducing frequent DRAM access.
+The typical data flow uses Network-on-Chip (NoC) interfaces to bring data into a Tensix core, where it gets unpacked, processed by the compute units, packed, and sent out via the NoC to DRAM or other Tensix cores. This design prioritizes efficient data movement and local SRAM usage, reducing frequent DRAM access.
 
-Programming with Metalium typically requires three kernel types per Tensix: a **reader kernel** for data input, a **compute kernel** for calculations, and a **writer kernel** for data output. These kernels coordinate through circular buffers in SRAM. The architecture natively operates on 32×32 tiles, optimized for deep learning operations. Metalium provides APIs and abstractions (including compute and data movement) to simplify development, manage hardware resources, and ensure kernel compatibility across hardware generations.
+Programming with Metalium typically requires three kernel types per Tensix core: a **reader kernel** for data input, a **compute kernel** for calculations, and a **writer kernel** for data output. These kernels coordinate through circular buffers in SRAM. The architecture natively operates on 32×32 tiles, optimized for deep learning operations. Metalium provides APIs and abstractions (including compute and data movement) to simplify development, manage hardware resources, and ensure kernel compatibility across hardware generations.
 
 This document covers these concepts in detail to help you develop efficient applications on Tenstorrent hardware.
 
 ## Tenstorrent Architecture Overview
 
-The Tenstorrent architecture is a different kind of AI processor. Unlike GPUs where the processor provides a massive pool of threads and parallelize across them. Tenstorrent chips are a grid of different nodes. Most are compute nodes called a Tensix core ("core" is overloaded in computer architecture, thus will be dropped from this point onwards) sprinkled with some memory, chip management and Ethernet nodes to facilitate the computation.
+The architecture Tenstorrent proposed is a different kind of AI accelerator. Unlike GPUs where the processor provides a massive pool of threads and parallelize across them. Tenstorrent chips are a grid of different nodes. Most are compute nodes called a Tensix core sprinkled with some memory, chip management and Ethernet nodes to facilitate the computation. The overall chip is then called a Tensix processor. The following image shows the logical layout of a Tensix processor, with the different nodes and their functions.
 
-The following image shows the NoC grid of the Tenstorrent Wormhole processor (D = DRAM, T = Tensix, E = Ethernet, A = ARC/management, P = PCIe).
+The following sections focus on the individual compute units. For precision, 'Tensix' refers specifically to Tensix cores rather than the complete Tensix processor.
+
+The following image shows the NoC grid of the Tenstorrent Wormhole™ processor (D = DRAM, T = Tensix, E = Ethernet, A = ARC/management, P = PCIe).
 
 <img width="900" alt="image" src="docs/source/common/images/tenstorrent-wormhole-logical-noc-diagram.webp">
 
-Each Tensix contains 5 "Baby" RISC-V CPUs (Data Movement 0, Data Movement 1, Unpack, Math and Pack), 2 NoC interfaces, a vector unit (SFPU), a matrix unit (FPU) and a pack and unpacker, as well as 1.5MB of SRAM (called L1 in the archicture) to hold transient data and facilitates data exchange between local components. The following image is a rough block diagram of a Tensix (blue arrow = instruction dispatch, brown arrow = data transfer)
+Each Tensix contains 5 "Baby" RISC-V CPUs (Data Movement 0, Data Movement 1, Unpack, Math and Pack), 2 NoC interfaces, a vector unit (SFPU), a matrix unit (FPU) and a pack and unpacker, as well as 1.5MB of SRAM (called L1 in the architecture) to hold transient data and facilitates data exchange between local components. The following image is a rough block diagram of a Tensix (blue arrow = instruction dispatch, brown arrow = data transfer)
 
 <img width="900" alt="image" src="docs/source/common/images/tenstorrent-tensix-rough-block-diagram.webp">
 
@@ -219,7 +221,7 @@ This approach reduces the need for aggressive operator fusion that CPUs and GPUs
 
 The physical placement of DRAM controllers on the chip can be exploited to optimize memory access patterns. By default, memory operations use "interleaved" mode, which distributes data across all available DRAM controllers. This provides the most balanced performance characteristics and works well for general-purpose workloads.
 
-For specific operations, data can instead be stored in "sharded" mode, where tensors are distributed across multiple Tensix cores based on the physical topology of the chip. This approach reduces the physical distance data must travel and minimizes cross-chip communication overhead. Sharded memory placement is particularly beneficial for attention mechanisms and convolution operations where the computation pattern aligns well with the data distribution strategy.
+For specific operations, data can instead be stored in "sharded" mode (see the [Tensor and Memory Layout report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md) for details), where tensors are distributed across multiple Tensix cores based on the physical topology of the chip. This approach reduces the physical distance data must travel and minimizes cross-chip communication overhead. Sharded memory placement is particularly beneficial for attention mechanisms and convolution operations where the computation pattern aligns well with the data distribution strategy.
 
 <img width="900" alt="image" src="docs/source/common/images/tenstorrent-wormhole-sharded-noc-access.webp">
 
@@ -236,7 +238,7 @@ The 32×32 tile size allows hardware to process data efficiently within a few cl
 
 <img width="900" alt="image" src="docs/source/common/images/matmul-blocked-row-column-diagram.webp">
 
-GPUs face significant challenges efficiently feeding data to their tensor cores due to their vector-first architecture, which creates inherent limitations in memory access patterns for tensor operations. Tenstorrent hardware is designed specifically for tile-based computation from the ground up - both vector and matrix units are natively optimized for 32×32 tile operations, resulting in more predictable performance and simpler programming models.
+GPUs often struggle to efficiently supply data to their tensor cores because their architectures are primarily designed around vector operations. This can lead to less optimal memory access patterns for tensor workloads. In contrast, Tenstorrent hardware is built for tile-based computation from the start—both the vector and matrix units operate natively on 32×32 tiles. This approach leads to more predictable performance and a simpler programming model. For detailed performance numbers, see the [Matrix Multiplcation performance report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/GEMM_FLOPS/GEMM_FLOPS.md) as well as the [Convolution Networks on Tenstorrent Chips](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md) report.
 
 ### Where is the cache hierarchy
 
@@ -265,23 +267,29 @@ The Baby RISC-V cores are implemented as straightforward RISC-V 32IM processors 
 
 As models grow larger, multi-chip co-processing becomes essential for serving state-of-the-art models. The machine learning community has traditionally relied on CPUs and PCIe buses for inter-device data transfers. However, the scale requirements of modern workloads necessitated specialized solutions like NVLink and Infiniband. While these proprietary interconnects are effective, they require expensive cabling and switching infrastructure.
 
-Tenstorrent takes a different approach by using standard Ethernet connectivity. While NVIDIA's NVLink 5.0 provides 50GB/s (400Gbps) bandwidth, Tenstorrent chips support standard Ethernet up to 800Gbps - infrastructure already present in modern data centers. This eliminates the need for proprietary interconnects and specialized switches. The chips have sufficient NoC bandwidth and processing capability to function as network switches themselves, enabling converged computing without affecting computational performance.
+Tenstorrent takes a different approach by using standard Ethernet connectivity. While NVIDIA's NVLink 5.0 provides 400G (G = Gbps) connectivity, Tenstorrent chips support standard Ethernet up to 800G - infrastructure already present in modern data centers. This eliminates the need for proprietary interconnects and specialized switches. The chips have sufficient NoC bandwidth and processing capability to function as network switches themselves, enabling converged computing without affecting computational performance.
 
-The Wormhole N300 card illustrates this design with two Wormhole chips connected via Ethernet. The chip with direct PCIe host connectivity (L chip - Local) communicates with the secondary chip (R chip - Remote) through this Ethernet link. The SDK abstracts this topology, allowing developers to program both chips uniformly for memory allocation, kernel execution, and data transfer operations.
+The Wormhole n300 card illustrates this design with two Wormhole chips connected via Ethernet. The chip with direct PCIe host connectivity (L chip - Local) communicates with the secondary chip (R chip - Remote) through this Ethernet link. The SDK abstracts this topology, allowing developers to program both chips uniformly for memory allocation, kernel execution, and data transfer operations.
 
 <img width="900" alt="image" src="docs/source/common/images/tenstorrent-wormhole-board-connective-diagram.webp">
 
-This architecture scales efficiently beyond two chips. The QuietBox configuration contains 8 Wormhole or 4 Blackhole processors connected in a mesh topology. Data can be transferred between processors using specialized code called EDM (Ethernet Data Movers) that handles traffic routing over the Ethernet interconnects.
+This architecture scales efficiently beyond two chips. The QuietBox configuration contains 8 Wormhole or 4 Blackhole™ processors connected in a mesh topology. Data can be transferred between processors using specialized code called EDM (Ethernet Data Movers) that handles traffic routing over the Ethernet interconnects.
 
-<img width="900" alt="image" src="https://clehaxze.tw//images/gemlog/tenstorrent-wormhole-quietbox-topology.webp">
+<img width="900" alt="image" src="docs/source/common/images/tenstorrent-wormhole-quietbox-topology.webp">
 
-While 8 chips provides substantial computational capacity, larger configurations are required for training the most demanding models. The same interconnect architecture scales to configurations of up to 32 chips connected to a single host system. This approach extends to multi-host deployments, where Wormhole processors maintain their mesh connectivity across distributed systems.
+While 8 chips provides substantial computational capacity, larger configurations are required for training the most demanding models. The same interconnect architecture scales to configurations of up to 32 chips connected on a single host system.
 
-<img width="900" alt="image" src="docs/source/common/images/tenstorrent-wormhole-rack-scale.webp">
+<img width="900" alt="image" src="docs/source/common/images/tenstorrent-galaxy-32-wh.webp">
 
-## tt-Metalium
+Multiple 32-chip boxes can be connected together to form a mesh spanning several hosts. These meshes can then be linked, with traffic routed between them using the tt-Fabric firmware. This approach allows scaling to data center configurations while keeping the same programming model, API, and development concerns as a single machine.
 
-tt-Metalium (also called Metalium, tt-Metal, or just Metal) is Tenstorrent's SDK for developing applications on Tenstorrent AI processors. The API design resembles OpenCL, providing C++ interfaces for both high-level operations and direct hardware control. The kernels shown in previous sections are written using Metalium.
+<img width="900" alt="image" src="docs/source/common/images/tenstorrent-fabric-scale-out-machine.webp">
+
+Please refer to the [tt-Fabric technical report](tech_reports/TT-Fabric/TT-Fabric-Architecture.md) for more details on the interconnect architecture and how it enables efficient scaling across multiple chips and hosts. And [Basic Ethernet Multichip](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/EthernetMultichip/BasicEthernetGuide.md) for a guide on Ethernet performance on Wormhole processors.
+
+## TT-Metalium
+
+Metalium is Tenstorrent's SDK for developing applications on the Tensix Processor. The full product name is TT-Metalium™, also abbreviated as tt-Metal or Metal. The API design resembles OpenCL, providing C++ interfaces for both high-level operations and direct hardware control. The kernels shown in previous sections are written using Metalium.
 
 Metalium functions as the base layer for Tenstorrent's software stack. Higher-level tools like TTNN, tt-MLIR, and tt-Forge are built on top of Metalium. Applications can range from simple single-kernel programs running on one core to complex distributed computations spanning multiple chips.
 
@@ -538,7 +546,7 @@ Single Program, Multiple Data (SPMD) execution is a common parallel computing mo
 
 For complex operations requiring specialized behavior, Metalium also supports Multiple Program, Multiple Data (MPMD) execution, where different Tensix cores run entirely different programs. An example is the data-reused matrix multiplication implementation, which places specialized kernels on specific Tensix cores to broadcast data to other cores, reducing NoC bandwidth consumption.
 
-Unlike OpenCL's `get_global_id()`, CUDA's `threadIdx`, or OpenMP's `omp_get_thread_num()`, Metalium does not provide built-in thread identification mechanisms. Instead, developers explicitly specify the data range each Tensix core processes by passing different runtime arguments to each core before kernel execution. For example:
+Unlike OpenCL's `get_global_id()`, CUDA's `threadIdx`, or OpenMP's `omp_get_thread_num()`, Metalium does not provide built-in thread and global work size identification mechanisms. Instead, developers explicitly specify the data range each Tensix core processes by passing different runtime arguments to each core before kernel execution. For example:
 
 ```c++
 CoreRange core_range = {{0, 0}, {4, 4}}; // Processors from (0,0) to (4,4)
@@ -574,46 +582,51 @@ for(uint32_t y = core_range.start.y; y < core_range.end.y; y++) {
 Metalium provides the `tt::tt_metal::split_work_to_cores` utility function to distribute work across available cores for SPMD execution. The function takes the total number of tiles and available cores, then calculates how to divide the work when it cannot be evenly distributed. The function returns two groups of cores: a primary group that handles more tiles per core, and a secondary group that handles fewer, along with the tile count for each group. Minimizing workload inbalance between cores (if work can be evenly distributed, the secondary group will be empty.)
 
 ```c++
-auto grid_size = device->compute_with_storage_grid_size();
+auto core_grid = device->compute_with_storage_grid_size();
 auto [num_cores, // number of cores utilized
     all_cores, // set of all cores used
     core_group_1, // Primary core group
     core_group_2, // Secondary core group
     num_tiles_per_core_group_1, // Number of tiles each core in the primary group processes
     num_tiles_per_core_group_2 // Number of tiles each core in the secondary group processes
-    ] = tt::tt_metal::split_work_to_cores(grid_size, n_tiles);
+    ] = tt::tt_metal::split_work_to_cores(grid_size, work_size);
+```
+
+Only create kernels on cores that have been assigned work (i.e., those in `all_cores` or `core_group_*`). Avoid creating kernels on unused cores, as this can cause undefined behavior or crashes if kernels are created but runtime arguments are not set on the core. If there is not enough work, some cores may remain idle—do not assign kernels to them.
+
+```c++
+// `all_cores` is guarenteed to be the union of `core_group_1` and `core_group_2`.
+for (const auto& core : all_cores) {
+    // Good
+    CreateKernel(program, "/path/to/reader.cpp", all_cores, DataMovementConfig{...});
+    CreateKernel(program, "/path/to/compute.cpp", all_cores, ComputeConfig{...});
+    CreateKernel(program, "/path/to/writer.cpp", all_cores, DataMovementConfig{...});
+
+    // Bad - all_cores may be smaller than core_grid
+    //                                               vvvvvvv
+    // CreateKernel(program, "/path/to/reader.cpp", core_grid, DataMovementConfig{...});
+    // CreateKernel(program, "/path/to/compute.cpp", core_grid, ComputeConfig{...});
+    // CreateKernel(program, "/path/to/writer.cpp", core_grid, DataMovementConfig{...});
+}
 ```
 
 Developers should iterate over all cores and set the runtime arguments for each kernel according to the assigned core group and tile count. The sum of tiles processed by all cores must match the original workload. If a core is not part of either group (can happen due to not enough work or other reasons), its runtime arguments MUST be set such the kernel does nothing (a no-op). Leaving runtime arguments uninitialized will lead to undefined behavior and issues during execution.
 
 ```c++
-auto cores = grid_to_cores(num_cores, num_coresgrid_size.x, grid_size.y);
-for (uint32_t i = 0, start_tile_id = 0; i < num_cores; i++) {
-    const auto& core = cores[i];
-
-    uint32_t num_tiles_per_core;
-
-    if (core_group_1.contains(core)) {
-        num_tiles_per_core = num_tiles_per_core_group_1;
+auto work_groups = {std::make_pair(core_group_1, num_tiles_per_core_group_1),
+                    std::make_pair(core_group_2, num_tiles_per_core_group_2)};
+uint32_t id = 0; // Offset for the next core in the group
+for(const auto& [group, work_per_core] : work_groups) {
+    for (const auto& range : group) {
+        for(const auto& core : range) {
+            // Set runtime arguments for each kernel based on the core and tile count
+            SetRuntimeArgs(program, reader, core, {/*reader parameters*/a->address(), b->address(), work_per_core, id});
+            SetRuntimeArgs(program, writer, core, {/*writer parameters*/c->address(), work_per_core});
+            SetRuntimeArgs(program, compute, core, {/*compute parameters*/work_per_core, id});
+            id += work_per_core;
+        }
     }
-    else if (core_group_2.contains(core)) {
-        num_tiles_per_core = num_tiles_per_core_group_2;
-    }
-    else {
-        // This core is not part of the primary or secondary group, Kernel parameters should be set so
-        // effectively performs no-op. Otherwise kernel parameters will be undefined and may cause issues.
-        // EX: by setting the number of tiles to be processed (among other parameters) to 0.
-        SetRuntimeArgs(program, reader, core, std::array<uint32_t, SOME_NUMBER_OF_PARAMETERS_READER>{0});
-        SetRuntimeArgs(program, writer, core, std::array<uint32_t, SOME_NUMBER_OF_PARAMETERS_WRITER>{0});
-        SetRuntimeArgs(program, compute, core, std::array<uint32_t, SOME_NUMBER_OF_PARAMETERS_COMPUTE>{0});
-        continue;
-    }
-
-    // Set runtime arguments for each kernel based on the core and tile count
-    SetRuntimeArgs(program, reader, core, {/*reader parameters*/a->address(), b->address(), num_tiles_per_core});
-    SetRuntimeArgs(program, writer, core, {/*writer parameters*/c->address(), num_tiles_per_core});
-    SetRuntimeArgs(program, compute, core, {/*compute parameters*/num_tiles_per_core});
-    start_tile_id += num_tiles_per_core;
 }
-// at final iteration, start_tile_id should equal n_tiles
+
+// at this point id == work_size as all cores have been assigned work
 ```
