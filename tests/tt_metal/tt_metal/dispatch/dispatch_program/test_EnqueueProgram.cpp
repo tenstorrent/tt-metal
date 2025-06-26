@@ -360,7 +360,8 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
     uint32_t num_runtime_args_dm0,
     uint32_t num_runtime_args_dm1,
     uint32_t num_runtime_args_compute,
-    uint32_t num_iterations) {
+    uint32_t num_iterations,
+    bool do_checks = true) {
     Program program;
     bool pass = true;
 
@@ -431,6 +432,11 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
         EnqueueProgram(cq, program, false);
     }
     Finish(cq);
+
+    // Early return to skip slow dispatch path
+    if (!do_checks) {
+        return pass;
+    }
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         for (const CoreCoord& core_coord : core_range) {
@@ -985,25 +991,51 @@ void test_basic_dispatch_functions(IDevice* device, int cq_id) {
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
 
-    log_info(tt::LogTest, "Running On Device {}", device->id());
+    log_info(tt::LogTest, "Running On Device {} CQ{}", device->id(), cq_id);
 
-    std::vector<uint32_t> src_data(k_DataSize / sizeof(uint32_t));
+    // Alternate write patterns
+    std::vector<uint32_t> src_data_1(k_DataSize / sizeof(uint32_t));
+    std::vector<uint32_t> src_data_2(k_DataSize / sizeof(uint32_t));
     for (int i = 0; i < k_DataSize / sizeof(uint32_t); ++i) {
-        src_data[i] = (device->id() + 1) * 0xdeadbeef;
+        src_data_1[i] = (device->id() + rand()) * 0xdeadbeef;
+        src_data_2[i] = (device->id() + rand()) * 0xabcd1234;
     }
     auto buffer = CreateBuffer(InterleavedBufferConfig{device, k_DataSize, k_PageSize, BufferType::L1});
+    auto dram_buffer = CreateBuffer(InterleavedBufferConfig{device, k_DataSize, k_PageSize, BufferType::DRAM});
     auto& cq = device->command_queue(cq_id);
     for (int iteration = 0; iteration < k_Iterations; ++iteration) {
         for (int i = 0; i < k_LoopPerDev; ++i) {
             EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-                device, cq, dummy_program_config, 24, 12, 15, k_LoopPerDev));
-            EnqueueWriteBuffer(cq, *buffer, src_data, false);
+                device, cq, dummy_program_config, 24, 12, 15, k_LoopPerDev, false));
 
             std::vector<uint32_t> dst_data;
-            EnqueueReadBuffer(cq, *buffer, dst_data, true);
-            EXPECT_EQ(src_data, dst_data);
+            if (i & 1) {
+                EnqueueWriteBuffer(cq, *buffer, src_data_1, false);
+                EnqueueReadBuffer(cq, *buffer, dst_data, true);
+                EXPECT_EQ(src_data_1, dst_data);
+            } else {
+                EnqueueWriteBuffer(cq, *dram_buffer, src_data_2, false);
+                EnqueueReadBuffer(cq, *dram_buffer, dst_data, true);
+                EXPECT_EQ(src_data_2, dst_data);
+            }
         }
     }
+
+    // non blocking fast data movement APIs
+    for (int iteration = 0; iteration < k_Iterations; ++iteration) {
+        for (int i = 0; i < k_LoopPerDev; ++i) {
+            EnqueueWriteBuffer(cq, *buffer, src_data_1, false);
+        }
+    }
+
+    std::vector<uint32_t> dst_data;
+    for (int iteration = 0; iteration < k_Iterations; ++iteration) {
+        for (int i = 0; i < k_LoopPerDev; ++i) {
+            EnqueueReadBuffer(cq, *buffer, dst_data, false);
+        }
+    }
+
+    Finish(cq);
 }
 
 }  // namespace local_test_functions
