@@ -441,7 +441,6 @@ def test_demo(
     user_input,
     model_location_generator,
     device,
-    use_program_cache,
 ):
     disable_persistent_kernel_cache()
 

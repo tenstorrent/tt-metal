@@ -52,7 +52,6 @@ import torch
 def test_conv_features(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,

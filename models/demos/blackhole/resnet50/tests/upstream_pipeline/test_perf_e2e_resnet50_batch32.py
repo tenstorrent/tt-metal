@@ -20,7 +20,6 @@ from models.utility_functions import run_for_blackhole
 )
 def test_perf_trace_2cqs(
     device,
-    use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,
