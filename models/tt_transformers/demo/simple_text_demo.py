@@ -42,7 +42,7 @@ class TokenAccuracy:
         self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
 
     def prepare_ref_tokens(self, tokenizer):
-        text_data = tokenizer.decode(self.input_prompt)
+        text_data = tokenizer.decode(self.input_prompt.tolist())
         return text_data
 
     def collect_predicted_tokens(self, tokens):
