@@ -1,18 +1,18 @@
 # TT-NN
-TT-NN is an open-source C++ and Python library of neural network operations, built on top of the TT-Metallium programming model. 
+TT-NN is an open-source C++ and Python library of neural network operations, built on top of the TT-Metallium programming model.
 It provides a PyTorch-like interface for running machine learning workloads on Tenstorrent AI accelerators, and serves as the primary high-level API for developing and optimizing ML models on Tenstorrent hardware.
 
 ## Purpose
 ### Enable ML frameworks targeting Tenstorrent hardware
-Developers have access to a vast library of existing models implemented in PyTorch, JAX, TensorFlow, and other frameworks. 
+Developers have access to a vast library of existing models implemented in PyTorch, JAX, TensorFlow, and other frameworks.
 TT-NN offers a collection of operations and reusable building blocks to support the development of ML compilers and framework backends targeting Tenstorrent hardware.
 
 → See framework integrations: [Forge Compiler](https://github.com/tenstorrent/tt-forge) [PyTorch 2.0 TT-NN Backend](https://github.com/tenstorrent/pytorch2.0_ttnn)
 
 ### Manual bringup and optimization of ML models
-When performance is critical, developers need fine-grained control. 
-Existing ML frameworks and compilers don’t fully expose the capabilities of our hardware. 
-TT-NN lets developers work with familiar high-level operations while tapping into hardware-specific optimizations when necessary. 
+When performance is critical, developers need fine-grained control.
+Existing ML frameworks and compilers don’t fully expose the capabilities of our hardware.
+TT-NN lets developers work with familiar high-level operations while tapping into hardware-specific optimizations when necessary.
 This includes options to specify data format for mixed-precision, tensor layout and distribution, op fusion and other operation specific settings.
 
 → See production-ready model examples: [Model Zoo](https://tenstorrent.com/developers) <br>
@@ -24,7 +24,7 @@ This includes options to specify data format for mixed-precision, tensor layout 
 * **Native Multi-Device Support:**<br> TT-NN seamlessly virtualizes multiple Tenstorrent devices into a single logical unit, enabling effortless scaling across device clusters.
 
 ## Getting Started
-Assuming you completed the installation of the hardware and drivers, you can simply install TT-NN from PyPi 
+Assuming you completed the installation of the hardware and drivers, you can simply install TT-NN from PyPi
 ```
 pip install ttnn
 ```
@@ -41,7 +41,7 @@ print(c)
 There is a collection of tutorials written with [Jupyter Notebooks](https://jupyter.org/install) to help you ramp up your skillset for using TT-NN.
 These notebooks can be found under [ttnn/tutorials](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials).
 
-From within the `ttnn/tutorials` directory, launch the notebooks with: 
+From within the `ttnn/tutorials` directory, launch the notebooks with:
 ```
 jupyter lab --no-browser --port=8888
 ```
