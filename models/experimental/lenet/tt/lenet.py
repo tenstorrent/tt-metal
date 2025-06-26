@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import ttnn
-import torch.nn as nn
 
 
 from models.experimental.lenet.lenet_utils import load_torch_lenet
@@ -11,7 +11,7 @@ from models.utility_functions import torch2tt_tensor
 from tt_lib.fallback_ops import fallback_ops
 
 
-class TtLeNet5(nn.Module):
+class TtLeNet5(LightweightModule):
     def __init__(self, num_classes, device, state_dict):
         super().__init__()
         self.device = device

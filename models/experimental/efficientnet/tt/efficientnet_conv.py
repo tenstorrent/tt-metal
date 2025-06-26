@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 
 from loguru import logger
@@ -16,7 +16,7 @@ from models.utility_functions import (
 )
 
 
-class TtEfficientnetConv2d(torch.nn.Module):
+class TtEfficientnetConv2d(LightweightModule):
     """
     Configurable block used for Convolution2d blocks.
 
@@ -125,7 +125,7 @@ class TtEfficientnetConv2d(torch.nn.Module):
         return self.conv(x)
 
 
-class TtEfficientnetConv2dNormActivation(torch.nn.Module):
+class TtEfficientnetConv2dNormActivation(LightweightModule):
     """
     Configurable block used for Convolution2d-Normalization-Activation blocks.
 
@@ -136,7 +136,7 @@ class TtEfficientnetConv2dNormActivation(torch.nn.Module):
         stride (int, optional): Stride of the convolution. Default: 1
         padding (int, tuple or str, optional): Padding added to all four sides of the input. Default: None, in which case it will be calculated as ``padding = (kernel_size - 1) // 2 * dilation``
         groups (int, optional): Number of blocked connections from input channels to output channels. Default: 1
-        norm_layer (Callable[..., torch.nn.Module], optional): Norm layer that will be stacked on top of the convolution layer. If ``None`` this layer won't be used. Default: ``torch.nn.BatchNorm2d``
+        norm_layer (Callable[..., LightweightModule], optional): Norm layer that will be stacked on top of the convolution layer. If ``None`` this layer won't be used. Default: ``torch.nn.BatchNorm2d``
         activation_layer (bool): True if to use activation (Silu), false othervise.
         dilation (int): Spacing between kernel elements. Default: 1
         inplace (bool): Parameter for the activation layer, which can optionally do the operation in-place. Default ``True``

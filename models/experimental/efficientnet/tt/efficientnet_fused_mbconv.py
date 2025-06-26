@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import ttnn
 from typing import List, Optional, Callable
@@ -20,7 +21,7 @@ class FusedMBConvConfig(_MBConvConfig):
         input_channels: int,
         out_channels: int,
         num_layers: int,
-        block: Optional[Callable[..., torch.nn.Module]] = None,
+        block: Optional[Callable[..., LightweightModule]] = None,
     ):
         if block is None:
             block = TtEfficientnetFusedMBConv
@@ -36,7 +37,7 @@ class FusedMBConvConfig(_MBConvConfig):
         )
 
 
-class TtEfficientnetFusedMBConv(torch.nn.Module):
+class TtEfficientnetFusedMBConv(LightweightModule):
     def __init__(
         self,
         state_dict,
@@ -55,7 +56,7 @@ class TtEfficientnetFusedMBConv(torch.nn.Module):
 
         self.use_res_connect = cnf.stride == 1 and cnf.input_channels == cnf.out_channels
 
-        layers: List[torch.nn.Module] = []
+        layers: List[LightweightModule] = []
         expanded_channels = cnf.adjust_channels(cnf.input_channels, cnf.expand_ratio)
 
         if expanded_channels != cnf.input_channels:
