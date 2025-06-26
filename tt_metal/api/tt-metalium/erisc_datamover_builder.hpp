@@ -13,7 +13,7 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 #include <tt-metalium/edm_fabric_counters.hpp>
-
+#include <tt-metalium/routing_table_generator.hpp>  // for FabricNodeId
 #include <unordered_map>
 #include <optional>
 #include <cstdint>
@@ -61,16 +61,29 @@ enum class FabricEriscDatamoverType {
     Dateline = 1,
     DatelineUpstream = 2,
     DatelineUpstreamAdjacentDevice = 3,
-    Invalid = 4,
+    DatelineUpstreamAdjacentDeviceUpstream = 4,
+    Invalid = 5,
+};
+
+enum class FabricEriscDatamoverAxis : std::size_t {
+    Short = 0,
+    Long = 1,
+    Invalid = 2,
+};
+
+struct FabricRouterBufferConfig {
+    bool enable_dateline_sender_extra_buffer_slots = false;
+    bool enable_dateline_receiver_extra_buffer_slots = false;
+    bool enable_dateline_upstream_sender_extra_buffer_slots = false;
+    bool enable_dateline_upstream_receiver_extra_buffer_slots = false;
+    bool enable_dateline_upstream_adjacent_sender_extra_buffer_slots = false;
 };
 
 // enable extra buffer slots configuration based on sender/receiver channel and EDM type.
 struct FabricEriscDatamoverOptions {
     FabricEriscDatamoverType edm_type = FabricEriscDatamoverType::Default;
-    bool enable_dateline_sender_extra_buffer_slots = false;
-    bool enable_dateline_receiver_extra_buffer_slots = false;
-    bool enable_dateline_upstream_sender_extra_buffer_slots = false;
-    bool enable_dateline_upstream_receiver_extra_buffer_slots = false;
+    FabricEriscDatamoverAxis edm_axis = FabricEriscDatamoverAxis::Short;
+    FabricRouterBufferConfig edm_buffer_config = FabricRouterBufferConfig{};
 };
 
 struct FabricEriscDatamoverConfig {
@@ -79,16 +92,21 @@ struct FabricEriscDatamoverConfig {
     static constexpr uint32_t WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
     static constexpr uint32_t AT_CMD_BUF = 3;      // for atomics
     static constexpr uint32_t DEFAULT_NOC_VC = 2;
-    static constexpr uint32_t MAX_EDM_NOC_VC = 3;
+    static constexpr uint32_t NUM_EDM_NOC_VCS = 2;
 
     static constexpr uint32_t DEFAULT_RECEIVER_FORWARDING_NOC = 1;
     static constexpr uint32_t DEFAULT_RECEIVER_LOCAL_WRITE_NOC = 1;
     static constexpr uint32_t DEFAULT_SENDER_ACK_NOC = 0;
 
+    // If a mesh axis spans eight or more devices, use more buffer slot configuration.
+    // Threshold (8 devices) was determined empirically.
+    static constexpr std::size_t MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD = 8;
+
     static constexpr std::size_t dateline_sender_channel_skip_idx = 2;
     static constexpr std::size_t dateline_receiver_channel_skip_idx = 0;
     static constexpr std::size_t dateline_upstream_sender_channel_skip_idx = 1;
     static constexpr std::size_t dateline_upstream_receiver_channel_skip_idx = 1;
+    static constexpr std::size_t dateline_upstream_adjcent_sender_channel_skip_idx = 2;
 
     static constexpr std::size_t num_sender_channels_1d = 3;
     static constexpr std::size_t num_sender_channels_2d = 5;
@@ -217,6 +235,7 @@ struct FabricEriscDatamoverConfig {
     // Dateline Upstream EDM skip connection flag
     bool skip_sender_channel_1_connection = false;
     bool skip_receiver_channel_1_connection = false;
+    bool skip_sender_vc1_channel_connection = false;
 
     // emd vcs
     std::size_t edm_noc_vc = 0;
@@ -264,7 +283,6 @@ struct SenderWorkerAdapterSpec {
     size_t edm_worker_location_info_addr = 0;  // The EDM's location for `EDMChannelWorkerLocationInfo`
     size_t buffer_size_bytes = 0;
     size_t buffer_index_semaphore_id = 0;  // the semaphore ID on the EDM, not the worker
-    bool persistent_fabric = false;
     eth_chan_directions edm_direction = eth_chan_directions::EAST;
 };
 
@@ -296,8 +314,8 @@ public:
         const CoreCoord& my_eth_core_logical,
         size_t my_noc_x,
         size_t my_noc_y,
-        size_t my_chip_id,
-        size_t peer_chip_id,
+        const FabricNodeId& local_fabric_node_id,
+        const FabricNodeId& peer_fabric_node_id,
 
         const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
             receiver_channels_downstream_flow_control_semaphore_id,
@@ -312,7 +330,6 @@ public:
 
         const FabricEriscDatamoverConfig& config,
         eth_chan_directions direction,
-        bool enable_persistent_mode,
         bool build_in_worker_connection_mode = false,
         bool dateline_connection = false);
 
@@ -320,10 +337,20 @@ public:
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         const CoreCoord& ethernet_core,
-        chip_id_t local_chip_id,
-        chip_id_t peer_chip_id,
+        const FabricNodeId& local_fabric_node_id,
+        const FabricNodeId& peer_fabric_node_id,
         const FabricEriscDatamoverConfig& config,
-        bool enable_persistent_mode,
+        bool build_in_worker_connection_mode = false,
+        bool dateline_connection = false,
+        eth_chan_directions direction = eth_chan_directions::EAST);
+
+    static FabricEriscDatamoverBuilder build(
+        tt::tt_metal::IDevice* device,
+        tt::tt_metal::Program& program,
+        const CoreCoord& ethernet_core,
+        chip_id_t local_physical_chip_id,
+        chip_id_t peer_physical_chip_id,
+        const FabricEriscDatamoverConfig& config,
         bool build_in_worker_connection_mode = false,
         bool dateline_connection = false,
         eth_chan_directions direction = eth_chan_directions::EAST);
@@ -349,7 +376,7 @@ public:
     void teardown_from_host(
         tt::tt_metal::IDevice* d,
         tt::tt_fabric::TerminationSignal termination_signal =
-            tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
+            tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE) const;
 
     void set_firmware_context_switch_interval(size_t interval);
     void set_wait_for_host_signal(bool wait_for_host_signal);
@@ -362,8 +389,8 @@ public:
 
     FabricEriscDatamoverConfig config;
 
-    size_t my_chip_id = 0;
-    size_t peer_chip_id = 0;
+    FabricNodeId local_fabric_node_id = FabricNodeId(MeshId{0}, 0);
+    FabricNodeId peer_fabric_node_id = FabricNodeId(MeshId{0}, 0);
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 
@@ -414,7 +441,6 @@ public:
     std::array<bool, FabricEriscDatamoverConfig::num_sender_channels>
         sender_channel_connection_liveness_check_disable_array = {};
 
-    bool enable_persistent_mode = false;
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
     bool enable_first_level_ack = false;

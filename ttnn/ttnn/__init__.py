@@ -97,6 +97,8 @@ def manage_config(name, value):
 from ttnn._ttnn.multi_device import (
     CppMeshToTensor,
     CppTensorToMesh,
+    PlacementReplicate,
+    PlacementShard,
     MeshMapperConfig,
     MeshComposerConfig,
     get_device_tensors,
@@ -131,7 +133,7 @@ from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
-from ttnn._ttnn.fabric import FabricConfig, initialize_fabric_config
+from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, set_fabric_config
 
 from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,

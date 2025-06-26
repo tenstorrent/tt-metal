@@ -245,14 +245,14 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     secrets: inherit
-  publish-to-test-pypi:
+  publish-to-pypi:
     name: >-
-      Publish Python 🐍 distribution 📦 to Test PyPI
+      Publish Python 🐍 distribution 📦 to PyPI
     needs: [build-artifact, test-wheels]
     runs-on: ubuntu-latest
     environment:
-      name: testpypi
-      url: https://test.pypi.org/p/ttnn
+      name: pypi
+      url: https://pypi.org/project/ttnn/
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
     steps:
@@ -261,7 +261,5 @@ jobs:
       with:
         name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
         path: dist/
-    - name: Publish distribution 📦 to Test PyPI
+    - name: Publish distribution 📦 to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        repository-url: https://test.pypi.org/legacy/

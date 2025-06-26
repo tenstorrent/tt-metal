@@ -616,8 +616,8 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
     log_debug(tt::LogOp, "Wt: {}", Wt);
     log_debug(tt::LogOp, "St: {}", St);
 
-    const auto input1_shard_spec_opt = input_tensor1.shard_spec();
-    const auto input2_shard_spec_opt = input_tensor2.shard_spec();
+    const auto& input1_shard_spec_opt = input_tensor1.shard_spec();
+    const auto& input2_shard_spec_opt = input_tensor2.shard_spec();
 
     TT_FATAL(input1_shard_spec_opt.has_value(), "input1_shard_spec is not available");
     TT_FATAL(input2_shard_spec_opt.has_value(), "input2_shard_spec is not available");

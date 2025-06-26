@@ -11,7 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
 #include <optional>
 #include <variant>
@@ -152,8 +152,8 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto input = input_tensors.at(0);
-        auto output = output_tensors.at(0);
+        const auto& input = input_tensors.at(0);
+        const auto& output = output_tensors.at(0);
         const uint32_t data_size = input.element_size();
         tt::tt_metal::Buffer* src_buffer = input.buffer();
         tt::tt_metal::Buffer* dst_buffer = output.buffer();

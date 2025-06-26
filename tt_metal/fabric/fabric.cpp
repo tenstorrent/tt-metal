@@ -12,6 +12,8 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/device.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <optional>
 #include <set>
@@ -58,6 +60,16 @@ namespace tt::tt_fabric {
 size_t get_tt_fabric_channel_buffer_size_bytes() {
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     return control_plane.get_fabric_context().get_fabric_channel_buffer_size_bytes();
+}
+
+size_t get_tt_fabric_packet_header_size_bytes() {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    return control_plane.get_fabric_context().get_fabric_packet_header_size_bytes();
+}
+
+size_t get_tt_fabric_max_payload_size_bytes() {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    return control_plane.get_fabric_context().get_fabric_max_payload_size_bytes();
 }
 
 void append_fabric_connection_rt_args(
@@ -159,7 +171,6 @@ void append_fabric_connection_rt_args(
         .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
         .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
         .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
-        .persistent_fabric = true,
         .edm_direction = router_direction};
 
     auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
@@ -172,5 +183,42 @@ void append_fabric_connection_rt_args(
         worker_buffer_index_semaphore_id,
         worker_args);
 }
+
+namespace experimental {
+
+size_t get_number_of_available_routing_planes(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t cluster_axis, size_t row_or_col) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Get any device from the cluster to determine fabric node
+    // For now, use chip 0 as a representative device
+
+    size_t row_idx = cluster_axis == 0 ? 0 : row_or_col;
+    size_t col_idx = cluster_axis == 0 ? row_or_col : 0;
+    auto* first_chip = mesh_device.get_device(row_idx, col_idx);
+    chip_id_t first_chip_id = first_chip->id();
+    auto fabric_node_in_row_or_col = control_plane.get_fabric_node_id_from_physical_chip_id(first_chip_id);
+
+    // Map cluster axis to routing directions
+    constexpr std::array<std::array<RoutingDirection, 2>, 2> cluster_axis_directions_to_check = {
+        std::array<RoutingDirection, 2>{RoutingDirection::N, RoutingDirection::S},
+        std::array<RoutingDirection, 2>{RoutingDirection::E, RoutingDirection::W}};
+
+    TT_FATAL(
+        cluster_axis < cluster_axis_directions_to_check.size(),
+        "Invalid cluster axis {}. Must be less than {}",
+        cluster_axis,
+        cluster_axis_directions_to_check.size());
+    const auto& directions_to_check = cluster_axis_directions_to_check[cluster_axis];
+
+    size_t planes_dir0 =
+        control_plane.get_num_available_routing_planes_in_direction(fabric_node_in_row_or_col, directions_to_check[0]);
+    size_t planes_dir1 =
+        control_plane.get_num_available_routing_planes_in_direction(fabric_node_in_row_or_col, directions_to_check[1]);
+    TT_FATAL(planes_dir0 == planes_dir1, "Routing planes are not equal");
+    return planes_dir0;
+}
+
+}  // namespace experimental
 
 }  // namespace tt::tt_fabric

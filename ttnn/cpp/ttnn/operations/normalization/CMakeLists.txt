@@ -1,8 +1,14 @@
 add_library(ttnn_op_normalization ${LIB_TYPE})
-add_library(TT::NN::Ops::Normalization ALIAS ttnn_op_normalization)
+add_library(TTNN::Ops::Normalization ALIAS ttnn_op_normalization)
 
 target_precompile_headers(ttnn_op_normalization REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_normalization)
+set_target_properties(
+    ttnn_op_normalization
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 
 target_sources(
     ttnn_op_normalization
@@ -27,12 +33,31 @@ target_sources(
         rmsnorm/rmsnorm.cpp
 )
 
+file(GLOB_RECURSE kernels softmax/device/kernels/*)
+target_sources(
+    ttnn_op_normalization
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
+)
+
 target_include_directories(ttnn_op_normalization PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
     ttnn_op_normalization
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_normalization
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/normalization
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_normalization LIBRARY COMPONENT tar)

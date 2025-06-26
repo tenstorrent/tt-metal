@@ -35,8 +35,9 @@ TSU_PERF_DROP_LIMIT_PERCENT = 10
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 617, "max": 640}, 80: {"min": 50, "max": 54}},
-    "6U": {1: {"min": 738, "max": 762}, 80: {"min": 55, "max": 59}},
+    "4U": {1: {"min": 390, "max": 448}, 10: {"min": 230, "max": 253}, 80: {"min": 52, "max": 56}},
+    # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
+    "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 62, "max": 66}},
 }
 
 
@@ -134,6 +135,17 @@ def run_llama3_demo(
     assert batch_size <= 32, "Max batch size currently supported is 32"
     assert max_seq_len <= 128 * 1024, "Max sequence length must be less than 128k tokens"
 
+    top_k = sampling_params["top_k"]
+    if isinstance(top_k, int):
+        top_k = [top_k] * batch_size
+    top_p = sampling_params["top_p"]
+    if isinstance(top_p, float):
+        top_p = [top_p] * batch_size
+    temperature = sampling_params["temperature"]
+    if isinstance(temperature, float):
+        temperature = [temperature] * batch_size
+    seed = sampling_params["seed"]
+
     dummy_weights = weights == "random"
 
     # We disregard any warmup iteration for profiling, in favour of just measuring compile time on the first iteration
@@ -177,8 +189,8 @@ def run_llama3_demo(
     tt_device_name = model_args.device_name  # ["N150", "N300", "T3K", "TG"]
 
     if llama_model_name == "3.1-70B":
-        assert tt_device_name in ["TG"], "Llama3.1-70B is only supported on TG"
-        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama3.1-70B"
+        assert tt_device_name in ["TG"], "Llama-3.1-70B is only supported on TG"
+        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama-3.1-70B"
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
@@ -215,7 +227,7 @@ def run_llama3_demo(
         )
         logger.info("Page table tensor done")
 
-    # Load TTNN Llama3.1 model
+    # Load TTNN Llama-3.1 model
     logger.info("Loading weights to device...")
     profiler.start("loading_weights_to_device")
     tt_model = TtTransformer(
@@ -237,7 +249,7 @@ def run_llama3_demo(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        sampling_params=sampling_params,
+        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     profiler.end("loading_weights_to_device")
@@ -321,7 +333,7 @@ def run_llama3_demo(
         )
 
         # Sampling
-        _ = tt_sampling(tt_out[0], tt_out_tok)
+        _ = tt_sampling(tt_out[0], top_k, top_p, seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
         logger.info(f"Sampling done")
 
     if not stress_test:
@@ -333,7 +345,10 @@ def run_llama3_demo(
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
-    # profiler.end(f"plus one position done")
+
+    _ = tt_sampling(
+        tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok
+    )  # Compile again without seed to obtain random sampling; at this position to simplify test_decoder_device_perf.py
 
     # Capture Trace
     logger.info(f"Capturing model trace...")
@@ -355,7 +370,7 @@ def run_llama3_demo(
     )
 
     # Sampling
-    _ = tt_sampling(tt_out[0], tt_out_tok)
+    _ = tt_sampling(tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok)
 
     if not stress_test:
         ttnn.plus_one(
@@ -407,7 +422,7 @@ def run_llama3_demo(
 
     all_outputs = []
 
-    logger.info(f"Starting decode loop...")
+    logger.info(f"Starting decode loop in trace mode...")
     profiler.start(f"inference_decode", iteration=iteration)
 
     # Determine TSU threshold based on layer count
@@ -418,28 +433,30 @@ def run_llama3_demo(
     # Tracks the number of iterations where throughput falls below `tsu_threshold`
     tsu_failures = 0
     all_tokens_per_second_per_user = []
-
+    failed_tokens_per_second_per_user = []
+    read_events = []
+    tt_out_toks_cpu = []
+    iteration_time_start = time()
+    prefill = True
+    block_host = True
+    decode_iteration = 0
+    trace_exec_offset = 1
     while users_decoding:
+        # Execute trace
+        if iteration in range(len(encoded_prompts[0])):
+            block_host = True
+            prefill = True
+        else:
+            block_host = False if layers == 80 else True
+            prefill = False
+
         if iteration == 0:  # First iteration also accounts for compile time
             profiler.start(f"compile_decode", iteration=iteration)
-        iteration_time_start = time()
 
-        # Execute trace
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-        tt_out_tok_device0 = ttnn.get_device_tensors(tt_out_tok)[0]
-        tt_out_tok_cpu = tt_out_tok_device0.cpu(blocking=True, cq_id=0)
-        iteration_time = time() - iteration_time_start
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=block_host)
 
-        # Update current pos and mat idxs on host and send to device
-        # TODO This is required for now since we cannot ttnn.plus_one(rot_mat_idxs) while it being uint32.
-        # If this tensor is int32, it won't be supported by ttnn.embedding
-        if not stress_test:
-            current_pos += 1
-        tt_output_torch = ttnn.to_torch(
-            tt_out_tok_cpu,
-        )[0, 0, 0, :batch_size]
-        # Append the generated token to the list of outputs
-        if iteration in range(len(encoded_prompts[0])):
+        if prefill:
+            current_iteration = iteration
             all_outputs.append(encoded_prompts[0][iteration])  # Update list of TT outputs
             tt_out_tok_reset = ttnn.from_torch(
                 encoded_prompts_tensor_whole_sequence[:, iteration].reshape(1, 1, 1, batch_size),
@@ -448,57 +465,77 @@ def run_llama3_demo(
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
             )
             ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
+            profiler.start(f"log_printing_iter_{iteration}", iteration=iteration)
+            if not is_ci_env:
+                # Print out generated outputs for each user at the end of every iteration
+                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
+
+            iteration_time_ends = time()
+            iteration_time = iteration_time_ends - iteration_time_start
+            tokens_per_second_per_user = 1 / iteration_time
+
+            if not is_ci_env or iteration < 200 or iteration % 1000 == 0:
+                logger.info(
+                    f"Iteration : {iteration}, Prefill Iteration : {iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
+                )
+            profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
+            iteration_time_start = time()
         else:
-            all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
-            if all_outputs[-1] in [128001, 128009] and not stress_test:  # EoT tokens
-                users_decoding = False
+            tt_out_toks_cpu += [tt_out_tok.cpu(blocking=block_host, cq_id=0)]
+            read_events += [ttnn.record_event(mesh_device, 0)]
 
-        # Ignore the first iteration for average speed calculation
-        if iteration > 0:
-            total_decoding_time += iteration_time
-            total_tokens_generated += 1
+            if decode_iteration >= trace_exec_offset:
+                current_iteration = iteration - trace_exec_offset
+                current_decode_iteration = decode_iteration - trace_exec_offset
+                # Write to host
+                ttnn.event_synchronize(read_events[current_decode_iteration])
+                tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks_cpu[current_decode_iteration])[0])[
+                    0, 0, 0, :batch_size
+                ]
+                all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
 
-        tokens_per_second_per_user = 1 / iteration_time
+                profiler.start(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
+                if not is_ci_env:
+                    # Print out generated outputs for each user at the end of every iteration
+                    logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
 
-        profiler.start(f"log_printing_iter_{iteration}", iteration=iteration)
-        # Print out generated outputs for each user at the end of every iteration
-        if not is_ci_env:
-            # if len(user_input) == 1:
-            logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
-            # else:
-            #     for user in range(batch_size):
-            #         text = "".join(tokenizer.decode(all_outputs[user]))
-            #         if len(text) > 100:
-            #             text = "..." + text[-97:]
-            #         text = text.replace("\n", " ")
-            #         logger.info("[User {}] {}".format(user, text))
+                iteration_time_ends = time()
+                iteration_time = iteration_time_ends - iteration_time_start
 
-        if not is_ci_env or iteration < 200 or iteration % 1000 == 0:
-            # Always print perf at every iteration if not in CI
-            logger.info(
-                f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-            )
+                tokens_per_second_per_user = 1 / iteration_time
 
-        all_tokens_per_second_per_user.append(tokens_per_second_per_user)
+                all_tokens_per_second_per_user.append(tokens_per_second_per_user)
 
-        if iteration == 127:
-            tokens_per_second_per_user_token127 = tokens_per_second_per_user
+                if not is_ci_env or current_iteration < 200 or current_iteration % 1000 == 0:
+                    logger.info(
+                        f"Iteration : {current_iteration}, Decode Iteration : {current_decode_iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
+                    )
+                profiler.end(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
 
-        if not stress_test:
-            # Increment failure count if throughput is too low
-            if tokens_per_second_per_user < tsu_thresholds["min"] or tokens_per_second_per_user > tsu_thresholds["max"]:
-                tsu_failures += 1
+                if current_iteration == 127:
+                    tokens_per_second_per_user_token127 = tokens_per_second_per_user
 
-        profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
+                if not stress_test:
+                    # Increment failure count if throughput is too low
+                    if decode_iteration in range(1, 200) and (
+                        tokens_per_second_per_user < tsu_thresholds["min"]
+                        or tokens_per_second_per_user > tsu_thresholds["max"]
+                    ):
+                        tsu_failures += 1
+                        failed_tokens_per_second_per_user.append((decode_iteration, tokens_per_second_per_user))
+
+                iteration_time_start = time()
+
+            decode_iteration += 1
+
+        # Upper limit of generated tokens for each user (to avoid infinite generation in case eos is not seen)
+        if current_iteration + 1 >= max_generated_tokens:  # EoT tokens
+            users_decoding = False
 
         if iteration == 0:  # First iteration also accounts for compile time
             profiler.end(f"compile_decode", iteration=iteration)
 
         iteration += 1
-
-        # Upper limit of generated tokens for each user (to avoid infinite generation in case eos is not seen)
-        if iteration >= max_generated_tokens:
-            users_decoding = False
 
     # Release trace
     ttnn.release_trace(mesh_device, trace_id)
@@ -518,7 +555,7 @@ def run_llama3_demo(
             ml_model_name="llama70b-tg",
         )
 
-    if not stress_test:
+    if not stress_test and len(all_tokens_per_second_per_user) > 0:
         logger.info(f"Min tsu throughput: {min(all_tokens_per_second_per_user)}")
         logger.info(f"Max tsu throughput: {max(all_tokens_per_second_per_user)}")
         logger.info(f"Avg tsu throughput: {sum(all_tokens_per_second_per_user) / len(all_tokens_per_second_per_user)}")
@@ -540,17 +577,13 @@ def run_llama3_demo(
 
         # print before assertion
         out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
-        tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * iteration / 100
+        tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * decode_iteration / 100
         if tsu_failures > tsu_perf_drop_limit:
             logger.info(out_of_targets_msg)
             logger.info(f"Failing iterations sorted by t/s/u")
-            sorted_tokens_per_second_per_user = sorted(all_tokens_per_second_per_user)
-            for i in range(len(sorted_tokens_per_second_per_user)):
-                if (
-                    sorted_tokens_per_second_per_user[i] < tsu_thresholds["min"]
-                    or sorted_tokens_per_second_per_user[i] > tsu_thresholds["max"]
-                ):
-                    logger.info(f"Iteration {i}: {sorted_tokens_per_second_per_user[i]}")
+            sorted_tokens_per_second_per_user = sorted(failed_tokens_per_second_per_user, key=lambda x: x[1])
+            for iteration, tsu in sorted_tokens_per_second_per_user:
+                logger.info(f"Iteration {iteration}: {tsu}")
         # Assert at the end of test to check if the throughput recuperated
         assert tsu_failures <= tsu_perf_drop_limit, out_of_targets_msg
 
@@ -563,7 +596,7 @@ def run_llama3_demo(
 # input_prompts (string): input json file with prompts to process. See models/demos/llama3/demo/*.json for list of input files
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
-# max_seq_len (int): Maximum context length supported by the model (Llama3.1 and Llama3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
+# max_seq_len (int): Maximum context length supported by the model (Llama-3.1 and Llama-3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
 # batch_size (int): Number of users in a batch (Supports 1/2/4/8/16/32 batches)
 # max_generated_tokens (int): Maximum number of tokens to generate for each user (Note that the users will stop generation before this limit if they reach a EoS token)
 # paged_attention (bool): Whether to use paged attention or default attention (vLLM requires paged attention)
@@ -583,10 +616,10 @@ def run_llama3_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            2000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 32, "top_p": 0.9, "temperature": 0.7, "seed": 42},  # sampling_params
             False,  # stress_test
             0,  # start_pos
         ),
@@ -598,10 +631,10 @@ def run_llama3_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            2000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             0,  # start_pos
         ),
@@ -616,7 +649,7 @@ def run_llama3_demo(
             500000,  # max_generated_tokens (same index for stress test)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.0, "temperature": 1.0, "seed": 42},  # sampling_params
             True,  # stress_test
             0,  # start_pos
         ),
@@ -631,7 +664,7 @@ def run_llama3_demo(
             2048,  # max_generated_tokens (same index for stress test)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
         ),
@@ -646,7 +679,7 @@ def run_llama3_demo(
             1,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos
         ),
@@ -661,7 +694,7 @@ def run_llama3_demo(
             20000,  # experimentally established as large enough to catch ND hangs
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
         ),
@@ -729,7 +762,6 @@ def test_llama_demo(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
-
     if galaxy_type != "6U" and galaxy_type != "4U":
         raise Exception("Not running on TG nor on 6U, you must run on those systems for this test")
 

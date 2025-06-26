@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include "dataflow_api.h"
-#include "cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
+#include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -140,7 +141,7 @@ void kernel_main() {
         uint32_t index_w_index = i % num_alignment_width;
         uint32_t index_off = index_w_index * num_elements_per_alignment;
         uint32_t index_start = index_off;
-        uint32_t index_end = min(index_off + num_elements_per_alignment, index_size_w);
+        uint32_t index_end = std::min(index_off + num_elements_per_alignment, index_size_w);
 
         uint32_t j = 0;
         for (uint32_t index_index = index_start; index_index < index_end; index_index++, j++) {

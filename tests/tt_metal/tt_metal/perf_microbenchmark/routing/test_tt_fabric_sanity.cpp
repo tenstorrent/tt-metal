@@ -169,7 +169,7 @@ struct test_board_t {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
         }
 
-        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::CUSTOM);
+        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::CUSTOM);
 
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
         control_plane = &tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -188,7 +188,7 @@ struct test_board_t {
     void _init_galaxy_board(uint32_t num_chips, bool all_pcie = false) {
         // TODO: add support for quanta galaxy variant
         if (all_pcie) {
-            mesh_graph_descriptor = "quanta_galaxy_mesh_graph_descriptor.yaml";
+            mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor.yaml";
         } else {
             mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml";
         }
@@ -764,10 +764,12 @@ struct test_device_t {
         uint32_t grid_size_x = grid_size.x;
         uint32_t grid_size_y = grid_size.y;
 
+        router_phys_cores.reserve(router_logical_cores.size());
         for (auto& core : router_logical_cores) {
             router_phys_cores.push_back(soc_desc.get_physical_core_from_logical_core(core, CoreType::ETH));
         }
 
+        worker_phys_cores.reserve(worker_logical_cores.size());
         for (auto& core : worker_logical_cores) {
             worker_phys_cores.push_back(soc_desc.get_physical_core_from_logical_core(core, CoreType::WORKER));
         }

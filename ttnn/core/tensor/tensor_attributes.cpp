@@ -32,38 +32,4 @@ const DistributedTensorConfig& TensorAttributes::get_distributed_tensor_config()
     return distributed_tensor_config_;
 }
 
-std::vector<distributed::MeshCoordinate> TensorAttributes::determine_distribution(
-    const distributed::MeshShape& mesh_shape) const {
-    const auto coord_range = [this, &mesh_shape]() {
-        if (auto* shard2d_strategy = std::get_if<ShardTensor2D>(&distributed_tensor_config_)) {
-            distributed::MeshShape distribution_shape(shard2d_strategy->shard_mesh.y, shard2d_strategy->shard_mesh.x);
-            return distributed::MeshCoordinateRange(distribution_shape);
-        } else {
-            return distributed::MeshCoordinateRange(mesh_shape);
-        }
-    }();
-
-    const int num_shards = std::visit(
-        tt::stl::overloaded{
-            [&mesh_shape](const HostStorage&) { return mesh_shape.mesh_size(); },
-            [&mesh_shape](const DeviceStorage& s) { return s.coords.size(); },
-            [&mesh_shape](const MultiDeviceHostStorage& s) { return s.num_buffers(); },
-        },
-        storage_);
-
-    TT_FATAL(
-        num_shards <= mesh_shape.mesh_size(),
-        "Number of shards {} exceeds the mesh size {}",
-        num_shards,
-        mesh_shape.mesh_size());
-
-    std::vector<distributed::MeshCoordinate> coords;
-    coords.reserve(num_shards);
-    auto coord_it = coord_range.begin();
-    for (int i = 0; i < num_shards; ++coord_it, ++i) {
-        coords.push_back(*coord_it);
-    }
-    return coords;
-}
-
 }  // namespace tt::tt_metal

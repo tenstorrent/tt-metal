@@ -58,6 +58,7 @@ public:
     // factory (initialises MPI environment once per process)
     static void create(int argc, char** argv);
     static const ContextPtr& get_current_world();
+    static bool is_initialized();
 
     // destructor – communicator MPI_COMM_WORLD is freed automatically by MPI_Finalize
     // All other communicators are freed here
@@ -104,7 +105,7 @@ public:
     [[nodiscard]] ContextPtr create_sub_context(tt::stl::Span<int> ranks) const override;
     void abort(int error_code) const override;
     void revoke_and_shrink() override;
-    [[nodiscard]] virtual bool is_revoked() override;
+    [[nodiscard]] bool is_revoked() override;
 
     /* ----------------- mpi constructors ---------------- */
     explicit MPIContext(MPI_Comm comm);
