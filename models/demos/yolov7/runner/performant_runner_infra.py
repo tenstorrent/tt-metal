@@ -3,19 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
 from loguru import logger
-
-import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.experimental.yolov7.tt.ttnn_yolov7 import ttnn_yolov7
-from models.experimental.yolov7.reference.model import Yolov7_model
-
+import ttnn
+from models.demos.yolov7.reference.model import Yolov7_model
+from models.demos.yolov7.reference.yolov7_utils import download_yolov7_weights
+from models.demos.yolov7.tt.ttnn_yolov7 import ttnn_yolov7
+from models.demos.yolov7.ttnn_yolov7_utils import create_custom_preprocessor, load_weights
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov7.reference.yolov7_utils import download_yolov7_weights
-from models.experimental.yolov7.ttnn_yolov7_utils import create_custom_preprocessor, load_weights
 
 
 class YOLOv7PerformanceRunnerInfra:

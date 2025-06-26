@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.yolov7.runner.performant_runner_infra import YOLOv7PerformanceRunnerInfra
+from models.demos.yolov7.runner.performant_runner_infra import YOLOv7PerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -82,7 +82,7 @@ class YOLOv7PerformantRunner:
     def _execute_yolov7_trace_2cqs_inference(self, tt_inputs_host=None):
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
         ttnn.wait_for_event(1, self.op_event)
-        ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
         # TODO: Add in place support to ttnn to_memory_config

@@ -17,7 +17,7 @@ from loguru import logger
 from ultralytics import YOLO
 
 from models.demos.yolov9c.reference.yolov9c import YoloV9
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import non_max_suppression, scale_boxes
+from models.experimental.yolo_eval.utils import non_max_suppression, scale_boxes
 
 
 def load_coco_class_names():
