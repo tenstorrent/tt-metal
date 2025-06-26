@@ -543,9 +543,19 @@ Result conv2d_L1(
         std::tie(weight_tensor_on_device, bias_tensor_on_device) =
             prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, params, device);
     } else {
-        // Validate that the device conv weights are in the correct format
-        validate_device_conv_weights(weight_tensor_on_device, in_channels, out_channels, conv_config.weights_dtype);
-        log_debug(tt::LogOp, "conv2d: Using preprocessed weights from device.");
+        // Check if device weights are properly prepared
+        if (is_valid_device_conv_weights(
+                weight_tensor_on_device, in_channels, out_channels, conv_config.weights_dtype)) {
+            log_debug(tt::LogOp, "conv2d: Using preprocessed weights from device.");
+        } else {
+            log_warning(
+                tt::LogOp,
+                "conv2d: Device weights not properly prepared, pulling back to host and trying to reprocess.");
+            // Pull weights back to host, prepare them, and push back to device
+            ttnn::Tensor host_weight_tensor = ttnn::operations::core::from_device(weight_tensor_on_device);
+            std::tie(weight_tensor_on_device, bias_tensor_on_device) =
+                prepare_conv_weights_biases_and_move_to_device(host_weight_tensor, bias_tensor, params, device);
+        }
     }
 
     // Prepare bias tensor if it exists and is not yet on device
@@ -554,9 +564,21 @@ Result conv2d_L1(
             bias_tensor_on_device = prepare_conv_bias_internal(
                 bias_tensor_on_device, out_channels, params, weight_tensor_on_device.dtype(), device);
         } else {
-            // Validate that the device conv bias is in the correct format
-            validate_device_conv_bias(bias_tensor_on_device.value(), out_channels, conv_config.weights_dtype);
-            log_debug(tt::LogOp, "conv2d: Using preprocessed bias from device.");
+            // Check if device bias is properly prepared
+            if (is_valid_device_conv_bias(bias_tensor_on_device.value(), out_channels, conv_config.weights_dtype)) {
+                log_debug(tt::LogOp, "conv2d: Using preprocessed bias from device.");
+            } else {
+                log_warning(
+                    tt::LogOp, "conv2d: Device bias not properly prepared, pulling back to host and reprocessing.");
+                // Pull bias back to host, prepare it, and push back to device
+                ttnn::Tensor host_bias_tensor = ttnn::operations::core::from_device(bias_tensor_on_device.value());
+                bias_tensor_on_device = prepare_conv_bias_internal(
+                    std::optional<const ttnn::Tensor>(host_bias_tensor),
+                    out_channels,
+                    params,
+                    weight_tensor_on_device.dtype(),
+                    device);
+            }
         }
     }
 

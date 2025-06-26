@@ -564,33 +564,47 @@ void validate_host_conv_bias(const ttnn::Tensor& bias_tensor) {
 }
 
 // Validate device conv weights format (minimal validation for main path)
-void validate_device_conv_weights(
+bool is_valid_device_conv_weights(
     const ttnn::Tensor& weight_tensor,
     uint32_t in_channels,
     uint32_t out_channels,
     const std::optional<DataType>& expected_dtype) {
-    TT_FATAL(weight_tensor.layout() == Layout::TILE, "Device conv weights must be in TILE layout");
+    if (weight_tensor.layout() != Layout::TILE) {
+        return false;
+    }
 
     const auto& shape = weight_tensor.logical_shape();
-    TT_FATAL(shape.rank() == 4 && shape[0] == 1 && shape[1] == 1, "Invalid device conv weight tensor shape");
-    TT_FATAL(
-        shape[2] >= in_channels && shape[3] >= out_channels,
-        "Device conv weight tensor too small for required channels");
-
-    if (expected_dtype.has_value()) {
-        TT_FATAL(weight_tensor.dtype() == expected_dtype.value(), "Device conv weight tensor dtype mismatch");
+    if (shape.rank() != 4 || shape[0] != 1 || shape[1] != 1) {
+        return false;
     }
+
+    if (shape[3] < out_channels) {
+        return false;
+    }
+
+    if (expected_dtype.has_value() && weight_tensor.dtype() != expected_dtype.value()) {
+        return false;
+    }
+
+    return true;
 }
 
 // Validate device conv bias format (minimal validation for main path)
-void validate_device_conv_bias(
+bool is_valid_device_conv_bias(
     const ttnn::Tensor& bias_tensor, uint32_t out_channels, const std::optional<DataType>& expected_dtype) {
-    TT_FATAL(bias_tensor.layout() == Layout::TILE, "Device conv bias must be in TILE layout");
-    TT_FATAL(bias_tensor.logical_shape()[3] >= out_channels, "Device conv bias tensor too small for required channels");
-
-    if (expected_dtype.has_value()) {
-        TT_FATAL(bias_tensor.dtype() == expected_dtype.value(), "Device conv bias tensor dtype mismatch");
+    if (bias_tensor.layout() != Layout::TILE) {
+        return false;
     }
+
+    if (bias_tensor.logical_shape()[3] < out_channels) {
+        return false;
+    }
+
+    if (expected_dtype.has_value() && bias_tensor.dtype() != expected_dtype.value()) {
+        return false;
+    }
+
+    return true;
 }
 
 template <typename T>

@@ -18,13 +18,13 @@ namespace operations::conv {
 namespace conv2d {
 
 // Device validation functions for conv2d tensors (after preparation/on device)
-void validate_device_conv_weights(
+bool is_valid_device_conv_weights(
     const ttnn::Tensor& weight_tensor,
     uint32_t in_channels,
     uint32_t out_channels,
     const std::optional<DataType>& expected_dtype);
 
-void validate_device_conv_bias(
+bool is_valid_device_conv_bias(
     const ttnn::Tensor& bias_tensor, uint32_t out_channels, const std::optional<DataType>& expected_dtype);
 
 // Converts convolution weights to tilized 2d matrix layout.
@@ -110,8 +110,8 @@ struct Conv2dWeightsBiasPrepConfig {
         std::optional<DataType> weights_bias_dtype_,
         uint32_t weight_block_h_ntiles_,
         uint32_t weight_block_w_ntiles_,
-        const sliding_window::ParallelConfig input_parallel_config_,
-        const sliding_window::ParallelConfig output_parallel_config_,
+        const sliding_window::ParallelConfig& input_parallel_config_,
+        const sliding_window::ParallelConfig& output_parallel_config_,
         uint32_t groups_,
         uint32_t act_block_h_ntiles_,
         uint32_t input_width_,
