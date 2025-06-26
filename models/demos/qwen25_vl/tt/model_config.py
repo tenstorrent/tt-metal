@@ -47,6 +47,18 @@ class VisionModelArgs(ModelArgs):
             self.model_name
         )  # todo)) implement finer grained control similar to tt_transformers'
 
+        num_rows = lambda seq_len: min(seq_len, 1024 if self.is_galaxy else 2048)
+        k_dim = self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim
+        n_dim = self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim
+        self.model_config["VISION_WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
+            m=num_rows(seq_len),
+            k=k_dim,
+            n=n_dim,
+            grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
+            in0_block_w=1 if self.is_galaxy else self.dim // 1024,
+            fuse_batch=seq_len <= 1024,
+        )
+
         assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
 
     def prepare_residual_tensor_prefill(self, x_bsh, force_replicated=False):

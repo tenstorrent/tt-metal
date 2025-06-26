@@ -515,7 +515,7 @@ class VisionAttention(LightweightModule):
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
             dtype=self.activation_dtype or ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
+            program_config=self.model_config["VISION_WO_PREFILL_PROGCFG"](seq_len),
         )
         # FIXME: surely ttnn.linear bias should work?
         if self.wo_bias_prefill is not None:

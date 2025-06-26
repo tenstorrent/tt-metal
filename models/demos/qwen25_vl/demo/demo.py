@@ -167,6 +167,19 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
+        (  # Batch-32 run with single decoder layer (CI only) - 32 users
+            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",  # real multi-user prompts
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users with the same prompt
+            4096,  # max_seq_len, allow for image tokens
+            32,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+        ),
     ],
     ids=[
         "batch-1",  # latency
@@ -174,6 +187,7 @@ def create_tt_model(
         "batch-32",  # 32 users (special because it fills tile size)
         "ci-only-two-users",  # ci_only batch-2 for faster testing coverage in CI pipelines
         "ci-only-repeated-batch",  # ci_only repeated batch for faster testing coverage in CI pipelines
+        "ci-only-32-users",  # ci_only batch-32 for faster testing coverage in CI pipelines
     ],
 )
 @pytest.mark.parametrize(
@@ -186,7 +200,7 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 25663488, "num_command_queues": 1}],
+    [{"trace_region_size": 26015744, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
