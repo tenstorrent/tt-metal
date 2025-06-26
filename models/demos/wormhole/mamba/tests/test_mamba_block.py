@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.wormhole.mamba.reference.args import ModelMode
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
 from models.demos.wormhole.mamba.tt import model_config
@@ -17,7 +18,7 @@ from models.demos.wormhole.mamba.tt.mamba_model import TtTensorLoader
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
-class PytorchMambaBlock(torch.nn.Module):
+class PytorchMambaBlock(LightweightModule):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
         self.block = hf_reference_model.layers[layer_num].mixer

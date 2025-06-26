@@ -2,12 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 from models.helper_funcs import Linear
 
 
-class TtMLP(torch.nn.Module):
+class TtMLP(LightweightModule):
     def __init__(self, base_address, config, device, tt_cache_path, dtype):
         super().__init__()
         # Get the weights

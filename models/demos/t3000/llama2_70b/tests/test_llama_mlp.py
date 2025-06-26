@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     BASE_URL,
@@ -23,7 +24,7 @@ from models.utility_functions import skip_for_grayskull
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
-class PytorchLlamaMLPModel(torch.nn.Module):
+class PytorchLlamaMLPModel(LightweightModule):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
         self.mlp = hf_reference_model.layers[layer_num].feed_forward

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import pytest
 import torch
 from transformers import BertForQuestionAnswering
@@ -16,7 +17,7 @@ from tt_lib.utils import pad_activation, pad_weight
 from models.utility_functions import comp_pcc, comp_allclose
 
 
-class TtBertEncoder(torch.nn.Module):
+class TtBertEncoder(LightweightModule):
     def __init__(self, config, encoder_idx, state_dict, device):
         super().__init__()
         hidden_dim = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"]).shape[-1]
@@ -134,7 +135,7 @@ class TtBertEncoder(torch.nn.Module):
         return ffn_out_add_and_norm
 
 
-class PytorchBertEncoder(torch.nn.Module):
+class PytorchBertEncoder(LightweightModule):
     def __init__(self, hugging_face_reference_model):
         super().__init__()
         self.bert_encoder = hugging_face_reference_model.bert.encoder.layer[0]

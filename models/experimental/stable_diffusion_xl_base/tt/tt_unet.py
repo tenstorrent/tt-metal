@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 
 from models.experimental.stable_diffusion_xl_base.tt.tt_timesteps import TtTimesteps
@@ -23,7 +23,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 )
 
 
-class TtUNet2DConditionModel(nn.Module):
+class TtUNet2DConditionModel(LightweightModule):
     # During testing it was observed that setting conv_weights to bfloat16 + HiFi4 leads to much better image quality.
     # Other weights seem not to have as an impact on it.
     def __init__(self, device, state_dict, module_path, model_config, transformer_weights_dtype=ttnn.bfloat16):

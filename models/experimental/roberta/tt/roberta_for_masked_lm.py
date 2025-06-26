@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-import torch.nn as nn
 
 from typing import Optional, Tuple, Union
 from loguru import logger
@@ -22,7 +22,7 @@ class TtMaskedLMOutput:
     hidden_states: ttnn.Tensor = None
 
 
-class TtRobertaForMaskedLM(nn.Module):
+class TtRobertaForMaskedLM(LightweightModule):
     def __init__(self, config, state_dict, base_address, device, reference_model):
         super().__init__()
         self.device = device

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import torch.nn as nn
 
@@ -26,7 +27,7 @@ def concatenate(activations, residuals, groups=2):
     return interleaved
 
 
-class UNet(nn.Module):
+class UNet(LightweightModule):
     def __init__(self, groups=1):
         super(UNet, self).__init__()
 

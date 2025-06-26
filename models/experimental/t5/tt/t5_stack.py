@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 from torch import nn
 
@@ -60,7 +61,7 @@ class BaseModelOutputWithPastAndCrossAttentions:
         self.cross_attentions = cross_attentions  # Optional[Tuple[FloatTensor]]
 
 
-class TtT5Stack(nn.Module):
+class TtT5Stack(LightweightModule):
     def __init__(self, config, state_dict, base_address, device, embed_tokens=None):
         super().__init__()
 

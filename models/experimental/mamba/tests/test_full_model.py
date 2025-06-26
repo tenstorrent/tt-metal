@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import pytest
 from loguru import logger
@@ -17,7 +18,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from models.utility_functions import skip_for_grayskull
 
 
-class MambaPytorch(torch.nn.Module):
+class MambaPytorch(LightweightModule):
     def __init__(self, hf_reference_model, num_layers=None):
         super().__init__()
         self.embedding = hf_reference_model.embedding

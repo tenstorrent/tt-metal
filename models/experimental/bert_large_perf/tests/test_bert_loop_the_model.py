@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from loguru import logger
 import torch
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
@@ -21,7 +22,7 @@ from models.utility_functions import profiler
 from models.utility_functions import disable_persistent_kernel_cache
 
 
-class TtBertForQuestionAnswering(torch.nn.Module):
+class TtBertForQuestionAnswering(LightweightModule):
     def __init__(self, config, hugging_face_reference_model, device):
         super().__init__()
 

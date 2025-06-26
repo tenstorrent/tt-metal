@@ -2,16 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import List, Optional, Tuple, Union
 import ttnn
 import torch
-import torch.nn as nn
 import numpy as np
 from loguru import logger
 import ttnn.device
 
 
-class TtEulerDiscreteScheduler(nn.Module):
+class TtEulerDiscreteScheduler(LightweightModule):
     def __init__(
         self,
         device: ttnn.device.Device,

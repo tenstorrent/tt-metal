@@ -13,6 +13,7 @@ from PIL import Image as PIL_Image
 from torch import Tensor
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import copy_host_to_device, get_padded_prefill_len, get_prefill_rot_mat
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
@@ -108,7 +109,7 @@ def _get_xattn_mask(
     )
 
 
-class CrossAttentionTransformer(torch.nn.Module):
+class CrossAttentionTransformer(LightweightModule):
     def __init__(
         self,
         mesh_device,

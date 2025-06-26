@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-import torch.nn as nn
 
 from typing import Optional, Tuple, Union
 from dataclasses import dataclass
@@ -23,7 +23,7 @@ class TtMultipleChoiceModelOutput:
     attentions: ttnn.Tensor = None
 
 
-class TtRobertaForMultipleChoice(nn.Module):
+class TtRobertaForMultipleChoice(LightweightModule):
     """
     Roberta Model with a multiple choice classification head on top (a linear layer on top of the pooled output and a
     softmax) e.g. for RocStories/SWAG tasks.
