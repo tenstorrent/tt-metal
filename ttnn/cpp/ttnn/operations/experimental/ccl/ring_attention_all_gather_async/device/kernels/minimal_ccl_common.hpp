@@ -75,7 +75,7 @@ FORCE_INLINE void scatter_fabric_write_unidir(
     volatile PACKET_HEADER_TYPE* pkt_hdr,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_direction_connection,
     size_t l1_read_addr,
-    uint32_t payload_size_bytes_first_core,
+    uint16_t payload_size_bytes_first_core,
     uint32_t payload_size_bytes_second_core) {
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const auto [dest_noc_xy_next_core, dest_addr_next_core] = get_noc_address_components(noc0_dest_noc_addr_next_core);
