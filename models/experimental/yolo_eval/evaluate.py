@@ -205,7 +205,8 @@ def evaluation(
     predicted_bbox = []
     preprocessed_images = []  # List to store preprocessed images
 
-    img_for_yolov7 = []
+    if model_name == "YOLOv7":
+        img_for_yolov7 = []
     # Preprocessing loop
     for batch in data_set:
         paths, im0s, s = batch
@@ -263,7 +264,8 @@ def evaluation(
         else:
             preprocessed_images.append((im, im, im0s))
 
-        img_for_yolov7.append(s)
+        if model_name == "YOLOv7":
+            img_for_yolov7.append(s)
 
     # Model inference loop
     for ttnn_im, im, im0s in preprocessed_images:
