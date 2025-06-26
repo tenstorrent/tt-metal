@@ -4,7 +4,9 @@
 
 from typing import Optional, Tuple
 from functools import partial
+from loguru import logger
 import numpy as np
+import pytest
 
 import torch
 import random
@@ -15,6 +17,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import profile_ttnn_call
 from models.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
+from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -89,7 +92,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # The run function must take the above-defined parameters as inputs.
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
-def run(
+def run_var(
+    device,
     input_shape,
     dim,
     keepdim,
@@ -97,8 +101,6 @@ def run(
     input_layout,
     input_a_memory_config,
     output_memory_config,
-    *,
-    device,
 ) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
@@ -128,3 +130,39 @@ def run(
     expected_pcc = 0.999
     tensors = [input_tensor_a, op_output_tensor]
     return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
+
+
+def run(
+    input_shape,
+    dim,
+    keepdim,
+    input_a_dtype,
+    input_layout,
+    input_a_memory_config,
+    output_memory_config,
+    *,
+    device,
+):
+    return run_var(
+        device, input_shape, dim, keepdim, input_a_dtype, input_layout, input_a_memory_config, output_memory_config
+    )
+
+
+@pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters, invalidate_vector))
+def test_var(
+    device,
+    input_shape,
+    dim,
+    keepdim,
+    input_a_dtype,
+    input_layout,
+    input_a_memory_config,
+    output_memory_config,
+):
+    (result, msg), e2e_perf = run_var(
+        device, input_shape, dim, keepdim, input_a_dtype, input_layout, input_a_memory_config, output_memory_config
+    )
+    assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"Perf. metrics: {e2e_perf}")
