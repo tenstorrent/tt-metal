@@ -48,8 +48,13 @@ def run_tt_lib_test(
         tensor_input = data_gen_func(input_shape)
         tensor_inputs.append(tensor_input)
 
+    print(tensor_inputs)
+
     tt_lib_out = tt_lib_op(*tensor_inputs, device=device, **test_args)
     pytorch_out = pytorch_op(*tensor_inputs, **test_args)
+
+    print(tt_lib_out)
+    print(pytorch_out)
 
     result, output = output_comparison_func(pytorch_out, tt_lib_out)
 

@@ -24,6 +24,10 @@ void MAIN {
             // Pop tile after tile, copy to DST and pack
             cb_wait_front(input_cb, 1);
 
+            volatile uint32_t* data_ptr =
+                reinterpret_cast<uint32_t*>(get_local_cb_interface(input_cb).fifo_rd_ptr << 4);
+            DPRINT_UNPACK({ DPRINT << "INPUT L1: " << data_ptr[0] << ENDL(); })
+
             copy_tile(input_cb, 0, 0);
 
             typecast_tile_init();
@@ -35,6 +39,10 @@ void MAIN {
             tile_regs_wait();
 
             pack_tile(0, output_cb);
+
+            volatile uint16_t* data_ptr_out =
+                reinterpret_cast<uint16_t*>(get_local_cb_interface(output_cb).fifo_wr_ptr << 4);
+            DPRINT_PACK({ DPRINT << "OUTPUT L1: " << data_ptr_out[0] << ENDL(); })
 
             cb_pop_front(input_cb, 1);
 
