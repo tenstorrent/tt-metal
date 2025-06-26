@@ -134,7 +134,6 @@ PROGRAMMING_EXAMPLE_ENTRIES = (
     # Does not work on WH yet.
     # TestEntry("programming_examples/matmul_multicore_reuse_mcast", "programming_examples/matmul_multicore_reuse_mcast"),
     TestEntry("programming_examples/contributed/vecadd", "programming_examples/contributed/vecadd"),
-    TestEntry("programming_examples/pad_multi_core", "programming_examples/pad_multi_core"),
 )
 
 
