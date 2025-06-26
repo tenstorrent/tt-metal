@@ -68,6 +68,4 @@ size_t get_number_of_available_routing_planes(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t cluster_axis, size_t row_or_col);
 }
 
-const ControlPlane& get_control_plane();
-
 }  // namespace tt::tt_fabric

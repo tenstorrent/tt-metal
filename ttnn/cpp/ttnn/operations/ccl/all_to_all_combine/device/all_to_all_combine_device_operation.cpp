@@ -130,17 +130,18 @@ AllToAllCombineDeviceOperation::invoke(
     const uint32_t num_links,
     const tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
-    // tt::tt_metal::SubDeviceId subdevice_id,
     const GlobalSemaphore& global_semaphore,
     const std::optional<uint32_t>& axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
     return {
-        operation_attributes_t{//.subdevice_id = std::move(subdevice_id),
-                               .output_mem_config = memory_config,
-                               .axis = axis,
-                               .num_links = num_links,
-                               .topology = topology,
-                               .cross_device_semaphore = global_semaphore},
+        operation_attributes_t{
+            .output_mem_config = memory_config,
+            .axis = axis,
+            .num_links = num_links,
+            .topology = topology,
+            .cross_device_semaphore = global_semaphore,
+            .subdevice_id = std::move(subdevice_id)},
         tensor_args_t{
             .input_tensor = input_tensor,
             .mapping_tensor = expert_mapping_tensor,

@@ -24,9 +24,8 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
     const tt::tt_fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<uint32_t>& axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
-    // const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
-
     return ttnn::prim::all_to_all_combine(
         input_tensor,
         expert_mapping_tensor,
@@ -36,6 +35,7 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
         memory_config.value_or(input_tensor.memory_config()),
         global_semaphore,
         axis,
+        subdevice_id,
         optional_output_tensor);
 }
 
