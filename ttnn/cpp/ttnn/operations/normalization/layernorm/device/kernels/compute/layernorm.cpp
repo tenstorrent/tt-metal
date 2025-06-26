@@ -31,11 +31,6 @@ void MAIN {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
-    // if (FLOAT32_DTYPE) {
-    //     DPRINT << "HIGH FIDELITY" << ENDL();
-    // } else {
-    //     DPRINT << "LOW FIDELITY" << ENDL();
-    // }
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -133,7 +128,6 @@ void MAIN {
 #endif
 
 #ifndef RMSNORM
-        UNPACK(DPRINT << "----------------Got to the start---------" << ENDL());
         /*
          * E[x]
          * means = ttnn.sum(x, 3, True, None, None, 1.0/W) # -> NCH1

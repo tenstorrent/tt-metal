@@ -233,6 +233,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         im3_t = WtB;  // buffer for xmm^2
         in5_t = WtB;  // buffer for gamma
         in6_t = WtB;  // buffer for beta
+        im1_t = 2;
+        im2_t = 2;
         if (b) {
             im6_t = WtB;
             in0_t = 2 * block_size;
@@ -726,7 +728,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // block size for in1 (tensor b)
     uint32_t in1_CB_size = in0_CB_size;
     // in2 - scaler
-    uint32_t in2_CB_size = bfloat16_tile_size * 2;
+    uint32_t in2_CB_size = bfloat16_tile_size;
     // in3 - eps
     uint32_t in3_CB_size = bfloat16_tile_size;
     // gamma

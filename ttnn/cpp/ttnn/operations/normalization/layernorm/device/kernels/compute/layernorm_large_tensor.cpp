@@ -16,6 +16,7 @@
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "debug/dprint_pages.h"
 
 namespace NAMESPACE {
 
@@ -194,6 +195,7 @@ void MAIN {
         //  cb_ex2pe =   -------------
         //               √(Var(X) + ε)
         cb_wait_front(cb_ex2, onetile);
+        cb_reserve_back(cb_ex2pe, onetile);
 
         reconfig_data_format(cb_ex2, cb_eps);
 
@@ -237,6 +239,9 @@ void MAIN {
         //    x-E[X]
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
+
+        UNPACK(tt::compute::common::print_full_tile(cb_ex2pe, 0, true));
+
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             tile_regs_acquire();
             tile_regs_wait();
@@ -348,6 +353,7 @@ void MAIN {
 #ifdef RMSNORM
         cb_pop_front(cb_ex, 1);
 #endif
+        cb_pop_front(cb_ex2pe, onetile);
         // End of
         // Final Val Calc
         //    x-E[X]
