@@ -121,7 +121,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
     "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1753088}], indirect=True
 )
 @pytest.mark.parametrize("batch_size", [8])
-def test_vit(device, use_program_cache, batch_size, is_single_card_n300):
+def test_vit(device, batch_size, is_single_card_n300):
     # Test is ran either on n300 or n150
     # If it's n300, there's a problem with eth dispatch, hence lower perf
     if is_single_card_n300:

@@ -362,7 +362,6 @@ def test_demo(
     NUM_RUNS,
     model_location_generator,
     device,
-    use_program_cache,
 ):
     model_config_str = "BFLOAT8_B-SHARDED"
     skip_unsupported_config(device, model_config_str, batch)
@@ -388,7 +387,7 @@ def test_demo(
     "loop_count",
     ((20),),
 )
-def test_demo_squadv2(model_location_generator, device, use_program_cache, batch, loop_count):
+def test_demo_squadv2(model_location_generator, device, batch, loop_count):
     model_config_str = "BFLOAT8_B-SHARDED"
     skip_unsupported_config(device, model_config_str, batch)
     disable_persistent_kernel_cache()

@@ -33,7 +33,7 @@ class Emb(torch.nn.Module):
         32,
     ),
 )
-def test_mixtral_model_inference(t3k_mesh_device, use_program_cache, reset_seeds, batch):
+def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, batch):
     valid_pcc = 0.964
     dtype = ttnn.bfloat8_b
     iterations = 10

@@ -268,7 +268,7 @@ def run_getitem_RAW_MAJOR(shape_index_dim, dtype, index_size, device):
         100,
     ],
 )
-def test_getitem_RAW_MAJOR_callback(shape_index_dim, dtype, index_size, device, use_program_cache):
+def test_getitem_RAW_MAJOR_callback(shape_index_dim, dtype, index_size, device):
     torch.manual_seed(2024)
     num_program_cache_entries_list = []
     for i in range(2):
@@ -816,9 +816,7 @@ def run_moreh_geitem_tilized_one_index(shape_index_dim, dtype, index_size, row_m
         False,
     ],
 )
-def test_getitem_tilized_one_index_callback(
-    shape_index_dim, dtype, index_size, row_major_index, device, use_program_cache
-):
+def test_getitem_tilized_one_index_callback(shape_index_dim, dtype, index_size, row_major_index, device):
     torch.manual_seed(2024)
     num_program_cache_entries_list = []
     for i in range(2):

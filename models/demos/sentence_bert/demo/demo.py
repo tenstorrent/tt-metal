@@ -44,7 +44,7 @@ def mean_pooling(token_embeddings, attention_mask):
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("model_name, sequence_length", [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384)])
-def test_sentence_bert_demo_inference(device, inputs, model_name, sequence_length, use_program_cache):
+def test_sentence_bert_demo_inference(device, inputs, model_name, sequence_length):
     transformers_model = transformers.AutoModel.from_pretrained(model_name).eval()
     config = transformers.BertConfig.from_pretrained(model_name)
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
@@ -162,7 +162,7 @@ def load_knowledge_base(kb_file="knowledge_base.txt"):
     "model_name, sequence_length, batch_size,kb_file",
     [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, "knowledge_base.txt")],
 )
-def test_interactive_demo_inference(device, model_name, sequence_length, batch_size, kb_file, use_program_cache):
+def test_interactive_demo_inference(device, model_name, sequence_length, batch_size, kb_file):
     logger.info(f"Loading knowledge base from {kb_file}...")
     kb_sentences = load_knowledge_base(kb_file)
     kb_embeddings, kb_sentences, model_instance = compute_ttnn_embeddings(kb_sentences, model_name, device)

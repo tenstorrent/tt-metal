@@ -243,7 +243,7 @@ def test_moreh_sum_non_4d(input_shape, dim, keepdim, use_provide_output, device)
     (0, 1, 2),
     ids=["0", "1", "2"],
 )
-def test_moreh_sum_enable_cache(input_shape, dim, device, use_program_cache):
+def test_moreh_sum_enable_cache(input_shape, dim, device):
     torch.manual_seed(3072)
     keepdim = [True, False]
     use_provide_output = [True, False]
@@ -426,7 +426,7 @@ def test_moreh_sum_backward_wo_input_grad(input_shape, dim, device):
     [0, 1, 2],
     ids=["0", "1", "2"],
 )
-def test_moreh_sum_backward_enable_cache(input_shape, dim, device, use_program_cache):
+def test_moreh_sum_backward_enable_cache(input_shape, dim, device):
     torch.manual_seed(3072)
     keepdim = [True, False]
     use_provide_output = [True, False]

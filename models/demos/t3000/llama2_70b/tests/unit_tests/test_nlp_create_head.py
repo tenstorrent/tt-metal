@@ -349,7 +349,6 @@ def test_create_head3(
     batch,
     seq_len,
     all_devices,
-    use_program_cache,
 ):
     n_devices = 8
     devices = get_devices_for_t3000(all_devices, num_devices=1)

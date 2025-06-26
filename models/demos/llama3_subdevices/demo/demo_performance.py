@@ -458,7 +458,6 @@ def test_llama_decode_performance(
     weights,
     layers,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     reset_seeds,
 ):

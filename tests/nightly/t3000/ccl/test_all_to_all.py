@@ -320,7 +320,6 @@ def test_all_to_all(
     layout,
     mem_config,
     num_iters,
-    use_program_cache,
     function_level_defaults,
     do_check,
     reuse_inputs,

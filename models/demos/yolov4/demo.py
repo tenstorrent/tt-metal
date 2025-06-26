@@ -37,7 +37,6 @@ from models.utility_functions import disable_persistent_kernel_cache, run_for_wo
 )
 def test_yolov4(
     device,
-    use_program_cache,
     batch_size,
     act_dtype,
     weight_dtype,

@@ -86,7 +86,6 @@ def test_binary_mul(
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
-    use_program_cache,
     grid_size=(8, 8),
 ):
     if is_blackhole() and mesh_device.get_num_devices() > 1:

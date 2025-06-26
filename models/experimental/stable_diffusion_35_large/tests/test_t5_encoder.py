@@ -23,7 +23,7 @@ from ..tt.utils import assert_quality
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(("use_program_cache"), [False, True])
-def test_t5_encoder(*, device: ttnn.Device, model_name, use_program_cache: bool) -> None:
+def test_t5_encoder(*, device: ttnn.Device, use_program_cache: bool, model_name: bool) -> None:
     if use_program_cache:
         ttnn.enable_program_cache(device)
 

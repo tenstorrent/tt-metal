@@ -52,7 +52,6 @@ def test_vae_resnet(
     block,
     block_id,
     resnet_block_id,
-    use_program_cache,
 ):
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
 

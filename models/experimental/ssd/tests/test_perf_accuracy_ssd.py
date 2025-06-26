@@ -157,7 +157,6 @@ def run_perf_ssd(
 )
 def test_perf_bare_metal(
     device,
-    use_program_cache,
     expected_inference_time,
     expected_compile_time,
     imagenet_sample_input,
@@ -187,7 +186,6 @@ def test_perf_bare_metal(
 )
 def test_perf_virtual_machine(
     device,
-    use_program_cache,
     expected_inference_time,
     expected_compile_time,
     imagenet_sample_input,

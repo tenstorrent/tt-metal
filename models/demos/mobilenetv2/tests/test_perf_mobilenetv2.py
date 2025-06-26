@@ -36,7 +36,7 @@ def get_expected_times(name):
         "pretrained_weight_false",
     ],
 )
-def test_mobilenetv2(device, input_tensor, use_pretrained_weight, reset_seeds, use_program_cache):
+def test_mobilenetv2(device, input_tensor, use_pretrained_weight, reset_seeds):
     # Check if weights file exists, if not, download them
     disable_persistent_kernel_cache()
     profiler.clear()
@@ -123,7 +123,7 @@ def test_mobilenetv2(device, input_tensor, use_pretrained_weight, reset_seeds, u
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_perf_device_bare_metal_mobilenetv2(batch_size, expected_perf, use_program_cache):
+def test_perf_device_bare_metal_mobilenetv2(batch_size, expected_perf):
     subdir = "ttnn_mobilenetv2"
     num_iterations = 1
     margin = 0.03

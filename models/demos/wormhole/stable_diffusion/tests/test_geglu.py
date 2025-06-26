@@ -36,7 +36,6 @@ def test_geglu_512x512(
     block,
     block_index,
     attention_index,
-    use_program_cache,
 ):
     model = UNet2DConditionModel.from_pretrained(model_name, subfolder="unet").eval()
 

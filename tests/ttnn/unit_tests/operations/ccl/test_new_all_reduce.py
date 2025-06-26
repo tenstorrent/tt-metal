@@ -361,7 +361,6 @@ def test_all_reduce(
     num_iters,
     warmup_iters,
     trace_mode,
-    use_program_cache,
     function_level_defaults,
 ):
     if output_shape == [1, 1, 32, 16 * 1024] and input_dtype == ttnn.bfloat16:
@@ -451,7 +450,6 @@ def test_all_reduce_loopback(
     num_iters,
     warmup_iters,
     trace_mode,
-    use_program_cache,
     function_level_defaults,
 ):
     if mesh_device.get_num_devices() != 32:

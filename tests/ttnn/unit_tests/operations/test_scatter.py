@@ -72,9 +72,7 @@ def select_torch_dtype(ttnn_dtype):
         # ([2, 10, 151936], -1, [2, 10, 151936], ttnn.float32, ttnn.uint32, ttnn.Layout.TILE),
     ],
 )
-def test_scatter_normal(
-    input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, device, use_program_cache
-):
+def test_scatter_normal(input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, device):
     torch.manual_seed(22052025)
     # https://github.com/tenstorrent/tt-metal/issues/23205
     device.disable_and_clear_program_cache()

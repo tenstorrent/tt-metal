@@ -77,7 +77,6 @@ def test_model_inference(
     max_seq_len,
     num_layers,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
     is_ci_env,

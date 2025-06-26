@@ -50,7 +50,7 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
     ],
     indirect=True,
 )
-def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds):
+def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 

@@ -215,7 +215,7 @@ def test_moreh_linear_wo_output(shapes, has_bias, npu_dtype, device):
         ([2, 1, 2, 3, 2, 2, 96, 95], [511, 95], [1, 511], [2, 1, 2, 3, 2, 2, 96, 511]),
     ),
 )
-def test_moreh_linear_enable_cache(shapes, device, use_program_cache):
+def test_moreh_linear_enable_cache(shapes, device):
     torch.manual_seed(2024)
     num_program_cache_entries_list = []
     for i in range(2):
@@ -373,7 +373,7 @@ def test_moreh_linear_backward(shapes, requires_grads, requires_bias_grad, compu
         ([32, 1023], [1536, 1023], [1, 1], [32, 1536]),
     ),
 )
-def test_moreh_linear_backward_enable_cache(shapes, device, use_program_cache):
+def test_moreh_linear_backward_enable_cache(shapes, device):
     requires_input_grad, requires_weight_grad, requires_bias_grad = (True, True, True)
     compute_kernel_config = get_compute_kernel_options(False)
 

@@ -127,7 +127,7 @@ def run_summarization_inference(device, batch_size, sequence_length, max_tokens,
     ("batch_size", "sequence_length", "max_tokens", "model_name"),
     ((8, 128, 2, "t5-small"),),
 )
-def test_t5_demo_for_summarize(device, use_program_cache, batch_size, sequence_length, max_tokens, model_name):
+def test_t5_demo_for_summarize(device, batch_size, sequence_length, max_tokens, model_name):
     disable_persistent_kernel_cache()
 
     return run_summarization_inference(device, batch_size, sequence_length, max_tokens, model_name)

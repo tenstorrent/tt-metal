@@ -22,7 +22,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 )
 @pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_downblock2d(device, temb_shape, input_shape, use_program_cache, reset_seeds, conv_weights_dtype):
+def test_downblock2d(device, temb_shape, input_shape, reset_seeds, conv_weights_dtype):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )

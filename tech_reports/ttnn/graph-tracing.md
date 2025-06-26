@@ -222,7 +222,7 @@ Giving as a result a code like this:
 ```
 def run_bert_question_and_answering_inference(
     device,
-    use_program_cache,
+
     model_name,
     batch_size,
     sequence_size,

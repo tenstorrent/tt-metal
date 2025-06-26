@@ -33,7 +33,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
-def test_lm_head_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds):
+def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len)

@@ -70,7 +70,6 @@ def test_run_prefetcher(
     num_layers,
     num_reader_cores,
     dtypes,
-    use_program_cache,
     function_level_defaults,
 ):
     device = mesh_device
@@ -127,7 +126,6 @@ def test_run_prefetcher_batched_weights(
     batch_weights,
     num_reader_cores,
     dtypes,
-    use_program_cache,
     function_level_defaults,
 ):
     device = mesh_device
@@ -155,7 +153,6 @@ def test_run_prefetcher_batched_weights(
 )
 def test_run_prefetcher_llama_perf(
     mesh_device,
-    use_program_cache,
     function_level_defaults,
 ):
     device = mesh_device

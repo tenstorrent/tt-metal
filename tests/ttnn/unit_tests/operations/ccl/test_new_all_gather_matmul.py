@@ -37,7 +37,6 @@ def run_all_gather_impl(
     all_gather_topology,
     use_non_fused,
     use_legacy_allgather,
-    use_program_cache,
     mem_config_weights=None,
     num_iters=1,
     enable_trace=True,
@@ -376,7 +375,6 @@ def test_all_gather_matmul_async(
     enable_trace,
     use_non_fused,
     use_legacy_allgather,
-    use_program_cache,
     all_gather_topology,
     num_iters,
 ):
@@ -395,7 +393,6 @@ def test_all_gather_matmul_async(
         mem_config_input,
         mem_config_ag,
         mem_config_mm,
-        use_program_cache=use_program_cache,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         use_non_fused=use_non_fused,

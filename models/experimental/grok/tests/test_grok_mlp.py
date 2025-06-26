@@ -25,7 +25,7 @@ from models.utility_functions import (
 
 
 @pytest.mark.timeout(500)
-def test_grok_mlp_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+def test_grok_mlp_inference(t3k_mesh_device, reset_seeds):
     # Specify different dtypes for each feedForward weights
     dtypes = {
         "linear": ttnn.bfloat4_b,

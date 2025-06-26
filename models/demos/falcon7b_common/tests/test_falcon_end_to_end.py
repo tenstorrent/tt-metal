@@ -336,7 +336,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     model_version,
     model_location_generator,
     get_tt_cache_path,
-    use_program_cache,
 ):
     if is_e75(mesh_device) and batch == 32:
         pytest.skip("Falcon batch 32 is unsupported on E75")
