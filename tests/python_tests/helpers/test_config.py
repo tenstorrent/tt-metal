@@ -180,6 +180,9 @@ def generate_make_command(
         write_build_header(test_config, profiler_build=profiler_build)
 
     # Simplified make command - only basic build parameters
-    make_cmd = f"make -j 6 --silent testname={test_config.get('testname')} "
+    make_cmd = f"make -j 6 --silent testname={test_config.get('testname')} all "
+
+    if profiler_build == ProfilerBuild.Yes:
+        make_cmd += "profiler "
 
     return make_cmd

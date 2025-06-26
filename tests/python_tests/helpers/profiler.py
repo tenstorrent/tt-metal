@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import csv
+import os
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -15,19 +16,6 @@ from helpers.test_config import ProfilerBuild, generate_make_command
 from helpers.utils import run_shell_command
 
 
-def _hash_profiler_message(s: str) -> int:
-    hash32 = 2166136261
-    for c in s.encode("ascii"):
-        hash32 ^= c
-        hash32 = (hash32 * 16777619) & 0xFFFFFFFF  # simulate 32-bit unsigned overflow
-    return (hash32 ^ (hash32 >> 16)) & 0xFFFF  # fold to 16 bits
-
-
-_PROFILER_PATTERN = re.compile(
-    r"'#pragma message: (?P<full_marker>LLK_PROFILER:(?P<file>[^:]+):(?P<line>\d+):(?P<marker>[^']+))'",
-)
-
-
 @dataclass
 class ProfilerFullMarker:
     marker: str
@@ -36,39 +24,9 @@ class ProfilerFullMarker:
     id: int
 
 
-def _parse_profiler_message(line: str):
-    # ex. '#pragma message: LLK_PROFILER:sources/example.cpp:1337:MARKER'
-    expr = _PROFILER_PATTERN.search(line)
-    if expr is None:
-        return None
-
-    groups = expr.groupdict()
-    return ProfilerFullMarker(
-        marker=groups["marker"],
-        file=groups["file"],
-        line=int(groups["line"]),
-        id=_hash_profiler_message(groups["full_marker"]),
-    )
-
-
-def _assert_no_collision(messages, message):
-    """Inserts message if no collisions, raises otherwise"""
-    existing = messages.get(message.id)
-    if existing is not None and existing != message:
-        raise AssertionError(f'Hash collision between "{message}" and "{existing}"')
-
-
 def build_with_profiler(test_config):
     make_cmd = generate_make_command(test_config, ProfilerBuild.Yes)
-    result = run_shell_command(f"cd .. && {make_cmd}")
-
-    lines = result.stderr.splitlines()
-    messages = {}
-    for line in lines:
-        if message := _parse_profiler_message(line):
-            _assert_no_collision(messages, message)
-            messages[message.id] = message
-    return messages
+    run_shell_command(f"cd .. && {make_cmd}")
 
 
 @dataclass
@@ -94,6 +52,10 @@ class ProfilerData:
 
 
 class Profiler:
+
+    META_PATTERN = re.compile(
+        r"(?P<full_marker>LLK_PROFILER:(?P<file>[^:]+):(?P<line>\d+):(?P<marker>[^']+))",
+    )
 
     BUFFER_LENGTH = 0x400
     THREAD_BUFFER = [
@@ -185,8 +147,67 @@ class Profiler:
             writer.writerows(rows)
 
     @staticmethod
-    def get_data(profiler_meta) -> ProfilerData:
-        return Profiler._parse_buffers(Profiler._load_buffers(), profiler_meta)
+    def _hash_meta(s: str) -> int:
+        hash32 = 2166136261
+        for c in s.encode("ascii"):
+            hash32 ^= c
+            hash32 = (
+                hash32 * 16777619
+            ) & 0xFFFFFFFF  # simulate 32-bit unsigned overflow
+        return (hash32 ^ (hash32 >> 16)) & 0xFFFF  # fold to 16 bits
+
+    @staticmethod
+    def _assert_no_collision(messages, message):
+        existing = messages.get(message.id)
+        if existing is not None and existing != message:
+            raise AssertionError(f'Hash collision between "{message}" and "{existing}"')
+
+    @staticmethod
+    def _parse_meta(meta: str):
+        expr = Profiler.META_PATTERN.search(meta)
+        if expr is None:
+            return None
+
+        groups = expr.groupdict()
+        return ProfilerFullMarker(
+            marker=groups["marker"],
+            file=groups["file"],
+            line=int(groups["line"]),
+            id=Profiler._hash_meta(groups["full_marker"]),
+        )
+
+    @staticmethod
+    def _get_meta(testname: str) -> dict[id, ProfilerFullMarker]:
+        root = os.environ.get("LLK_HOME")
+        if not root:
+            raise AssertionError("Environment variable LLK_HOME is not set")
+
+        profiler = Path(root) / "tests" / "build" / "tests" / testname / "profiler"
+
+        files = [
+            profiler / "unpack.meta.bin",
+            profiler / "math.meta.bin",
+            profiler / "pack.meta.bin",
+        ]
+
+        meta = {}
+        for file in files:
+            if not file.exists():
+                continue
+            with open(file, "rb") as f:
+                binary = f.read()
+                strings = [s.decode("ascii") for s in binary.split(b"\0")]
+                for s in strings:
+                    marker = Profiler._parse_meta(s)
+                    if marker:
+                        Profiler._assert_no_collision(meta, marker)
+                        meta[marker.id] = marker
+        return meta
+
+    @staticmethod
+    def get_data(testname: str) -> ProfilerData:
+        meta = Profiler._get_meta(testname)
+        return Profiler._parse_buffers(Profiler._load_buffers(), meta)
 
     @staticmethod
     def _load_buffers(core_loc="0,0", word_count=BUFFER_LENGTH):

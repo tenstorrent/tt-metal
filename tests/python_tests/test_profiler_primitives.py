@@ -32,13 +32,12 @@ def test_profiler_primitives():
         "testname": "profiler_primitives_test",
     }
 
-    profiler_meta = build_with_profiler(test_config)
-    assert profiler_meta is not None, "Profiler metadata should not be None"
+    build_with_profiler(test_config)
 
     run_elf_files("profiler_primitives_test")
     wait_for_tensix_operations_finished()
 
-    runtime = Profiler.get_data(profiler_meta)
+    runtime = Profiler.get_data(test_config["testname"])
 
     # ZONE_SCOPED
     zone = runtime.unpack[0]

@@ -13,6 +13,7 @@ SHARED_DIR       := $(BUILD_DIR)/shared
 TEST_DIR        := $(BUILD_DIR)/tests/$(testname)
 OBJ_DIR         := $(TEST_DIR)/obj
 DIS_DIR         := $(TEST_DIR)/dis
+PROFILER_DIR    := $(TEST_DIR)/profiler
 ELF_DIR         := $(TEST_DIR)/elf
 
 HELPERS         := helpers
@@ -23,6 +24,7 @@ RMDIR           := rm -rf
 
 GXX             := $(TOOL_PATH)/riscv32-tt-elf-g++
 OBJDUMP         := $(TOOL_PATH)/riscv32-tt-elf-objdump
+OBJCOPY         := $(TOOL_PATH)/riscv32-tt-elf-objcopy
 
 # =========================
 # Architecture Selection
@@ -42,7 +44,7 @@ endif
 # =========================
 # Compiler and Linker Flags
 # =========================
-OPTIONS_ALL	:= -O3 -mabi=ilp32 -std=$(CXX_VERSION) -ffast-math $(ARCH_CPU)
+OPTIONS_ALL	:= -g -O3 -mabi=ilp32 -std=$(CXX_VERSION) -ffast-math $(ARCH_CPU)
 OPTIONS_COMPILE := -fno-use-cxa-atexit -Wall -fpermissive -fno-exceptions -fno-rtti -Werror \
 				   -Wno-unknown-pragmas -Wno-error=multistatement-macros -Wno-error=parentheses \
 				   -Wno-error=unused-but-set-variable -Wno-unused-variable -DTENSIX_FIRMWARE \
@@ -61,7 +63,7 @@ TO_UPPER = $(shell echo $(1) | tr '[:lower:]' '[:upper:]')
 # =========================
 # Targets
 # =========================
-.PHONY: all dis clean
+.PHONY: all dis profiler clean
 
 all: $(ELF_DIR)/unpack.elf \
 	 $(ELF_DIR)/math.elf \
@@ -73,6 +75,9 @@ dis: $(DIS_DIR)/unpack.S \
 	 $(DIS_DIR)/pack.S \
 	 $(SHARED_DIR)/brisc.S
 
+profiler: $(PROFILER_DIR)/unpack.meta.bin \
+	  $(PROFILER_DIR)/math.meta.bin \
+	  $(PROFILER_DIR)/pack.meta.bin
 # =========================
 # Build Rules
 # =========================
@@ -81,6 +86,9 @@ dis: $(DIS_DIR)/unpack.S \
 $(SHARED_DIR)/%.S: $(SHARED_DIR)/%.elf | $(SHARED_DIR)
 	$(OBJDUMP) -xsD $< > $@
 	$(OBJDUMP) -t $< | sort >> $@
+
+$(PROFILER_DIR)/%.meta.bin: $(ELF_DIR)/%.elf | $(PROFILER_DIR)
+	$(OBJCOPY) -O binary -j .profiler_meta $< $@
 
 $(DIS_DIR)/%.S: $(ELF_DIR)/%.elf | $(DIS_DIR)
 	$(OBJDUMP) -xsD $< > $@
@@ -107,7 +115,7 @@ $(SHARED_DIR)/tmu-crt0.o: $(HELPERS)/tmu-crt0.S | $(SHARED_DIR)
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -MMD -MP -MF $(@:.o=.d) -c -o $@ $<
 
 # required folder structure
-$(DIS_DIR) $(ELF_DIR) $(OBJ_DIR) $(SHARED_DIR):
+$(PROFILER_DIR) $(DIS_DIR) $(ELF_DIR) $(OBJ_DIR) $(SHARED_DIR):
 	mkdir -p $@
 
 # =========================

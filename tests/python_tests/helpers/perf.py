@@ -127,14 +127,14 @@ def perf_benchmark(test_config, run_types: list[PerfRunType], run_count=8):
         get_timing = RUN_CONFIGURATIONS[type]
 
         test_config["perf_run_type"] = type
-        profiler_meta = build_with_profiler(test_config)
+        build_with_profiler(test_config)
 
         runs = []
         for _ in range(run_count):
             run_elf_files(test_config["testname"])
             wait_for_tensix_operations_finished()
 
-            profiler_data = Profiler.get_data(profiler_meta)
+            profiler_data = Profiler.get_data(test_config["testname"])
             perf_data = process_profiler_data(profiler_data)
 
             runs.append(get_timing(perf_data))
