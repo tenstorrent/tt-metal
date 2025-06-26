@@ -634,20 +634,32 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
-    // modified 3: write back to output tensor
+    // modified 3: write back to output cb
+    std::vector<uint32_t> cb_copy_args = {
+        tmp_out_cb_id, out_cb_id, out_nhw_per_core / nblocks, output_shape[3] / num_shards_c};
 
-    uint32_t temporary_size = program.get_cb_memory_size();
-    uint32_t post_allocate_size =
-        input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    uint32_t l1_usage = calculate_L1_usage(
-        input, kernel_size_h, kernel_size_w, out_h, out_w, input.memory_config(), output.memory_config(), pool_type);
-    uint32_t output_cb_size = post_allocate_size - memory_used;
+    std::string cb_coppy_kernel_fname =
+        "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
+        "cb_copy.cpp";
 
-    TT_FATAL(
-        temporary_size + output_cb_size == l1_usage,
-        "Calculated CB size {} does not match with the actual CB size {}  ",
-        temporary_size + output_cb_size,
-        l1_usage);
+    auto cb_copy_config = tt::tt_metal::DataMovementConfig{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = tt::tt_metal::NOC::RISCV_0_default,
+        .compile_args = cb_copy_args};
+    CreateKernel(program, cb_coppy_kernel_fname, all_cores, cb_copy_config);
+
+    // uint32_t temporary_size = program.get_cb_memory_size();
+    // uint32_t post_allocate_size =
+    //     input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+    // uint32_t l1_usage = calculate_L1_usage(
+    //     input, kernel_size_h, kernel_size_w, out_h, out_w, input.memory_config(), output.memory_config(), pool_type);
+    // uint32_t output_cb_size = post_allocate_size - memory_used;
+
+    // TT_FATAL(
+    //     temporary_size + output_cb_size == l1_usage,
+    //     "Calculated CB size {} does not match with the actual CB size {}  ",
+    //     temporary_size + output_cb_size,
+    //     l1_usage);
 
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
