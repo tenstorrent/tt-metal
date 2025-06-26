@@ -717,5 +717,70 @@ TEST(MeshContainerTest, OutOfBounds) {
     EXPECT_ANY_THROW(container.at(MeshCoordinate(0, 0, 0)));
 }
 
+// Test that MeshContainer iterators have the correct iterator traits
+TEST(MeshContainerIteratorTraitsTest, IteratorTraits) {
+    using Container = MeshContainer<int>;
+    using Iterator = Container::Iterator;
+    using ConstIterator = Container::ConstIterator;
+
+    // Check Iterator traits
+    EXPECT_TRUE((std::is_same_v<std::iterator_traits<Iterator>::iterator_category, std::forward_iterator_tag>));
+    EXPECT_TRUE((std::is_same_v<std::iterator_traits<Iterator>::value_type, Iterator::ValueProxy>));
+    EXPECT_TRUE((std::is_same_v<std::iterator_traits<Iterator>::difference_type, std::ptrdiff_t>));
+    EXPECT_TRUE((std::is_same_v<std::iterator_traits<Iterator>::pointer, Iterator::ValueProxy*>));
+    EXPECT_TRUE((std::is_same_v<std::iterator_traits<Iterator>::reference, Iterator::ValueProxy&>));
+
+    // Check ConstIterator traits
+    EXPECT_TRUE((std::is_same_v<std::iterator_traits<ConstIterator>::iterator_category, std::forward_iterator_tag>));
+    EXPECT_TRUE((std::is_same_v<std::iterator_traits<ConstIterator>::value_type, ConstIterator::ValueProxy>));
+    EXPECT_TRUE((std::is_same_v<std::iterator_traits<ConstIterator>::difference_type, std::ptrdiff_t>));
+    EXPECT_TRUE((std::is_same_v<std::iterator_traits<ConstIterator>::pointer, const ConstIterator::ValueProxy*>));
+    EXPECT_TRUE((std::is_same_v<std::iterator_traits<ConstIterator>::reference, const ConstIterator::ValueProxy&>));
+}
+
+// Test that iterators work with STL algorithms
+TEST(MeshContainerIteratorTraitsTest, STLAlgorithmsCompatibility) {
+    MeshContainer<int> container(MeshShape(2, 3), std::vector<int>{0, 1, 2, 3, 4, 5});
+
+    // Test std::for_each
+    std::vector<int> values_from_foreach;
+    std::for_each(container.begin(), container.end(), [&values_from_foreach](const auto& proxy) {
+        values_from_foreach.push_back(proxy.value());
+    });
+    EXPECT_THAT(values_from_foreach, ElementsAre(0, 1, 2, 3, 4, 5));
+
+    // Test std::find_if
+    auto it = std::find_if(container.begin(), container.end(), [](const auto& proxy) {
+        return proxy.value() == 3;
+    });
+    ASSERT_NE(it, container.end());
+    EXPECT_EQ(it->value(), 3);
+    EXPECT_EQ(it->coord(), MeshCoordinate(1, 0));
+
+    // Test std::count_if
+    auto count = std::count_if(container.begin(), container.end(), [](const auto& proxy) {
+        return proxy.value() > 2;
+    });
+    EXPECT_EQ(count, 3);
+
+    // Test std::any_of
+    bool has_value_4 = std::any_of(container.begin(), container.end(), [](const auto& proxy) {
+        return proxy.value() == 4;
+    });
+    EXPECT_TRUE(has_value_4);
+
+    // Test std::all_of
+    bool all_non_negative = std::all_of(container.begin(), container.end(), [](const auto& proxy) {
+        return proxy.value() >= 0;
+    });
+    EXPECT_TRUE(all_non_negative);
+
+    // Test std::none_of
+    bool none_greater_than_10 = std::none_of(container.begin(), container.end(), [](const auto& proxy) {
+        return proxy.value() > 10;
+    });
+    EXPECT_TRUE(none_greater_than_10);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed
