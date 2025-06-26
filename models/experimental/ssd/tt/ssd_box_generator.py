@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-from torch import nn
 import ttnn
 import math
 from typing import (
@@ -14,7 +14,7 @@ from typing import (
 from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
 
 
-class TtDefaultBoxGenerator(nn.Module):
+class TtDefaultBoxGenerator(LightweightModule):
     def __init__(
         self,
         aspect_ratios: List[List[int]],

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import torch.nn as nn
 
@@ -18,7 +19,7 @@ from models.experimental.roberta.roberta_common import torch2tt_tensor
 mem_config = ttnn.L1_MEMORY_CONFIG
 
 
-class TtRobertaLMHead(nn.Module):
+class TtRobertaLMHead(LightweightModule):
     """Roberta Head for masked language modeling."""
 
     def __init__(

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import torch.nn as nn
 import ttnn
@@ -19,7 +20,7 @@ from models.utility_functions import (
 )
 
 
-class TtGPT(nn.Module):
+class TtGPT(LightweightModule):
     def __init__(self, config, device, tt_cache_path, dtype):
         super().__init__()
 

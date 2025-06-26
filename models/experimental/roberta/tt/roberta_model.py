@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-import torch.nn as nn
 
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union, List
@@ -29,7 +29,7 @@ class TtBaseModelOutputWithPoolingAndCrossAttentions:
     cross_attentions: ttnn.Tensor = None
 
 
-class TtRobertaModel(nn.Module):
+class TtRobertaModel(LightweightModule):
     """
 
     The model can behave as an encoder (with only self-attention) as well as a decoder, in which case a layer of
