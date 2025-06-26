@@ -10,7 +10,9 @@ import random
 import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from loguru import logger
+import pytest
 
+from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.sweep_framework.sweep_utils.reduction_common import run_prod
 
 # Override the default timeout in seconds for hang detection.
@@ -101,7 +103,24 @@ def run(
     )
 
 
-import pytest
+@pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters, invalidate_vector))
+def test_prod(
+    device,
+    input_shape,
+    dim,
+    keepdim,
+    input_a_dtype,
+    input_a_layout,
+    input_a_memory_config,
+    output_memory_config,
+):
+    (result, msg), e2e_perf = run_prod(
+        input_shape, dim, keepdim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config, device
+    )
+    assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"Perf. metrics: {e2e_perf}")
 
 
 @pytest.mark.parametrize(
