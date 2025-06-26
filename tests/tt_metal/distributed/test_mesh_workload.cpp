@@ -57,6 +57,7 @@ namespace {
 
 using ::testing::HasSubstr;
 using ::testing::ThrowsMessage;
+using ::testing::SizeIs;
 
 struct CBConfig {
     uint32_t cb_id = 0;
@@ -712,6 +713,79 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
         auto device = mesh_device_->get_device(device_coord);
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values_1);
     }
+}
+
+TEST_F(MeshWorkloadTestSuite, UseCommandQueueOnChildAfterParent) {
+    auto random_seed = 0;
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
+
+    auto& parent_cq = mesh_device_->mesh_command_queue();
+    auto submeshes = mesh_device_->create_submeshes(MeshShape{1, 1});
+    EXPECT_TRUE(mesh_device_->is_parent_mesh());
+    EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
+
+    std::shared_ptr<MeshWorkload> mesh_workload = std::make_shared<MeshWorkload>();
+    auto programs = utils::create_random_programs(
+        1 /* num_programs */, mesh_device_->compute_with_storage_grid_size(), seed);
+    MeshCoordinate zero_coord = MeshCoordinate::zero_coordinate(mesh_device_->shape().dims());
+    MeshCoordinateRange devices_range = MeshCoordinateRange(zero_coord, zero_coord);
+    AddProgramToMeshWorkload(*mesh_workload, std::move(*programs[0]), devices_range);
+
+    //enqueue parent workload
+    EXPECT_NO_THROW(EnqueueMeshWorkload(parent_cq, *mesh_workload, false/* blocking */));
+    // enqueue submesh workload
+    for (const auto& submesh : submeshes) {
+        EXPECT_EQ(submesh->shape(), MeshShape(1, 1));
+        EXPECT_THAT(submesh->get_devices(), SizeIs(1));
+        auto& submesh_cq = submesh->mesh_command_queue();
+        std::shared_ptr<MeshWorkload> submesh_workload = std::make_shared<MeshWorkload>();
+        auto submesh_programs = utils::create_random_programs(
+        1 /* num_programs */, submesh->compute_with_storage_grid_size(), seed);
+        MeshCoordinate submesh_zero_coord = MeshCoordinate::zero_coordinate(submesh->shape().dims());
+        MeshCoordinateRange submesh_devices_range = MeshCoordinateRange(zero_coord,     zero_coord);
+        AddProgramToMeshWorkload(*submesh_workload, std::move(*submesh_programs[0]), submesh_devices_range);
+        EXPECT_ANY_THROW(EnqueueMeshWorkload(submesh_cq, *submesh_workload, false /* blocking */));
+    }
+    Finish(parent_cq);
+}
+
+TEST_F(MeshWorkloadTestSuite, UseCommandQueueOnParentAfterChild) {
+    auto random_seed = 0;
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
+
+    auto& parent_cq = mesh_device_->mesh_command_queue();
+    auto submeshes = mesh_device_->create_submeshes(MeshShape{1, 1});
+    EXPECT_TRUE(mesh_device_->is_parent_mesh());
+    EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
+
+    std::shared_ptr<MeshWorkload> mesh_workload = std::make_shared<MeshWorkload>();
+    auto programs = utils::create_random_programs(
+        1 /* num_programs */, mesh_device_->compute_with_storage_grid_size(), seed);
+    MeshCoordinate zero_coord = MeshCoordinate::zero_coordinate(mesh_device_->shape().dims());
+    MeshCoordinateRange devices_range = MeshCoordinateRange(zero_coord, zero_coord);
+    AddProgramToMeshWorkload(*mesh_workload, std::move(*programs[0]), devices_range);
+
+    // enqueue submesh workload
+    for (const auto& submesh : submeshes) {
+        EXPECT_EQ(submesh->shape(), MeshShape(1, 1));
+        EXPECT_THAT(submesh->get_devices(), SizeIs(1));
+        auto& submesh_cq = submesh->mesh_command_queue();
+        std::shared_ptr<MeshWorkload> submesh_workload = std::make_shared<MeshWorkload>();
+        auto submesh_programs = utils::create_random_programs(
+        1 /* num_programs */, submesh->compute_with_storage_grid_size(), seed);
+        MeshCoordinate submesh_zero_coord = MeshCoordinate::zero_coordinate(submesh->shape().dims());
+        MeshCoordinateRange submesh_devices_range = MeshCoordinateRange(zero_coord,     zero_coord);
+        AddProgramToMeshWorkload(*submesh_workload, std::move(*submesh_programs[0]), submesh_devices_range);
+        EXPECT_NO_THROW(EnqueueMeshWorkload(submesh_cq, *submesh_workload, false /* blocking */));
+    }
+
+    for (const auto& submesh : submeshes) {
+        auto& submesh_cq = submesh->mesh_command_queue();
+        Finish(submesh_cq);
+    }
+
+    //enqueue parent workload
+    EXPECT_ANY_THROW(EnqueueMeshWorkload(parent_cq, *mesh_workload, false /* blocking */));
 }
 
 }  // namespace

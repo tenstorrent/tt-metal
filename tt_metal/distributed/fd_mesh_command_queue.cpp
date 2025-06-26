@@ -52,7 +52,31 @@ struct ProgramCommandSequence;
 }  // namespace tt
 
 namespace tt::tt_metal::distributed {
-
+namespace {
+bool validate_submesh_command_queue(const MeshDevice& mesh_device) {
+    if (mesh_device.is_parent_mesh())
+    {
+        for (const auto& submesh : mesh_device.get_submeshes()) {
+            if (!submesh->is_initialized() || submesh->num_hw_cqs() <= 0) {
+                continue;
+            }
+            if (submesh->mesh_command_queue().using_device_dispatch())
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+    else
+    {
+        const auto& parent_mesh = mesh_device.get_parent_mesh();
+        if (!parent_mesh->is_initialized()) {
+            return true;
+        }
+        return !parent_mesh->mesh_command_queue().using_device_dispatch();
+    }
+}
+} //namespace
 struct MeshReadEventDescriptor {
     ReadEventDescriptor single_device_descriptor;
     MeshCoordinateRange device_range;
@@ -97,7 +121,7 @@ FDMeshCommandQueue::FDMeshCommandQueue(
 }
 
 FDMeshCommandQueue::~FDMeshCommandQueue() {
-    if (in_use_) {
+    if (using_device_dispatch_) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
         // before going out of scope. This is a blocking operation - it waits
         // for all queued up work to complete.
@@ -146,6 +170,8 @@ void FDMeshCommandQueue::populate_virtual_program_dispatch_core() {
     }
 }
 
+bool FDMeshCommandQueue::using_device_dispatch() const { return using_device_dispatch_; }
+
 CoreCoord FDMeshCommandQueue::virtual_program_dispatch_core() const { return this->dispatch_core_; }
 
 CoreType FDMeshCommandQueue::dispatch_core_type() const { return this->dispatch_core_type_; }
@@ -183,7 +209,12 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
-    in_use_ = true;
+    TT_ASSERT(
+        validate_submesh_command_queue(*mesh_device_),
+        "Cannot enqueue commands to MeshCommandQueue on mesh id {} when parent mesh or submesh MeshCommandQueue is "
+        "being used",
+        mesh_device_->id());
+    using_device_dispatch_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
@@ -361,7 +392,12 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     uint32_t size_bytes,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    in_use_ = true;
+    TT_ASSERT(
+        validate_submesh_command_queue(*mesh_device_),
+        "Cannot enqueue commands to MeshCommandQueue on mesh id {} when parent mesh or submesh MeshCommandQueue is "
+        "being used",
+        mesh_device_->id());
+    using_device_dispatch_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
     IDevice* device = mesh_device_->get_device(address.device_coord);
@@ -390,7 +426,12 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     uint32_t size_bytes,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    in_use_ = true;
+    TT_ASSERT(
+        validate_submesh_command_queue(*mesh_device_),
+        "Cannot enqueue commands to MeshCommandQueue on mesh id {} when parent mesh or submesh MeshCommandQueue is "
+        "being used",
+        mesh_device_->id());
+    using_device_dispatch_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
     IDevice* device = mesh_device_->get_device(address.device_coord);
@@ -435,7 +476,12 @@ void FDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    in_use_ = true;
+    TT_ASSERT(
+        validate_submesh_command_queue(*mesh_device_),
+        "Cannot enqueue commands to MeshCommandQueue on mesh id {} when parent mesh or submesh MeshCommandQueue is "
+        "being used",
+        mesh_device_->id());
+    using_device_dispatch_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
     auto device_buffer = buffer.get_device_buffer(device_coord);
@@ -453,7 +499,12 @@ void FDMeshCommandQueue::read_shard_from_device(
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    in_use_ = true;
+    TT_ASSERT(
+        validate_submesh_command_queue(*mesh_device_),
+        "Cannot enqueue commands to MeshCommandQueue on mesh id {} when parent mesh or submesh MeshCommandQueue is "
+        "being used",
+        mesh_device_->id());
+    using_device_dispatch_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
     auto device_buffer = buffer.get_device_buffer(device_coord);
@@ -544,7 +595,12 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     bool notify_host,
     const std::optional<MeshCoordinateRange>& device_range) {
-    in_use_ = true;
+    TT_ASSERT(
+        validate_submesh_command_queue(*mesh_device_),
+        "Cannot enqueue commands to MeshCommandQueue on mesh id {} when parent mesh or submesh MeshCommandQueue is "
+        "being used",
+        mesh_device_->id());
+    using_device_dispatch_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     auto& sysmem_manager = this->reference_sysmem_manager();
     auto event = MeshEvent(
@@ -601,7 +657,12 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host(
 }
 
 void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
-    in_use_ = true;
+    TT_ASSERT(
+        validate_submesh_command_queue(*mesh_device_),
+        "Cannot enqueue commands to MeshCommandQueue on mesh id {} when parent mesh or submesh MeshCommandQueue is "
+        "being used",
+        mesh_device_->id());
+    using_device_dispatch_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     for (const auto& coord : sync_event.device_range()) {
         event_dispatch::issue_wait_for_event_commands(
@@ -726,7 +787,12 @@ void FDMeshCommandQueue::reset_worker_state(
     auto& sysmem_manager = this->reference_sysmem_manager();
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
-    in_use_ = true;
+    TT_ASSERT(
+        validate_submesh_command_queue(*mesh_device_),
+        "Cannot enqueue commands to MeshCommandQueue on mesh id {} when parent mesh or submesh MeshCommandQueue is "
+        "being used",
+        mesh_device_->id());
+    using_device_dispatch_ = true;
     for (auto device : mesh_device_->get_devices()) {
         program_dispatch::reset_worker_dispatch_state_on_device(
             mesh_device_,
@@ -870,7 +936,12 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
 }
 
 void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking) {
-    in_use_ = true;
+    TT_ASSERT(
+        validate_submesh_command_queue(*mesh_device_),
+        "Cannot enqueue commands to MeshCommandQueue on mesh id {} when parent mesh or submesh MeshCommandQueue is "
+        "being used",
+        mesh_device_->id());
+    using_device_dispatch_ = true;
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
     auto descriptor = trace_inst->desc;
     auto buffer = trace_inst->mesh_buffer;

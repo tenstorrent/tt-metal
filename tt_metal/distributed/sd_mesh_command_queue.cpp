@@ -13,6 +13,7 @@ namespace tt::tt_metal::distributed {
 SDMeshCommandQueue::SDMeshCommandQueue(MeshDevice* mesh_device, uint32_t id) :
     MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool()) {}
 
+bool SDMeshCommandQueue::using_device_dispatch() const { return false;}
 void SDMeshCommandQueue::write_shard_to_device(
     const MeshBuffer& buffer,
     const MeshCoordinate& device_coord,

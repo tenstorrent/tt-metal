@@ -154,7 +154,7 @@ private:
     inline static std::mutex reader_thread_pool_mutex_;
     // Used to Maintain state: Mark/Check if this data structure is being used for dispatch.
     // This is temporary - will not be needed when we MeshCommandQueue is the only dispatch interface.
-    std::atomic<bool> in_use_ = false;
+    std::atomic<bool> using_device_dispatch_ = false;
 
     const uint32_t prefetcher_dram_aligned_block_size_;
     const uint64_t prefetcher_cache_sizeB_;
@@ -191,6 +191,7 @@ public:
 
     ~FDMeshCommandQueue() override;
 
+    bool using_device_dispatch() const override;
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override { return config_buffer_mgr_[index]; };
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
 

@@ -77,6 +77,7 @@ public:
     uint32_t id() const { return id_; }
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
     virtual void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) = 0;
+    virtual bool using_device_dispatch() const = 0;
 
     // Specifies host data to be written to or read from a MeshBuffer shard.
     struct ShardDataTransfer {
