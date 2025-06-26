@@ -56,9 +56,6 @@ jobs:
           echo "Found example directories:"
           ls -1d /usr/share/${{ inputs.product }}/examples/*/
           for example in /usr/share/${{ inputs.product }}/examples/*; do
-            echo "looking at example: $example"
-
-            [ -f "$example/CMakeLists.txt" ] || continue
 
             example_name=$(basename "$example")
             # Wouldn't it be nice if we could have nested groups?
@@ -69,20 +66,12 @@ jobs:
             cmake --build .
             echo "::endgroup::"
 
-            echo "::group::${example_name} - run"
             # Find and run the built executable
             exec_path=$(find . -maxdepth 1 -type f -executable -not -name "*.so")
             echo "Found executables, running them in sequence:"
-            echo "$exec_path"
-            echo "----------------------------------------"
             for exe in $exec_path; do
-              echo "Running: $exe"
+              echo "::group::${exe} - run"
               "$exe"
-              if [ $? -ne 0 ]; then
-                echo "Error: $exe failed with exit code $?"
-                exit 1
-              fi
-              echo "----------------------------------------"
+              echo "::endgroup::"
             done
-            echo "::endgroup::"
           done
