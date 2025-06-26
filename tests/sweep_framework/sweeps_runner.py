@@ -230,6 +230,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
         result["original_vector_data"] = original_vector_data
 
         result["end_time_ts"] = dt.datetime.now()
+        result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         result["host"] = get_hostname()
         result["user"] = get_username()
 
@@ -633,7 +634,7 @@ def run_multiple_modules_json(module_names, suite_name):
     git_author = get_git_author()
     git_branch_name = get_git_branch()
     git_commit_hash = git_hash()
-    status = "failure"
+    status = "success"
     run_start_time = dt.datetime.now()
     run_id = push_run(initiated_by, git_author, git_branch_name, git_commit_hash, run_start_time, status)
 
@@ -691,7 +692,7 @@ def run_multiple_modules_json(module_names, suite_name):
                     except Exception as e:
                         logger.error(f"Failed to execute module {module_name}: {e}")
                         test_end_time = dt.datetime.now()
-                        test_id = push_failed_test(run_id, module_name, test_start_time, test_end_time, "failure")
+                        push_failed_test(run_id, module_name, test_start_time, test_end_time, "failure")
                         continue
 
         except FileNotFoundError:
@@ -882,9 +883,12 @@ def export_test_results(header_info, results):
             if elem == "device_perf":
                 result[elem] = results[i][elem]
                 continue
+            # Skip problematic fields that were added for PostgreSQL functionality
+            if elem in ["start_time_ts", "end_time_ts", "original_vector_data"]:
+                continue
             result[elem] = serialize(results[i][elem])
         client.index(index=results_index, body=result)
-
+    logger.info(f"Successfully exported {len(results)} results to Elasticsearch")
     client.close()
 
 
@@ -1211,7 +1215,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--database",
         required=False,
-        default="postgres",
+        default="elasticsearch",
         choices=["elasticsearch", "postgres"],
         help="Database backend for storing results. Available options: ['elasticsearch', 'postgres']",
     )
@@ -1301,7 +1305,8 @@ if __name__ == "__main__":
             logger.info(f"  {module_name}")
         run_sweeps_json(module_names, args.suite_name)
     else:
-        # Using Elasticsearch or no module names specified
+        # Exporting results to Elasticsearch
+        logger.info(f"Exporting results to Elasticsearch")
         run_sweeps(module_names, args.suite_name, args.vector_id)
 
     if args.watcher:
