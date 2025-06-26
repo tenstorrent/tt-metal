@@ -63,7 +63,7 @@ operations_dict = {
         torch.minimum,
         ttnn.minimum,
         None,
-        [1.0],
+        [0.0, 1.0, -1.0, -0.0],
         "minimum",
     ),
 }
@@ -108,6 +108,7 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
     # Get the operations to test
     (torch_unary_op, ttnn_unary_op, python_unary_op, scalar_list, parent_op) = operations_dict[operation_name]
 
+    plt.figure(figsize=(12, 6))
     for scalar in scalar_list:
         print(f"  Testing with scalar = {scalar}")
         # Create scalar tensor for torch
@@ -267,23 +268,41 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         print(f"{operation_name} [bfloat16] PCC = {pcc[0]}, Duration = {elapsed_s:.4f}s")
 
         # Plot Mean ULP Error vs Input Value (base_x) for individual scalar values
+        # plot_df = pd.read_csv(csv_path)
+        # plt.figure(figsize=(10, 5))
+        # plt.plot(plot_df["base_x"], plot_df["mean_ulp_error"], label="Mean ULP Error", color="blue")
+        # plt.title(f"TTNN vs PyTorch: Mean ULP Error for {operation_name}")
+        # plt.xlabel("Input Value (base_x)")
+        # plt.ylabel("Mean ULP Error")
+        # plt.grid(True)
+        # plt.legend()
+        # plt.tight_layout()
+        # parent_dir = os.path.dirname(dest_dir.rstrip("/"))
+        # plot_dir = os.path.join(parent_dir, "plots")
+        # os.makedirs(plot_dir, exist_ok=True)
+        # plot_filename = f"{operation_name}-bfloat16_{scalar}_{group_size}.png"
+        # plot_path = os.path.join(plot_dir, plot_filename)
+        # plt.savefig(plot_path)
+        # plt.close()
+        # print(f"--> Plot saved to: {plot_path}")
+
+        # Single plot for all scalar values
         plot_df = pd.read_csv(csv_path)
-        plt.figure(figsize=(10, 5))
-        plt.plot(plot_df["base_x"], plot_df["mean_ulp_error"], label="Mean ULP Error", color="blue")
-        plt.title(f"TTNN vs PyTorch: Mean ULP Error for {operation_name}")
-        plt.xlabel("Input Value (base_x)")
-        plt.ylabel("Mean ULP Error")
-        plt.grid(True)
-        plt.legend()
-        plt.tight_layout()
-        parent_dir = os.path.dirname(dest_dir.rstrip("/"))
-        plot_dir = os.path.join(parent_dir, "plots")
-        os.makedirs(plot_dir, exist_ok=True)
-        plot_filename = f"{operation_name}-bfloat16_{scalar}_{group_size}.png"
-        plot_path = os.path.join(plot_dir, plot_filename)
-        plt.savefig(plot_path)
-        plt.close()
-        print(f"--> Plot saved to: {plot_path}")
+        plt.plot(plot_df["base_x"], plot_df["mean_ulp_error"], label=f"scalar={scalar}")
+
+    plt.title(f"TTNN vs PyTorch: Mean ULP Error for {operation_name} (bfloat16)")
+    plt.xlabel("Input Value (base_x)")
+    plt.ylabel("Mean ULP Error")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+
+    plot_dir = os.path.join(os.path.dirname(dest_dir.rstrip("/")), "plots")
+    os.makedirs(plot_dir, exist_ok=True)
+    plot_path = os.path.join(plot_dir, f"{operation_name}-bfloat16_all_scalars_{group_size}.png")
+    plt.savefig(plot_path)
+    plt.close()
+    print(f"--> Combined scalar plot saved to: {plot_path}")
 
 
 def main(args):
