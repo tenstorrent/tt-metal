@@ -7,6 +7,7 @@ from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import load_inputs, prepare_inputs_ttnn, preprocess_inputs
@@ -14,7 +15,7 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 
 
-class Emb(torch.nn.Module):
+class Emb(LightweightModule):
     def __init__(self):
         super().__init__()
         self.emb = torch.nn.Embedding(32000, 4096)

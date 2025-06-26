@@ -12,6 +12,7 @@ from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tests.test_llama_attention import PagedAttentionConfig
 from models.demos.t3000.llama2_70b.tt.llama_common import (
@@ -32,7 +33,7 @@ DEVICE_PERF_START_SIGNPOST = "START_PERF_RUN"
 DEVICE_PERF_END_SIGNPOST = "END_PERF_RUN"
 
 
-class PytorchLlamaModel(torch.nn.Module):
+class PytorchLlamaModel(LightweightModule):
     def __init__(self, hf_reference_model):
         super().__init__()
         self.model = hf_reference_model

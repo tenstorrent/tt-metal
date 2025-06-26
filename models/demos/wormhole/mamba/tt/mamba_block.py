@@ -7,13 +7,14 @@ from typing import Callable
 import torch
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.wormhole.mamba.reference.args import ModelArgs, ModelMode
 from models.demos.wormhole.mamba.tt.cache import TensorCache
 from models.demos.wormhole.mamba.tt.mamba_conv import MambaConv, MambaConvConfig
 from models.demos.wormhole.mamba.tt.mamba_ssm import TtMambaSSM
 
 
-class TtMambaBlock(torch.nn.Module):
+class TtMambaBlock(LightweightModule):
     def __init__(self, args: ModelArgs, device, configs, load_fn: Callable):
         super().__init__()
 

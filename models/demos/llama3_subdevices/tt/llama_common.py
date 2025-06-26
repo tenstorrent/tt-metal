@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import math
 import torch
 import ttnn
 
 
-class HostEmbedding(torch.nn.Module):
+class HostEmbedding(LightweightModule):
     def __init__(self, model_args):
         super().__init__()
         self.emb = torch.nn.Embedding(model_args.vocab_size, model_args.dim)
