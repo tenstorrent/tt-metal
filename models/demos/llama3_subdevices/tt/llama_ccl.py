@@ -924,7 +924,7 @@ class TT_CCL:
         seqlen = input_tensor_mesh.shape[-2]
         persistent_buffers = self.persistent_buffers[seqlen].get(buffer_key, None)
 
-        if buffer_key == 128 and key == "QKV":
+        if buffer_key == 128 and buffer_key == "QKV":
             num_links = 2
         else:
             num_links = 4
