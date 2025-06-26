@@ -10,12 +10,9 @@
 
 namespace nd_sharding {
 namespace detail {
-namespace {
 template <template <uint32_t...> class Wrapper, size_t BASE_IDX, size_t... Is>
 constexpr auto make_struct_from_sequence_wrapper(std::index_sequence<Is...>)
     -> Wrapper<get_compile_time_arg_val(BASE_IDX + Is)...>;
-
-}  // namespace
 
 template <template <uint32_t...> class Wrapper, size_t base, uint32_t rank>
 using struct_cta_sequence_wrapper_t =
