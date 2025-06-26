@@ -276,6 +276,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_nbytes = datum_size(in_df);
     const uint32_t out_nbytes = datum_size(out_df);
 
+    printf("input channels: %d\n", input_shape[3]);
+
     const uint32_t in_nbytes_c = input_shape[3] / num_shards_c * in_nbytes;     // row of input (channels)
     const uint32_t out_nbytes_c = output_shape[3] / num_shards_c * out_nbytes;  // row of output (channels)
 
@@ -306,6 +308,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                               in_ntiles_c % MAX_TILES_PER_REDUCTION == 1)
             ? tt::constants::TILE_HEIGHT
             : tt::constants::TILE_HEIGHT / 2;
+    printf("is_partial_tile = %d\n", is_partial_tile);
+    printf("is_wide_reduction = %d\n", is_wide_reduction);
+    printf(
+        "condition: %d\n",
+        !is_partial_tile &&
+            !(is_wide_reduction && pool_type == Pool2DType::AVG_POOL2D && in_ntiles_c % MAX_TILES_PER_REDUCTION == 1));
+    printf("tt::constants::TILE_HEIGHT: %d\n", tt::constants::TILE_HEIGHT);
+    printf("max_rows_for_reduction = %d\n", max_rows_for_reduction);
     TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
 
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
@@ -343,7 +353,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_scalar_cb_id_0 = next_cb_index++;
     const uint32_t in_scalar_cb_pagesize = tile_size(in_df);
     const uint32_t in_scalar_cb_npages = 1 * multi_buffering_factor;
-    TT_FATAL(in_scalar_cb_npages == 2, "Kernel logic relys on scalar cb page number being 2");
+    TT_FATAL(in_scalar_cb_npages <= 2, "Kernel logic relys on scalar cb page number being <= 2");
     tt::tt_metal::create_cb(in_scalar_cb_id_0, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_0, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
@@ -382,6 +392,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto sync_cb1 = tt::tt_metal::create_cb(sync_cb_id1, program, all_cores, 2, 2, tt::DataFormat::UInt16);
     int32_t sync_cb_id2 = next_cb_index++;
     auto sync_cb2 = tt::tt_metal::create_cb(sync_cb_id2, program, all_cores, 2, 2, tt::DataFormat::UInt16);
+    int32_t sync_cb_id3 = next_cb_index++;
+    auto sync_cb3 = tt::tt_metal::create_cb(sync_cb_id3, program, all_cores, 2, 2, tt::DataFormat::UInt16);
+    int32_t sync_cb_id4 = next_cb_index++;
+    auto sync_cb4 = tt::tt_metal::create_cb(sync_cb_id4, program, all_cores, 2, 2, tt::DataFormat::UInt16);
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
@@ -456,8 +470,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t max_pool_partials_cb_id = 32;
     if (is_large_kernel) {
         max_pool_partials_cb_id = next_cb_index++;  // max_pool partials
-        const uint32_t max_pool_partials_cb_pagesize = in_cb_pagesize;
-        const uint32_t max_pool_partials_cb_npages = nblocks;
+        const uint32_t max_pool_partials_cb_pagesize = in_cb_pagesize;  // page size is one row
+        const uint32_t max_pool_partials_cb_npages = 1;
 
         tt::tt_metal::create_cb(
             max_pool_partials_cb_id,
@@ -559,6 +573,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         multi_buffering_factor,
         sync_cb_id1,
         sync_cb_id2,
+        sync_cb_id3,
+        sync_cb_id4,
+        out_cb_id,
         stride_w};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
@@ -610,7 +627,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_one_cb_id,
         one_scalar_per_core,
         sync_cb_id1,
-        sync_cb_id2};
+        sync_cb_id2,
+        sync_cb_id3,
+        sync_cb_id4};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
@@ -742,6 +761,11 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto dilation_h = sliding_window_config.dilation_hw.first;
     auto dilation_w = sliding_window_config.dilation_hw.second;
     auto num_shards_c = sliding_window_config.num_cores_c;
+
+    printf("kernel_size_h: %d\n", kernel_size_h);
+    printf("kernel_size_w: %d\n", kernel_size_w);
+    printf("num_cores_c: %d\n", sliding_window_config.num_cores_c);
+    printf("num_cores_nhw: %d\n", sliding_window_config.num_cores_nhw);
 
     std::vector<uint32_t> op_trace_metadata =
         ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
