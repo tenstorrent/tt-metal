@@ -53,8 +53,6 @@ jobs:
           CXX: g++-12
         run: |
           set -euo pipefail
-          echo "Found example directories:"
-          ls -1d /usr/share/${{ inputs.product }}/examples/*/
           for example in /usr/share/${{ inputs.product }}/examples/*; do
 
             example_name=$(basename "$example")
@@ -67,10 +65,10 @@ jobs:
             echo "::endgroup::"
 
             # Find and run the built executable
-            exec_path=$(find . -maxdepth 1 -type f -executable -not -name "*.so")
-            echo "Found executables, running them in sequence:"
+            exec_path=$(find . -maxdepth 2 -type f -executable -not -name "*.so")
             for exe in $exec_path; do
-              echo "::group::${exe} - run"
+              exe_basename=$(basename "$exe")
+              echo "::group::${exe_basename} - run"
               "$exe"
               echo "::endgroup::"
             done
