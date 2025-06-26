@@ -108,8 +108,8 @@ class TtLayerNormParameters:
 def sd_rms_norm(x: ttnn.Tensor, parameters: TtRmsNormParameters, deallocate: bool = False) -> ttnn.Tensor:
     output = ttnn.rms_norm(x, weight=parameters.weight, epsilon=parameters.eps)
 
-    if deallocate:
-        ttnn.deallocate(x)
+    # if deallocate:
+    #     ttnn.deallocate(x)
 
     return output
 
@@ -122,6 +122,7 @@ def sd_layer_norm(
     program_config: ttnn.ProgramConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
     cfg_index: int = 0,
+    sync=False,
 ) -> ttnn.Tensor:
     if not parameters.distributed:
         return ttnn.layer_norm(
@@ -145,13 +146,15 @@ def sd_layer_norm(
         dtype=ttnn.bfloat16,
     )
 
+    # if sync:
+    # ttnn.synchronize_device(stats.device())
     stats = ttnn.experimental.all_gather_async(
         stats,
         dim=len(x.shape) - 1,
         cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
         mesh_device=x.device(),
         topology=parallel_manager.dit_parallel_config.topology,
-        multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["ag"],
+        multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
         memory_config=memory_config,
         num_links=1,
     )

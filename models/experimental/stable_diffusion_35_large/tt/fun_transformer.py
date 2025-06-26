@@ -166,7 +166,7 @@ def sd_transformer(
             cluster_axis=parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis,
             mesh_device=spatial.device(),
             topology=parallel_manager.dit_parallel_config.topology,
-            multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["ag"],
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
             num_links=1,
         )
         spatial = spatial_B1NDt
@@ -178,7 +178,7 @@ def sd_transformer(
             cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
             mesh_device=spatial.device(),
             topology=parallel_manager.dit_parallel_config.topology,
-            multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["ag"],
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
             num_links=1,
         )
         spatial = spatial_B1ND

@@ -146,8 +146,9 @@ class StableDiffusionParallelManager:
         self._init_subdevice()
 
         # SD35-specific semaphores
-        semaphore_names = [("rs_from", None), ("rs_to", None), ("ag", None), ("ring_sdpa", 2)]
+        semaphore_names = [("ping_pong", 2), ("ring_sdpa", 2), ("rs_from", None), ("rs_to", None)]
         self._init_semaphores(semaphore_names)
+        self.ping_pong_idx = 0
 
         self.persistent_buffers = [{} for _ in range(self.dit_parallel_config.cfg_parallel.factor)]
 
@@ -209,6 +210,11 @@ class StableDiffusionParallelManager:
                         dtype=ttnn.bfloat16,
                         mesh_mapper=ttnn.ShardTensor2dMesh(sm, mesh_shape=tuple(sm.shape), dims=[None, None]),
                     )
+
+    def get_ping_pong_semaphore(self, cfg_index):
+        cur_idx = self.ping_pong_idx
+        self.ping_pong_idx = 1 - self.ping_pong_idx
+        return self.cfg_semaphores[cfg_index]["ping_pong"][cur_idx]
 
     @property
     def is_ring_parallel(self):

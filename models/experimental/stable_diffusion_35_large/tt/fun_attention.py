@@ -163,7 +163,7 @@ def sd_attention_qkv(
         qkv, num_heads=num_local_heads, transpose_key=False
     )
 
-    ttnn.deallocate(qkv)
+    # ttnn.deallocate(qkv)
 
     q = sd_rms_norm(q, parameters.norm_q, deallocate=True)
     k = sd_rms_norm(k, parameters.norm_k, deallocate=True)
@@ -236,14 +236,14 @@ def sd_joint_attention(
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
+        # ttnn.deallocate(q)
+        # ttnn.deallocate(k)
+        # ttnn.deallocate(v)
 
         concatenated_attn = ttnn.transformer.concatenate_heads(
             attn,
         )
-        ttnn.deallocate(attn)
+        # ttnn.deallocate(attn)
 
         spatial = sd_attention_out_proj(concatenated_attn, parameters.spatial)
 
@@ -319,7 +319,7 @@ def sd_joint_attention(
             cluster_axis=parallel_manager.dit_parallel_config.ulysses_parallel.mesh_axis,
             mesh_device=device,
             topology=parallel_manager.dit_parallel_config.topology,
-            multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["ag"],
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
         )
         prompt = unpadded_all_gather_async(
             prompt,
@@ -327,7 +327,7 @@ def sd_joint_attention(
             cluster_axis=parallel_manager.dit_parallel_config.ulysses_parallel.mesh_axis,
             mesh_device=device,
             topology=parallel_manager.dit_parallel_config.topology,
-            multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["ag"],
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
         )
 
     spatial = sd_attention_out_proj(spatial, parameters.spatial)

@@ -338,8 +338,8 @@ def sd_linear(
         transpose_a=transpose_a,
     )
 
-    if deallocate:
-        ttnn.deallocate(x)
+    # if deallocate:
+    #     ttnn.deallocate(x)
 
     if squeeze:
         output = output.reshape([output.shape[0], 1, 1, output.shape[-1]])

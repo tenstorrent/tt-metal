@@ -72,7 +72,7 @@ def sd_feed_forward(
     # ttnn.deallocate(x2)
 
     result = sd_linear(x3, parameters.out_proj, core_grid=core_grid)
-    ttnn.deallocate(x3)
+    # ttnn.deallocate(x3)
 
     if parallel_manager.is_tensor_parallel:
         result = ttnn.experimental.reduce_scatter_async(

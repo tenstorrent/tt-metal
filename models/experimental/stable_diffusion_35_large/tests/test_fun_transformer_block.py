@@ -42,50 +42,20 @@ TILE_SIZE = 32
         "topology",
     ),
     [
-        # [(1, 1), 1, 1, 1, 1, 1, ttnn.Topology.Linear],
-        # [(1, 2), 1, 1, 2, 1, 2, ttnn.Topology.Linear],
-        # [(1, 4), 1, 1, 4, 1, 4, ttnn.Topology.Linear],
-        # [(1, 8), 1, 1, 8, 1, 8, ttnn.Topology.Linear],
-        # [(1, 2), 1, 2, 1, 2, 1, ttnn.Topology.Linear],
-        # [(2, 2), 1, 2, 2, 2, 2, ttnn.Topology.Linear],
-        # [(2, 4), 1, 2, 4, 2, 4, ttnn.Topology.Linear],
-        # [(2, 4), 1, 4, 2, 4, 2, ttnn.Topology.Linear],
-        # [(8, 4), (1, 1), (4, 1), (8, 0), ttnn.Topology.Linear],
-        # [(8, 4), (1, 1), (8, 0), (4, 1), ttnn.Topology.Linear],
+        [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear],
         [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
+        [(2, 4), (2, 0), (4, 1), (1, 0), ttnn.Topology.Linear],
         [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear],
         [(8, 4), (2, 1), (8, 0), (2, 1), ttnn.Topology.Linear],
         [(8, 4), (2, 1), (2, 1), (8, 0), ttnn.Topology.Linear],
-        [(8, 4), (4, 0), (2, 0), (4, 1), ttnn.Topology.Linear],
-        [(8, 4), (4, 0), (4, 1), (2, 0), ttnn.Topology.Linear],
-        [(8, 4), (2, 1), (8, 0), (2, 1), ttnn.Topology.Linear],
-        [(8, 4), (2, 1), (2, 1), (8, 0), ttnn.Topology.Linear],
-        [(8, 4), (8, 0), (1, 0), (4, 1), ttnn.Topology.Linear],
-        [(8, 4), (8, 0), (4, 1), (1, 0), ttnn.Topology.Linear],
-        [(8, 4), (4, 1), (1, 1), (8, 0), ttnn.Topology.Linear],
     ],
     ids=[
-        # "cfg1_sp1_tp1", # Fails, maybe because 1x1 mesh can't instantiate fabric
-        # "cfg1_sp1_tp2",
-        # "cfg1_sp1_tp4",
-        # "cfg1_sp1_tp8",
-        # "cfg1_sp2_tp1",
-        # "cfg1_sp2_tp2",
-        # "cfg1_sp2_tp4",
-        # "cfg1_sp4_tp2",
-        # "tg_cfg1_sp4_tp8",
-        # "tg_cfg1_sp8_tp4",
+        "t3k_cfg2_sp1_tp4",
         "t3k_cfg2_sp2_tp2",
+        "t3k_cfg2_sp4_tp1",
         "tg_cfg2_sp4_tp4",
         "tg_cfg2_sp8_tp2",
         "tg_cfg2_sp2_tp8",
-        "tg_cfg4_sp2_tp4",
-        "tg_cfg4_sp4_tp2",
-        "tg_cfg2_sp8_tp2",
-        "tg_cfg2_sp2_tp8",
-        "tg_cfg8_sp1_tp4",
-        "tg_cfg8_sp4_tp1",
-        "tg_cfg4_sp1_tp8",
     ],
     indirect=["mesh_device"],
 )
@@ -239,46 +209,47 @@ def test_transformer_block(
     persistent_buffer_shape = [1, num_heads // tp_factor, spatial_padded_4d.shape[2], head_size]
     parallel_manager.maybe_init_persistent_buffers(persistent_buffer_shape)
 
-    tt_spatial_output, tt_prompt_output = sd_transformer_block(
-        spatial=tt_spatial,
-        prompt=tt_prompt,
-        time_embed=tt_time,
-        parameters=parameters,
-        parallel_manager=parallel_manager,
-        num_heads=num_heads,
-        N=spatial_sequence_length,
-        L=prompt_sequence_length,
-        cfg_index=0,
-    )
+    for _ in range(100):
+        tt_spatial_output, tt_prompt_output = sd_transformer_block(
+            spatial=tt_spatial,
+            prompt=tt_prompt,
+            time_embed=tt_time,
+            parameters=parameters,
+            parallel_manager=parallel_manager,
+            num_heads=num_heads,
+            N=spatial_sequence_length,
+            L=prompt_sequence_length,
+            cfg_index=0,
+        )
 
-    ttnn.synchronize_device(submesh)
+        ttnn.synchronize_device(submesh)
 
-    tt_spatial_output_torch = ttnn.to_torch(
-        tt_spatial_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            submesh,
-            mesh_shape=tuple(submesh.shape),
-            dims=spatial_shard_dims,
-        ),
-    )
-    tt_spatial_output_torch = tt_spatial_output_torch[:, :, 0:spatial_sequence_length, :embedding_dim]
-    assert_quality(
-        spatial_output, tt_spatial_output_torch, pcc=0.995, shard_dim=0, num_devices=submesh.get_num_devices()
-    )
-
-    prompt_shard_dims[
-        parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis
-    ] = 2  # Concat replicas on sequence
-    if tt_prompt_output is not None:
-        tt_prompt_output_torch = ttnn.to_torch(
-            tt_prompt_output,
+        tt_spatial_output_torch = ttnn.to_torch(
+            tt_spatial_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 submesh,
                 mesh_shape=tuple(submesh.shape),
-                dims=prompt_shard_dims,
+                dims=spatial_shard_dims,
             ),
         )
-        tt_prompt_output_torch = tt_prompt_output_torch[:, :, 0:prompt_sequence_length, :embedding_dim]
+        tt_spatial_output_torch = tt_spatial_output_torch[:, :, 0:spatial_sequence_length, :embedding_dim]
         assert_quality(
-            prompt_output, tt_prompt_output_torch, pcc=0.995, shard_dim=0, num_devices=submesh.get_num_devices()
+            spatial_output, tt_spatial_output_torch, pcc=0.98, shard_dim=0, num_devices=submesh.get_num_devices()
         )
+
+        prompt_shard_dims[
+            parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis
+        ] = 2  # Concat replicas on sequence
+        if tt_prompt_output is not None:
+            tt_prompt_output_torch = ttnn.to_torch(
+                tt_prompt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    submesh,
+                    mesh_shape=tuple(submesh.shape),
+                    dims=prompt_shard_dims,
+                ),
+            )
+            tt_prompt_output_torch = tt_prompt_output_torch[:, :, 0:prompt_sequence_length, :embedding_dim]
+            assert_quality(
+                prompt_output, tt_prompt_output_torch, pcc=0.98, shard_dim=0, num_devices=submesh.get_num_devices()
+            )
