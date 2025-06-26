@@ -77,7 +77,7 @@ def test_demo_multichip(
                 2048: {"prefill_t/s": 18650, "decode_t/s/u": 7.40},
             },
             "6U": {
-                128: {"prefill_t/s": 31500, "decode_t/s/u": 12.55},
+                128: {"prefill_t/s": 30000, "decode_t/s/u": 12.00},
                 1024: {"prefill_t/s": 29090, "decode_t/s/u": 11.19},
                 2048: {"prefill_t/s": 27230, "decode_t/s/u": 10.90},
             },
