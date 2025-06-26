@@ -25,7 +25,6 @@ def run_ag_with_trace(
     input_tensor,
     dim,
     persistent_output_tensor,
-    persistent_intermediate_buffer,
     num_links,
     cluster_axis,
     output_mem_config,
