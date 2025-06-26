@@ -286,6 +286,8 @@ void write_control_buffer_to_core(
 
 bool onlyProfileDispatchCores(ProfilerDumpState state);
 
+bool isGalaxyMMIODevice(const IDevice* device);
+
 }  // namespace tt_metal
 
 }  // namespace tt
