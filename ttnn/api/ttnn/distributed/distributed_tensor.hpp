@@ -142,7 +142,12 @@ public:
 
     static MeshToTensor create(const MeshDevice& mesh_device, const MeshComposerConfig& config);
 
-    Tensor compose(const std::vector<Tensor>& tensors) const;
+    // Composes multi-device tensor into a single tensor.
+    Tensor compose(const Tensor& tensor) const;
+
+    // Overload that returns a pair of logical data composed from multi-device tensor and its shape.
+    template <typename T>
+    std::pair<std::vector<T>, Shape> compose(const Tensor& tensor) const;
 
 private:
     class Impl;
@@ -184,5 +189,7 @@ Tensor create_distributed_tensor(
 
 // Aggregates a multi-device tensor into a host tensor according to the `composer`.
 Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer);
+
+// TODO: another high level API that returns a pair of logical data and shape.
 
 }  // namespace ttnn::distributed

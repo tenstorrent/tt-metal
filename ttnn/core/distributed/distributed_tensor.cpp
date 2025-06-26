@@ -347,41 +347,54 @@ class MeshToTensor::Impl {
 public:
     Impl(const MeshShape& shape, const MeshComposerConfig& config) : shape_(shape), config_(config) {}
 
-    Tensor compose(const std::vector<Tensor>& tensors) const {
-        TT_FATAL(
-            shape_.dims() == 1 || tensors.size() == shape_.mesh_size(),
-            "ND composition requires the number of tensors {} to match the mesh shape {}",
-            tensors.size(),
-            shape_);
+    template <typename T>
+    std::pair<std::vector<T>, Shape> compose(const Tensor& tensor) const {
+        // TODO: avoid this, instead extract tensor shards from distributed host buffer.
+        const auto tensors = get_device_tensors(tensor.cpu());
 
-        std::vector<Tensor> current_tensors = tensors;
-        size_t outer_stride = shape_.dims() == 1 ? tensors.size() : shape_.mesh_size();
-
-        for (int mesh_dim_idx = shape_.dims() - 1; mesh_dim_idx >= 0; --mesh_dim_idx) {
-            const size_t mesh_dim_size = shape_.dims() == 1 ? tensors.size() : shape_[mesh_dim_idx];
-            const int concat_dim = config_.dims[mesh_dim_idx];
-            outer_stride /= mesh_dim_size;
-
-            std::vector<Tensor> next_tensors;
-            next_tensors.reserve(outer_stride);
-
-            for (size_t outer_idx = 0; outer_idx < outer_stride; ++outer_idx) {
-                std::vector<Tensor> group_to_concat;
-                group_to_concat.reserve(mesh_dim_size);
-                size_t group_start_idx = outer_idx * mesh_dim_size;
-                for (size_t inner_idx = 0; inner_idx < mesh_dim_size; ++inner_idx) {
-                    group_to_concat.push_back(current_tensors[outer_idx * mesh_dim_size + inner_idx]);
-                }
-                next_tensors.push_back(experimental::xtensor::concat(group_to_concat, concat_dim));
-            }
-            current_tensors = std::move(next_tensors);
+        tt::stl::SmallVector<int> num_chunks(shape_.cbegin(), shape_.cend());
+        if (shape_.dims() == 1) {
+            num_chunks[0] = tensors.size();
+        } else {
+            TT_FATAL(
+                tensors.size() == shape_.mesh_size(),
+                "ND composition requires the number of tensors {} to match the mesh shape {}",
+                tensors.size(),
+                shape_);
         }
 
-        TT_FATAL(
-            current_tensors.size() == 1,
-            "NdMeshToTensor: Composition failed. Expected 1 final tensor, but got {}.",
-            current_tensors.size());
-        return current_tensors[0];
+        // TODO: use adapted type, avoid copying this when not needed.
+        std::vector<xt::xarray<T>> xtensors;
+        xtensors.reserve(tensors.size());
+        for (const auto& tensor : tensors) {
+            xtensors.push_back(ttnn::experimental::xtensor::to_xtensor<T>(tensor));
+        }
+
+        // TODO: don't copy into vector, when not needed.
+        auto xtensor = experimental::xtensor::concat_ndim(xtensors, num_chunks, config_.dims);
+        std::vector<T> data_vec(xtensor.begin(), xtensor.end());
+        return {data_vec, ttnn::experimental::xtensor::get_shape_from_xarray(xtensor)};
+    }
+
+    Tensor compose(const Tensor& tensor) const {
+        auto dispatch_to_concrete = [this]<typename T>(const Tensor& tensor) {
+            auto [data, shape] = compose<T>(tensor);
+            TensorSpec spec(shape, tensor.tensor_spec().tensor_layout());
+            return Tensor::from_vector(data, spec);
+        };
+
+        switch (tensor.dtype()) {
+            case tt::tt_metal::DataType::BFLOAT8_B:
+            case tt::tt_metal::DataType::BFLOAT4_B:
+            case tt::tt_metal::DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(tensor);
+            case tt::tt_metal::DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(tensor);
+            case tt::tt_metal::DataType::UINT32: return dispatch_to_concrete.template operator()<uint32_t>(tensor);
+            case tt::tt_metal::DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(tensor);
+            case tt::tt_metal::DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(tensor);
+            case tt::tt_metal::DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(tensor);
+            case tt::tt_metal::DataType::INVALID: TT_THROW("Invalid data type: {}", tensor.dtype());
+        }
+        TT_THROW("Unreachable");
     }
 
 private:
@@ -464,7 +477,7 @@ MeshToTensor::MeshToTensor(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) 
 MeshToTensor::~MeshToTensor() = default;
 MeshToTensor::MeshToTensor(MeshToTensor&& other) noexcept = default;
 MeshToTensor& MeshToTensor::operator=(MeshToTensor&& other) noexcept = default;
-Tensor MeshToTensor::compose(const std::vector<Tensor>& tensors) const { return impl_->compose(tensors); }
+Tensor MeshToTensor::compose(const Tensor& tensor) const { return impl_->compose(tensor); }
 
 MeshToTensor MeshToTensor::create(const MeshDevice& mesh_device, const MeshComposerConfig& config) {
     const auto distributed_shape = config.mesh_shape_override.value_or(mesh_device.shape());
@@ -601,8 +614,6 @@ template Tensor create_distributed_tensor<uint32_t>(
     ttnn::QueueId cq_id,
     uint32_t pad_value);
 
-Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer) {
-    return composer.compose(get_device_tensors(tensor.cpu()));
-}
+Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer) { return composer.compose(tensor); }
 
 }  // namespace ttnn::distributed
