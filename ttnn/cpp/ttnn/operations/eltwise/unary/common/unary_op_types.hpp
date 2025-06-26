@@ -77,6 +77,8 @@ enum class UnaryOpType {
     UNARY_EQ,
     UNARY_GT,
     UNARY_LT,
+    UNARY_GE,
+    UNARY_LE,
     TILED_PROD,
     TYPECAST,
     BITWISE_XOR,
