@@ -77,6 +77,7 @@ target_link_libraries(
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
+        OpenMPI::MPI
 )
 
 target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)

@@ -183,6 +183,9 @@ private:
     // Stores a table of all local intermesh links (board_id, chan_id) and the corresponding remote intermesh links
     IntermeshLinkTable intermesh_link_table_;
     std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
+
+    FabricNodeId get_fabric_node_id_from_mesh_coord(MeshId mesh_id, const MeshCoordinate& mesh_coord) const;
+
     // custom logic to order eth channels
     void order_ethernet_channels();
 
@@ -209,8 +212,7 @@ private:
     void validate_mesh_connections(MeshId mesh_id) const;
     void validate_mesh_connections() const;
 
-    std::vector<chip_id_t> get_mesh_physical_chip_ids(
-        std::uint32_t mesh_ns_size, std::uint32_t mesh_ew_size, chip_id_t nw_chip_physical_chip_id) const;
+    std::vector<chip_id_t> get_mesh_physical_chip_ids(MeshId mesh_id, chip_id_t nw_chip_physical_chip_id) const;
 
     std::pair<FabricNodeId, chan_id_t> get_connected_mesh_chip_chan_ids(
         FabricNodeId fabric_node_id, chan_id_t chan_id) const;
@@ -252,7 +254,7 @@ public:
 private:
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
     // Host rank to sub mesh shape
-    std::unordered_map<HostRankId, std::vector<MeshCoordinate>> host_rank_to_sub_mesh_shape_;
+    std::unordered_map<HostRankId, std::unordered_map<MeshId, MeshCoordinateRange>> host_rank_to_mesh_coord_ranges_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
 
     std::string mesh_graph_desc_file_;
