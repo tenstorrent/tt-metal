@@ -4,7 +4,5 @@ project(metal_example_vecadd)
 add_executable(metal_example_vecadd)
 target_sources(metal_example_vecadd PRIVATE vecadd.cpp)
 
-if(NOT TARGET TT::Metalium)
-    find_package(TT-Metalium REQUIRED)
-endif()
+find_package(TT-Metalium REQUIRED)
 target_link_libraries(metal_example_vecadd PUBLIC TT::Metalium)

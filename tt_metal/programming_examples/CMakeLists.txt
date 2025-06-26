@@ -7,6 +7,7 @@ include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/programming_examples")
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/profiler)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/distributed)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/contributed)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/add_2_integers_in_compute)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/add_2_integers_in_riscv)
@@ -19,7 +20,6 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/loopback)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/matmul)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/pad_multi_core)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/shard_data_rm)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vecadd)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vecadd_sharding)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vecadd_multi_core)
 
@@ -41,7 +41,6 @@ install(
         hello_world_datatypes_kernel
         loopback
         matmul
-        vecadd
         shard_data_rm
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into
@@ -65,7 +64,6 @@ install(
         hello_world_datatypes_kernel
         loopback
         matmul
-        vecadd
         shard_data_rm
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
