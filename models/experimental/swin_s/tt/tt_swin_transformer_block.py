@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import ttnn
-import torch.nn as nn
 from models.experimental.swin_s.tt.tt_mlp import TtMLP
 from models.experimental.swin_s.tt.tt_shifted_window_attention import TtShiftedWindowAttention
 
 
-class TtSwinTransformerBlock(nn.Module):
+class TtSwinTransformerBlock(LightweightModule):
     def __init__(
         self,
         device,

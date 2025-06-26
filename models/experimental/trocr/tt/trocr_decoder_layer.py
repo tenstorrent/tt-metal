@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Tuple
 
 import ttnn
@@ -12,7 +12,7 @@ from models.experimental.trocr.tt.trocr_attention import TtTrOCRAttention
 from models.experimental.trocr.tt.trocr_configuration import TtTrOCRConfig
 
 
-class TtTrOCRDecoderLayer(nn.Module):
+class TtTrOCRDecoderLayer(LightweightModule):
     def __init__(
         self,
         config: TtTrOCRConfig,

@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from models.common.lightweightmodule import LightweightModule
 
 from models.experimental.yolov3.reference.models.common import autopad
 import ttnn
@@ -18,7 +18,7 @@ from models.utility_functions import (
 )
 
 
-class TtConv2D(torch.nn.Module):
+class TtConv2D(LightweightModule):
     def __init__(
         self,
         device,
