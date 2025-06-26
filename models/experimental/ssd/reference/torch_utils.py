@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 import warnings, torch, math
 from collections import OrderedDict
 from types import FunctionType
@@ -27,7 +26,7 @@ from torchvision.utils import _make_ntuple
 from torch.hub import load_state_dict_from_url
 
 
-class SqueezeExcitation(LightweightModule):
+class SqueezeExcitation(nn.Module):
     """
     This block implements the Squeeze-and-Excitation block from https://arxiv.org/abs/1709.01507 (see Fig. 1).
     Parameters ``activation``, and ``scale_activation`` correspond to ``delta`` and ``sigma`` in eq. 3.
@@ -35,16 +34,16 @@ class SqueezeExcitation(LightweightModule):
     Args:
         input_channels (int): Number of channels in the input image
         squeeze_channels (int): Number of squeeze channels
-        activation (Callable[..., LightweightModule], optional): ``delta`` activation. Default: ``torch.nn.ReLU``
-        scale_activation (Callable[..., LightweightModule]): ``sigma`` activation. Default: ``torch.nn.Sigmoid``
+        activation (Callable[..., nn.Module], optional): ``delta`` activation. Default: ``torch.nn.ReLU``
+        scale_activation (Callable[..., nn.Module]): ``sigma`` activation. Default: ``torch.nn.Sigmoid``
     """
 
     def __init__(
         self,
         input_channels: int,
         squeeze_channels: int,
-        activation: Callable[..., LightweightModule] = torch.nn.ReLU,
-        scale_activation: Callable[..., LightweightModule] = torch.nn.Sigmoid,
+        activation: Callable[..., nn.Module] = torch.nn.ReLU,
+        scale_activation: Callable[..., nn.Module] = torch.nn.Sigmoid,
     ) -> None:
         super().__init__()
         _log_api_usage_once(self)
@@ -75,12 +74,12 @@ class ConvNormActivation(torch.nn.Sequential):
         stride: Union[int, Tuple[int, ...]] = 1,
         padding: Optional[Union[int, Tuple[int, ...], str]] = None,
         groups: int = 1,
-        norm_layer: Optional[Callable[..., LightweightModule]] = torch.nn.BatchNorm2d,
-        activation_layer: Optional[Callable[..., LightweightModule]] = torch.nn.ReLU,
+        norm_layer: Optional[Callable[..., nn.Module]] = torch.nn.BatchNorm2d,
+        activation_layer: Optional[Callable[..., nn.Module]] = torch.nn.ReLU,
         dilation: Union[int, Tuple[int, ...]] = 1,
         inplace: Optional[bool] = True,
         bias: Optional[bool] = None,
-        conv_layer: Callable[..., LightweightModule] = torch.nn.Conv2d,
+        conv_layer: Callable[..., nn.Module] = torch.nn.Conv2d,
     ) -> None:
         if padding is None:
             if isinstance(kernel_size, int) and isinstance(dilation, int):
@@ -133,8 +132,8 @@ class Conv2dNormActivation(ConvNormActivation):
         stride (int, optional): Stride of the convolution. Default: 1
         padding (int, tuple or str, optional): Padding added to all four sides of the input. Default: None, in which case it will be calculated as ``padding = (kernel_size - 1) // 2 * dilation``
         groups (int, optional): Number of blocked connections from input channels to output channels. Default: 1
-        norm_layer (Callable[..., LightweightModule], optional): Norm layer that will be stacked on top of the convolution layer. If ``None`` this layer won't be used. Default: ``torch.nn.BatchNorm2d``
-        activation_layer (Callable[..., LightweightModule], optional): Activation function which will be stacked on top of the normalization layer (if not None), otherwise on top of the conv layer. If ``None`` this layer won't be used. Default: ``torch.nn.ReLU``
+        norm_layer (Callable[..., nn.Module], optional): Norm layer that will be stacked on top of the convolution layer. If ``None`` this layer won't be used. Default: ``torch.nn.BatchNorm2d``
+        activation_layer (Callable[..., nn.Module], optional): Activation function which will be stacked on top of the normalization layer (if not None), otherwise on top of the conv layer. If ``None`` this layer won't be used. Default: ``torch.nn.ReLU``
         dilation (int): Spacing between kernel elements. Default: 1
         inplace (bool): Parameter for the activation layer, which can optionally do the operation in-place. Default ``True``
         bias (bool, optional): Whether to use bias in the convolution layer. By default, biases are included if ``norm_layer is None``.
@@ -149,8 +148,8 @@ class Conv2dNormActivation(ConvNormActivation):
         stride: Union[int, Tuple[int, int]] = 1,
         padding: Optional[Union[int, Tuple[int, int], str]] = None,
         groups: int = 1,
-        norm_layer: Optional[Callable[..., LightweightModule]] = torch.nn.BatchNorm2d,
-        activation_layer: Optional[Callable[..., LightweightModule]] = torch.nn.ReLU,
+        norm_layer: Optional[Callable[..., nn.Module]] = torch.nn.BatchNorm2d,
+        activation_layer: Optional[Callable[..., nn.Module]] = torch.nn.ReLU,
         dilation: Union[int, Tuple[int, int]] = 1,
         inplace: Optional[bool] = True,
         bias: Optional[bool] = None,
@@ -171,7 +170,7 @@ class Conv2dNormActivation(ConvNormActivation):
         )
 
 
-class ObjectDetection(LightweightModule):
+class ObjectDetection(nn.Module):
     def forward(self, img: Tensor) -> Tensor:
         if not isinstance(img, Tensor):
             img = F.pil_to_tensor(img)
@@ -187,7 +186,7 @@ class ObjectDetection(LightweightModule):
         )
 
 
-class ImageClassification(LightweightModule):
+class ImageClassification(nn.Module):
     def __init__(
         self,
         *,
@@ -249,7 +248,7 @@ class ImageList:
         return ImageList(cast_tensor, self.image_sizes)
 
 
-class DefaultBoxGenerator(LightweightModule):
+class DefaultBoxGenerator(nn.Module):
     """
     This module generates the default boxes of SSD for a set of feature maps and image sizes.
 
@@ -447,7 +446,7 @@ class Weights:
             return self.transforms == other.transforms
 
 
-M = TypeVar("M", bound=LightweightModule)
+M = TypeVar("M", bound=nn.Module)
 
 BUILTIN_MODELS = {}
 
@@ -475,7 +474,7 @@ def _ovewrite_value_param(param: str, actual: Optional[V], expected: V) -> V:
     return expected
 
 
-def _xavier_init(conv: LightweightModule):
+def _xavier_init(conv: nn.Module):
     for layer in conv.modules():
         if isinstance(layer, nn.Conv2d):
             torch.nn.init.xavier_uniform_(layer.weight)
@@ -501,7 +500,7 @@ def _topk_min(input: Tensor, orig_kval: int, axis: int) -> int:
     return min_kval
 
 
-def retrieve_out_channels(model: LightweightModule, size: Tuple[int, int]) -> List[int]:
+def retrieve_out_channels(model: nn.Module, size: Tuple[int, int]) -> List[int]:
     in_training = model.training
     model.eval()
 

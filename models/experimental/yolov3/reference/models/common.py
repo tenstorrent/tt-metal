@@ -7,7 +7,6 @@
 Common modules
 """
 
-from models.common.lightweightmodule import LightweightModule
 import ast
 import contextlib
 import json
@@ -72,7 +71,7 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
     return p
 
 
-class Conv(LightweightModule):
+class Conv(torch.nn.Module):
     # Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)
     default_act = nn.SiLU()  # default activation
 
@@ -80,7 +79,7 @@ class Conv(LightweightModule):
         super().__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         self.bn = nn.BatchNorm2d(c2)
-        self.act = self.default_act if act is True else act if isinstance(act, LightweightModule) else nn.Identity()
+        self.act = self.default_act if act is True else act if isinstance(act, torch.nn.Module) else nn.Identity()
 
     def forward(self, x):
         return self.act(self.bn(self.conv(x)))
@@ -101,7 +100,7 @@ class DWConvTranspose2d(nn.ConvTranspose2d):
         super().__init__(c1, c2, k, s, p1, p2, groups=math.gcd(c1, c2))
 
 
-class TransformerLayer(LightweightModule):
+class TransformerLayer(torch.nn.Module):
     # Transformer layer https://arxiv.org/abs/2010.11929 (LayerNorm layers removed for better performance)
     def __init__(self, c, num_heads):
         super().__init__()
@@ -118,7 +117,7 @@ class TransformerLayer(LightweightModule):
         return x
 
 
-class TransformerBlock(LightweightModule):
+class TransformerBlock(torch.nn.Module):
     # Vision Transformer https://arxiv.org/abs/2010.11929
     def __init__(self, c1, c2, num_heads, num_layers):
         super().__init__()
@@ -137,7 +136,7 @@ class TransformerBlock(LightweightModule):
         return self.tr(p + self.linear(p)).permute(1, 2, 0).reshape(b, self.c2, w, h)
 
 
-class Bottleneck(LightweightModule):
+class Bottleneck(torch.nn.Module):
     # Standard bottleneck
     def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
         super().__init__()
@@ -150,7 +149,7 @@ class Bottleneck(LightweightModule):
         return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
 
-class BottleneckCSP(LightweightModule):
+class BottleneckCSP(torch.nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
@@ -169,7 +168,7 @@ class BottleneckCSP(LightweightModule):
         return self.cv4(self.act(self.bn(torch.cat((y1, y2), 1))))
 
 
-class CrossConv(LightweightModule):
+class CrossConv(torch.nn.Module):
     # Cross Convolution Downsample
     def __init__(self, c1, c2, k=3, s=1, g=1, e=1.0, shortcut=False):
         # ch_in, ch_out, kernel, stride, groups, expansion, shortcut
@@ -183,7 +182,7 @@ class CrossConv(LightweightModule):
         return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
 
-class C3(LightweightModule):
+class C3(torch.nn.Module):
     # CSP Bottleneck with 3 convolutions
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
@@ -229,7 +228,7 @@ class C3Ghost(C3):
         self.m = nn.Sequential(*(GhostBottleneck(c_, c_) for _ in range(n)))
 
 
-class SPP(LightweightModule):
+class SPP(torch.nn.Module):
     # Spatial Pyramid Pooling (SPP) layer https://arxiv.org/abs/1406.4729
     def __init__(self, c1, c2, k=(5, 9, 13)):
         super().__init__()
@@ -245,7 +244,7 @@ class SPP(LightweightModule):
             return self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))
 
 
-class SPPF(LightweightModule):
+class SPPF(torch.nn.Module):
     # Spatial Pyramid Pooling - Fast (SPPF) layer for YOLOv3 by Glenn Jocher
     def __init__(self, c1, c2, k=5):  # equivalent to SPP(k=(5, 9, 13))
         super().__init__()
@@ -263,7 +262,7 @@ class SPPF(LightweightModule):
             return self.cv2(torch.cat((x, y1, y2, self.m(y2)), 1))
 
 
-class Focus(LightweightModule):
+class Focus(torch.nn.Module):
     # Focus wh information into c-space
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super().__init__()
@@ -285,7 +284,7 @@ class Focus(LightweightModule):
         # return self.conv(self.contract(x))
 
 
-class GhostConv(LightweightModule):
+class GhostConv(torch.nn.Module):
     # Ghost Convolution https://github.com/huawei-noah/ghostnet
     def __init__(self, c1, c2, k=1, s=1, g=1, act=True):  # ch_in, ch_out, kernel, stride, groups
         super().__init__()
@@ -298,7 +297,7 @@ class GhostConv(LightweightModule):
         return torch.cat((y, self.cv2(y)), 1)
 
 
-class GhostBottleneck(LightweightModule):
+class GhostBottleneck(torch.nn.Module):
     # Ghost Bottleneck https://github.com/huawei-noah/ghostnet
     def __init__(self, c1, c2, k=3, s=1):  # ch_in, ch_out, kernel, stride
         super().__init__()
@@ -316,7 +315,7 @@ class GhostBottleneck(LightweightModule):
         return self.conv(x) + self.shortcut(x)
 
 
-class Contract(LightweightModule):
+class Contract(torch.nn.Module):
     # Contract width-height into channels, i.e. x(1,64,80,80) to x(1,256,40,40)
     def __init__(self, gain=2):
         super().__init__()
@@ -335,7 +334,7 @@ class Contract(LightweightModule):
         return x.view(b, c * s * s, h // s, w // s)  # x(1,256,40,40)
 
 
-class Expand(LightweightModule):
+class Expand(torch.nn.Module):
     # Expand channels into width-height, i.e. x(1,64,80,80) to x(1,16,160,160)
     def __init__(self, gain=2):
         super().__init__()
@@ -349,7 +348,7 @@ class Expand(LightweightModule):
         return x.view(b, c // s**2, h * s, w * s)  # x(1,16,160,160)
 
 
-class Concat(LightweightModule):
+class Concat(torch.nn.Module):
     # Concatenate a list of tensors along dimension
     def __init__(self, dimension=1):
         super().__init__()
@@ -359,7 +358,7 @@ class Concat(LightweightModule):
         return torch.cat(x, self.d)
 
 
-class DetectMultiBackend(LightweightModule):
+class DetectMultiBackend(torch.nn.Module):
     # YOLOv3 MultiBackend class for python inference on various backends
     def __init__(
         self,
@@ -725,7 +724,7 @@ class DetectMultiBackend(LightweightModule):
         return None, None
 
 
-class AutoShape(LightweightModule):
+class AutoShape(torch.nn.Module):
     # YOLOv3 input-robust model wrapper for passing cv2/np/PIL/torch inputs. Includes preprocessing, inference and NMS
     conf = 0.25  # NMS confidence threshold
     iou = 0.45  # NMS IoU threshold
@@ -987,7 +986,7 @@ class Detections:
         return f"YOLOv3 {self.__class__} instance\n" + self.__str__()
 
 
-class Proto(LightweightModule):
+class Proto(torch.nn.Module):
     # YOLOv3 mask Proto module for segmentation models
     def __init__(self, c1, c_=256, c2=32):  # ch_in, number of protos, number of masks
         super().__init__()
@@ -1000,7 +999,7 @@ class Proto(LightweightModule):
         return self.cv3(self.cv2(self.upsample(self.cv1(x))))
 
 
-class Classify(LightweightModule):
+class Classify(torch.nn.Module):
     # YOLOv3 classification head, i.e. x(b,c1,20,20) to x(b,c2)
     def __init__(
         self, c1, c2, k=1, s=1, p=None, g=1, dropout_p=0.0

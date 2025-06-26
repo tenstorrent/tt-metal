@@ -2,14 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 from __future__ import annotations
 
 import torch
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/autoencoders/vae.py
-class VaeDecoder(LightweightModule):
+class VaeDecoder(torch.nn.Module):
     def __init__(
         self,
         block_out_channels: list[int] | tuple[int, ...] = (128, 256, 512, 512),
@@ -69,7 +68,7 @@ class VaeDecoder(LightweightModule):
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/unets/unet_2d_blocks.py
-class UpDecoderBlock2D(LightweightModule):
+class UpDecoderBlock2D(torch.nn.Module):
     def __init__(
         self,
         *,
@@ -108,7 +107,7 @@ class UpDecoderBlock2D(LightweightModule):
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/unets/unet_2d_blocks.py
-class UNetMidBlock2D(LightweightModule):
+class UNetMidBlock2D(torch.nn.Module):
     def __init__(
         self,
         *,
@@ -147,7 +146,7 @@ class UNetMidBlock2D(LightweightModule):
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/resnet.py
-class ResnetBlock2D(LightweightModule):
+class ResnetBlock2D(torch.nn.Module):
     def __init__(
         self,
         *,
@@ -193,7 +192,7 @@ class ResnetBlock2D(LightweightModule):
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/upsampling.py
-class Upsample2D(LightweightModule):
+class Upsample2D(torch.nn.Module):
     def __init__(self, *, channels: int, out_channels: int) -> None:
         super().__init__()
 
@@ -207,7 +206,7 @@ class Upsample2D(LightweightModule):
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
-class Attention(LightweightModule):
+class Attention(torch.nn.Module):
     def __init__(self, *, query_dim: int, norm_num_groups: int, heads: int, dim_head: int) -> None:
         super().__init__()
 

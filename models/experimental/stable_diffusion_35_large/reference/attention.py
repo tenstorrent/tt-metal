@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 from __future__ import annotations
 
 import torch
@@ -11,7 +10,7 @@ from .normalization import RmsNorm
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
-class Attention(LightweightModule):
+class Attention(torch.nn.Module):
     def __init__(
         self,
         *,

@@ -10,7 +10,6 @@ Usage:
     $ python models/yolo.py --cfg yolov5s.yaml
 """
 
-from models.common.lightweightmodule import LightweightModule
 import argparse
 import contextlib
 import os
@@ -59,7 +58,7 @@ except ImportError:
     thop = None
 
 
-class Detect(LightweightModule):
+class Detect(torch.nn.Module):
     # YOLOv5 Detect head for detection models
     stride = None  # strides computed during build
     dynamic = False  # force grid reconstruction
@@ -130,7 +129,7 @@ class Segment(Detect):
         return (x, p) if self.training else (x[0], p) if self.export else (x[0], p, x[1])
 
 
-class BaseModel(LightweightModule):
+class BaseModel(torch.nn.Module):
     # YOLOv5 base model
     def forward(self, x, profile=False, visualize=False):
         return self._forward_once(x, profile, visualize)  # single-scale inference, train

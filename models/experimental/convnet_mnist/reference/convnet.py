@@ -2,12 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 import torch
 import torch.nn.functional as F
 
 
-class ConvNet(LightweightModule):
+class ConvNet(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.conv1 = torch.nn.Conv2d(1, 32, 3, 1)

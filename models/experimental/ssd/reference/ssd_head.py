@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 from collections import OrderedDict
 from functools import partial
 from typing import (
@@ -59,7 +58,7 @@ class SSDLiteClassificationHead(SSDScoringHead):
         in_channels: List[int],
         num_anchors: List[int],
         num_classes: int,
-        norm_layer: Callable[..., LightweightModule],
+        norm_layer: Callable[..., torch.nn.Module],
     ):
         cls_logits = nn.ModuleList()
         for channels, anchors in zip(in_channels, num_anchors):
@@ -73,7 +72,7 @@ class SSDLiteRegressionHead(SSDScoringHead):
         self,
         in_channels: List[int],
         num_anchors: List[int],
-        norm_layer: Callable[..., LightweightModule],
+        norm_layer: Callable[..., torch.nn.Module],
     ):
         bbox_reg = nn.ModuleList()
         for channels, anchors in zip(in_channels, num_anchors):
@@ -82,13 +81,13 @@ class SSDLiteRegressionHead(SSDScoringHead):
         super().__init__(bbox_reg, 4)
 
 
-class SSDLiteHead(LightweightModule):
+class SSDLiteHead(torch.nn.Module):
     def __init__(
         self,
         in_channels: List[int],
         num_anchors: List[int],
         num_classes: int,
-        norm_layer: Callable[..., LightweightModule],
+        norm_layer: Callable[..., torch.nn.Module],
     ):
         super().__init__()
         self.classification_head = SSDLiteClassificationHead(in_channels, num_anchors, num_classes, norm_layer)
@@ -101,12 +100,12 @@ class SSDLiteHead(LightweightModule):
         }
 
 
-class SSDLiteFeatureExtractorMobileNet(LightweightModule):
+class SSDLiteFeatureExtractorMobileNet(torch.nn.Module):
     def __init__(
         self,
-        backbone: LightweightModule,
+        backbone: torch.nn.Module,
         c4_pos: int,
-        norm_layer: Callable[..., LightweightModule],
+        norm_layer: Callable[..., torch.nn.Module],
         width_mult: float = 1.0,
         min_depth: int = 16,
     ):
@@ -152,7 +151,7 @@ class SSDLiteFeatureExtractorMobileNet(LightweightModule):
 def _mobilenet_extractor(
     backbone: Union[None, MobileNetV3],
     trainable_layers: int,
-    norm_layer: Callable[..., LightweightModule],
+    norm_layer: Callable[..., torch.nn.Module],
 ):
     backbone = backbone.features
     # Gather the indices of blocks which are strided. These are the locations of C1, ..., Cn-1 blocks.
@@ -176,7 +175,7 @@ def _prediction_block(
     in_channels: int,
     out_channels: int,
     kernel_size: int,
-    norm_layer: Callable[..., LightweightModule],
+    norm_layer: Callable[..., torch.nn.Module],
 ) -> nn.Sequential:
     return nn.Sequential(
         # 3x3 depthwise with stride 1 and padding 1
@@ -193,7 +192,7 @@ def _prediction_block(
     )
 
 
-def _extra_block(in_channels: int, out_channels: int, norm_layer: Callable[..., LightweightModule]) -> nn.Sequential:
+def _extra_block(in_channels: int, out_channels: int, norm_layer: Callable[..., torch.nn.Module]) -> nn.Sequential:
     activation = nn.ReLU6
     intermediate_channels = out_channels // 2
     return nn.Sequential(
@@ -226,7 +225,7 @@ def _extra_block(in_channels: int, out_channels: int, norm_layer: Callable[..., 
     )
 
 
-def _normal_init(conv: LightweightModule):
+def _normal_init(conv: torch.nn.Module):
     for layer in conv.modules():
         if isinstance(layer, nn.Conv2d):
             torch.nn.init.normal_(layer.weight, mean=0.0, std=0.03)
@@ -241,7 +240,7 @@ def ssdlite320_mobilenet_v3_large(
     num_classes: Optional[int] = None,
     weights_backbone: Optional[MobileNet_V3_Large_Weights] = MobileNet_V3_Large_Weights.IMAGENET1K_V1,
     trainable_backbone_layers: Optional[int] = None,
-    norm_layer: Optional[Callable[..., LightweightModule]] = None,
+    norm_layer: Optional[Callable[..., torch.nn.Module]] = None,
     **kwargs: Any,
 ) -> SSD:
     weights = SSDLite320_MobileNet_V3_Large_Weights.verify(weights)
@@ -312,7 +311,7 @@ def ssdlite320_mobilenet_v3_large(
     return model
 
 
-def retrieve_out_channels(model: LightweightModule, size: Tuple[int, int]) -> List[int]:
+def retrieve_out_channels(model: torch.nn.Module, size: Tuple[int, int]) -> List[int]:
     in_training = model.training
     model.eval()
 

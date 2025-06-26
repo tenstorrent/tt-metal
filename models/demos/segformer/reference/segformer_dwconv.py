@@ -4,10 +4,8 @@
 
 import torch.nn as nn
 
-from models.common.lightweightmodule import LightweightModule
 
-
-class SegformerDWConv(LightweightModule):
+class SegformerDWConv(torch.nn.Module):
     def __init__(self, dim=768):
         super().__init__()
         self.dwconv = nn.Conv2d(dim, dim, 3, 1, 1, bias=True, groups=dim)

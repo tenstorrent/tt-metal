@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 import math
 import torch
 from torch import nn
@@ -51,7 +50,7 @@ def drop_connect(x, drop_connect_rate, training):
     return x
 
 
-class MBConvBlock(LightweightModule):
+class MBConvBlock(torch.nn.Module):
     def __init__(self, inp, final_oup, k, s, expand_ratio, se_ratio, has_se=False):
         super(MBConvBlock, self).__init__()
 
@@ -122,7 +121,7 @@ class MBConvBlock(LightweightModule):
         return x
 
 
-class EfficientNetLite(LightweightModule):
+class EfficientNetLite(torch.nn.Module):
     def __init__(
         self,
         widthi_multiplier,

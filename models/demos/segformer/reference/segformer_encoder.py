@@ -8,12 +8,11 @@ import torch
 import torch.nn as nn
 from transformers.modeling_outputs import BaseModelOutput
 
-from models.common.lightweightmodule import LightweightModule
 from models.demos.segformer.reference.segformer_layer import SegformerLayer
 from models.demos.segformer.reference.segformer_overlap_patch_embeddings import SegformerOverlapPatchEmbeddings
 
 
-class SegformerEncoder(LightweightModule):
+class SegformerEncoder(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config

@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2024 HPC-AI Tech
 
 # SPDX-License-Identifier: Apache-2.0
-from models.common.lightweightmodule import LightweightModule
 from typing import List, Optional, Tuple, Union
 
 import torch
@@ -85,7 +84,7 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
-class RMSNorm(LightweightModule):
+class RMSNorm(torch.nn.Module):
     def __init__(
         self,
         hidden_size: int,
@@ -108,7 +107,7 @@ class RMSNorm(LightweightModule):
         return hidden_states.to(input_dtype)
 
 
-class RotaryEmbedding(LightweightModule):
+class RotaryEmbedding(torch.nn.Module):
     def __init__(self, dim: int, max_position_embeddings: int = 2048, base: int = 10000) -> None:
         super().__init__()
         assert dim % 2 == 0
@@ -182,7 +181,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     return q_embed, k_embed
 
 
-class MultiHeadAttention(LightweightModule):
+class MultiHeadAttention(torch.nn.Module):
     def __init__(
         self,
         hidden_size: int,
@@ -295,7 +294,7 @@ class MultiHeadAttention(LightweightModule):
         return attn_output, attn_weights, past_key_value
 
 
-class MoeMLP(LightweightModule):
+class MoeMLP(torch.nn.Module):
     def __init__(
         self,
         hidden_dim: int,
@@ -313,7 +312,7 @@ class MoeMLP(LightweightModule):
         return current_hidden_states
 
 
-class MoeBlock(LightweightModule):
+class MoeBlock(torch.nn.Module):
     def __init__(
         self,
         hidden_dim: int,
@@ -382,7 +381,7 @@ class MoeBlock(LightweightModule):
         return final_hidden_states, router_logits
 
 
-class DecoderLayer(LightweightModule):
+class DecoderLayer(torch.nn.Module):
     def __init__(
         self,
         hidden_size: int,

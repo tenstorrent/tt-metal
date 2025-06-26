@@ -6,10 +6,8 @@
 import torch
 import torch.nn as nn
 
-from models.common.lightweightmodule import LightweightModule
 
-
-class Neck(LightweightModule):
+class Neck(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.c1 = nn.Conv2d(1024, 512, 1, 1, 0, bias=False)

@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -26,7 +25,7 @@ model_cfgs = dict(
 )
 
 
-class EffectiveSEModule(LightweightModule):
+class EffectiveSEModule(torch.nn.Module):
     """'Effective Squeeze-Excitation
     From `CenterMask : Real-Time Anchor-Free Instance Segmentation` - https://arxiv.org/abs/1911.06667
     """
@@ -119,7 +118,7 @@ _NORM_ACT_REQUIRES_ARG = {
 }
 
 
-class SeparableConvNormAct(LightweightModule):
+class SeparableConvNormAct(torch.nn.Module):
     """Separable Conv w/ trailing Norm and Activation"""
 
     def __init__(
@@ -190,7 +189,7 @@ class SequentialAppendList(nn.Sequential):
         return x
 
 
-class OsaBlock(LightweightModule):
+class OsaBlock(torch.nn.Module):
     def __init__(
         self,
         in_chs,
@@ -254,7 +253,7 @@ def create_attn(attn_type, channels, **kwargs):
 
 
 def get_attn(attn_type):
-    if isinstance(attn_type, LightweightModule):
+    if isinstance(attn_type, torch.nn.Module):
         return attn_type
     module_cls = None
     if attn_type:
@@ -271,7 +270,7 @@ def get_attn(attn_type):
     return module_cls
 
 
-class OsaStage(LightweightModule):
+class OsaStage(torch.nn.Module):
     def __init__(
         self,
         in_chs,
@@ -319,7 +318,7 @@ class OsaStage(LightweightModule):
         return x
 
 
-class SelectAdaptivePool2d(LightweightModule):
+class SelectAdaptivePool2d(torch.nn.Module):
     """Selectable global pooling layer with dynamic input kernel size"""
 
     def __init__(
@@ -355,7 +354,7 @@ class SelectAdaptivePool2d(LightweightModule):
         return self.__class__.__name__ + " (" + "pool_type=" + self.pool_type + ", flatten=" + str(self.flatten) + ")"
 
 
-class ConvNormAct(LightweightModule):
+class ConvNormAct(torch.nn.Module):
     def __init__(
         self,
         in_channels,
@@ -449,7 +448,7 @@ def get_norm_act_layer(norm_layer, act_layer=None):
     return norm_act_layer
 
 
-class ClassifierHead(LightweightModule):
+class ClassifierHead(torch.nn.Module):
     """Classifier head w/ configurable global pooling."""
 
     def __init__(
@@ -552,7 +551,7 @@ def _create_pool(
     return global_pool, num_pooled_features
 
 
-class VoVNet(LightweightModule):
+class VoVNet(torch.nn.Module):
     def __init__(
         self,
         cfg=model_cfgs,
@@ -571,8 +570,8 @@ class VoVNet(LightweightModule):
             num_classes (int): Number of classifier classes (default: 1000)
             global_pool (str): Global pooling type (default: 'avg')
             output_stride (int): Output stride of network, one of (8, 16, 32) (default: 32)
-            norm_layer (Union[str, LightweightModule]): normalization layer
-            act_layer (Union[str, LightweightModule]): activation layer
+            norm_layer (Union[str, torch.nn.Module]): normalization layer
+            act_layer (Union[str, torch.nn.Module]): activation layer
             kwargs (dict): Extra kwargs overlayed onto cfg
         """
         super(VoVNet, self).__init__()

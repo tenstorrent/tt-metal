@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 import numpy as np
 import torch
 import torch.nn as nn
@@ -43,7 +42,7 @@ def autopad(k, p=None):
     return p
 
 
-class MP(LightweightModule):
+class MP(torch.nn.Module):
     def __init__(self, k=2):
         super(MP, self).__init__()
         self.m = nn.MaxPool2d(kernel_size=k, stride=k)
@@ -52,7 +51,7 @@ class MP(LightweightModule):
         return self.m(x)
 
 
-class Concat(LightweightModule):
+class Concat(torch.nn.Module):
     def __init__(self, dimension=1):
         super(Concat, self).__init__()
         self.d = dimension
@@ -61,18 +60,18 @@ class Concat(LightweightModule):
         return torch.cat(x, self.d)
 
 
-class Conv(LightweightModule):
+class Conv(torch.nn.Module):
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):
         super(Conv, self).__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
         self.bn = nn.BatchNorm2d(c2)
-        self.act = nn.SiLU() if act is True else (act if isinstance(act, LightweightModule) else nn.Identity())
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, torch.nn.Module) else nn.Identity())
 
     def forward(self, x):
         return self.act(self.bn(self.conv(x)))
 
 
-class SPPCSPC(LightweightModule):
+class SPPCSPC(torch.nn.Module):
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5, k=(5, 9, 13)):
         super(SPPCSPC, self).__init__()
         c_ = int(2 * c2 * e)
@@ -96,7 +95,7 @@ def make_divisible(x, divisor):
     return math.ceil(x / divisor) * divisor
 
 
-class RepConv(LightweightModule):
+class RepConv(torch.nn.Module):
     def __init__(self, c1, c2, k=3, s=1, p=None, g=1, act=True, deploy=False):
         super(RepConv, self).__init__()
         self.deploy = deploy
@@ -106,7 +105,7 @@ class RepConv(LightweightModule):
         assert k == 3
         assert autopad(k, p) == 1
         padding_11 = autopad(k, p) - k // 2
-        self.act = nn.SiLU() if act is True else (act if isinstance(act, LightweightModule) else nn.Identity())
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, torch.nn.Module) else nn.Identity())
         if deploy:
             self.rbr_reparam = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=True)
         else:
@@ -420,7 +419,7 @@ def revert_sync_batchnorm(module):
     return module_output
 
 
-class TracedModel(LightweightModule):
+class TracedModel(torch.nn.Module):
     def __init__(self, model=None, device=None, img_size=(640, 640)):
         super(TracedModel, self).__init__()
         self.stride = model.stride

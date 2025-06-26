@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 from diffusers import DiffusionPipeline
 from diffusers.models.unets.unet_2d_condition import UNet2DConditionOutput
 import torch
@@ -10,7 +9,7 @@ import pytest
 
 
 # Wrapper UNet2DCondition to slice it over a batch dimension
-class UNet2DConditionSliceWrapper(LightweightModule):
+class UNet2DConditionSliceWrapper(torch.nn.Module):
     def __init__(self, unet):
         super().__init__()
         self.unet = unet

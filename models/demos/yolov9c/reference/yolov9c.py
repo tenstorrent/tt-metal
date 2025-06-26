@@ -6,8 +6,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as f
 
-from models.common.lightweightmodule import LightweightModule
-
 
 def make_anchors(feats, strides, grid_cell_offset=0.5):
     anchor_points, stride_tensor = [], []
@@ -42,7 +40,7 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
     return p
 
 
-class Conv(LightweightModule):
+class Conv(torch.nn.Module):
     def __init__(
         self,
         in_channel,
@@ -82,7 +80,7 @@ class Conv(LightweightModule):
         return x
 
 
-class RepConv(LightweightModule):
+class RepConv(torch.nn.Module):
     default_act = nn.SiLU()
 
     def __init__(self, in_channel, out_channel, k=3, s=1, p=1, g=1, d=1):
@@ -95,7 +93,7 @@ class RepConv(LightweightModule):
         return self.act(self.conv1(x) + self.conv2(x))
 
 
-class Bottleneck(LightweightModule):
+class Bottleneck(torch.nn.Module):
     def __init__(self, in_channel, out_channel):
         super().__init__()
         self.cv1 = Conv(in_channel, out_channel)
@@ -112,7 +110,7 @@ class RepBottleneck(Bottleneck):
         self.cv1 = RepConv(in_channel // 2, out_channel // 2)
 
 
-class C3(LightweightModule):
+class C3(torch.nn.Module):
     def __init__(self, in_channel, out_channel, n=1, shortcut=True, g=1, e=0.5):
         super().__init__()
         self.cv1 = Conv(in_channel // 2, out_channel // 4, 1, 1)
@@ -129,7 +127,7 @@ class RepCSP(C3):
         self.m = nn.Sequential(*(RepBottleneck(in_channel // 2, out_channel // 2) for _ in range(1)))
 
 
-class RepNCSPELAN4(LightweightModule):
+class RepNCSPELAN4(torch.nn.Module):
     def __init__(self, input_channel, output_channel, cv2_inc, cv2_outc, cv3_inc, cv3_outc, cv4_inc, cv4_out_c, n=1):
         super().__init__()
         self.cv1 = Conv(input_channel, output_channel)
@@ -143,7 +141,7 @@ class RepNCSPELAN4(LightweightModule):
         return self.cv4(torch.cat(y, 1))
 
 
-class ADown(LightweightModule):
+class ADown(torch.nn.Module):
     def __init__(self, in_channel, out_channel):
         super().__init__()
         self.cv1 = Conv(in_channel, out_channel, 3, 2, 1)
@@ -158,7 +156,7 @@ class ADown(LightweightModule):
         return torch.cat((x1, x2), 1)
 
 
-class SPPELAN(LightweightModule):
+class SPPELAN(torch.nn.Module):
     def __init__(self, input_channel, output_channel, k=5):
         super().__init__()
         self.cv1 = Conv(input_channel, output_channel, 1, 1)
@@ -173,7 +171,7 @@ class SPPELAN(LightweightModule):
         return self.cv5(torch.cat(y, 1))
 
 
-class DFL(LightweightModule):
+class DFL(torch.nn.Module):
     def __init__(self, c1=16):
         super().__init__()
         self.c1 = c1
@@ -187,7 +185,7 @@ class DFL(LightweightModule):
         return self.conv(x.view(b, 4, self.c1, a).transpose(2, 1).softmax(1)).view(b, 4, a)
 
 
-class Detect(LightweightModule):
+class Detect(torch.nn.Module):
     dynamic = False
     export = False
     format = None
@@ -235,7 +233,7 @@ class Detect(LightweightModule):
         return dist2bbox(bboxes, anchors, dim=1)
 
 
-class Proto(LightweightModule):
+class Proto(torch.nn.Module):
     def __init__(self, c1, c_=256, c2=32):
         super().__init__()
         self.cv1 = Conv(c1, c_, kernel=3, enable_autopad=True)
@@ -266,7 +264,7 @@ class Segment(Detect):
         return (torch.cat([x[0], mc], 1), (x[1], mc, p))
 
 
-class YoloV9(LightweightModule):
+class YoloV9(torch.nn.Module):
     def __init__(self, enable_segment=True):
         super().__init__()
         if enable_segment:
@@ -360,7 +358,7 @@ class YoloV9(LightweightModule):
         return x
 
 
-class Concat(LightweightModule):
+class Concat(torch.nn.Module):
     def __init__(self, dimension=1):
         super().__init__()
         self.d = dimension
@@ -369,7 +367,7 @@ class Concat(LightweightModule):
         return torch.cat(x, self.d)
 
 
-class BaseModel(LightweightModule):
+class BaseModel(torch.nn.Module):
     def forward(self, x, *args, **kwargs):
         if isinstance(x, dict):
             return self.loss(x, *args, **kwargs)

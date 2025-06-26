@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 from typing import cast, Dict, List, Union
 
 import torch
@@ -58,10 +57,10 @@ cfgs: Dict[str, List[Union[str, int]]] = {
 }
 
 
-class VGG(LightweightModule):
+class VGG(torch.nn.Module):
     def __init__(
         self,
-        features: LightweightModule,
+        features: torch.nn.Module,
         num_classes: int = 1000,
         init_weights: bool = True,
         dropout: float = 0.5,
@@ -108,7 +107,7 @@ def make_layers(
     state_dict=None,
     base_address="features",
 ) -> nn.Sequential:
-    layers: List[LightweightModule] = []
+    layers: List[torch.nn.Module] = []
     in_channels = 3
 
     for v in cfg:

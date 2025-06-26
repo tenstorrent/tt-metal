@@ -28,7 +28,6 @@ import torch
 from torch import nn
 from torch.nn.utils import skip_init
 
-from models.common.lightweightmodule import LightweightModule
 from models.demos.t3000.mixtral8x7b.reference.moe import MoeLayer
 
 
@@ -66,7 +65,7 @@ def apply_rotary_emb(
     return xq_out.type_as(xq), xk_out.type_as(xk)
 
 
-class Attention(LightweightModule):
+class Attention(torch.nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
@@ -142,7 +141,7 @@ class Attention(LightweightModule):
         return self.wo(output)
 
 
-class FeedForward(LightweightModule):
+class FeedForward(torch.nn.Module):
     def __init__(self, args):
         super().__init__()
 
@@ -154,7 +153,7 @@ class FeedForward(LightweightModule):
         return self.w2(nn.functional.silu(self.w1(x)) * self.w3(x))
 
 
-class RMSNorm(LightweightModule):
+class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
@@ -168,7 +167,7 @@ class RMSNorm(LightweightModule):
         return output * self.weight
 
 
-class TransformerBlock(LightweightModule):
+class TransformerBlock(torch.nn.Module):
     def __init__(self, args):
         super().__init__()
         self.n_heads = args.n_heads
@@ -177,7 +176,7 @@ class TransformerBlock(LightweightModule):
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
         self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
         self.args = args
-        self.feed_forward: LightweightModule
+        self.feed_forward: torch.nn.Module
         if args.moe is not None:
             self.feed_forward = MoeLayer(
                 experts=[FeedForward(args=args) for _ in range(args.num_experts)],
@@ -206,7 +205,7 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 1000000.0) -> torch.
     return torch.polar(torch.ones_like(freqs), freqs)  # complex64
 
 
-class Transformer(LightweightModule):
+class Transformer(torch.nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args

@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 from functools import partial
 from typing import Any, Callable, List, Optional, Sequence
 import torch
@@ -50,13 +49,13 @@ class InvertedResidualConfig:
         return _make_divisible(channels * width_mult, 8)
 
 
-class InvertedResidual(LightweightModule):
+class InvertedResidual(torch.nn.Module):
     # Implemented as described at section 5 of MobileNetV3 paper
     def __init__(
         self,
         cnf: InvertedResidualConfig,
-        norm_layer: Callable[..., LightweightModule],
-        se_layer: Callable[..., LightweightModule] = partial(SElayer, scale_activation=nn.Hardsigmoid),
+        norm_layer: Callable[..., torch.nn.Module],
+        se_layer: Callable[..., torch.nn.Module] = partial(SElayer, scale_activation=nn.Hardsigmoid),
     ):
         super().__init__()
         if not (1 <= cnf.stride <= 2):
@@ -64,7 +63,7 @@ class InvertedResidual(LightweightModule):
 
         self.use_res_connect = cnf.stride == 1 and cnf.input_channels == cnf.out_channels
 
-        layers: List[LightweightModule] = []
+        layers: List[torch.nn.Module] = []
         activation_layer = nn.Hardswish if cnf.use_hs else nn.ReLU
 
         # expand
@@ -119,14 +118,14 @@ class InvertedResidual(LightweightModule):
         return result
 
 
-class MobileNetV3(LightweightModule):
+class MobileNetV3(torch.nn.Module):
     def __init__(
         self,
         inverted_residual_setting: List[InvertedResidualConfig],
         last_channel: int,
         num_classes: int = 1000,
-        block: Optional[Callable[..., LightweightModule]] = None,
-        norm_layer: Optional[Callable[..., LightweightModule]] = None,
+        block: Optional[Callable[..., torch.nn.Module]] = None,
+        norm_layer: Optional[Callable[..., torch.nn.Module]] = None,
         dropout: float = 0.0,
         **kwargs: Any,
     ) -> None:
@@ -147,7 +146,7 @@ class MobileNetV3(LightweightModule):
         if norm_layer is None:
             norm_layer = partial(nn.BatchNorm2d, eps=0.001, momentum=0.01)
 
-        layers: List[LightweightModule] = []
+        layers: List[torch.nn.Module] = []
 
         # building first layer
         firstconv_output_channels = inverted_residual_setting[0].input_channels

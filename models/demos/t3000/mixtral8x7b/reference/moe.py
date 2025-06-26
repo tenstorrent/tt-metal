@@ -28,7 +28,6 @@ from torch import nn
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from models.common.lightweightmodule import LightweightModule
 
 
 @dataclasses.dataclass
@@ -37,8 +36,8 @@ class MoeArgs:
     num_experts_per_tok: int
 
 
-class MoeLayer(LightweightModule):
-    def __init__(self, experts: List[LightweightModule], gate: LightweightModule, moe_args: MoeArgs):
+class MoeLayer(torch.nn.Module):
+    def __init__(self, experts: List[torch.nn.Module], gate: torch.nn.Module, moe_args: MoeArgs):
         super().__init__()
         assert len(experts) > 0
         self.experts = nn.ModuleList(experts)

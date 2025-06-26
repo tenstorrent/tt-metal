@@ -46,8 +46,6 @@ from transformers.utils import (
     logging,
 )
 
-from models.common.lightweightmodule import LightweightModule
-
 from .hf_configuration_falcon import FalconConfig
 
 logger = logging.get_logger(__name__)
@@ -80,7 +78,7 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
-class FalconRotaryEmbedding(LightweightModule):
+class FalconRotaryEmbedding(torch.nn.Module):
     """Implementation of RotaryEmbedding from GPT-NeoX.
     This implementation is designed to operate on queries and keys that are compatible with `[batch_size,
     n_heads_per_partition, seq_len, head_dim]` (e.g. MinGPTAttention format).
@@ -247,7 +245,7 @@ class TT_functional:
         return attn_weight @ V
 
 
-class FalconAttention(LightweightModule):
+class FalconAttention(torch.nn.Module):
     def __init__(self, config: FalconConfig):
         super().__init__()
 
@@ -476,7 +474,7 @@ class FalconAttention(LightweightModule):
                 return output_tensor, present
 
 
-class FalconMLP(LightweightModule):
+class FalconMLP(torch.nn.Module):
     def __init__(self, config: FalconConfig):
         super().__init__()
         hidden_size = config.hidden_size
@@ -492,7 +490,7 @@ class FalconMLP(LightweightModule):
         return x
 
 
-class FalconDecoderLayer(LightweightModule):
+class FalconDecoderLayer(torch.nn.Module):
     def __init__(self, config: FalconConfig):
         super().__init__()
         hidden_size = config.hidden_size
@@ -578,7 +576,7 @@ FALCON_START_DOCSTRING = r"""
     This model inherits from [`PreTrainedModel`]. Check the superclass documentation for the generic methods the
     library implements for all its model (such as downloading or saving, resizing the input embeddings etc.)
 
-    This model is also a PyTorch [LightweightModule](https://pytorch.org/docs/stable/nn.html#LightweightModule) subclass.
+    This model is also a PyTorch [torch.nn.Module](https://pytorch.org/docs/stable/nn.html#torch.nn.Module) subclass.
     Use it as a regular PyTorch Module and refer to the PyTorch documentation for all matter related to general usage
     and behavior.
 
@@ -657,7 +655,7 @@ class FalconPreTrainedModel(PreTrainedModel):
     def __init__(self, *inputs, **kwargs):
         super().__init__(*inputs, **kwargs)
 
-    def _init_weights(self, module: LightweightModule):
+    def _init_weights(self, module: torch.nn.Module):
         """Initialize the weights."""
         if isinstance(module, nn.Linear) or isinstance(module, FalconLinear):
             # Slightly different from the TF version which uses truncated_normal for initialization
@@ -674,7 +672,7 @@ class FalconPreTrainedModel(PreTrainedModel):
             module.weight.data.fill_(1.0)
 
     # Copied from transformers.models.bloom.modeling_bloom.BloomPreTrainedModel._set_gradient_checkpointing with BloomModel->FalconModel
-    def _set_gradient_checkpointing(self, module: LightweightModule, value: bool = False):
+    def _set_gradient_checkpointing(self, module: torch.nn.Module, value: bool = False):
         if isinstance(module, FalconModel):
             module.gradient_checkpointing = value
 

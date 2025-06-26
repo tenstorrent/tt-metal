@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 from functools import partial
 from typing import Callable, List, Optional
 import torch
@@ -12,7 +11,7 @@ from models.experimental.swin_s.reference.swin_transformer_block import SwinTran
 from models.experimental.swin_s.reference.patchmerging import PatchMerging
 
 
-class Permute(LightweightModule):
+class Permute(torch.nn.Module):
     def __init__(self, dims: List[int]):
         super().__init__()
         self.dims = dims
@@ -21,7 +20,7 @@ class Permute(LightweightModule):
         return torch.permute(x, self.dims)
 
 
-class SwinTransformer(LightweightModule):
+class SwinTransformer(torch.nn.Module):
     def __init__(
         self,
         patch_size: List[int],
@@ -34,9 +33,9 @@ class SwinTransformer(LightweightModule):
         attention_dropout: float = 0.0,
         stochastic_depth_prob: float = 0.1,
         num_classes: int = 1000,
-        norm_layer: Optional[Callable[..., LightweightModule]] = None,
-        block: Optional[Callable[..., LightweightModule]] = None,
-        downsample_layer: Callable[..., LightweightModule] = PatchMerging,
+        norm_layer: Optional[Callable[..., torch.nn.Module]] = None,
+        block: Optional[Callable[..., torch.nn.Module]] = None,
+        downsample_layer: Callable[..., torch.nn.Module] = PatchMerging,
     ):
         super().__init__()
 
@@ -47,7 +46,7 @@ class SwinTransformer(LightweightModule):
         if norm_layer is None:
             norm_layer = partial(nn.LayerNorm, eps=1e-5)
 
-        layers: List[LightweightModule] = []
+        layers: List[torch.nn.Module] = []
         # split image into non-overlapping patches
         layers.append(
             nn.Sequential(
@@ -63,7 +62,7 @@ class SwinTransformer(LightweightModule):
         stage_block_id = 0
         # build SwinTransformer blocks
         for i_stage in range(len(depths)):
-            stage: List[LightweightModule] = []
+            stage: List[torch.nn.Module] = []
             dim = embed_dim * 2**i_stage
             for i_layer in range(depths[i_stage]):
                 # adjust stochastic depth probability based on the depth of the stage block

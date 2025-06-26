@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 import math
 from dataclasses import dataclass
 
@@ -23,7 +22,7 @@ class T5Config:
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.47.0/src/transformers/models/t5/modeling_t5.py
-class T5Encoder(LightweightModule):
+class T5Encoder(torch.nn.Module):
     def __init__(self, config: T5Config) -> None:
         super().__init__()
 
@@ -35,7 +34,7 @@ class T5Encoder(LightweightModule):
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.47.0/src/transformers/models/t5/modeling_t5.py
-class T5Stack(LightweightModule):
+class T5Stack(torch.nn.Module):
     def __init__(self, config: T5Config) -> None:
         super().__init__()
 
@@ -72,7 +71,7 @@ class T5Stack(LightweightModule):
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.47.0/src/transformers/models/t5/modeling_t5.py
-class T5Block(LightweightModule):
+class T5Block(torch.nn.Module):
     def __init__(self, config: T5Config, *, has_relative_attention_bias: bool) -> None:
         super().__init__()
 
@@ -93,7 +92,7 @@ class T5Block(LightweightModule):
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.47.0/src/transformers/models/t5/modeling_t5.py
-class T5LayerSelfAttention(LightweightModule):
+class T5LayerSelfAttention(torch.nn.Module):
     def __init__(self, config: T5Config, *, has_relative_attention_bias: bool) -> None:
         super().__init__()
 
@@ -107,7 +106,7 @@ class T5LayerSelfAttention(LightweightModule):
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.47.0/src/transformers/models/t5/modeling_t5.py
-class T5Attention(LightweightModule):
+class T5Attention(torch.nn.Module):
     def __init__(self, config: T5Config, *, has_relative_attention_bias: bool) -> None:
         super().__init__()
         self._config = config
@@ -145,7 +144,7 @@ class T5Attention(LightweightModule):
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.47.0/src/transformers/models/t5/modeling_t5.py
-class T5LayerFF(LightweightModule):
+class T5LayerFF(torch.nn.Module):
     def __init__(self, d_model: int, d_ff: int, eps: float) -> None:
         super().__init__()
         self.DenseReluDense = T5DenseGatedActDense(d_model=d_model, d_ff=d_ff)
@@ -158,7 +157,7 @@ class T5LayerFF(LightweightModule):
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.47.0/src/transformers/models/t5/modeling_t5.py
-class T5DenseGatedActDense(LightweightModule):
+class T5DenseGatedActDense(torch.nn.Module):
     def __init__(self, *, d_model: int, d_ff: int) -> None:
         super().__init__()
         self.wi_0 = torch.nn.Linear(d_model, d_ff, bias=False)
@@ -174,7 +173,7 @@ class T5DenseGatedActDense(LightweightModule):
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.47.0/src/transformers/models/t5/modeling_t5.py
-class T5LayerNorm(LightweightModule):
+class T5LayerNorm(torch.nn.Module):
     def __init__(self, *, d_model: int, eps: float) -> None:
         super().__init__()
 
@@ -222,7 +221,7 @@ def _compute_bias(
     device: torch.device,
     relative_attention_num_buckets: int,
     relative_attention_max_distance: int,
-    relative_attention_bias: LightweightModule,
+    relative_attention_bias: torch.nn.Module,
 ) -> torch.Tensor:
     context_position = torch.arange(seq_length, device=device)[:, None]
     memory_position = torch.arange(seq_length, device=device)[None, :]
@@ -239,7 +238,7 @@ def _compute_bias(
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.47.0/src/transformers/activations.py
-class NewGELUActivation(LightweightModule):
+class NewGELUActivation(torch.nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         c = math.sqrt(2.0 / math.pi)
         y = 0.044715 * torch.pow(x, 3.0) + x

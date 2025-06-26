@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Union, Tuple
 import torch.nn as nn
 
@@ -19,7 +18,7 @@ def adaptive_pool_feat_mult(pool_type="avg"):
         return 1
 
 
-class SelectAdaptivePool2d(LightweightModule):
+class SelectAdaptivePool2d(torch.nn.Module):
     """Selectable global pooling layer with dynamic input kernel size"""
 
     def __init__(

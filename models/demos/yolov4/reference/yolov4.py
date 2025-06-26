@@ -5,7 +5,6 @@
 
 import torch
 
-from models.common.lightweightmodule import LightweightModule
 from models.demos.yolov4.reference.downsample1 import DownSample1
 from models.demos.yolov4.reference.downsample2 import DownSample2
 from models.demos.yolov4.reference.downsample3 import DownSample3
@@ -15,7 +14,7 @@ from models.demos.yolov4.reference.head import Head
 from models.demos.yolov4.reference.neck import Neck
 
 
-class Yolov4(LightweightModule):
+class Yolov4(torch.nn.Module):
     def __init__(self):
         super(Yolov4, self).__init__()
         self.downsample1 = DownSample1()

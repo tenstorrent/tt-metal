@@ -11,7 +11,6 @@ https://github.com/openai/gpt-2/blob/master/src/model.py
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 """
 
-from models.common.lightweightmodule import LightweightModule
 import math
 import inspect
 from dataclasses import dataclass
@@ -21,7 +20,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 
-class LayerNorm(LightweightModule):
+class LayerNorm(torch.nn.Module):
     """LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False"""
 
     def __init__(self, ndim, bias):
@@ -33,7 +32,7 @@ class LayerNorm(LightweightModule):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
 
-class CausalSelfAttention(LightweightModule):
+class CausalSelfAttention(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
@@ -97,7 +96,7 @@ class CausalSelfAttention(LightweightModule):
         return y
 
 
-class MLP(LightweightModule):
+class MLP(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
         self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
@@ -113,7 +112,7 @@ class MLP(LightweightModule):
         return x
 
 
-class Block(LightweightModule):
+class Block(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
@@ -138,7 +137,7 @@ class GPTConfig:
     bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
 
 
-class GPT(LightweightModule):
+class GPT(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.vocab_size is not None

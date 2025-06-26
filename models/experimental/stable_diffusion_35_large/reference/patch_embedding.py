@@ -2,14 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 from __future__ import annotations
 
 import torch
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/embeddings.py
-class PatchEmbed(LightweightModule):
+class PatchEmbed(torch.nn.Module):
     def __init__(
         self,
         *,

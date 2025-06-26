@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 import warnings, torch
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
@@ -20,7 +19,7 @@ from torchvision.models.detection._utils import BoxCoder, Matcher, SSDMatcher
 from torchvision.models.detection.transform import GeneralizedRCNNTransform
 
 
-class SSDHead(LightweightModule):
+class SSDHead(torch.nn.Module):
     def __init__(self, in_channels: List[int], num_anchors: List[int], num_classes: int):
         super().__init__()
         self.classification_head = SSDClassificationHead(in_channels, num_anchors, num_classes)
@@ -33,7 +32,7 @@ class SSDHead(LightweightModule):
         }
 
 
-class SSDScoringHead(LightweightModule):
+class SSDScoringHead(torch.nn.Module):
     def __init__(self, module_list: nn.ModuleList, num_columns: int):
         super().__init__()
         self.module_list = module_list
@@ -88,7 +87,7 @@ class SSDRegressionHead(SSDScoringHead):
         super().__init__(bbox_reg, 4)
 
 
-class SSD(LightweightModule):
+class SSD(torch.nn.Module):
     __annotations__ = {
         "box_coder": BoxCoder,
         "proposal_matcher": Matcher,
@@ -96,13 +95,13 @@ class SSD(LightweightModule):
 
     def __init__(
         self,
-        backbone: LightweightModule,
+        backbone: torch.nn.Module,
         anchor_generator: DefaultBoxGenerator,
         size: Tuple[int, int],
         num_classes: int,
         image_mean: Optional[List[float]] = None,
         image_std: Optional[List[float]] = None,
-        head: Optional[LightweightModule] = None,
+        head: Optional[torch.nn.Module] = None,
         score_thresh: float = 0.01,
         nms_thresh: float = 0.45,
         detections_per_img: int = 200,

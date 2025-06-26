@@ -9,7 +9,6 @@
 # Modified by Ke Sun (sunk@mail.ustc.edu.cn)
 # ------------------------------------------------------------------------------
 
-from models.common.lightweightmodule import LightweightModule
 import logging
 
 import torch
@@ -62,7 +61,7 @@ def conv3x3(in_planes, out_planes, stride=1):
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False)
 
 
-class BasicBlock(LightweightModule):
+class BasicBlock(torch.nn.Module):
     expansion = 1
 
     def __init__(self, inplanes, planes, stride=1, downsample=None):
@@ -93,7 +92,7 @@ class BasicBlock(LightweightModule):
         return out
 
 
-class Bottleneck(LightweightModule):
+class Bottleneck(torch.nn.Module):
     expansion = 4
 
     def __init__(self, inplanes, planes, stride=1, downsample=None):
@@ -131,7 +130,7 @@ class Bottleneck(LightweightModule):
         return out
 
 
-class HighResolutionModule(LightweightModule):
+class HighResolutionModule(torch.nn.Module):
     def __init__(
         self,
         num_branches,
@@ -300,7 +299,7 @@ class HighResolutionModule(LightweightModule):
 blocks_dict = {"BASIC": BasicBlock, "BOTTLENECK": Bottleneck}
 
 
-class PytorchHighResolutionNet(LightweightModule):
+class PytorchHighResolutionNet(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.cfg = config

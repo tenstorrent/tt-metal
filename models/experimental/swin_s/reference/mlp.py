@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 from typing import Callable, List, Optional
 import torch
 
@@ -12,8 +11,8 @@ class MLP(torch.nn.Sequential):
         self,
         in_channels: int,
         hidden_channels: List[int],
-        norm_layer: Optional[Callable[..., LightweightModule]] = None,
-        activation_layer: Optional[Callable[..., LightweightModule]] = torch.nn.ReLU,
+        norm_layer: Optional[Callable[..., torch.nn.Module]] = None,
+        activation_layer: Optional[Callable[..., torch.nn.Module]] = torch.nn.ReLU,
         inplace: Optional[bool] = None,
         bias: bool = True,
         dropout: float = 0.0,

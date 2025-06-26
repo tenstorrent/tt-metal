@@ -5,16 +5,14 @@
 import torch
 import torch.nn as nn
 
-from models.common.lightweightmodule import LightweightModule
 
-
-class Conv(LightweightModule):
+class Conv(torch.nn.Module):
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
         super().__init__()
         self.default_act = nn.SiLU(inplace=True)
         self.conv = nn.Conv2d(c1, c2, k, s, self._autopad(k, p, d), groups=g, dilation=d, bias=False)
         self.bn = nn.BatchNorm2d(c2, eps=0.001, momentum=0.03)  # Modified BatchNorm parameters
-        self.act = self.default_act if act is True else act if isinstance(act, LightweightModule) else nn.Identity()
+        self.act = self.default_act if act is True else act if isinstance(act, torch.nn.Module) else nn.Identity()
 
     def _autopad(self, k, p=None, d=1):
         if d > 1:
@@ -30,7 +28,7 @@ class Conv(LightweightModule):
         return x
 
 
-class Bottleneck(LightweightModule):
+class Bottleneck(torch.nn.Module):
     def __init__(self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5):
         super().__init__()
         c_ = int(c2 * e)
@@ -45,7 +43,7 @@ class Bottleneck(LightweightModule):
         return x + cv2_out if add else cv2_out
 
 
-class C2f(LightweightModule):
+class C2f(torch.nn.Module):
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
         super().__init__()
         self.c = int(c2 * e)
@@ -64,7 +62,7 @@ class C2f(LightweightModule):
         return x
 
 
-class SPPF(LightweightModule):
+class SPPF(torch.nn.Module):
     def __init__(self, c1, c2, k=5):
         super().__init__()
         self.c_ = c1 // 2
@@ -79,7 +77,7 @@ class SPPF(LightweightModule):
         return self.cv2(torch.cat(y, 1))
 
 
-class DetectCv2(LightweightModule):
+class DetectCv2(torch.nn.Module):
     def __init__(self, c1, c2, k, reg_max):
         super().__init__()
         self.conv1 = Conv(c1, c2, k)
@@ -93,7 +91,7 @@ class DetectCv2(LightweightModule):
         return x
 
 
-class DFL(LightweightModule):
+class DFL(torch.nn.Module):
     def __init__(self, c1=16):
         super().__init__()
         self.conv = nn.Conv2d(c1, 1, 1, bias=False)
@@ -109,7 +107,7 @@ class DFL(LightweightModule):
         return x
 
 
-class Detect(LightweightModule):
+class Detect(torch.nn.Module):
     def __init__(self, nc=80, ch=()):
         super().__init__()
         self.nc = nc
@@ -188,7 +186,7 @@ class Detect(LightweightModule):
             return torch.cat((c_xy, wh), dim)
 
 
-class Concat(LightweightModule):
+class Concat(torch.nn.Module):
     def __init__(self, dim=1):
         super().__init__()
         self.dim = dim
@@ -197,7 +195,7 @@ class Concat(LightweightModule):
         return torch.cat(inputs, dim=self.dim)
 
 
-class DetectionModel(LightweightModule):
+class DetectionModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.model = nn.Sequential(
@@ -255,7 +253,7 @@ class DetectionModel(LightweightModule):
         return self.model[22]([fifteen, eighteen, twentyone])
 
 
-class YOLOv8(LightweightModule):
+class YOLOv8(torch.nn.Module):
     def __init__(self, weights_path=None):
         super().__init__()
         self.model = DetectionModel()

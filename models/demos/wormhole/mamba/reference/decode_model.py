@@ -49,7 +49,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import einsum, rearrange, repeat
 
-from models.common.lightweightmodule import LightweightModule
 from models.demos.wormhole.mamba.reference.args import ModelArgs
 
 MambaPretrainedModelName = Literal[
@@ -62,7 +61,7 @@ MambaPretrainedModelName = Literal[
 ]
 
 
-class MambaDecode(LightweightModule):
+class MambaDecode(torch.nn.Module):
     def __init__(self, args: ModelArgs):
         """Full Mamba model."""
         super().__init__()
@@ -168,7 +167,7 @@ class MambaDecode(LightweightModule):
         return model
 
 
-class ResidualBlock(LightweightModule):
+class ResidualBlock(torch.nn.Module):
     def __init__(self, args: ModelArgs):
         """Simple block wrapping Mamba block with normalization and residual connection."""
         super().__init__()
@@ -201,7 +200,7 @@ class ResidualBlock(LightweightModule):
         return output
 
 
-class MambaBlock(LightweightModule):
+class MambaBlock(torch.nn.Module):
     def __init__(self, args: ModelArgs):
         """A single Mamba block, as described in Figure 3 in Section 3.4 in the Mamba paper [1]."""
         super().__init__()
@@ -386,7 +385,7 @@ class MambaBlock(LightweightModule):
         return y
 
 
-class RMSNorm(LightweightModule):
+class RMSNorm(torch.nn.Module):
     def __init__(self, d_model: int, eps: float = 1e-5):
         super().__init__()
         self.eps = eps

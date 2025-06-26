@@ -2,11 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 import torch.nn as nn
 
 
-class BasicConv2d(LightweightModule):
+class BasicConv2d(torch.nn.Module):
     def __init__(self, in_planes, out_planes, kernel_size, stride, padding=0):
         super(BasicConv2d, self).__init__()
         self.conv = nn.Conv2d(

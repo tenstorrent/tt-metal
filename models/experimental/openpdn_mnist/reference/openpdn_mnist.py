@@ -3,12 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from models.common.lightweightmodule import LightweightModule
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-class OpenPDNMnist(LightweightModule):
+class OpenPDNMnist(torch.nn.Module):
     def __init__(self, num_classes):
         super(OpenPDNMnist, self).__init__()
         self.conv1 = nn.Conv2d(in_channels=5, out_channels=32, kernel_size=5, padding=2)

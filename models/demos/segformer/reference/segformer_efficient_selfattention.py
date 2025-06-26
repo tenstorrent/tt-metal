@@ -7,10 +7,8 @@ import math
 import torch
 import torch.nn as nn
 
-from models.common.lightweightmodule import LightweightModule
 
-
-class SegformerEfficientSelfAttention(LightweightModule):
+class SegformerEfficientSelfAttention(torch.nn.Module):
     """SegFormer's efficient self-attention mechanism. Employs the sequence reduction process introduced in the [PvT
     paper](https://arxiv.org/abs/2102.12122)."""
 

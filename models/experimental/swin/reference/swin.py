@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 import collections.abc
 import math
 from dataclasses import dataclass
@@ -82,7 +81,7 @@ def window_reverse(windows, window_size, height, width):
     return windows
 
 
-class SwinSelfAttention(LightweightModule):
+class SwinSelfAttention(torch.nn.Module):
     def __init__(self, config: SwinConfig, dim, num_heads, window_size):
         super().__init__()
         if dim % num_heads != 0:
@@ -181,7 +180,7 @@ class SwinSelfAttention(LightweightModule):
         return outputs
 
 
-class SwinSelfOutput(LightweightModule):
+class SwinSelfOutput(torch.nn.Module):
     def __init__(self, config: SwinConfig, dim):
         super().__init__()
         self.dense = nn.Linear(dim, dim)
@@ -192,7 +191,7 @@ class SwinSelfOutput(LightweightModule):
         return hidden_states
 
 
-class SwinAttention(LightweightModule):
+class SwinAttention(torch.nn.Module):
     def __init__(self, config: SwinConfig, dim, num_heads, window_size):
         super().__init__()
         self.self = SwinSelfAttention(config, dim, num_heads, window_size)
@@ -233,7 +232,7 @@ class SwinAttention(LightweightModule):
         return outputs
 
 
-class SwinIntermediate(LightweightModule):
+class SwinIntermediate(torch.nn.Module):
     def __init__(self, config: SwinConfig, dim):
         super().__init__()
         self.dense = nn.Linear(dim, int(config.mlp_ratio * dim))
@@ -248,7 +247,7 @@ class SwinIntermediate(LightweightModule):
         return hidden_states
 
 
-class SwinOutput(LightweightModule):
+class SwinOutput(torch.nn.Module):
     def __init__(self, config: SwinConfig, dim):
         super().__init__()
         self.dense = nn.Linear(int(config.mlp_ratio * dim), dim)
@@ -258,7 +257,7 @@ class SwinOutput(LightweightModule):
         return hidden_states
 
 
-class SwinLayer(LightweightModule):
+class SwinLayer(torch.nn.Module):
     def __init__(self, config: SwinConfig, dim, input_resolution, num_heads, shift_size=0):
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
@@ -383,7 +382,7 @@ class SwinLayer(LightweightModule):
         return layer_outputs
 
 
-class SwinStage(LightweightModule):
+class SwinStage(torch.nn.Module):
     def __init__(self, config: SwinConfig, dim, input_resolution, depth, num_heads, downsample):
         super().__init__()
         self.config = config
@@ -450,7 +449,7 @@ class SwinStage(LightweightModule):
         return stage_outputs
 
 
-class SwinPatchMerging(LightweightModule):
+class SwinPatchMerging(torch.nn.Module):
     """
     Patch Merging Layer.
 
@@ -459,7 +458,7 @@ class SwinPatchMerging(LightweightModule):
             Resolution of input feature.
         dim (`int`):
             Number of input channels.
-        norm_layer (`LightweightModule`, *optional*, defaults to `nn.LayerNorm`):
+        norm_layer (`torch.nn.Module`, *optional*, defaults to `nn.LayerNorm`):
             Normalization layer class.
     """
 
@@ -467,7 +466,7 @@ class SwinPatchMerging(LightweightModule):
         self,
         input_resolution: Tuple[int],
         dim: int,
-        norm_layer: LightweightModule = nn.LayerNorm,
+        norm_layer: torch.nn.Module = nn.LayerNorm,
     ) -> None:
         super().__init__()
         self.input_resolution = input_resolution
@@ -509,7 +508,7 @@ class SwinPatchMerging(LightweightModule):
         return input_feature
 
 
-class SwinPatchEmbeddings(LightweightModule):
+class SwinPatchEmbeddings(torch.nn.Module):
     """
     This class turns `pixel_values` of shape `(batch_size, num_channels, height, width)` into the initial
     `hidden_states` (patch embeddings) of shape `(batch_size, seq_length, hidden_size)` to be consumed by a
@@ -560,7 +559,7 @@ class SwinPatchEmbeddings(LightweightModule):
         return embeddings, output_dimensions
 
 
-class SwinEmbeddings(LightweightModule):
+class SwinEmbeddings(torch.nn.Module):
     """
     Construct the patch and position embeddings. Optionally, also the mask token.
     """
@@ -601,7 +600,7 @@ class SwinEmbeddings(LightweightModule):
         return embeddings, output_dimensions
 
 
-class SwinEncoder(LightweightModule):
+class SwinEncoder(torch.nn.Module):
     def __init__(self, config: SwinConfig, grid_size):
         super().__init__()
         self.num_layers = len(config.depths)
@@ -714,7 +713,7 @@ class SwinEncoder(LightweightModule):
         )
 
 
-class SwinModel(LightweightModule):
+class SwinModel(torch.nn.Module):
     def __init__(self, config: SwinConfig, add_pooling_layer=True, use_mask_token=False):
         super().__init__()
         self.config = config
@@ -802,7 +801,7 @@ class SwinModel(LightweightModule):
         )
 
 
-class PytorchSwinForImageClassification(LightweightModule):
+class PytorchSwinForImageClassification(torch.nn.Module):
     def __init__(self, config: SwinConfig) -> None:
         super().__init__()
         self.config = config

@@ -16,7 +16,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from models.common.lightweightmodule import LightweightModule
 import math
 from collections import OrderedDict
 
@@ -24,7 +23,7 @@ import torch
 from torch import Tensor, nn
 
 
-class GELUActivation(LightweightModule):
+class GELUActivation(torch.nn.Module):
     """
     Original Implementation of the GELU activation function in Google BERT repo when initially created. For
     information: OpenAI GPT's GELU is slightly different (and gives slightly different results): 0.5 * x * (1 +

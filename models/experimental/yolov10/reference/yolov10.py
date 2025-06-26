@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 import torch
 import torch.nn as nn
 import copy
@@ -41,7 +40,7 @@ def autopad(k, p=None, d=1):
     return p
 
 
-class Concat(LightweightModule):
+class Concat(torch.nn.Module):
     def __init__(self, dimension=1):
         super().__init__()
         self.d = dimension
@@ -51,20 +50,20 @@ class Concat(LightweightModule):
         return out
 
 
-class Conv(LightweightModule):
+class Conv(torch.nn.Module):
     default_act = nn.SiLU()
 
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
         super().__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         self.bn = nn.BatchNorm2d(c2, eps=0.001, momentum=0.03)
-        self.act = self.default_act if act is True else act if isinstance(act, LightweightModule) else nn.Identity()
+        self.act = self.default_act if act is True else act if isinstance(act, torch.nn.Module) else nn.Identity()
 
     def forward(self, x):
         return self.act(self.bn(self.conv(x)))
 
 
-class Bottleneck(LightweightModule):
+class Bottleneck(torch.nn.Module):
     def __init__(self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5):
         super().__init__()
         c_ = int(c2 * e)
@@ -76,7 +75,7 @@ class Bottleneck(LightweightModule):
         return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
 
-class C2f(LightweightModule):
+class C2f(torch.nn.Module):
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
         super().__init__()
         self.c = int(c2 * e)
@@ -96,7 +95,7 @@ class C2f(LightweightModule):
         return self.cv2(torch.cat(y, 1))
 
 
-class SPPF(LightweightModule):
+class SPPF(torch.nn.Module):
     def __init__(self, c1, c2, k=5):
         super().__init__()
         c_ = c1 // 2
@@ -110,7 +109,7 @@ class SPPF(LightweightModule):
         return self.cv2(torch.cat(y, 1))
 
 
-class CIB(LightweightModule):
+class CIB(torch.nn.Module):
     def __init__(self, c1, c2, shortcut=True, e=0.5, lk=False):
         super().__init__()
         c_ = int(c2 * e)
@@ -128,7 +127,7 @@ class CIB(LightweightModule):
         return x + self.cv1(x) if self.add else self.cv1(x)
 
 
-class SCDown(LightweightModule):
+class SCDown(torch.nn.Module):
     def __init__(self, c1, c2, k, s):
         super().__init__()
         self.cv1 = Conv(c1, c2, 1, 1)
@@ -144,7 +143,7 @@ class C2fCIB(C2f):
         self.m = nn.ModuleList(CIB(self.c, self.c, shortcut, e=1.0, lk=lk) for _ in range(n))
 
 
-class Attention(LightweightModule):
+class Attention(torch.nn.Module):
     def __init__(self, dim, num_heads=8, attn_ratio=0.5):
         super().__init__()
         self.num_heads = num_heads
@@ -172,7 +171,7 @@ class Attention(LightweightModule):
         return x
 
 
-class PSA(LightweightModule):
+class PSA(torch.nn.Module):
     def __init__(self, c1, c2, e=0.5):
         super().__init__()
         assert c1 == c2
@@ -190,7 +189,7 @@ class PSA(LightweightModule):
         return self.cv2(torch.cat((a, b), 1))
 
 
-class DFL(LightweightModule):
+class DFL(torch.nn.Module):
     def __init__(self, c1=16):
         super().__init__()
         self.conv = nn.Conv2d(c1, 1, 1, bias=False).requires_grad_(False)
@@ -203,7 +202,7 @@ class DFL(LightweightModule):
         return self.conv(x.view(b, 4, self.c1, a).transpose(2, 1).softmax(1)).view(b, 4, a)
 
 
-class Detect(LightweightModule):
+class Detect(torch.nn.Module):
     dynamic = False
     export = False
     format = None
@@ -278,7 +277,7 @@ class v10Detect(Detect):
         self.one2one_cv3 = copy.deepcopy(self.cv3)
 
 
-class YOLOv10(LightweightModule):
+class YOLOv10(torch.nn.Module):
     def __init__(self, nc=80, anchors=()):
         super().__init__()
         self.model = nn.Sequential(
@@ -344,7 +343,7 @@ class YOLOv10(LightweightModule):
         return x
 
 
-class BaseModel(LightweightModule):
+class BaseModel(torch.nn.Module):
     def forward(self, x, *args, **kwargs):
         if isinstance(x, dict):
             return self.loss(x, *args, **kwargs)

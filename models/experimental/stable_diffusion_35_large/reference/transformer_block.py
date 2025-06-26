@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 from __future__ import annotations
 
 import torch
@@ -13,7 +12,7 @@ from .normalization import AdaLayerNormDummy
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention.py
-class TransformerBlock(LightweightModule):
+class TransformerBlock(torch.nn.Module):
     def __init__(
         self,
         *,

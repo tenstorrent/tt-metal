@@ -18,7 +18,6 @@
 # limitations under the License.
 """ PyTorch MobileNetV2 model."""
 
-from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Union
 
 import torch
@@ -104,7 +103,7 @@ def apply_tf_padding(features: torch.Tensor, stride, kernel_size, dilation) -> t
     return nn.functional.pad(features, padding, "constant", 0.0)
 
 
-class MobileNetV2ConvLayer(LightweightModule):
+class MobileNetV2ConvLayer(torch.nn.Module):
     def __init__(
         self,
         config,
@@ -208,7 +207,7 @@ class MobileNetV2ConvLayer(LightweightModule):
         return features
 
 
-class MobileNetV2InvertedResidual(LightweightModule):
+class MobileNetV2InvertedResidual(torch.nn.Module):
     def __init__(
         self,
         config,
@@ -284,7 +283,7 @@ class MobileNetV2InvertedResidual(LightweightModule):
         return residual + features if self.use_residual else features
 
 
-class MobileNetV2Stem(LightweightModule):
+class MobileNetV2Stem(torch.nn.Module):
     def __init__(
         self,
         config,
@@ -365,7 +364,7 @@ class MobileNetV2Stem(LightweightModule):
         return features
 
 
-class MobileNetV2Model(LightweightModule):
+class MobileNetV2Model(torch.nn.Module):
     def __init__(
         self,
         config,

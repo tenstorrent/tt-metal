@@ -7,7 +7,6 @@ Sourced from https://github.com/Cadene/tensorflow-model-zoo.torch (MIT License) 
 based upon Google's Tensorflow implementation and pretrained weights (Apache 2.0 License)
 """
 
-from models.common.lightweightmodule import LightweightModule
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -42,7 +41,7 @@ default_cfgs = {
 }
 
 
-class Mixed3a(LightweightModule):
+class Mixed3a(torch.nn.Module):
     def __init__(self, state_dict, base_address):
         super(Mixed3a, self).__init__()
         self.maxpool = nn.MaxPool2d(3, stride=2)
@@ -56,7 +55,7 @@ class Mixed3a(LightweightModule):
         return out
 
 
-class Mixed4a(LightweightModule):
+class Mixed4a(torch.nn.Module):
     def __init__(self, state_dict, base_address):
         super(Mixed4a, self).__init__()
 
@@ -82,7 +81,7 @@ class Mixed4a(LightweightModule):
         return out
 
 
-class Mixed5a(LightweightModule):
+class Mixed5a(torch.nn.Module):
     def __init__(self, state_dict, base_address):
         super(Mixed5a, self).__init__()
         self.conv = BasicConv2d(192, 192, kernel_size=3, stride=2)
@@ -96,7 +95,7 @@ class Mixed5a(LightweightModule):
         return out
 
 
-class InceptionA(LightweightModule):
+class InceptionA(torch.nn.Module):
     def __init__(self, state_dict, base_address):
         super(InceptionA, self).__init__()
         self.branch0 = BasicConv2d(384, 96, kernel_size=1, stride=1)
@@ -131,7 +130,7 @@ class InceptionA(LightweightModule):
         return out
 
 
-class ReductionA(LightweightModule):
+class ReductionA(torch.nn.Module):
     def __init__(self, state_dict, base_address=""):
         super(ReductionA, self).__init__()
         self.branch0 = BasicConv2d(384, 384, kernel_size=3, stride=2)
@@ -155,7 +154,7 @@ class ReductionA(LightweightModule):
         return out
 
 
-class InceptionB(LightweightModule):
+class InceptionB(torch.nn.Module):
     def __init__(self, state_dict, base_address):
         super(InceptionB, self).__init__()
         self.branch0 = BasicConv2d(1024, 384, kernel_size=1, stride=1)
@@ -193,7 +192,7 @@ class InceptionB(LightweightModule):
         return out
 
 
-class ReductionB(LightweightModule):
+class ReductionB(torch.nn.Module):
     def __init__(self, state_dict, base_address):
         super(ReductionB, self).__init__()
 
@@ -222,7 +221,7 @@ class ReductionB(LightweightModule):
         return out
 
 
-class InceptionC(LightweightModule):
+class InceptionC(torch.nn.Module):
     def __init__(self, state_dict, base_address):
         super(InceptionC, self).__init__()
 
@@ -278,7 +277,7 @@ class InceptionC(LightweightModule):
         return out
 
 
-class InceptionV4(LightweightModule):
+class InceptionV4(torch.nn.Module):
     def __init__(
         self,
         num_classes=1000,
