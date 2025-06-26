@@ -452,13 +452,19 @@ def test_rs_create_heads_perf(
 @pytest.mark.parametrize(
     "shape_id, warmup_iters, perf_target_us",
     [
+        # TODO: update when scatter-write goes through
+        # 128
         ("128_seq and sh-2048w", 15, 48),
         ("128_seq and sh-1280w", 15, 25),
         ("128_seq and sh-3584w", 15, 50),
-        # TODO: update to ~280us, ~170us, ~440us when scatter-write goes through
+        # 4k
         ("4k_seq and sh-2048w", 15, 490),
         ("4k_seq and sh-1280w", 15, 280),
         ("4k_seq and sh-3584w", 15, 750),
+        # 8k
+        ("8k_seq and sh-2048w", 15, 950),
+        ("8k_seq and sh-1280w", 15, 540),
+        ("8k_seq and sh-3584w", 15, 1485),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -512,15 +518,22 @@ def test_rs_ring(
 @pytest.mark.parametrize(
     "shape_id, warmup_iters, perf_target_us",
     [
+        # TODO: update when scatter-write goes through
+        # 128
         ("128_seq and sh-256w", 15, 26),
         ("128_seq and sh-320w", 15, 20),
         ("128_seq and sh-896w", 15, 30),
         ("128_seq and sh-32w", 15, 16),
-        # TODO: update to ~285us, ~180us, ~480us, ~24us when scatter-write goes through
+        # 4k
         ("4k_seq and sh-256w", 15, 490),
         ("4k_seq and sh-320w", 15, 285),
         ("4k_seq and sh-896w", 15, 770),
         ("4k_seq and sh-32w", 15, 35),
+        # 8k
+        ("8k_seq and sh-256w", 15, 960),
+        ("8k_seq and sh-320w", 15, 550),
+        ("8k_seq and sh-896w", 15, 1485),
+        ("8k_seq and sh-32w", 15, 65),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
