@@ -66,8 +66,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     auto src_device = mesh_device->get_device(mesh_coordinate);
     const auto src_physical_device_id = mesh_device->get_device(mesh_coordinate)->id();
 
-    const auto& control_plane = tt::tt_fabric::get_control_plane();
-    const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device->id());
+    const auto fabric_node_id = get_fabric_node_id_from_physical_chip_id(src_device->id());
     const uint32_t src_mesh_id = *fabric_node_id.mesh_id;
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
@@ -150,8 +149,11 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
             num_headers * tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
 
-    const auto src_core_grid = mesh_device->get_device(mesh_coordinate)->compute_with_storage_grid_size();
-    const auto subdevice_cores = grid_to_cores({0, 0}, src_core_grid);
+    const auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set =
+        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+
+    const auto subdevice_cores = corerange_to_cores(subdevice_core_range_set);
 
     TT_FATAL(
         subdevice_cores.size() >= num_links,
@@ -237,7 +239,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;
     for (const auto& coord : all_mesh_coordinates) {
         auto device = mesh_device->get_device(coord);
-        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
+        auto fabric_node_id = get_fabric_node_id_from_physical_chip_id(device->id());
         dest_mesh_id.push_back(*fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)fabric_node_id.chip_id);
     }

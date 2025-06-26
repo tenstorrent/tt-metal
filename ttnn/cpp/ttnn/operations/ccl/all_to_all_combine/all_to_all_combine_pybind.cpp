@@ -35,8 +35,8 @@ void py_bind_all_to_all_combine(py::module& module) {
                const tt::tt_fabric::Topology topology,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<uint32_t>& axis,
+               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                const std::optional<ttnn::Tensor>& optional_output_tensor,
-               // const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                QueueId queue_id) {
                 return self(
                     queue_id,
@@ -48,6 +48,7 @@ void py_bind_all_to_all_combine(py::module& module) {
                     topology,
                     memory_config,
                     axis,
+                    subdevice_id,
                     optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
@@ -59,8 +60,8 @@ void py_bind_all_to_all_combine(py::module& module) {
             py::arg("topology") = tt::tt_fabric::Topology::Linear,
             py::arg("memory_config") = std::nullopt,
             py::arg("axis") = std::nullopt,
+            py::arg("subdevice_id") = std::nullopt,
             py::arg("optional_output_tensor") = std::nullopt,
-            // py::arg("subdevice_id") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
         });
 }
