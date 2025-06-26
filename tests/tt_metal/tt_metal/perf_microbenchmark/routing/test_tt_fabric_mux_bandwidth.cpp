@@ -138,7 +138,10 @@ void create_mux_kernel(
     auto mux_logical_core = mux_test_config.mux_logical_core;
 
     // getting mux ct args like this will result in compilation error if fabric is not enabled
+    // and may not work properly since we need drainer's status address and num buffers, but by
+    // default mux config works with edm's status address and buffers
     // std::vector<uint32_t> mux_ct_args = mux_kernel_config->get_fabric_mux_compile_time_args();
+
     auto default_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     size_t mux_status_address = mux_kernel_config->get_status_address();
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -154,7 +157,7 @@ void create_mux_kernel(
         mux_kernel_config->get_connection_handshake_address(default_channel_type, 0),
         mux_kernel_config->get_flow_control_address(default_channel_type, 0),
         mux_kernel_config->get_channel_base_address(default_channel_type, 0),
-        mux_status_address + noc_address_padding_bytes, /* risky, could change if mux address map is updated */
+        mux_status_address + noc_address_padding_bytes,  // risky, could change if mux address map is updated
         drainer_kernel_config->get_status_address(),
         drainer_kernel_config->num_buffers_full_size_channel,
         test_params.num_full_size_channel_iters,
@@ -334,14 +337,21 @@ int main(int argc, char** argv) {
         sizeof(tt::tt_fabric::PacketHeader) + test_params.packet_payload_size_bytes;
     test_params.buffer_size_bytes_header_only_channel = sizeof(tt::tt_fabric::PacketHeader);
 
+    tt::tt_metal::detail::SetFabricConfig(
+        tt::tt_metal::FabricConfig::FABRIC_1D, tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+    std::vector<chip_id_t> all_device_ids;
+    for (unsigned int id = 0; id < num_devices; id++) {
+        all_device_ids.push_back(id);
+    }
+    std::map<chip_id_t, tt::tt_metal::IDevice*> devices = tt::tt_metal::detail::CreateDevices(all_device_ids);
+
     // for now, just use one device for running benchmarks
-    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto mesh_id = control_plane.get_user_physical_mesh_ids()[0];
     chip_id_t logical_chip_id = 0;
     auto physical_chip_id =
         control_plane.get_physical_chip_id_from_fabric_node_id(tt::tt_fabric::FabricNodeId(mesh_id, logical_chip_id));
-
-    std::map<chip_id_t, tt::tt_metal::IDevice*> devices = tt::tt_metal::detail::CreateDevices({physical_chip_id});
     tt::tt_metal::IDevice* device = devices.at(physical_chip_id);
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -475,6 +485,8 @@ int main(int argc, char** argv) {
     tt::tt_metal::Finish(cq);
 
     tt::tt_metal::detail::CloseDevices(devices);
+    tt::tt_metal::detail::SetFabricConfig(
+        tt::tt_metal::FabricConfig::DISABLED, tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 
     log_info(tt::LogTest, "Collecting results");
 
