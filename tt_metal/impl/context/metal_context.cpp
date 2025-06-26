@@ -591,6 +591,12 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             CoreCoord virtual_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
             if (erisc_app_still_running(device_id, virtual_core)) {
+                log_info(
+                    tt::LogMetal,
+                    "While initializing device {}, active ethernet dispatch core {} detected as still "
+                    "running, issuing exit signal.",
+                    device_id,
+                    virtual_core.str());
                 erisc_send_exit_signal(device_id, virtual_core, false /* is_idle_eth */);
                 device_to_early_exit_cores[device_id].insert(virtual_core);
             }
@@ -1258,13 +1264,6 @@ bool MetalContext::erisc_app_still_running(chip_id_t device_id, CoreCoord virtua
 void MetalContext::erisc_send_exit_signal(chip_id_t device_id, CoreCoord virtual_core, bool is_idle_eth) {
     go_msg_t go_msg;
     std::memset(&go_msg, 0, sizeof(go_msg_t));
-    log_info(
-        tt::LogMetal,
-        "While initializing device {}, {} ethernet dispatch core {} detected as still "
-        "running, issuing exit signal.",
-        device_id,
-        is_idle_eth ? "idle" : "active",
-        virtual_core.str());
 
     DeviceAddr launch_addr = hal_->get_dev_addr(
         is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
