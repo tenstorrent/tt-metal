@@ -77,7 +77,6 @@
 
 
 ## Diffusion Models
-Sec/
 | Model                                                                       | Batch | Hardware                                                 | Sec/Image     | Target Sec/Image | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
 | [Stable Diffusion 1.4 (512x512)](./models/demos/wormhole/stable_diffusion)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 6.25   | 3        |           |
@@ -111,9 +110,9 @@ Sec/
 | [YOLOv4 (320x320)](./models/demos/yolov4)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 120     | 420        |             |
 | [YOLOv4 (640x640)](./models/demos/yolov4)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 50      | 100        |             |
 | [YOLOv8x (640x640)](./models/demos/yolov8x)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 40      | 100        |             |
+| [YOLOv8s_world (640x640)](./models/demos/yolov8s_world)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 40      | 320        |             |
 | [YOLOv9c (640x640)](./models/demos/yolov9c)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 57      | 300        |             |
 | [YOLOv10x (640x640)](./models/demos/yolov10x)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 30      | 200        |             |
-| [YOLOv8s_world (640x640)](./models/demos/yolov8s_world)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 40      | 320        |             |
 
 
 ### Segmentation
