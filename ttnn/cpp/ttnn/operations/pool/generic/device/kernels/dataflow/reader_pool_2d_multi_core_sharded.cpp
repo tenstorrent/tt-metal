@@ -154,7 +154,7 @@ void kernel_main() {
     constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
-    constexpr uint32_t stride_w = get_compile_time_arg_val(31);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(34);
 
     constexpr uint32_t in_nbytes_leftover = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) * BYTES_PER_DATUM;
 
