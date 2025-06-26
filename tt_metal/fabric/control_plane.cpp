@@ -855,8 +855,8 @@ size_t ControlPlane::get_num_live_routing_planes(
 
 // Only builds the routing table representation, does not actually populate the routing tables in memory of the
 // fabric routers on device
-void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(tt_metal::FabricReliabilityMode reliability_mode) {
-    TT_FATAL(this->fabric_context_ != nullptr, "Must call initialize_fabric_context first");
+void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
+    tt::tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
@@ -964,8 +964,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(tt_meta
         }
     }
 
-    this->initialize_dynamic_routing_plane_counts(
-        intra_mesh_connectivity, this->fabric_context_->get_fabric_config(), reliability_mode);
+    this->initialize_dynamic_routing_plane_counts(intra_mesh_connectivity, fabric_config, reliability_mode);
 
     // Order the ethernet channels so that when we use them for deciding connections, indexing into ports per direction
     // is consistent for each each neighbouring chip.

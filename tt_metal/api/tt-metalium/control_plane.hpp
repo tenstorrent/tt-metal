@@ -38,7 +38,8 @@ public:
     void print_all_ethernet_connections() const;
 
     // Converts chip level routing tables to per ethernet channel
-    void configure_routing_tables_for_fabric_ethernet_channels(tt_metal::FabricReliabilityMode reliability_mode);
+    void configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
     void write_routing_tables_to_all_chips() const;
 
     // Return mesh_id, chip_id from physical chip id
