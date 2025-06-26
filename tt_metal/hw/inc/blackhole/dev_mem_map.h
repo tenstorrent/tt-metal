@@ -80,10 +80,12 @@
 // to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on Blackhole by
 // writing the value to be written to local L1 first and then issue a noc async write.
 // Each noc has 16B to store value written out by inline writes.
-// Base address for each noc to store the value to be written will be `MEM_{B,NC}RISC_L1_INLINE_BASE + (noc_index * 16)`
+// Base address for each noc to store the value to be written will be `MEM_{E,B,NC}RISC_L1_INLINE_BASE + (noc_index *
+// 16)`
 #define MEM_L1_INLINE_SIZE_PER_NOC 16
 #define MEM_BRISC_L1_INLINE_BASE 32   // MEM_L1_ARC_FW_SCRATCH + MEM_L1_ARC_FW_SCRATCH_SIZE
 #define MEM_NCRISC_L1_INLINE_BASE 64  // MEM_BRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2))  // 2 nocs
+#define MEM_ERISC_L1_INLINE_BASE 32   // Use the same memory as BRISC
 
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2))  // 2 nocs

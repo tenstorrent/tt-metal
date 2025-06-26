@@ -147,6 +147,8 @@ inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr
     src_addr = MEM_BRISC_L1_INLINE_BASE;
 #elif defined(COMPILE_FOR_NCRISC)
     src_addr = MEM_NCRISC_L1_INLINE_BASE;
+#elif defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+    src_addr = MEM_ERISC_L1_INLINE_BASE;
 #else
     ASSERT(0);
 #endif
