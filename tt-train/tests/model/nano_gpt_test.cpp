@@ -79,7 +79,6 @@ void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
     }
 
     auto *device = &ttml::autograd::ctx().get_device();
-    device->enable_program_cache();
 
     auto sequence_length = config.transformer_config.max_sequence_length;
 

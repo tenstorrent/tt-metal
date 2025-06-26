@@ -51,6 +51,8 @@ filterwarnings("ignore")
 def test_demo(
     device, use_program_cache, model_location_generator, reset_seeds, demo_type, model_type, use_pretrained_weight
 ):
+    # https://github.com/tenstorrent/tt-metal/issues/23270
+    device.disable_and_clear_program_cache()
     disable_persistent_kernel_cache()
     # Download latest version of the dataset
     path = kagglehub.dataset_download("mateuszbuda/lgg-mri-segmentation")
