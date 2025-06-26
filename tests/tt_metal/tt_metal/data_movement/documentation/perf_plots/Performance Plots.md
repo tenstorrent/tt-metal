@@ -1,6 +1,8 @@
 # Data Movement Performance Plots
 
-This file contains visual representations of performance results from our various data movement primitive tests. A separate set of results is present for both architectures (i.e. Wormhole_B0 and Blackhole).
+This file contains visual representations of performance results from our various data movement primitive tests. A separate set of results is present for both architectures (i.e. Wormhole_B0 and Blackhole). In all plots, RISCV 0/NOC 0 is used for "Sender" kernels, and RISCV 1/NOC 1 for "Receiver" kernels.
+
+For each test case, two plots are given to provide meaning from both the Hardware and the Software perspectives. The "Transaction Size vs Duration" plot depicts how long data movement takes to complete for a specific combination of test parameters (i.e. number of transactions and transaction sizes). This may be useful for kernel developers to gauge the latency of their OPs. The "Transaction Size vs Bandwidth" plot depicts how much the NOC capacity is saturated by data movement kernels using different combination of test parameters. This may be useful to gauge the effective performance of different data movement scenarios.
 
 ## Wormhole_B0
 
