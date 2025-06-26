@@ -45,9 +45,7 @@ target_sources(
     PRIVATE
         common_test_utils.cpp
         test_add.cpp
-        test_async_runtime.cpp # TODO: Fix memory leak (LSan) then shift-left
         test_broadcast_to.cpp
-        test_conv2d.cpp # TODO: Fix misaligned memory load (UBSan) then shift-left
         test_generic_op.cpp
         test_graph_add.cpp
         test_graph_basic.cpp
@@ -66,12 +64,30 @@ target_link_libraries(
         TTNN::CPP
 )
 
+add_library(unit_tests_ttnn_slow OBJECT)
+add_library(TTNN::Test::Slow ALIAS unit_tests_ttnn_slow)
+TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_slow)
+target_sources(
+    unit_tests_ttnn_slow
+    PRIVATE
+        test_async_runtime.cpp # TODO: Fix memory leak (LSan) then shift-left
+        test_conv2d.cpp # TODO: Fix misaligned memory load (UBSan) then shift-left
+)
+target_include_directories(unit_tests_ttnn_slow PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(
+    unit_tests_ttnn_slow
+    PRIVATE
+        test_common_libs
+        TTNN::CPP
+)
+
 add_executable(unit_tests_ttnn)
 target_link_libraries(
     unit_tests_ttnn
     PRIVATE
         TTNN::Test::Smoke
         TTNN::Test::Basic
+        TTNN::Test::Slow
 )
 
 # unit_tests_ttnn_ccl
