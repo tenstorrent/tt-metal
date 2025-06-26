@@ -139,15 +139,9 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] output_shard_num_cores: {}", output_shard_num_cores);
 
     // Check for minimal interleaved case
-    if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
-        input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
-        input_tensor_page_layout == tt::tt_metal::Layout::TILE) {
-        return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
-    } else if (
-        input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 &&
-        input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+    if (input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         input_tensor_page_layout == tt::tt_metal::Layout::TILE && semaphore.size() == 2) {
-        return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_ANY;
+        return AllGatherAsyncVersion::MINIMAL_INTERLEAVED;
     }
 
     log_trace(tt::LogOp, "[select_version] input_is_sharded: {}", input_is_sharded);
@@ -252,31 +246,10 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
     switch (version) {
-        case AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32: {
+        case AllGatherAsyncVersion::MINIMAL_INTERLEAVED: {
             log_trace(
-                tt::LogOp,
-                "Detected all gather specialized shape. all_gather_async_minimal_interleaved_dim3_1_1_32_any is "
-                "called");
-            return all_gather_async_minimal_interleaved_dim3_1_1_32_any(
-                input_tensors[0],
-                target_device,
-                forward_device,
-                backward_device,
-                output_tensors[0],
-                this->dim,
-                this->num_links,
-                target_ring_size,
-                device_index,
-                this->topology,
-                this->semaphore.at(0),
-                this->sub_device_id);
-        }
-        case AllGatherAsyncVersion::MINIMAL_INTERLEAVED_ANY: {
-            log_trace(
-                tt::LogOp,
-                "Detected all gather specialized shape. all_gather_async_minimal_interleaved_dim3_1_1_any_any is "
-                "called");
-            return all_gather_async_minimal_interleaved_dim3_1_1_any_any(
+                tt::LogOp, "Detected all gather specialized shape. all_gather_async_minimal_interleaved is called");
+            return all_gather_async_minimal_interleaved(
                 input_tensors[0],
                 target_device,
                 forward_device,
