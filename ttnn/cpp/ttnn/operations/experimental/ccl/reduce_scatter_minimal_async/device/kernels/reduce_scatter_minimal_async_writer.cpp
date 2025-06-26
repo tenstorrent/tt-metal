@@ -140,7 +140,7 @@ void kernel_main() {
                         uint32_t tiles_to_put_in_current_packet =
                             std::min(tiles_remaining_to_read_in_current_direction, num_tiles_to_write_per_packet);
 
-                        // Will have more cases once scatter-write supports other non-bfloat16 dtypes
+                        // Will have more cases once scatter-write supports more than 2 distinct addresses
                         switch (tiles_to_put_in_current_packet) {
                             case 2: {
                                 uint32_t tile_one_id = input_tile_id_start + row_offset + pages_read_in_row;
