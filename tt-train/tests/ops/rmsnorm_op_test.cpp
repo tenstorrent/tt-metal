@@ -58,7 +58,6 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Kernel_Composite) {
         {1U, 1U, 1U, (1U << 20U) - 18U}};
 
     auto* device = &ttml::autograd::ctx().get_device();
-    device->enable_program_cache();
 
     constexpr uint32_t iterations = 2U;
     for (const auto& shape : shapes) {

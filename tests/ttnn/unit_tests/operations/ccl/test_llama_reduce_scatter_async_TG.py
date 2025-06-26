@@ -75,7 +75,6 @@ def run_reduce_scatter_test(
     topology=ttnn.Topology.Linear,
     use_noc1_only=False,
 ):
-    mesh_device.enable_program_cache()
     num_pages_per_packet = 4
     cyclic_buffer_size = 8
 
