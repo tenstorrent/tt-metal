@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -512,11 +512,11 @@ bool Buffer::is_valid_partial_region(const BufferRegion& region) const {
     return this->is_valid_region(region) && (region.offset > 0 || region.size != this->size());
 }
 
-DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
-    uint32_t num_banks = allocator_->get_num_banks(buffer_type_);
+DeviceAddr Buffer::page_address(DeviceAddr bank_id, DeviceAddr page_index) const {
+    DeviceAddr num_banks = static_cast<DeviceAddr>(allocator_->get_num_banks(buffer_type_));
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
-    int pages_offset_within_bank = (int)page_index / num_banks;
-    auto offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
+    DeviceAddr pages_offset_within_bank = page_index / num_banks;
+    auto offset = (round_up(this->page_size(), static_cast<DeviceAddr>(this->alignment())) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
 }
 
@@ -554,7 +554,7 @@ std::optional<uint32_t> Buffer::num_cores() const {
     return buffer_distribution_spec_.value().num_cores();
 }
 
-DeviceAddr Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {
+DeviceAddr Buffer::translate_page_address(DeviceAddr offset, uint32_t bank_id) const {
     DeviceAddr base_page_address = this->address() + allocator_->get_bank_offset(buffer_type_, bank_id);
     return base_page_address + offset;
 }
@@ -589,7 +589,7 @@ std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
 
 DeviceAddr ShardSpecBuffer::num_pages() const {
     auto shape_in_pages_ = this->shape_in_pages();
-    return shape_in_pages_[0] * shape_in_pages_[1];
+    return static_cast<DeviceAddr>(shape_in_pages_[0]) * static_cast<DeviceAddr>(shape_in_pages_[1]);
 }
 
 }  // namespace tt::tt_metal
