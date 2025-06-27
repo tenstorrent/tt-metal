@@ -15,13 +15,16 @@ import torchvision
 from loguru import logger
 
 
+# Read image using OpenCV from a file path (handles Unicode paths)
 def imread(filename: str, flags: int = cv2.IMREAD_COLOR):
     return cv2.imdecode(np.fromfile(filename, np.uint8), flags)
 
 
+# Supported image file extensions
 IMG_FORMATS = {"bmp", "dng", "jpeg", "jpg", "mpo", "png", "tif", "tiff", "webp", "pfm", "heic"}
 
 
+# Data loader for image files
 class LoadImages:
     def __init__(self, path, batch=1, vid_stride=1):
         files = []
@@ -40,11 +43,11 @@ class LoadImages:
         ni = len(images)
 
         self.files = images
-        self.nf = ni
-        self.ni = ni
+        self.nf = ni  # number of files
+        self.ni = ni  # number of images
         self.mode = "image"
         self.vid_stride = vid_stride
-        self.bs = batch
+        self.bs = batch  # batch size
         if self.nf == 0:
             raise FileNotFoundError(f"No images or videos found in {p}")
 
@@ -62,8 +65,6 @@ class LoadImages:
                     raise StopIteration
 
             path = self.files[self.count]
-
-            self.mode = "image"
             im0 = imread(path)
             if im0 is None:
                 logger.warning(f"WARNING ⚠️ Image Read Error {path}")
@@ -89,8 +90,9 @@ class LoadImages:
         return math.ceil(self.nf / self.bs)
 
 
+# Resize image with optional padding (letterboxing)
 def LetterBox(img, new_shape=(320, 320), auto=False, scaleFill=False, scaleup=True, center=True, stride=32):
-    shape = img.shape[:2]
+    shape = img.shape[:2]  # current shape (height, width)
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)
 
@@ -116,31 +118,35 @@ def LetterBox(img, new_shape=(320, 320), auto=False, scaleFill=False, scaleup=Tr
     return img
 
 
+# Apply LetterBox to a batch of images
 def pre_transform(im, res):
     return [LetterBox(img=x, new_shape=res) for x in im]
 
 
+# Image preprocessing: resize, normalize, and convert to tensor
 def preprocess(im, res):
     device = "cpu"
     not_tensor = not isinstance(im, torch.Tensor)
     if not_tensor:
         im = np.stack(pre_transform(im, res))
-        im = im[..., ::-1].transpose((0, 3, 1, 2))
+        im = im[..., ::-1].transpose((0, 3, 1, 2))  # BGR to RGB, NHWC to NCHW
         im = np.ascontiguousarray(im)
         im = torch.from_numpy(im)
 
     im = im.half() if device != "cpu" else im.float()
     if not_tensor:
-        im /= 255
+        im /= 255  # normalize to [0, 1]
     return im
 
 
+# Return an empty tensor or array of same shape and type
 def empty_like(x):
     return (
         torch.empty_like(x, dtype=torch.float32) if isinstance(x, torch.Tensor) else np.empty_like(x, dtype=np.float32)
     )
 
 
+# Convert bounding boxes from (x_center, y_center, width, height) to (x1, y1, x2, y2)
 def xywh2xyxy(x):
     assert x.shape[-1] == 4, f"input shape last dimension expected 4 but input shape is {x.shape}"
     y = empty_like(x)
@@ -151,6 +157,7 @@ def xywh2xyxy(x):
     return y
 
 
+# Perform non-maximum suppression (NMS) on predictions
 def non_max_suppression(
     prediction,
     conf_thres=0.25,
@@ -167,6 +174,8 @@ def non_max_suppression(
     in_place=True,
     rotated=False,
 ):
+    CONF_IDX = 4  # confidence score index
+    CLASS_IDX = 5  # class index
     assert 0 <= conf_thres <= 1, f"Invalid Confidence threshold {conf_thres}, valid values are between 0.0 and 1.0"
     assert 0 <= iou_thres <= 1, f"Invalid IoU {iou_thres}, valid values are between 0.0 and 1.0"
 
@@ -175,12 +184,14 @@ def non_max_suppression(
     if classes is not None:
         classes = torch.tensor(classes, device=prediction.device)
 
+    # Short-circuit path: filter predictions using confidence and class index
     if prediction.shape[-1] == 6:
-        output = [pred[pred[:, 4] > conf_thres][:max_det] for pred in prediction]
+        output = [pred[pred[:, CONF_IDX] > conf_thres][:max_det] for pred in prediction]
         if classes is not None:
-            output = [pred[(pred[:, 5:6] == classes).any(1)] for pred in output]
+            output = [pred[(pred[:, CLASS_IDX : CLASS_IDX + 1] == classes).any(1)] for pred in output]
         return output
 
+    # Extended NMS logic
     bs = prediction.shape[0]
     nc = nc or (prediction.shape[1] - 4)
     nm = prediction.shape[1] - nc - 4
@@ -201,7 +212,6 @@ def non_max_suppression(
     output = [torch.zeros((0, 6 + nm), device=prediction.device)] * bs
     for xi, x in enumerate(prediction):
         x = x[xc[xi]]
-
         if not x.shape[0]:
             continue
 
@@ -215,21 +225,19 @@ def non_max_suppression(
             x = torch.cat((box, conf, j.float(), mask), 1)[conf.view(-1) > conf_thres]
 
         if classes is not None:
-            x = x[(x[:, 5:6] == classes).any(1)]
+            x = x[(x[:, CLASS_IDX : CLASS_IDX + 1] == classes).any(1)]
 
         n = x.shape[0]
         if not n:
             continue
         if n > max_nms:
-            x = x[x[:, 4].argsort(descending=True)[:max_nms]]
+            x = x[x[:, CONF_IDX].argsort(descending=True)[:max_nms]]
 
-        c = x[:, 5:6] * (0 if agnostic else max_wh)
-        scores = x[:, 4]
-
-        boxes = x[:, :4] + c
+        c = x[:, CLASS_IDX : CLASS_IDX + 1] * (0 if agnostic else max_wh)
+        scores = x[:, CONF_IDX]
+        boxes = x[:, :4] + c  # class offset for NMS across classes
         i = torchvision.ops.nms(boxes, scores, iou_thres)
         i = i[:max_det]
-
         output[xi] = x[i]
         if (time.time() - t) > time_limit:
             logger.warning(f"WARNING ⚠️ NMS time limit {time_limit:.3f}s exceeded")
@@ -238,14 +246,17 @@ def non_max_suppression(
     return output
 
 
+# Extract boxes, confidence, and class IDs from predictions
 def Boxes(data):
     return {"xyxy": data[:, :4], "conf": data[:, -2], "cls": data[:, -1]}
 
 
+# Structure final detection results
 def Results(orig_img, path, names, boxes):
     return {"orig_img": orig_img, "path": path, "names": names, "boxes": Boxes(boxes)}
 
 
+# Clip boxes to image boundaries
 def clip_boxes(boxes, shape):
     if isinstance(boxes, torch.Tensor):
         boxes[..., 0] = boxes[..., 0].clamp(0, shape[1])
@@ -258,6 +269,7 @@ def clip_boxes(boxes, shape):
     return boxes
 
 
+# Rescale boxes from resized image to original image size
 def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None, padding=True, xywh=False):
     if ratio_pad is None:
         gain = min(img1_shape[0] / img0_shape[0], img1_shape[1] / img0_shape[1])
@@ -279,6 +291,7 @@ def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None, padding=True, xyw
     return clip_boxes(boxes, img0_shape)
 
 
+# Postprocessing pipeline for object detection
 def postprocess(preds, img, orig_imgs, batch, names):
     args = {"conf": 0.25, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
 
@@ -299,10 +312,10 @@ def postprocess(preds, img, orig_imgs, batch, names):
     return results
 
 
+# Download COCO class names (with local fallback)
 def load_coco_class_names():
     url = "https://raw.githubusercontent.com/pjreddie/darknet/master/data/coco.names"
     path = f"models/demos/yolov4/demo/coco.names"
-    response = requests.get(url)
     try:
         response = requests.get(url, timeout=5)
         if response.status_code == 200:

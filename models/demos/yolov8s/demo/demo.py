@@ -66,7 +66,7 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
     [True],
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_demo(device, source, model_type, res, use_weights_from_ultralytics, use_program_cache):
+def test_demo(device, source, model_type, res, use_weights_from_ultralytics):
     disable_persistent_kernel_cache()
     if use_weights_from_ultralytics:
         torch_model = YOLO("yolov8s.pt")
@@ -74,10 +74,7 @@ def test_demo(device, source, model_type, res, use_weights_from_ultralytics, use
         model = torch_model.eval()
 
     if model_type == "tt_model":
-        performant_runner = YOLOv8sPerformantRunner(
-            device,
-            use_program_cache,
-        )
+        performant_runner = YOLOv8sPerformantRunner(device, device_batch_size=1)
 
     save_dir = "models/demos/yolov8s/demo/runs"
 

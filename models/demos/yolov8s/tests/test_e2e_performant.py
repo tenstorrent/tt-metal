@@ -27,7 +27,7 @@ def test_run_yolov8s_trace_2cqs_inference(
     batch_size,
     model_location_generator,
 ):
-    performant_runner = YOLOv8sPerformantRunner(device, use_program_cache, batch_size)
+    performant_runner = YOLOv8sPerformantRunner(device, batch_size)
 
     input_shape = (batch_size, 3, 640, 640)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
