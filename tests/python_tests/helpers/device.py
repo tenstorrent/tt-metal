@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import time
 
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.debug_tensix import TensixDebug
 from ttexalens.tt_exalens_lib import (
     check_context,
     load_elf,
@@ -49,8 +49,7 @@ from .unpack import (
 MAX_READ_BYTE_SIZE_16BIT = 2048
 
 # Constants for soft reset operation
-RISC_DBG_SOFT_RESET0 = "RISCV_DEBUG_REG_SOFT_RESET_0"
-TRISC_SOFT_RESET_MASK = 0x7800  # Reset mask for TRISCs (unpack, math, pack)
+TRISC_SOFT_RESET_MASK = 0x7800  # Reset mask for TRISCs (unpack, math, pack) and BRISC
 
 
 def collect_results(
@@ -71,12 +70,13 @@ def perform_tensix_soft_reset(core_loc="0,0"):
     context = check_context()
     device = context.devices[0]
     chip_coordinate = OnChipCoordinate.create(core_loc, device=device)
-    tensix_debug = TensixDebug(chip_coordinate, 0, context)
+    noc_block = device.get_block(chip_coordinate)
+    register_store = noc_block.get_register_store()
 
     # Read current soft reset register, set TRISC reset bits, and write back
-    soft_reset = tensix_debug.read_tensix_register(RISC_DBG_SOFT_RESET0)
+    soft_reset = register_store.read_register("RISCV_DEBUG_REG_SOFT_RESET_0")
     soft_reset |= TRISC_SOFT_RESET_MASK
-    tensix_debug.write_tensix_register(RISC_DBG_SOFT_RESET0, soft_reset)
+    register_store.write_register("RISCV_DEBUG_REG_SOFT_RESET_0", soft_reset)
 
 
 def run_elf_files(testname, core_loc="0,0"):
@@ -284,7 +284,6 @@ def wait_until_tensix_complete(core_loc, mailbox_addr, timeout=30, max_backoff=5
 
 
 def wait_for_tensix_operations_finished(core_loc: str = "0,0"):
-
     wait_until_tensix_complete(core_loc, Mailbox.Packer)
     wait_until_tensix_complete(core_loc, Mailbox.Math)
     wait_until_tensix_complete(core_loc, Mailbox.Unpacker)
