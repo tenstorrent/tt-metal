@@ -41,10 +41,10 @@ enum class DistributionMode {
     SUBMESH,
 };
 
-// Returns a function that remaps a mesh coordinates from the mesh mapper shaper to the device shape, and vice versa.
-// `dst_range` must outlive the use of the returned function.
-auto get_remap_fn(DistributionMode distribution_mode, const MeshCoordinateRange* dst_range) {
-    return [distribution_mode, row_major_dst = dst_range->begin()](const MeshCoordinate& src_coord) mutable {
+// Returns a function that remaps a mesh coordinates from the mesh mapper / composer distribution shape to the device
+// shape. `global_range` must outlive the use of the returned function.
+auto get_remap_fn(DistributionMode distribution_mode, const MeshCoordinateRange* global_range) {
+    return [distribution_mode, row_major_dst = global_range->begin()](const MeshCoordinate& src_coord) mutable {
         switch (distribution_mode) {
             case DistributionMode::ROW_MAJOR: return *(row_major_dst++);
             case DistributionMode::SUBMESH: return src_coord;
@@ -359,6 +359,7 @@ private:
     MeshCoordinate local_offset_;
     DistributionMode distribution_mode_ = DistributionMode::ROW_MAJOR;
 
+    // Distribution parameters.
     MeshShape distribution_shape_;
     MeshMapperConfig config_;
     tt::tt_metal::DistributedTensorConfig distributed_tensor_config_;
@@ -366,22 +367,28 @@ private:
 
 class MeshToTensor::Impl {
 public:
-    Impl(DistributionMode distribution_mode, const MeshShape& distribution_shape, const MeshComposerConfig& config) :
-        distribution_mode_(distribution_mode), distribution_shape_(distribution_shape), config_(config) {}
+    Impl(
+        const MeshDevice& mesh_device,
+        DistributionMode distribution_mode,
+        const MeshShape& distribution_shape,
+        const MeshComposerConfig& config) :
+        global_range_(mesh_device.shape()),
+        distribution_mode_(distribution_mode),
+        distribution_shape_(distribution_shape),
+        config_(config) {}
 
     template <typename T>
     std::pair<std::vector<T>, Shape> compose(const Tensor& tensor) const {
         const auto src_buffer =
             std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.cpu().storage()).distributed_buffer();
 
-        const auto dst_range = MeshCoordinateRange(distribution_shape_);
-        auto remap_fn = get_remap_fn(distribution_mode_, &dst_range);
+        auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
         auto dst_buffer = tt::tt_metal::DistributedHostBuffer::create(distribution_shape_);
 
-        for (const auto& device_coord : MeshCoordinateRange(src_buffer.shape())) {
-            auto shard_opt = src_buffer.get_shard(device_coord);
+        for (const auto& dst_coord : MeshCoordinateRange(dst_buffer.shape())) {
+            auto shard_opt = src_buffer.get_shard(remap_fn(dst_coord));
             if (shard_opt.has_value()) {
-                dst_buffer.emplace_shard(remap_fn(device_coord), [&shard_opt]() { return *shard_opt; });
+                dst_buffer.emplace_shard(dst_coord, [&shard_opt]() { return *shard_opt; });
             }
         }
 
@@ -443,6 +450,10 @@ public:
     }
 
 private:
+    // MeshDevice parameters.
+    MeshCoordinateRange global_range_;
+
+    // Distribution parameters.
     DistributionMode distribution_mode_;
     MeshShape distribution_shape_;
     MeshComposerConfig config_;
@@ -524,7 +535,10 @@ MeshToTensor MeshToTensor::create(const MeshDevice& mesh_device, const MeshCompo
         config);
 
     return MeshToTensor(std::make_unique<Impl>(
-        compute_distribution_mode(config.mesh_shape_override, mesh_device.shape()), distributed_shape, config));
+        mesh_device,
+        compute_distribution_mode(config.mesh_shape_override, mesh_device.shape()),
+        distributed_shape,
+        config));
 }
 
 std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device) {
