@@ -430,8 +430,7 @@ void MeshGraph::print_connectivity() const {
 }
 
 void MeshGraph::validate_mesh_id(MeshId mesh_id) const {
-    auto mesh_ids = this->get_mesh_ids();
-    if (std::find(mesh_ids.begin(), mesh_ids.end(), mesh_id) == mesh_ids.end()) {
+    if (this->mesh_to_chip_ids_.find(mesh_id) == this->mesh_to_chip_ids_.end()) {
         TT_THROW("Invalid mesh_id {} in get_mesh_shape", mesh_id);
     }
 }
