@@ -553,7 +553,7 @@ def test_demo_text(
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=device_sampling_params,
-                    reset_inputs=True,
+                    reset_inputs=iteration == 0,
                 )
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
