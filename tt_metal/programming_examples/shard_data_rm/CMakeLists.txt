@@ -4,5 +4,7 @@ project(metal_example_shard_data_rm)
 add_executable(metal_example_shard_data_rm)
 target_sources(metal_example_shard_data_rm PRIVATE shard_data_rm.cpp)
 
-find_package(TT-Metalium REQUIRED)
+if(NOT TARGET TT::Metalium)
+    find_package(TT-Metalium REQUIRED)
+endif()
 target_link_libraries(metal_example_shard_data_rm PUBLIC TT::Metalium)

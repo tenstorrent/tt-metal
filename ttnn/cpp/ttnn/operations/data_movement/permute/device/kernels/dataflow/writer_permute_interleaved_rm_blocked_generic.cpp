@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <algorithm>
 #include "dataflow_api.h"
-#include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     // Compile-time constants

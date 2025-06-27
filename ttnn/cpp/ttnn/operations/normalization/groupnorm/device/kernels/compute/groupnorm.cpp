@@ -215,7 +215,7 @@ void MAIN {
 #else
     constexpr uint32_t cb_in_rm = cb_in0;
 #endif
-    tilize_init_short(cb_in_rm, per_core_N, cb_in);
+    tilize_init(cb_in_rm, per_core_N, cb_in);
     for (uint32_t m = 0; m < per_core_M; ++m) {
 #ifdef READER_REPACK
         cb_wait_front(cb_in_rm, per_core_N);
@@ -315,7 +315,7 @@ void MAIN {
 
                 // Partial/E[x]
                 index_h_offset = 0;
-                reduce_init_delta<false>(cb_x, cb_scaler, cb_ex_partial);
+                reduce_init(cb_x, cb_scaler, cb_ex_partial);
                 cb_reserve_back(cb_ex_partial, 1);
                 tile_regs_acquire();
                 cb_wait_front(cb_scaler, 1);
@@ -334,14 +334,14 @@ void MAIN {
                 tile_regs_release();
                 cb_pop_front(cb_x, out_block_hw_normal);
                 cb_push_back(cb_ex_partial, 1);
-                reduce_revert_delta(cb_ex_partial);
+                reduce_uninit();
 
                 cb_wait_front(cb_ex_partial, 1);
             }
             // End Local Redcue
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                reduce_init_delta<false>(cb_ex_external, cb_scaler_global, cb_ex_global);
+                reduce_init(cb_ex_external, cb_scaler_global, cb_ex_global);
                 cb_reserve_back(cb_ex_global, 1);
                 if (num_cores_per_mcast_group > 1) {
                     cb_reserve_back(cb_ex, 1);
@@ -357,7 +357,7 @@ void MAIN {
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex_global);
                 tile_regs_release();
-                reduce_revert_delta(cb_ex_global);
+                reduce_uninit();
                 cb_push_back(cb_ex_global, 1);
                 if (num_cores_per_mcast_group > 1) {
                     cb_push_back(cb_ex, 1);
@@ -465,7 +465,7 @@ void MAIN {
 
                 // Partial-Var(x)
                 index_h_offset = 0;
-                reduce_init_delta<false>(cb_xmm, cb_scaler, cb_ex2_partial);
+                reduce_init(cb_xmm, cb_scaler, cb_ex2_partial);
                 cb_reserve_back(cb_ex2_partial, 1);
                 tile_regs_acquire();
                 cb_wait_front(cb_xmm, out_block_hw_normal);
@@ -483,12 +483,12 @@ void MAIN {
                 tile_regs_release();
                 cb_push_back(cb_ex2_partial, 1);
                 cb_pop_front(cb_xmm, out_block_hw_normal);
-                reduce_revert_delta(cb_ex2_partial);
+                reduce_uninit();
             }
             // End Local Reduce
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                reduce_init_delta<false>(cb_ex_external, cb_scaler_global, cb_ex2_global);
+                reduce_init(cb_ex_external, cb_scaler_global, cb_ex2_global);
                 cb_reserve_back(cb_ex2_global, 1);
                 if (num_cores_per_mcast_group > 1) {
                     cb_reserve_back(cb_ex2, 1);
@@ -504,7 +504,7 @@ void MAIN {
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex2_global);
                 tile_regs_release();
-                reduce_revert_delta(cb_ex2_global);
+                reduce_uninit();
                 cb_push_back(cb_ex2_global, 1);
                 if (num_cores_per_mcast_group > 1) {
                     cb_push_back(cb_ex2, 1);

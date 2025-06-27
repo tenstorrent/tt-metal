@@ -93,8 +93,8 @@ struct MorehSoftmaxOperation {
         const Tensor& input_tensor,
         uint32_t dim,
         const std::optional<Tensor>& output_tensor,
-        const MorehSoftmaxOp op,
-        const MorehSoftmaxOpParallelizationStrategy strategy,
+        MorehSoftmaxOp op,
+        MorehSoftmaxOpParallelizationStrategy strategy,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };

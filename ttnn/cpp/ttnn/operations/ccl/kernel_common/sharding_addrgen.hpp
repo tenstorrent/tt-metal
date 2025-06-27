@@ -12,7 +12,7 @@
 
 #endif
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/sharding_common.hpp"
+#include "ttnn/operations/ccl/common/types/sharding_common.hpp"
 
 using mapping_table_t = uint32_t;
 

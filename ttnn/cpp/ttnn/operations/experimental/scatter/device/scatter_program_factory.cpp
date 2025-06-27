@@ -202,7 +202,7 @@ void ScatterProgramFactory::override_runtime_arguments(
     auto output_buffer_address = output_tensor.buffer()->address();
     for (const auto& core : cores) {
         auto& reader_runtime_args  = GetRuntimeArgs(program, reader_kernel_id, core);
-        auto& writer_runtime_args  = GetRuntimeArgs(program, reader_kernel_id, core);
+        auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
         reader_runtime_args[0] = input_buffer_address;
         reader_runtime_args[1] = index_buffer_address;
         reader_runtime_args[2] = source_buffer_address;

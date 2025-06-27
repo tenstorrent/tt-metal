@@ -67,7 +67,7 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.logical_shape();
+    const auto& shape = input_tensor.logical_shape();
     tt::tt_metal::TensorLayout output_tensor_layout =
         tt::tt_metal::TensorLayout(this->dtype, input_tensor.tensor_spec().page_config(), this->output_mem_config);
 
@@ -152,7 +152,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
         device_index,
         this->topology,
         this->semaphore,
-        this->sub_device_id);
+        this->sub_device_id,
+        this->use_noc1_only);
 }
 
 tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -188,7 +189,8 @@ Tensor all_reduce_async_impl(
     const std::optional<DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_noc1_only) {
     const auto mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");
@@ -203,6 +205,7 @@ Tensor all_reduce_async_impl(
                    topology,
                    multi_device_global_semaphore,
                    subdevice_id,
+                   use_noc1_only,
                    cluster_axis,
                    &mesh_device},
                {input_tensor, buffer_tensor})
@@ -220,7 +223,8 @@ Tensor all_reduce_async(
     const std::optional<DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_noc1_only) {
     return all_reduce_async_impl(
         input_tensor,
         buffer_tensor,
@@ -231,7 +235,8 @@ Tensor all_reduce_async(
         dtype,
         memory_config,
         num_preferred_links,
-        subdevice_id);
+        subdevice_id,
+        use_noc1_only);
 }
 
 std::vector<Tensor> all_reduce_async(
@@ -244,7 +249,8 @@ std::vector<Tensor> all_reduce_async(
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_noc1_only) {
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (size_t i = 0; i < input_tensors.size(); ++i) {
@@ -258,7 +264,8 @@ std::vector<Tensor> all_reduce_async(
             dtype,
             memory_config,
             num_preferred_links,
-            subdevice_id));
+            subdevice_id,
+            use_noc1_only));
     }
     return output_tensors;
 }

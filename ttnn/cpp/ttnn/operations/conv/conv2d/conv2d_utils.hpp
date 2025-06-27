@@ -53,7 +53,7 @@ bool is_1d_deptwise_conv(
     bool has_bias);
 
 sliding_window::ParallelConfig determine_parallel_config(
-    const TensorMemoryLayout shard_layout,
+    TensorMemoryLayout shard_layout,
     uint32_t batch_size,
     uint32_t input_channels,
     uint32_t output_height,
@@ -164,8 +164,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     tt::tt_metal::DataType input_datatype,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
-    const uint32_t groups,
-    const bool enable_bias,
+    uint32_t groups,
+    bool enable_bias,
     const DeviceComputeKernelConfig& compute_config);
 
 ttnn::Shape flatten_4d_shape(const ttnn::Shape& input_shape);

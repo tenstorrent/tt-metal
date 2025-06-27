@@ -60,7 +60,7 @@ class RefModel(torch.nn.Module):
     "is_sharded",
     (True, False),
 )
-def test_rmsnorm_singledevice(device, is_sharded, use_program_cache, reset_seeds):
+def test_rmsnorm_singledevice(device, is_sharded, reset_seeds):
     dim = 4096
     dtype = ttnn.bfloat8_b
 
@@ -104,7 +104,7 @@ def test_rmsnorm_singledevice(device, is_sharded, use_program_cache, reset_seeds
     "is_sharded",
     (True, False),
 )
-def test_rmsnorm_multidevice(t3k_mesh_device, is_sharded, use_program_cache, reset_seeds):
+def test_rmsnorm_multidevice(t3k_mesh_device, is_sharded, reset_seeds):
     dim = 4096
     dtype = ttnn.bfloat8_b
 

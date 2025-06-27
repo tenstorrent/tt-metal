@@ -34,9 +34,7 @@ inline void DumpFile(string file_name) {
     }
 }
 
-std::string_view::size_type FloatingGlobEndsAt(const std::string_view haystack,
-                                               const std::string_view needle,
-                                               unsigned globs);
+std::string_view::size_type FloatingGlobEndsAt(std::string_view haystack, std::string_view needle, unsigned globs);
 
 // Check of pattern matches at the beginning of str.
 inline std::string_view::size_type AnchoredGlobEndsAt(const std::string_view str,

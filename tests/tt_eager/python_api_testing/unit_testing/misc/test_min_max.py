@@ -38,7 +38,7 @@ import ttnn
         ttnn.TILE_LAYOUT,
     ),
 )
-def test_min_max_for_dim_hw(device, use_program_cache, shape_dim, kind, layout):
+def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
     shape, dim = shape_dim
     torch.manual_seed(0)
 

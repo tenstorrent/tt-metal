@@ -22,8 +22,8 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize("enable_cache", [True])
 def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape):
-    if enable_cache:
-        device.enable_program_cache()
+    if not enable_cache:
+        device.disable_program_cache()
 
     a = torch.randn(input_shape, dtype=torch.bfloat16)
     b = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -49,8 +49,9 @@ def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape
 )
 @pytest.mark.parametrize("enable_cache", [True])
 def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_shape):
-    if enable_cache:
-        device.enable_program_cache()
+    # respecting the parameters of the test, although cache should be active by default
+    if not enable_cache:
+        device.disable_and_clear_program_cache()
 
     a = torch.randn(input_shape, dtype=torch.bfloat16)
     b = torch.randn(output_shape, dtype=torch.bfloat16)
@@ -182,7 +183,7 @@ def test_reshape_hw_mul2_rm(device, n, c, h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
-def run_reshape_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache):
+def run_reshape_hw_rm_with_program_cache(device, n, c, h, w):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(n, c, h // 2, w * 2)
 
@@ -200,9 +201,9 @@ def run_reshape_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache):
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [256])
 @pytest.mark.parametrize("w", [8])
-def test_reshape_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache):
+def test_reshape_hw_rm_with_program_cache(device, n, c, h, w):
     for _ in range(2):
-        run_reshape_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache)
+        run_reshape_hw_rm_with_program_cache(device, n, c, h, w)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
@@ -394,7 +395,7 @@ def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, 
     assert_with_pcc(torch_result, output, 0.9999)
 
 
-def test_reshape_tile_program_cache(device, use_program_cache):
+def test_reshape_tile_program_cache(device):
     for input_shape, output_shape in ((1, 8, 8), (1, 16, 4)), ((16, 1, 5), (4, 2, 10)):
         for _ in range(3):
             torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)

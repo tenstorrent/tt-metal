@@ -72,7 +72,7 @@ void MAIN {
                 cb_reserve_back(tt::CBIndex::c_16, onetile);
 
                 // tilize CB::intermed2 and write to CBIndex::c_16
-                tilize_init_short(cb_intermed2, 1, out_cb_id);
+                tilize_init(cb_intermed2, 1, out_cb_id);
                 tilize_block(cb_intermed2, 1, out_cb_id);
                 cb_push_back(out_cb_id, 1);
 

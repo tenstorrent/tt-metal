@@ -90,7 +90,7 @@ def test_move_op(test_id, shape, layout, dtype, in0_mem_config, output_mem_confi
     run_move_op(test_id, shape, layout, dtype, in0_mem_config, output_mem_config, device)
 
 
-def test_move_op_with_program_cache(device, use_program_cache):
+def test_move_op_with_program_cache(device):
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
     dtype = ttnn.bfloat16
     layout = ttnn.TILE_LAYOUT

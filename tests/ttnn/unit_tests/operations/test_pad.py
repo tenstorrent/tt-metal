@@ -43,7 +43,7 @@ def test_pad_rm(device, n, c, h, w, padding, torch_padding, value):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
-def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, use_program_cache):
+def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
@@ -63,9 +63,9 @@ def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, va
 @pytest.mark.parametrize("w", [224])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 32), (0, 32)), (0, 32, 0, 32, 0, 1))])
 @pytest.mark.parametrize("value", [0])
-def test_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, use_program_cache):
+def test_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value):
     for _ in range(2):
-        run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, use_program_cache)
+        run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
@@ -260,7 +260,7 @@ def test_pad_rm_sharded_stickwise(
 @pytest.mark.parametrize("padding,torch_padding", [(((1, 1), (2, 32), (0, 0)), (0, 0, 2, 32, 1, 1))])
 @pytest.mark.parametrize("value", [8])
 @pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR])
-def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, use_program_cache):
+def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient):
     if device.core_grid.y < 8:
         pytest.skip("n300 does not have 8x8 grid")
     for _ in range(2):

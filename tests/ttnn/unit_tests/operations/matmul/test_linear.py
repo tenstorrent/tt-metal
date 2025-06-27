@@ -345,7 +345,7 @@ def test_linear_with_fp32_dest_acc_and_bias(device):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-def test_resnet50_linear(device, use_program_cache):
+def test_resnet50_linear(device):
     torch.manual_seed(0)
     batch_size = 16
     input_channels = 2048

@@ -427,7 +427,7 @@ def generate_sdxl_test_inputs():
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
-def test_sdxl_base_group_norm(device, input_shape, use_program_cache):
+def test_sdxl_base_group_norm(device, input_shape):
     num_groups = 32  #  always 32 for SDXL Base 1024x1024
     N, C, H, W = input_shape
     torch.manual_seed(0)

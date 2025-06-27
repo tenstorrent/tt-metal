@@ -40,7 +40,6 @@ def test_demo(
     expected_output: List[str],
     model_version,
     device,
-    use_program_cache,
     get_tt_cache_path,
     max_gen_len,
     prefill_chunk_size,

@@ -48,17 +48,6 @@ static std::string demangle(const char* str) {
     return str;
 }
 
-// Logging functions for assert usage
-template <typename... Args>
-inline void metal_log_fatal(fmt::format_string<const Args&...> fmt_str, const Args&... args) {
-    spdlog::critical("[Always] {}", fmt::format(fmt_str, args...));
-}
-
-template <typename... Args>
-inline void metal_log_debug(fmt::format_string<const Args&...> fmt_str, const Args&... args) {
-    spdlog::debug("[Always] {}", fmt::format(fmt_str, args...));
-}
-
 // https://www.fatalerrors.org/a/backtrace-function-and-assert-assertion-macro-encapsulation.html
 
 /**
@@ -105,8 +94,7 @@ template <typename... Args>
     char const* file, int line, char const* assert_type, char const* condition_str, Args const&... args) {
     if (std::getenv("TT_ASSERT_ABORT")) {
         if constexpr (sizeof...(args) > 0) {
-            tt::assert::metal_log_fatal(args...);
-            spdlog::default_logger()->flush();
+            log_critical(tt::LogAlways, args...);
         }
         abort();
     }
@@ -116,8 +104,7 @@ template <typename... Args>
     if constexpr (sizeof...(args) > 0) {
         trace_message_ss << "info:" << std::endl;
         trace_message_ss << fmt::format(args...) << std::endl;
-        tt::assert::metal_log_debug(args...);
-        spdlog::default_logger()->flush();
+        log_critical(tt::LogAlways, args...);
     }
     trace_message_ss << "backtrace:\n";
     trace_message_ss << tt::assert::backtrace_to_string(100, 3, " --- ");

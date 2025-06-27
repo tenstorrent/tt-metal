@@ -11,17 +11,17 @@ import models.perf.device_perf_utils as perf_utils
 @pytest.mark.parametrize(
     "module, filter, num_iterations, expected_perf",
     [
-        ["segformer_attention", "", 1, 620.0],
-        ["segformer_decode_head", "", 1, 245.0],
-        ["segformer_dwconv", "", 1, 445.0],
-        ["segformer_efficient_selfattention", "", 1, 650.0],
-        ["segformer_encoder", "", 1, 190.0],
-        ["segformer_layer", "", 1, 215.0],
+        ["segformer_attention", "", 1, 639.0],
+        ["segformer_decode_head", "", 1, 255.0],
+        ["segformer_dwconv", "", 1, 450.0],
+        ["segformer_efficient_selfattention", "", 1, 664.0],
+        ["segformer_encoder", "", 1, 192.0],
+        ["segformer_layer", "", 1, 216.0],
         ["segformer_mix_ffn", "", 1, 370.0],
-        ["segformer_mlp", "", 1, 8900.0],
-        ["segformer_model", "", 1, 190.0],
-        ["segformer_overlap_path_embeddings", "", 1, 2048.0],
-        ["segformer_selfoutput", "", 1, 14500.0],
+        ["segformer_mlp", "", 1, 9150.0],
+        ["segformer_model", "", 1, 193.0],
+        ["segformer_overlap_path_embeddings", "", 1, 2230.0],
+        ["segformer_selfoutput", "", 1, 15000.0],
     ],
 )
 def test_perf_device_bare_metal(module, filter, num_iterations, expected_perf):

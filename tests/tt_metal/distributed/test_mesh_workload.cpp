@@ -521,10 +521,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     ReplicatedBufferConfig global_buffer_config{.size = dram_buffer_size};
 
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = dram_buffer_size,
-        .buffer_type = tt_metal::BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = dram_buffer_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = true};
 
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {

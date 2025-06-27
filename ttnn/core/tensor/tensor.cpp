@@ -18,7 +18,7 @@
 
 #include "tt-metalium/mesh_device_view.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
+#include "tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include <tt-metalium/host_buffer.hpp>
@@ -258,14 +258,12 @@ template <typename T>
 Tensor Tensor::from_borrowed_data(
     tt::stl::Span<T> buffer,
     const ttnn::Shape& shape,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile) {
     size_t volume = shape.volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    HostBuffer data_buffer(buffer, MemoryPin(on_creation_callback, on_destruction_callback));
-    return Tensor(std::move(data_buffer), shape, convert_to_data_type<T>(), Layout::ROW_MAJOR, tile);
+    return Tensor(HostBuffer(buffer, std::move(buffer_pin)), shape, convert_to_data_type<T>(), Layout::ROW_MAJOR, tile);
 }
 
 template <>
@@ -392,38 +390,32 @@ template Tensor Tensor::from_span<uint32_t>(
 template Tensor Tensor::from_borrowed_data<float>(
     tt::stl::Span<float> buffer,
     const ttnn::Shape& shape,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<bfloat16>(
     tt::stl::Span<bfloat16> buffer,
     const ttnn::Shape& shape,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<int32_t>(
     tt::stl::Span<int32_t> buffer,
     const ttnn::Shape& shape,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<uint8_t>(
     tt::stl::Span<uint8_t> buffer,
     const ttnn::Shape& shape,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<uint16_t>(
     tt::stl::Span<uint16_t> buffer,
     const ttnn::Shape& shape,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<uint32_t>(
     tt::stl::Span<uint32_t> buffer,
     const ttnn::Shape& shape,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_vector<bfloat16>(
     std::vector<bfloat16>&& buffer,
@@ -486,13 +478,7 @@ Tensor Tensor::extract_shard(const uint32_t& core_id) const {
     return tensor_impl::extract_shard_wrapper(*this, core_id);
 }
 
-Tensor Tensor::to_layout(Layout target_layout, IDevice* worker) const {
-    return tensor_ops::tensor_to_layout(*this, target_layout, worker);
-}
-
-Tensor Tensor::to_layout(Layout target_layout, distributed::MeshDevice* mesh_device) const {
-    return tensor_ops::tensor_to_layout(*this, target_layout, mesh_device);
-}
+Tensor Tensor::to_layout(Layout target_layout) const { return tensor_ops::tensor_to_layout(*this, target_layout); }
 
 std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
 

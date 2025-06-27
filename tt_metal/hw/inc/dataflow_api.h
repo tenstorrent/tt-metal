@@ -495,18 +495,17 @@ void noc_async_read_one_packet(
  *
  * Return value: None
  *
- * | Argument                          | Description                                        | Data type | Valid range                              | required |
- * |-----------------------------------|----------------------------------------------------|-----------|------------------------------------------|----------|
- * | src_noc_addr                      | Encoding of the source NOC location (x,y)+address  | uint64_t  | DOX-TODO (ref to explain valid coords)   | True     |
- * | dst_local_l1_addr                 | Address in local L1 memory                         | uint32_t  | 0..1MB                                   | True     |
- * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                                   | True     |
- * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                                   | False    |
- * | max_page_size (template argument) | Maximum size of a single transaction in bytes      | uint32_t  | Any uint32_t number                      | False    |
+ * | Argument                          | Description                                        | Data type | Valid range                      | required |
+ * |-----------------------------------|----------------------------------------------------|-----------|----------------------------------|----------|
+ * | src_noc_addr                      | Encoding of the source NOC location (x,y)+address  | uint64_t  | Results of \a get_noc_addr calls | True     |
+ * | dst_local_l1_addr                 | Address in local L1 memory                         | uint32_t  | 0..1MB                           | True     |
+ * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                           | True     |
+ * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                           | False    |
+ * | max_page_size (template argument) | Maximum size of a single transaction in bytes      | uint32_t  | Any uint32_t number              | False    |
  */
 // clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
-inline void noc_async_read(
-    std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index) {
+inline void noc_async_read(uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -731,18 +730,17 @@ void noc_async_write_one_packet(
  *
  * Return value: None
  *
- * | Argument                          | Description                                             | Type     | Valid Range                                                    | Required |
- * |-----------------------------------|---------------------------------------------------------|----------|----------------------------------------------------------------|----------|
- * | src_local_l1_addr                 | Source address in local L1 memory                       | uint32_t | 0..1MB                                                         | True     |
- * | dst_noc_addr                      | Encoding of the destination NOC location (x,y)+address  | uint64_t | DOX-TODO (insert a reference to what constitutes valid coords) | True     |
- * | size                              | Size of data transfer in bytes                          | uint32_t | 0..1MB                                                         | True     |
- * | noc                               | Which NOC to use for the transaction                    | uint8_t  | 0 or 1                                                         | False    |
- * | max_page_size (template argument) | Maximum size of a single transaction in bytes           | uint32_t | Any uint32_t number                                            | False    |
+ * | Argument                          | Description                                             | Type     | Valid Range                      | Required |
+ * |-----------------------------------|---------------------------------------------------------|----------|----------------------------------|----------|
+ * | src_local_l1_addr                 | Source address in local L1 memory                       | uint32_t | 0..1MB                           | True     |
+ * | dst_noc_addr                      | Encoding of the destination NOC location (x,y)+address  | uint64_t | Results of \a get_noc_addr calls | True     |
+ * | size                              | Size of data transfer in bytes                          | uint32_t | 0..1MB                           | True     |
+ * | noc                               | Which NOC to use for the transaction                    | uint8_t  | 0 or 1                           | False    |
+ * | max_page_size (template argument) | Maximum size of a single transaction in bytes           | uint32_t | Any uint32_t number              | False    |
  */
 // clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
-inline void noc_async_write(
-    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
+inline void noc_async_write(uint32_t src_local_l1_addr, uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, NOC_UNICAST_WRITE_VC);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
@@ -815,20 +813,23 @@ void noc_async_write_multicast_one_packet(
  *
  * Return value: None
  *
- * | Argument               | Description                                                              | Type     | Valid Range                                                   | Required |
- * |------------------------|--------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
- * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | size                   | Size of data transfer in bytes                                           | uint32_t | 0..1MB                                                        | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores -1)                                       | True     |
+ * | Argument                          | Description                                                              | Type     | Valid Range                                | Required |
+ * |-----------------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
+ * | src_local_l1_addr                 | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
+ * | dst_noc_addr_multicast            | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
+ * | size                              | Size of data transfer in bytes                                           | uint32_t | 0..1MB                                     | True     |
+ * | num_dests                         | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores -1)                    | True     |
+ * | linked                            | Whether the transaction is linked                                        | bool     | true or false                              | False    |
+ * | noc                               | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
+ * | max_page_size (template argument) | Maximum size of a single transaction in bytes                            | uint32_t | Any uint32_t number                        | False    |
  */
 // clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
 inline void noc_async_write_multicast(
-    std::uint32_t src_local_l1_addr,
-    std::uint64_t dst_noc_addr_multicast,
-    std::uint32_t size,
-    std::uint32_t num_dests,
+    uint32_t src_local_l1_addr,
+    uint64_t dst_noc_addr_multicast,
+    uint32_t size,
+    uint32_t num_dests,
     bool linked = false,
     uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC);
@@ -1178,20 +1179,21 @@ inline void noc_semaphore_set_remote(
  *
  * Return value: None
  *
- * | Argument               | Description                                                              | Type     | Valid Range                                                   | Required |
- * |------------------------|--------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
- * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                                      | True     |
+ * | Argument               | Description                                                              | Type     | Valid Range                                | Required |
+ * |------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
+ * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
+ * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                   | True     |
+ * | linked                 | Whether the transaction is linked                                        | bool     | true or false                              | False    |
+ * | noc                    | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */
 // clang-format on
 inline void noc_semaphore_set_multicast(
-    std::uint32_t src_local_l1_addr,
-    std::uint64_t dst_noc_addr_multicast,
-    std::uint32_t num_dests,
+    uint32_t src_local_l1_addr,
+    uint64_t dst_noc_addr_multicast,
+    uint32_t num_dests,
     bool linked = false,
     uint8_t noc = noc_index) {
-    constexpr bool multicast_path_reserve = true;
     WAYPOINT("NSNW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
     ncrisc_noc_fast_write_any_len<noc_mode>(
@@ -1204,7 +1206,7 @@ inline void noc_semaphore_set_multicast(
         true,
         linked,
         num_dests,
-        multicast_path_reserve);
+        true /* multicast_path_reserve */);
     WAYPOINT("NSND");
 }
 // clang-format off
@@ -1226,20 +1228,21 @@ inline void noc_semaphore_set_multicast(
  *
  * Return value: None
  *
- * | Argument               | Description                                                              | Type     | Valid Range                                                   | Required |
- * |------------------------|--------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
- * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores)                                          | True     |
+ * | Argument               | Description                                                              | Type     | Valid Range                                | Required |
+ * |------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
+ * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
+ * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores)                       | True     |
+ * | linked                 | Whether the transaction is linked                                        | bool     | true or false                              | False    |
+ * | noc                    | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */
 // clang-format on
 inline void noc_semaphore_set_multicast_loopback_src(
-    std::uint32_t src_local_l1_addr,
-    std::uint64_t dst_noc_addr_multicast,
-    std::uint32_t num_dests,
+    uint32_t src_local_l1_addr,
+    uint64_t dst_noc_addr_multicast,
+    uint32_t num_dests,
     bool linked = false,
     uint8_t noc = noc_index) {
-    constexpr bool multicast_path_reserve = true;
     WAYPOINT("NSLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
@@ -1252,7 +1255,7 @@ inline void noc_semaphore_set_multicast_loopback_src(
         true,
         linked,
         num_dests,
-        multicast_path_reserve);
+        true /* multicast_path_reserve */);
     WAYPOINT("NSLD");
 }
 
@@ -1536,11 +1539,11 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  *
  * Return value: None
  *
- * | Argument  | Description                                            | Type     | Valid Range                                                   | Required |
- * |-----------|--------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | addr      | Encoding of the destination location (x,y)+address     | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | val       | The value to be written                                | uint32_t | Any uint32_t value                                            | True     |
- * | be        | Byte-enable                                            | uint8_t  | 0x1-0xF                                                       | False    |
+ * | Argument  | Description                                            | Type     | Valid Range                      | Required |
+ * |-----------|--------------------------------------------------------|----------|----------------------------------|----------|
+ * | addr      | Encoding of the destination location (x,y)+address     | uint64_t | Results of \a get_noc_addr calls | True     |
+ * | val       | The value to be written                                | uint32_t | Any uint32_t value               | True     |
+ * | be        | Byte-enable                                            | uint8_t  | 0x1-0xF                          | False    |
  */
 // clang-format on
 template <bool write_to_stream_reg = false, bool posted = false>
@@ -1697,12 +1700,13 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
  *
  * Return value: None
  *
- * | Argument                   | Description                                                      | Type     | Valid Range                                                   | Required |
- * |----------------------------|------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | addr                       | Encoding of the destination location (x,y)+address               | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | incr                       | The value to increment by                                        | uint32_t | Any uint32_t value                                            | True     |
- * | noc_id                     | Which NOC to use for the transaction                             | uint8_t  | 0 or 1                                                        | False    |
- * | posted (template argument) | Whether the call is posted or nonposted (i.e. needs to be acked) | uint32_t | true or false                                                 | False    |
+ * | Argument                   | Description                                                      | Type     | Valid Range                      | Required |
+ * |----------------------------|------------------------------------------------------------------|----------|----------------------------------|----------|
+ * | addr                       | Encoding of the destination location (x,y)+address               | uint64_t | Results of \a get_noc_addr calls | True     |
+ * | incr                       | The value to increment by                                        | uint32_t | Any uint32_t value               | True     |
+ * | noc_id                     | Which NOC to use for the transaction                             | uint8_t  | 0 or 1                           | False    |
+ * | vc                         | Which NOC to use for the transaction                             | uint8_t  | 0-3 (Unicast VCs)                | False    |
+ * | posted (template argument) | Whether the call is posted or nonposted (i.e. needs to be acked) | uint32_t | true or false                    | False    |
  */
 // clang-format on
 template <bool posted = false>

@@ -36,12 +36,12 @@ void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_t
     }
 
     // Get shapes
-    const auto q_shape = input_tensor_q.logical_shape();
-    const auto k_shape = input_tensor_k.logical_shape();
-    const auto v_shape = input_tensor_v.logical_shape();
-    const auto joint_q_shape = joint_tensor_q.logical_shape();
-    const auto joint_k_shape = joint_tensor_k.logical_shape();
-    const auto joint_v_shape = joint_tensor_v.logical_shape();
+    const auto& q_shape = input_tensor_q.logical_shape();
+    const auto& k_shape = input_tensor_k.logical_shape();
+    const auto& v_shape = input_tensor_v.logical_shape();
+    const auto& joint_q_shape = joint_tensor_q.logical_shape();
+    const auto& joint_k_shape = joint_tensor_k.logical_shape();
+    const auto& joint_v_shape = joint_tensor_v.logical_shape();
 
     // Validate storage types and buffers
     for (auto& tensor : input_tensors) {

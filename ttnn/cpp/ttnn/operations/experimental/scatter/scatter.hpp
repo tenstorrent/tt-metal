@@ -28,8 +28,8 @@ struct ScatterOperation {
 }  // namespace operations::experimental
 
 namespace experimental {
-constexpr auto scatter_ =
-    ttnn::register_operation<"ttnn::experimental::scatter_", ttnn::operations::experimental::ScatterOperation>();
+constexpr auto scatter =
+    ttnn::register_operation<"ttnn::experimental::scatter", ttnn::operations::experimental::ScatterOperation>();
 }  // namespace experimental
 
 }  // namespace ttnn

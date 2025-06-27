@@ -159,7 +159,7 @@ void tensor_mem_config_module(py::module& m_tensor) {
 
                 .. code-block:: python
 
-                    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.SINGLE_BANK)
+                    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED)
             )doc")
         .def(
             py::init<>([](BufferType buffer_type, NdShardSpec nd_shard_spec) {
@@ -288,7 +288,6 @@ void tensor_mem_config_module(py::module& m_tensor) {
         &dump_tensor,
         py::arg("filename"),
         py::arg("tensor"),
-        py::arg("strategy") = std::unordered_map<std::string, std::string>{},
         R"doc(
             Dump tensor to file
         )doc");

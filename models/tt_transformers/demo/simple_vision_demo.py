@@ -156,8 +156,6 @@ def test_multimodal_demo_text(
     ckpt_dir = os.environ["LLAMA_DIR"]
     tokenizer_path = str(Path(ckpt_dir) / "tokenizer.model")
 
-    mesh_device.enable_program_cache()
-
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
 
@@ -369,19 +367,19 @@ def test_multimodal_demo_text(
     )
     logger.info("")
 
-    if max_batch_size == 1 and enable_trace:  # Only profiling these parametrizations
+    if is_ci_env and max_batch_size == 1 and enable_trace:  # Only profiling these parametrizations
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
         target_prefill_tok_s = {
-            "N300_Llama3.2-11B": 10.8,
-            "T3K_Llama3.2-11B": 6.5,
-            "T3K_Llama3.2-90B": 3,
+            "N300_Llama-3.2-11B": 10.8,
+            "T3K_Llama-3.2-11B": 6.5,
+            "T3K_Llama-3.2-90B": 3,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s_u = {
-            "N300_Llama3.2-11B": 20,
-            "T3K_Llama3.2-11B": 33,
-            "T3K_Llama3.2-90B": 6,
+            "N300_Llama-3.2-11B": 20,
+            "T3K_Llama-3.2-11B": 33,
+            "T3K_Llama-3.2-90B": 6,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s = target_decode_tok_s_u * max_batch_size
@@ -392,18 +390,17 @@ def test_multimodal_demo_text(
         }
 
         # Save benchmark data for CI
-        if is_ci_env:
-            N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
-            benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
-            benchmark_data.save_partial_run_json(
-                profiler,
-                run_type=f"{tt_device_name}-demo",
-                ml_model_name=f"{base_model_name}-Vision",
-                ml_model_type="vlm",
-                num_layers=model_args[0].n_layers,
-                batch_size=max_batch_size,
-                input_sequence_length=max(prefill_lens).item(),
-                output_sequence_length=max_gen_len,
-            )
+        N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
+        benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type=f"{tt_device_name}-demo",
+            ml_model_name=f"{base_model_name}-Vision",
+            ml_model_type="vlm",
+            num_layers=model_args[0].n_layers,
+            batch_size=max_batch_size,
+            input_sequence_length=max(prefill_lens).item(),
+            output_sequence_length=max_gen_len,
+        )
 
         verify_perf(measurements, targets, high_tol_percentage=1.15)

@@ -22,7 +22,6 @@ from ..tt.utils import assert_quality, to_torch
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
 @pytest.mark.parametrize("mesh_device", [(1, 1), (1, 2), (1, 8)], indirect=True)
 @pytest.mark.parametrize("affine", [True, False], ids=["affine", "noaffine"])
-@pytest.mark.usefixtures("use_program_cache")
 def test_layer_norm(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -73,7 +72,6 @@ def test_layer_norm(
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.usefixtures("use_program_cache")
 def test_rms_norm(
     *,
     mesh_device: ttnn.MeshDevice,

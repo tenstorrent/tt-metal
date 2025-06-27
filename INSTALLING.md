@@ -132,23 +132,72 @@ Once hardware and system software are installed, verify that the system has been
 
 ### TT-NN / TT-Metalium Installation
 
-#### There are three options for installing TT-Metalium:
+#### There are four options for installing TT-Metalium:
 
-- [Option 1: From Source](#option-1-from-source)
+- [Option 1: From Binaries](#binaries)
+
+  Install pre-built binaries for quick setup and immediate access to TT-NN APIs and AI models.
+
+- [Option 2: From Docker Release Image](#docker-release-image)
+
+  Installing from Docker Release Image is a quick way to access our APIs and start running AI models.
+
+- [Option 3: From Source](#source)
 
   Installing from source gets developers closer to the metal and the source code.
 
-- [Option 2: From Docker Release Image](#option-2-from-docker-release-image)
+- [Option 4: From Anaconda](#anaconda)
 
-  Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.
-
-- [Option 3: From Wheel](#option-3-from-wheel)
-
-  Install from wheel as an alternative method to get quick access to our APIs and to running AI models.
+  Installing from Anaconda can be convienient for ML Developers who prefer that workflow.
 
 ---
 
-### Option 1: From Source
+### Binaries
+Install from wheel for quick access to `ttnn` Python APIs and to get an AI model running.
+All binaries support only Linux and distros with glibc 2.34 or newer.
+
+#### Step 1. Install the Latest Wheel:
+
+- Install the wheel using `pip`:
+
+  ```sh
+  pip install ttnn
+  ```
+
+#### Step 2. (For models users only) Set Up Environment for Models:
+
+To try our pre-built models in `models/`, you must:
+
+  - Install their required dependencies
+  - Set appropriate environment variables
+  - Set the CPU performance governor to ensure high performance on the host
+
+- This is done by executing the following:
+  ```sh
+  export PYTHONPATH=$(pwd)
+  pip install -r tt_metal/python_env/requirements-dev.txt
+  sudo apt-get install cpufrequtils
+  sudo cpupower frequency-set -g performance
+  ```
+
+---
+
+### Docker Release Image
+
+Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64) page
+
+```sh
+docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
+docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc bash
+```
+
+- For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64).
+
+- You are all set! Try some [TT-NN Basic Examples](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) next.
+
+---
+
+### Source
 Install from source if you are a developer who wants to be close to the metal and the source code. Recommended for running the demo models.
 
 #### Step 1. Clone the Repository:
@@ -196,49 +245,16 @@ source python_env/bin/activate
 
 ---
 
-### Option 2: From Docker Release Image
-Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.
+### Anaconda
+Anaconda is another virtual environment manager. There is a community driven recipe [here](https://github.com/conda-forge/tt-metalium-feedstock). There is support for Python 3.10, 3.11, and 3.12.
+All binaries support only Linux and distros with glibc 2.34 or newer.
 
-Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64) page
+#### Step 1. Install the Latest Package:
 
-```sh
-docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
-docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc bash
-```
-
-- For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64).
-
-- You are all set! Try some [TT-NN Basic Examples](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) next.
-
----
-
-### Option 3: From Wheel
-Install from wheel for quick access to our APIs and to get an AI model running
-
-#### Step 1. Download and Install the Latest Wheel:
-
-- Navigate to our [releases page](https://github.com/tenstorrent/tt-metal/releases/latest) and download the latest wheel file for the Tenstorrent card architecture you have installed.
-
-- Install the wheel using your Python environment manager of choice. For example, to install with `pip`:
+- Install the package using `conda`:
 
   ```sh
-  pip install <wheel_file.whl>
-  ```
-
-#### Step 2. (For models users only) Set Up Environment for Models:
-
-To try our pre-built models in `models/`, you must:
-
-  - Install their required dependencies
-  - Set appropriate environment variables
-  - Set the CPU performance governor to ensure high performance on the host
-
-- This is done by executing the following:
-  ```sh
-  export PYTHONPATH=$(pwd)
-  pip install -r tt_metal/python_env/requirements-dev.txt
-  sudo apt-get install cpufrequtils
-  sudo cpupower frequency-set -g performance
+  conda create -n metalium python=3.10 tt-metalium -c conda-forge
   ```
 
 ---

@@ -259,7 +259,6 @@ def run_test_perplexity(
 )
 def test_mixtral_perplexity(
     t3k_mesh_device,
-    use_program_cache,
     reset_seeds,
     llm_mode,
     max_seq_len,

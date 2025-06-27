@@ -80,7 +80,6 @@ ttnn.div_bw
 ttnn.div_no_nan
 ttnn.div_no_nan_bw
 ttnn.divide
-ttnn.downsample
 ttnn.dram_prefetcher
 ttnn.dump_tensor
 ttnn.elu

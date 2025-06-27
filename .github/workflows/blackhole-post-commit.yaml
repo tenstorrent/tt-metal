@@ -254,7 +254,7 @@ jobs:
     needs: build-artifact
     if: ${{ inputs.enable-llmbox-tests }}
     secrets: inherit
-    uses: ./.github/workflows/blackhole-llmbox-fabric-build-and-unit-tests.yaml
+    uses: ./.github/workflows/blackhole-llmbox-unit-tests-impl.yaml
     with:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}

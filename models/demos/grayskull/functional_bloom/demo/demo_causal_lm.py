@@ -227,7 +227,6 @@ def test_demo(
     functional_model,
     model_location_generator,
     device,
-    use_program_cache,
     batch_size=8,
     num_tokens_to_decode=10,
 ):
@@ -256,7 +255,6 @@ def test_demo_hellaswag(
     model_location_generator,
     functional_model,
     device,
-    use_program_cache,
     loop_count,
     batch_size=8,
     num_tokens_to_decode=10,

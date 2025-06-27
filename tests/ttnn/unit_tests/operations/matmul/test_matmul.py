@@ -597,7 +597,6 @@ def test_matmul_2d_multiple_output_blocks_per_core(
     num_out_block_h,
     num_out_block_w,
     transpose_mcast,
-    use_program_cache,
 ):
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     required_size = 8  # input tensor sizes are too small to be subdivided on larger grids
@@ -769,7 +768,6 @@ def test_matmul_2d_tiny_tile(
     out_sharded,
     in1_dtype,
     transpose_tile,
-    use_program_cache,
 ):
     for _ in range(2):
         run_matmul_2d_tiny_tile(
@@ -927,7 +925,6 @@ def test_matmul_1d_tiny_tile(
     out_sharded,
     in1_dtype,
     transpose_tile,
-    use_program_cache,
 ):
     for _ in range(2):
         run_matmul_1d_tiny_tile(
@@ -1135,7 +1132,6 @@ def test_matmul_1d_multiple_output_blocks_per_core(
     num_out_block_w,
     mcast_in0,
     uneven_width,
-    use_program_cache,
 ):
     for _ in range(2):
         run_matmul_1d_multiple_output_blocks_per_core(

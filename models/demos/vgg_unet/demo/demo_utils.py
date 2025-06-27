@@ -42,9 +42,14 @@ def process_single_image(image_path, mask_path, model, output_dir, model_type="t
             predict = model(X)
     else:
         # X = torch.from_numpy(X).float()
+
+        n, c, h, w = X.shape
         X = X.permute(0, 2, 3, 1)
-        ttnn_input = ttnn.from_torch(X, dtype=ttnn.bfloat16)
-        predict = model(ttnn_input)
+        X = X.reshape(1, 1, h * w * n, c)
+        ttnn_input = ttnn.from_torch(X, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn_input = ttnn.pad(ttnn_input, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
+
+        predict = model.execute_vgg_unet_trace_2cqs_inference(ttnn_input)
         predict = ttnn.to_torch(predict)
         predict = predict.permute(0, 3, 1, 2)
         predict = predict.reshape(1, 1, 256, 256)
@@ -128,8 +133,11 @@ def prediction(test, model, model_type):
                 predict = model(X)
         else:
             X = torch.from_numpy(X).float()
-            ttnn_input = ttnn.from_torch(X, dtype=ttnn.bfloat16)
-            predict = model(ttnn_input)
+            n, h, w, c = X.shape
+            X = X.reshape(1, 1, h * w * n, c)
+            ttnn_input = ttnn.from_torch(X, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            ttnn_input = ttnn.pad(ttnn_input, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
+            predict = model.execute_vgg_unet_trace_2cqs_inference(ttnn_input)
             predict = ttnn.to_torch(predict)
             predict = predict.permute(0, 3, 1, 2)
             predict = predict.reshape(1, 1, 256, 256)
@@ -234,9 +242,9 @@ def postprocess(df_pred, X_test, model_type):
 
     # Define the output folder
     if model_type == "torch_model":
-        output_folder = "models/experimental/vgg_unet/demo/output_images"
+        output_folder = "models/demos/vgg_unet/demo/output_images"
     else:
-        output_folder = "models/experimental/vgg_unet/demo/output_images_ttnn"
+        output_folder = "models/demos/vgg_unet/demo/output_images_ttnn"
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
 

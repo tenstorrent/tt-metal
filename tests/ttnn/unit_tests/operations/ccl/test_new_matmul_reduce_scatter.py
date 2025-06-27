@@ -37,7 +37,6 @@ def run_reduce_scatter_impl(
     mem_config_mm,
     rs_topology,
     use_non_fused,
-    use_program_cache,
     mem_config_weights=None,
     num_iters=1,
     enable_trace=True,
@@ -395,7 +394,6 @@ def test_reduce_scatter_async(
     mem_config_rs,
     enable_trace,
     num_iters,
-    use_program_cache,
     rs_topology,
 ):
     run_reduce_scatter_impl(
@@ -414,7 +412,6 @@ def test_reduce_scatter_async(
         mem_config_input,
         mem_config_rs,
         mem_config_mm,
-        use_program_cache=use_program_cache,
         rs_topology=rs_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,

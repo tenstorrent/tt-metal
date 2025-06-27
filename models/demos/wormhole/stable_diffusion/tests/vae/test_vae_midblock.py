@@ -25,7 +25,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 def test_vae_midblock(
-    device, input_channels, input_height, input_width, norm_num_blocks, conv_in_channel_split_factors, use_program_cache
+    device, input_channels, input_height, input_width, norm_num_blocks, conv_in_channel_split_factors
 ):
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
 

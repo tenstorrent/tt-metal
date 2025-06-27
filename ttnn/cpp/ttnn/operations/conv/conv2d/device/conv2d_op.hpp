@@ -16,7 +16,6 @@ namespace ttnn {
 namespace operations::conv {
 namespace conv2d {
 
-constexpr uint32_t l1_scratchpad_CB_size = 64;
 struct Conv2dConfig {
     tt::tt_metal::DataType dtype = tt::tt_metal::DataType::BFLOAT16;
 
@@ -343,8 +342,7 @@ conv_op_l1_usage calculate_L1_usage(
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
-    const tt::tt_metal::DataType input_datatype,
-    const tt::tt_metal::MemoryConfig& output_memory_config,
+    tt::tt_metal::DataType input_datatype,
     bool enable_bias,
     bool is_1d_depthwise_conv);
 

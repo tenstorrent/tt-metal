@@ -162,7 +162,7 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
         ([2, 2, 2, 2, 2, 2, 64, 64], 0.0, (0.9, 0.999), 1e-06, 0.0, False, False),
     ),
 )
-def test_moreh_adam_callback(params, device, use_program_cache):
+def test_moreh_adam_callback(params, device):
     torch.manual_seed(2024)
     num_program_cache_entries_list = []
     for i in range(2):
@@ -184,7 +184,7 @@ def test_moreh_adam_callback(params, device, use_program_cache):
         ([2, 2, 2, 2, 2, 2, 64, 64], 0.0, (0.9, 0.999), 1e-06, 0.0, False, False),
     ),
 )
-def test_moreh_adam_caching(params, device, use_program_cache):
+def test_moreh_adam_caching(params, device):
     torch.manual_seed(2024)
     num_program_cache_entries_list = []
     for i in range(1, 5):

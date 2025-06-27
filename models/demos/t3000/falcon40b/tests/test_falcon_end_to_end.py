@@ -444,7 +444,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     model_location_generator,
     get_tt_cache_path,
     t3k_mesh_device,
-    use_program_cache,
 ):
     model_config_str = f"{data_type}-{memcfg}"
     if llm_mode == "prefill" and memcfg != "DRAM" or num_devices != 8:

@@ -82,6 +82,22 @@ TEST(PartitionTest, ChunkFewerChunksThanRequested) {
     EXPECT_EQ(chunks[4].shape()[0], 1u);
 }
 
+TEST(PartitionTest, ChunkNegativeDim) {
+    xt::xarray<float> tensor = xt::arange<float>(20);
+    tensor.reshape({2, 10});
+
+    // Chunk into 3 parts along dimension -1 (i.e., dimension 1)
+    auto chunks_neg = chunk(tensor, 3, -1);
+    auto chunks_pos = chunk(tensor, 3, 1);
+
+    ASSERT_THAT(chunks_neg, SizeIs(3));
+    ASSERT_THAT(chunks_pos, SizeIs(3));
+
+    EXPECT_TRUE(xt::allclose(chunks_neg[0], chunks_pos[0]));
+    EXPECT_TRUE(xt::allclose(chunks_neg[1], chunks_pos[1]));
+    EXPECT_TRUE(xt::allclose(chunks_neg[2], chunks_pos[2]));
+}
+
 TEST(PartitionTest, DefaultAxis) {
     xt::xarray<double> a = {{1.0, 2.0}, {3.0, 4.0}};
     xt::xarray<double> b = {{5.0, 6.0}, {7.0, 8.0}};
@@ -99,6 +115,17 @@ TEST(PartitionTest, AxisOne) {
     std::vector<xt::xarray<int>> input = {x, y};
 
     xt::xarray<int> result = concat(input, 1);
+    xt::xarray<int> expected = {{1, 2, 3, 7, 8}, {4, 5, 6, 9, 10}};
+
+    EXPECT_TRUE(xt::allclose(result, expected));
+}
+
+TEST(PartitionTest, ConcatNegativeDim) {
+    xt::xarray<int> x = {{1, 2, 3}, {4, 5, 6}};
+    xt::xarray<int> y = {{7, 8}, {9, 10}};
+    std::vector<xt::xarray<int>> input = {x, y};
+
+    xt::xarray<int> result = concat(input, -1);
     xt::xarray<int> expected = {{1, 2, 3, 7, 8}, {4, 5, 6, 9, 10}};
 
     EXPECT_TRUE(xt::allclose(result, expected));
@@ -284,6 +311,7 @@ TEST(PartitionTest, ChunkNdimNonUniqueDims) {
     tensor.reshape({2, 3, 4});
 
     EXPECT_ANY_THROW(chunk_ndim(tensor, {2, 2}, {0, 0}));
+    EXPECT_ANY_THROW(chunk_ndim(tensor, {2, 2}, {2, -1}));
     EXPECT_ANY_THROW(chunk_ndim(tensor, {2, 2, 3}, {0, 1, 0}));
 }
 
@@ -292,7 +320,7 @@ TEST(PartitionTest, ChunkNdimDimsOutOfRange) {
     tensor.reshape({2, 3, 4});
 
     EXPECT_ANY_THROW(chunk_ndim(tensor, {2}, {3}));
-    EXPECT_ANY_THROW(chunk_ndim(tensor, {2}, {-1}));
+    EXPECT_ANY_THROW(chunk_ndim(tensor, {2}, {-5}));
     EXPECT_ANY_THROW(chunk_ndim(tensor, {2, 2}, {0, 5}));
 }
 

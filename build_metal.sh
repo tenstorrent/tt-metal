@@ -40,7 +40,7 @@ show_help() {
     echo "  --toolchain-path                 Set path to CMake toolchain file."
     echo "  --configure-only                 Only configure the project, do not build."
     echo "  --enable-coverage                Instrument the binaries for code coverage."
-    echo "  --enable-distributed             Enable distributed compute support (OpenMPI)."
+    echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
 }
 
@@ -121,7 +121,7 @@ ttnn-shared-sub-libs
 toolchain-path:
 configure-only
 enable-coverage
-enable-distributed
+without-distributed
 without-python-bindings
 "
 
@@ -150,8 +150,8 @@ while true; do
             enable_time_trace="ON";;
         --enable-coverage)
             enable_coverage="ON";;
-        --enable-distributed)
-            enable_distributed="ON";;
+        --without-distributed)
+            enable_distributed="OFF";;
 	--build-dir)
             build_dir="$2";shift;;
         -b|--build-type)

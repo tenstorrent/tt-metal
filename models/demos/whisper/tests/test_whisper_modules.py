@@ -48,7 +48,6 @@ def test_whisper_attention(
     use_encoder_states,
     use_attn_mask,
     use_kv_cache,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
@@ -164,7 +163,7 @@ def test_whisper_attention(
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size, use_program_cache):
+def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoderLayer(config).eval()
@@ -196,7 +195,7 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_length", [3000])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_encoder(device, ttnn_model, model_name, batch_size, sequence_length, use_program_cache):
+def test_encoder(device, ttnn_model, model_name, batch_size, sequence_length):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoder(config).eval()
@@ -247,7 +246,6 @@ def test_decoder_layer(
     encoder_sequence_size,
     decoder_sequence_size,
     use_kv_cache,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
@@ -321,7 +319,6 @@ def test_decoder(
     encoder_sequence_size,
     decoder_sequence_size,
     use_kv_cache,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
@@ -389,7 +386,7 @@ def test_decoder(
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_ttnn_whisper(tmp_path, device, ttnn_model, model_name, decoder_sequence_size, use_kv_cache, use_program_cache):
+def test_ttnn_whisper(tmp_path, device, ttnn_model, model_name, decoder_sequence_size, use_kv_cache):
     torch.manual_seed(0)
     config = WhisperConfig.from_pretrained(model_name)
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)

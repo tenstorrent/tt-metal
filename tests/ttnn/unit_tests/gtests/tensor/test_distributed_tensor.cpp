@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
+#include "host_buffer.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include "ttnn/distributed/api.hpp"
@@ -23,6 +24,15 @@ using ::testing::Pointwise;
 
 TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
     return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
+}
+
+// Returns the number of unique buffers in host-side multi-device tensor.
+int count_unique_buffers(const Tensor& tensor) {
+    const auto& storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.storage());
+    std::unordered_set<const void*> buffer_addresses;
+    storage.distributed_buffer().apply(
+        [&buffer_addresses](const HostBuffer& buffer) { buffer_addresses.insert(buffer.view_bytes().data()); });
+    return buffer_addresses.size();
 }
 
 class AggregateTensorTest : public GenericMeshDeviceFixture,
@@ -102,7 +112,7 @@ TEST_F(TensorDistributionT3000Test, Shard1DInvalidDim) {
         std::vector<float>(num_devices, 0), get_tensor_spec(ttnn::Shape{1, 1, 1, num_devices}, DataType::FLOAT32));
 
     EXPECT_ANY_THROW({
-        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, -1);
+        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, -10);
         Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
     });
 
@@ -123,7 +133,9 @@ TEST_F(TensorDistributionT3000Test, Shard1DFewerShardsThanDevices) {
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_devices - 1, 3, 1}, DataType::FLOAT32));
 
     auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
+
+    EXPECT_EQ(count_unique_buffers(sharded_tensor), mesh_device_->num_devices() - 1);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices() - 1);
@@ -139,6 +151,23 @@ TEST_F(TensorDistributionT3000Test, Shard1DFewerShardsThanDevices) {
     EXPECT_TRUE(ttnn::allclose<float>(concatenated_tensor, expected_tensor));
 }
 
+TEST_F(TensorDistributionT3000Test, Shard1DNegativeDim) {
+    const int num_devices = mesh_device_->num_devices();
+    std::vector<float> test_data(num_devices, 0);
+    std::iota(test_data.begin(), test_data.end(), 0);
+    Tensor input_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, 1, 1, num_devices}, DataType::FLOAT32));
+
+    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, -1);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+
+    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
+    EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
+    for (int i = 0; i < device_tensors.size(); i++) {
+        EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i));
+    }
+}
+
 TEST_F(TensorDistributionT3000Test, Shard1D) {
     const int num_devices = mesh_device_->num_devices();
     std::vector<float> test_data;
@@ -149,7 +178,9 @@ TEST_F(TensorDistributionT3000Test, Shard1D) {
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_devices, 3, 1}, DataType::FLOAT32));
 
     auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
+
+    EXPECT_EQ(count_unique_buffers(sharded_tensor), mesh_device_->num_devices());
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
@@ -185,7 +216,9 @@ TEST_P(TensorDistributionT3000Test2D, FullyReplicated) {
             .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Replicate{}},
             .mesh_shape_override = MeshShape(num_rows, num_cols),
         });
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
+
+    EXPECT_EQ(count_unique_buffers(sharded_tensor), 1);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), num_devices);
@@ -220,7 +253,9 @@ TEST_P(TensorDistributionT3000Test2D, ReplicateDim) {
             .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Replicate{}},
             .mesh_shape_override = MeshShape(num_rows, num_cols),
         });
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
+
+    EXPECT_EQ(count_unique_buffers(sharded_tensor), num_rows);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), num_devices);
@@ -254,7 +289,9 @@ TEST_P(TensorDistributionT3000Test2D, ShardDims) {
             .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
             .mesh_shape_override = MeshShape(num_rows, num_cols),
         });
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
+
+    EXPECT_EQ(count_unique_buffers(sharded_tensor), num_rows * num_cols);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), num_devices);
@@ -369,6 +406,7 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
     ASSERT_EQ(mesh_device_->shape(), MeshShape(kNumRows, kNumCols));
 
     std::vector<float> test_data;
+    test_data.reserve(4 * kNumRows * kNumCols * 7);
     for (int i = 0; i < 4 * kNumRows * kNumCols * 7; ++i) {
         test_data.push_back(static_cast<float>(i));
     }
@@ -386,7 +424,9 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
                 },
             .mesh_shape_override = MeshShape(2, 2, 2),
         });
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
+
+    EXPECT_EQ(count_unique_buffers(sharded_tensor), 2 * 2);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());

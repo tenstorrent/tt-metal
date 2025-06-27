@@ -162,22 +162,22 @@ int main(int argc, char** argv) {
 
             if (std::abs(expected - actual) > eps) {
                 pass = false;
-                log_error(tt::LogTest, "Result mismatch at index {}: expected {}, got {}", i, expected, actual);
+                fmt::print(stderr, "Result mismatch at index {}: expected {}, got {}\n", i, expected, actual);
             }
         }
 
         // Finally, we close the device.
         pass &= CloseDevice(device);
     } catch (const std::exception& e) {
-        log_error(tt::LogTest, "Test failed with exception!");
-        log_error(tt::LogTest, "{}", e.what());
+        fmt::print(stderr, "Test failed with exception!\n");
+        fmt::print(stderr, "{}\n", e.what());
 
         throw;
     }
     // clang-format on
 
     if (pass) {
-        log_info(tt::LogTest, "Test Passed");
+        fmt::print("Test Passed\n");
     } else {
         TT_THROW("Test Failed");
     }

@@ -51,6 +51,7 @@ void test_tensor_copy_semantics(distributed::MeshDevice* device) {
 
     // dev tensor to dev tensor copy constructor
     Tensor dev_a = ttnn::random::random(single_tile_shape).to_layout(Layout::TILE).to_device(device);
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     Tensor dev_a_copy = dev_a;
     auto dev_a_on_host = dev_a.cpu();
     auto dev_a_copy_on_host = dev_a_copy.cpu();

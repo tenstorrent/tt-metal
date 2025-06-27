@@ -4,7 +4,7 @@
 
 #include "full_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "cpp/ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 using namespace tt;
 using namespace tt::constants;

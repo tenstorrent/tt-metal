@@ -11,8 +11,8 @@
 #include <numeric>
 
 #include "gtest/gtest.h"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 
 using ttnn::ccl::Shape4D;
 using ttnn::ccl::cmd::CclCommandTensor;

@@ -409,7 +409,6 @@ def test_LlamaModel_inference(
     prompt_file,
     paged_attention,
     chunk_size,
-    use_program_cache,
 ):
     if chunk_size is not None and seq_len == 1:
         pytest.skip("Chunked prefill is not valid for decode mode tests")

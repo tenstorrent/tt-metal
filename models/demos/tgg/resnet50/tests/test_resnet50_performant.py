@@ -27,7 +27,6 @@ from models.utility_functions import run_for_wormhole_b0
 )
 def test_run_resnet50_2cqs_inference(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     act_dtype,
     weight_dtype,
@@ -59,7 +58,6 @@ def test_run_resnet50_2cqs_inference(
 )
 def test_run_resnet50_trace_2cqs_inference(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     act_dtype,
     weight_dtype,
@@ -89,7 +87,6 @@ def test_run_resnet50_trace_2cqs_inference(
 )
 def test_run_resnet50_inference(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     act_dtype,
     weight_dtype,
@@ -119,7 +116,6 @@ def test_run_resnet50_inference(
 )
 def test_run_resnet50_trace_inference(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     act_dtype,
     weight_dtype,

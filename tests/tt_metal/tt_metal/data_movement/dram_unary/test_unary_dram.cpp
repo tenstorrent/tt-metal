@@ -71,6 +71,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
         -100.0f, 100.0f, total_size_bytes / bfloat16::SIZEOF, chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     vector<uint32_t> packed_golden = packed_input;
 
     uint8_t l1_cb_index = CBIndex::c_0;
@@ -267,7 +268,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
 /* ========== Directed ideal test case; Test id = 3 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
     // Parameters
-    uint32_t num_of_transactions = 180;
+    uint32_t num_of_transactions = 179;
     uint32_t transaction_size_pages = 4 * 32;
     uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
     // Max transaction size = 4 * 32 pages = 128 * 32 bytes = 4096 bytes for WH; 8192 bytes for BH

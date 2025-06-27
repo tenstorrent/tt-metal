@@ -20,7 +20,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 def test_vae_attention(
     device,
     input_shape,
-    use_program_cache,
 ):
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
     torch_attention = vae.decoder.mid_block.attentions[0]

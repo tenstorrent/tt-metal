@@ -85,7 +85,7 @@ def assert_allclose(
     rtol=1e-05,
     atol=1e-08,
 ):
-    """
+    r"""
      Assert that two tensors are similar.
 
      Two tensors are considered close if

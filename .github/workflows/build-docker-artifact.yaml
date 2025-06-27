@@ -221,54 +221,42 @@ jobs:
   tag-latest:
     name: "🔄 Update latest tag"
     needs: check-docker-images
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docker-images.outputs.dev-exists == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v4
+
+      - name: "Push latest CI Build tag"
+        if: needs.check-docker-images.outputs.ci-build-exists == 'true'
+        uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          registry: https://ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          docker-image-tag: ${{ needs.check-docker-images.outputs.ci-build-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Tag and push latest
-        run: |
-          # Tag CI Build image
-          CI_BUILD_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}"
-          CI_BUILD_LATEST_TAG="${CI_BUILD_IMAGE_REPO}:latest"
-          CI_BUILD_TAG="${{ needs.check-docker-images.outputs.ci-build-tag }}"
-          echo "Tagging ${CI_BUILD_TAG} as ${CI_BUILD_LATEST_TAG}"
-          docker pull ${CI_BUILD_TAG}
-          docker tag ${CI_BUILD_TAG} ${CI_BUILD_LATEST_TAG}
-          docker push ${CI_BUILD_LATEST_TAG}
-          docker rmi ${CI_BUILD_TAG} ${CI_BUILD_LATEST_TAG}
+      - name: "Push latest CI Test tag"
+        if: needs.check-docker-images.outputs.ci-test-exists == 'true'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ needs.check-docker-images.outputs.ci-test-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-          # Tag CI Test image
-          CI_TEST_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}"
-          CI_TEST_LATEST_TAG="${CI_TEST_IMAGE_REPO}:latest"
-          CI_TEST_TAG="${{ needs.check-docker-images.outputs.ci-test-tag }}"
-          echo "Tagging ${CI_TEST_TAG} as ${CI_TEST_LATEST_TAG}"
-          docker pull ${CI_TEST_TAG}
-          docker tag ${CI_TEST_TAG} ${CI_TEST_LATEST_TAG}
-          docker push ${CI_TEST_LATEST_TAG}
-          docker rmi ${CI_TEST_TAG} ${CI_TEST_LATEST_TAG}
+      - name: "Push latest Dev tag"
+        if: needs.check-docker-images.outputs.dev-exists == 'true'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ needs.check-docker-images.outputs.dev-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-          # Tag Dev image
-          DEV_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}"
-          DEV_LATEST_TAG="${DEV_IMAGE_REPO}:latest"
-          DEV_TAG="${{ needs.check-docker-images.outputs.dev-tag }}"
-          echo "Tagging ${DEV_TAG} as ${DEV_LATEST_TAG}"
-          docker pull ${DEV_TAG}
-          docker tag ${DEV_TAG} ${DEV_LATEST_TAG}
-          docker push ${DEV_LATEST_TAG}
-          docker rmi ${DEV_TAG} ${DEV_LATEST_TAG}
+      - name: "Push latest Basic Dev tag"
+        if: needs.check-docker-images.outputs.basic-dev-exists == 'true'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-          # Tag Basic Dev image
-          BASIC_DEV_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}"
-          BASIC_DEV_LATEST_TAG="${BASIC_DEV_IMAGE_REPO}:latest"
-          BASIC_DEV_TAG="${{ needs.check-docker-images.outputs.basic-dev-tag }}"
-          echo "Tagging ${BASIC_DEV_TAG} as ${BASIC_DEV_LATEST_TAG}"
-          docker pull ${BASIC_DEV_TAG}
-          docker tag ${BASIC_DEV_TAG} ${BASIC_DEV_LATEST_TAG}
-          docker push ${BASIC_DEV_LATEST_TAG}
-          docker rmi ${BASIC_DEV_TAG} ${BASIC_DEV_LATEST_TAG}
+      - name: "Push latest Manylinux tag"
+        if: needs.check-docker-images.outputs.manylinux-exists == 'true'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ needs.check-docker-images.outputs.manylinux-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

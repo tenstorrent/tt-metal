@@ -171,7 +171,7 @@ def test_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_co
 
 
 @skip_for_grayskull("Grayskull not supported")
-def test_ssm_prefix_scan_with_program_cache(device, use_program_cache):
+def test_ssm_prefix_scan_with_program_cache(device):
     L, E, N = 32, 64, 32
     num_cores = 1
     dtype = ttnn.bfloat8_b

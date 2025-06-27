@@ -24,7 +24,6 @@ from models.utility_functions import run_for_blackhole
 )
 def test_perf(
     device,
-    use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,
@@ -54,7 +53,6 @@ def test_perf(
 )
 def test_perf_trace(
     device,
-    use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,
@@ -84,7 +82,6 @@ def test_perf_trace(
 )
 def test_perf_2cqs(
     device,
-    use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,
@@ -113,7 +110,6 @@ def test_perf_2cqs(
 )
 def test_perf_trace_2cqs(
     device,
-    use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,

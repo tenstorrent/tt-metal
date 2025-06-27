@@ -34,7 +34,6 @@ def test_attention(
     query_dim,
     num_attn_heads,
     out_dim,
-    use_program_cache,
     reset_seeds,
     weights_dtype,
 ):

@@ -11,9 +11,8 @@
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 /* All Gather Matmul fusion includes */
-#include "cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
-#include "cpp/ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn {
 namespace experimental {
@@ -69,7 +68,7 @@ void AllGatherMatmul::validate(
 std::vector<ttnn::TensorSpec> AllGatherMatmul::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     // All Gather shape
     ttnn::TensorSpec all_gather_output_shape = this->all_gather_struct.compute_output_specs({input_tensors[0]})[0];
-    ttnn::TensorSpec datacopy_output_shape = all_gather_output_shape;
+    const ttnn::TensorSpec& datacopy_output_shape = all_gather_output_shape;
 
     // Matmul shape
     ttnn::TensorSpec matmul_output_specs =

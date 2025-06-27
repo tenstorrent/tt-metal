@@ -120,6 +120,7 @@ bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
         chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     vector<uint32_t> packed_golden = packed_input;
 
     // Launch program and record outputs

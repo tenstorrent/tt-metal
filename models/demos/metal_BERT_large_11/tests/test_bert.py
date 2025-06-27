@@ -182,7 +182,6 @@ def run_bert_question_and_answering_inference(
 )
 def test_bert(
     device,
-    use_program_cache,
     model_version,
     batch,
     seq_len,
@@ -195,6 +194,9 @@ def test_bert(
 ):
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")
+
+    # https://github.com/tenstorrent/tt-metal/issues/23275
+    device.disable_and_clear_program_cache()
 
     model_config = get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)

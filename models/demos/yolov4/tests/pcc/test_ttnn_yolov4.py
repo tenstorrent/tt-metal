@@ -28,6 +28,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_weight, resolution):
     torch.manual_seed(0)
 
+    # https://github.com/tenstorrent/tt-metal/issues/23192
+    device.disable_and_clear_program_cache()
     if use_pretrained_weight:
         torch_model = load_torch_model(model_location_generator)
     else:
@@ -42,8 +44,16 @@ def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_wei
     img = load_image(imgfile, resolution)
     torch_input = image_to_tensor(img)
 
-    input_tensor = torch.permute(torch_input, (0, 2, 3, 1))
-    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16)
+    n, c, h, w = torch_input.shape
+    if c == 3:
+        c = 16
+    input_mem_config = ttnn.create_sharded_memory_config(
+        [n, c, h, w],
+        ttnn.CoreGrid(x=8, y=8),
+        ttnn.ShardStrategy.HEIGHT,
+    )
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input = ttnn_input.to(device, input_mem_config)
 
     torch_output_tensor = torch_model(torch_input)
 

@@ -224,7 +224,6 @@ def test_clone_dtype_conversion(
 def test_clone_callback(
     tilized,
     device,
-    use_program_cache,
 ):
     """
     Test case to verify the clone operation with various input/output dtype combinations.

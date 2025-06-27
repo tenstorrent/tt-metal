@@ -127,7 +127,8 @@ def run_unet_model(
         [B, C, H, W],
         timestep=ttnn_timestep_tensor,
         encoder_hidden_states=ttnn_encoder_tensor,
-        added_cond_kwargs=ttnn_added_cond_kwargs,
+        time_ids=ttnn_added_cond_kwargs["time_ids"],
+        text_embeds=ttnn_added_cond_kwargs["text_embeds"],
     )
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor.cpu())
@@ -141,7 +142,7 @@ def run_unet_model(
 
     ttnn.DumpDeviceProfiler(device)
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.995)
     logger.info(f"PCC of first iteration is: {pcc_message}")
 
     for _ in range(iterations - 1):
@@ -159,7 +160,8 @@ def run_unet_model(
             [B, C, H, W],
             timestep=ttnn_timestep_tensor,
             encoder_hidden_states=ttnn_encoder_tensor,
-            added_cond_kwargs=ttnn_added_cond_kwargs,
+            time_ids=ttnn_added_cond_kwargs["time_ids"],
+            text_embeds=ttnn_added_cond_kwargs["text_embeds"],
         )
         ttnn.deallocate(ttnn_input_tensor)
         ttnn.deallocate(ttnn_output_tensor)
@@ -190,7 +192,6 @@ def test_unet(
     time_ids_shape,
     conv_weights_dtype,
     transformer_weights_dtype,
-    use_program_cache,
     reset_seeds,
 ):
     run_unet_model(

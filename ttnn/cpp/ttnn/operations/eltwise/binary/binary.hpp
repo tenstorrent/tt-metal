@@ -69,7 +69,7 @@ struct RelationalBinary {
     static Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& lhs,
-        const float rhs,
+        float rhs,
         const std::optional<const DataType>& dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt,
@@ -81,7 +81,7 @@ struct RelationalBinary {
     // rhs - tensor combination not available on Pytorch for this op
     static Tensor invoke(
         QueueId queue_id,
-        const float rhs,
+        float rhs,
         const ttnn::Tensor& lhs,
         const std::optional<const DataType>& dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
@@ -102,7 +102,7 @@ struct InplaceRelationalBinary {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& lhs,
-        const float rhs,
+        float rhs,
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
@@ -135,7 +135,7 @@ struct InplaceBinaryOperation {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& lhs,
-        const float rhs,
+        float rhs,
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},

@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
     // run-time args

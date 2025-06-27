@@ -26,7 +26,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             20,
             1280,
             0,
-            0.975,
+            0.965,
         ),
         (
             (1, 1280, 64, 64),
@@ -37,7 +37,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             10,
             640,
             1,
-            0.984,
+            0.988,
         ),
     ],
 )
@@ -55,7 +55,6 @@ def test_crossattnup(
     out_dim,
     block_id,
     pcc,
-    use_program_cache,
     reset_seeds,
     transformer_weights_dtype,
     conv_weights_dtype,

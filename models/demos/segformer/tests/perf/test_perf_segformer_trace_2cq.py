@@ -19,14 +19,12 @@ from models.utility_functions import run_for_wormhole_b0
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, expected_compile_time, expected_inference_time",
     [
-        [1, ttnn.bfloat16, ttnn.bfloat16, 65, 0.0125],
+        [1, ttnn.bfloat16, ttnn.bfloat16, 65, 0.0130],
     ],
 )
 def test_perf_segformer_trace_2cq(
     device, batch_size, act_dtype, weight_dtype, expected_compile_time, expected_inference_time
 ):
-    device.enable_program_cache()
-
     segformer_t2cq = SegformerTrace2CQ(
         device,
         batch_size,

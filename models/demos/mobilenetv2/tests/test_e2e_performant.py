@@ -5,53 +5,117 @@
 import time
 
 import pytest
-import torch
 from loguru import logger
 
 import ttnn
-from models.demos.mobilenetv2.tests.mobilenetv2_e2e_performant import MobileNetV2Trace2CQ
+from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
+from models.demos.mobilenetv2.tests.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
+from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
+from models.demos.mobilenetv2.tt.model_preprocessing import (
+    create_mobilenetv2_input_tensors,
+    create_mobilenetv2_model_parameters,
+)
 from models.utility_functions import run_for_wormhole_b0
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": MOBILENETV2_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size",
-    ((1),),
+    ((MOBILENETV2_BATCH_SIZE),),
 )
 def test_run_mobilenetv2_trace_2cqs_inference(
     device,
-    use_program_cache,
     batch_size,
     model_location_generator,
 ):
-    mobilenetv2_trace_2cq = MobileNetV2Trace2CQ()
-
-    mobilenetv2_trace_2cq.initialize_mobilenetv2_trace_2cqs_inference(
-        device,
-        batch_size,
+    torch_input_tensor, host_input_tensor = create_mobilenetv2_input_tensors(
+        batch=batch_size, input_height=224, input_width=224, pad_channels=16
     )
 
-    input_shape = (batch_size, 3, 224, 224)
-    torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-    n, c, h, w = torch_input_tensor.shape
-    torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
-    torch_input_tensor = torch_input_tensor.reshape(1, 1, h * w * n, c)
-    tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    tt_inputs_host = ttnn.pad(tt_inputs_host, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
-    inference_iter_count = 10
-    inference_time_iter = []
-    for iter in range(0, inference_iter_count):
-        t0 = time.time()
-        output = mobilenetv2_trace_2cq.execute_mobilenetv2_trace_2cqs_inference(tt_inputs_host)
-        t1 = time.time()
-        inference_time_iter.append(t1 - t0)
-    mobilenetv2_trace_2cq.release_mobilenetv2_trace_2cqs_inference()
-    inference_time_avg = round(sum(inference_time_iter) / len(inference_time_iter), 6)
-    logger.info(
-        f"ttnn_mobilenetv2_224x224_batch_size_{batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size/inference_time_avg)}"
+    torch_model = Mobilenetv2()
+    torch_model.eval()
+    torch_output_tensor = torch_model(torch_input_tensor)
+
+    model_parameters = create_mobilenetv2_model_parameters(torch_model, device=device)
+    ttnn_model = ttnn_mobilenetv2.TtMobileNetV2(model_parameters, device, batchsize=batch_size)
+
+    dram_cores = 10
+    assert host_input_tensor.shape[-2] % dram_cores == 0, "Expecting even sharding on DRAM input tensor"
+    dram_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, 0))}),
+        [host_input_tensor.shape[-2] // dram_cores, host_input_tensor.shape[-1]],
+        ttnn.ShardOrientation.ROW_MAJOR,
     )
+    input_dram_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
+    )
+
+    input_l1_core_grid = ttnn.CoreGrid(x=8, y=8)
+    assert host_input_tensor.shape[-2] % input_l1_core_grid.num_cores == 0, "Expecting even sharding on L1 input tensor"
+    input_l1_mem_config = ttnn.create_sharded_memory_config(
+        shape=(host_input_tensor.shape[2] // input_l1_core_grid.num_cores, host_input_tensor.shape[-1]),
+        core_grid=input_l1_core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_dram_tensor = ttnn.allocate_tensor_on_device(
+        host_input_tensor.shape, host_input_tensor.dtype, host_input_tensor.layout, device, input_dram_mem_config
+    )
+
+    op_event = ttnn.record_event(device, 0)
+
+    logger.info(f"Compiling model")
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(host_input_tensor, input_dram_tensor, cq_id=1)
+    write_event = ttnn.record_event(device, 1)
+    ttnn.wait_for_event(0, write_event)
+    input_l1_tensor = ttnn.reshard(input_dram_tensor, input_l1_mem_config)
+    op_event = ttnn.record_event(device, 0)
+    output_tensor = ttnn_model(input_l1_tensor)
+
+    logger.info(f"Capturing trace of model")
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(host_input_tensor, input_dram_tensor, cq_id=1)
+    write_event = ttnn.record_event(device, 1)
+    ttnn.wait_for_event(0, write_event)
+    input_l1_tensor = ttnn.reshard(input_dram_tensor, input_l1_mem_config)
+    op_event = ttnn.record_event(device, 0)
+    input_trace_addr = input_l1_tensor.buffer_address()
+    output_tensor.deallocate(force=True)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    output_tensor = ttnn_model(input_l1_tensor)
+    input_l1_tensor = ttnn.allocate_tensor_on_device(input_l1_tensor.spec, device)
+    assert input_trace_addr == input_l1_tensor.buffer_address()
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+
+    outputs = []
+    iterations = 32
+    logger.info(f"Trace captured - running model benchmarks for {iterations} iterations...")
+    start = time.time()
+    for _ in range(iterations):
+        ttnn.wait_for_event(1, op_event)
+        ttnn.copy_host_to_device_tensor(host_input_tensor, input_dram_tensor, cq_id=1)
+        write_event = ttnn.record_event(device, 1)
+        ttnn.wait_for_event(0, write_event)
+        input_l1_tensor = ttnn.reshard(input_dram_tensor, input_l1_mem_config, input_l1_tensor)
+        op_event = ttnn.record_event(device, 0)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+        outputs.append(output_tensor.cpu(blocking=False))
+    ttnn.synchronize_device(device)
+    end = time.time()
+
+    inference_time = (end - start) / iterations
+    logger.info(f"Average model time={1000.0 * inference_time : .2f} ms")
+    logger.info(f"Average model performance={iterations * batch_size / (end-start) : .2f} fps")
+
+    assert_with_pcc(torch_output_tensor, ttnn.to_torch(outputs[-1]), 0.99)

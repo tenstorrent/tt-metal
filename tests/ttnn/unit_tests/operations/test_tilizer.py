@@ -23,7 +23,7 @@ def test_device_tilize(device):
     tensor = ttnn.from_torch(
         torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, dtype=output_dtype, device=device)
+    tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, dtype=output_dtype)
     ttnn.synchronize_device(device)
     end = time.time()
     logger.info(f"Time taken to convert to tensor using device-tilizer: {end-start}")

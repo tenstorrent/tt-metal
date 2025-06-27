@@ -50,7 +50,6 @@ def get_model_prefix(layer_index: int = 0):
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 def test_falcon_model(
     device,
-    use_program_cache,
     model_version,
     llm_mode,
     batch,

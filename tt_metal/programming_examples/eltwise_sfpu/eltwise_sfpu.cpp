@@ -138,21 +138,21 @@ int main() {
             float result = result_vec[i].to_float();
             if (std::abs(expected - result) > eps) {
                 pass = false;
-                log_error(tt::LogTest, "Result mismatch at index {}: {} != {}", i, expected, result);
+                fmt::print(stderr, "Result mismatch at index {}: {} != {}\n", i, expected, result);
             }
         }
 
         pass &= CloseDevice(device);
 
     } catch (const std::exception& e) {
-        log_error(tt::LogTest, "Test failed with exception!");
-        log_error(tt::LogTest, "{}", e.what());
+        fmt::print(stderr, "Test failed with exception!\n");
+        fmt::print(stderr, "{}\n", e.what());
 
         throw;
     }
 
     if (pass) {
-        log_info(tt::LogTest, "Test Passed");
+        fmt::print("Test Passed\n");
     } else {
         TT_THROW("Test Failed");
     }

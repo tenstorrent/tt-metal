@@ -54,6 +54,11 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
             output_tensor_shape,
             input_index_tensor_shape);
     }
+    TT_FATAL(
+        tensor_args.input_index_tensor.dtype() == DataType::UINT32 ||
+            tensor_args.input_index_tensor.dtype() == DataType::UINT16,
+        "Index tensor must be of type UINT32 or UINT16. Got: {}",
+        tensor_args.input_index_tensor.dtype());
 
     for (int i = 0; i < input_tensor_rank; ++i) {
         if (i != attributes.dim) {

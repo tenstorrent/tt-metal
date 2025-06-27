@@ -46,8 +46,8 @@ struct ConvTranpose2dOperation {
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         bool mirror_kernel = true,
-        const bool return_output_dim = false,
-        const bool return_weights_and_bias = false);
+        bool return_output_dim = false,
+        bool return_weights_and_bias = false);
 
     static Result invoke(
         QueueId queue_id,
@@ -70,8 +70,8 @@ struct ConvTranpose2dOperation {
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         bool mirror_kernel = true,
-        const bool return_output_dim = false,
-        const bool return_weights_and_bias = false);
+        bool return_output_dim = false,
+        bool return_weights_and_bias = false);
 };
 
 }  // namespace conv_transpose2d

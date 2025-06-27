@@ -37,7 +37,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
-def test_qwen_model_inference(mesh_device, weights, layers, use_program_cache, reset_seeds, ensure_gc):
+def test_qwen_model_inference(mesh_device, weights, layers, reset_seeds, ensure_gc):
     if mesh_device.shape != (1, 1):
         pytest.skip("Only N150 is supported")
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC

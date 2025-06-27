@@ -46,7 +46,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
     const std::vector<std::string> op_id_to_op_type_define = {
         "EltwiseBinaryType::ELWADD", "EltwiseBinaryType::ELWMUL", "EltwiseBinaryType::ELWSUB"};
 
-    const auto cores_for_program = sub_device_for_program.cores(HalProgrammableCoreType::TENSIX);
+    const auto& cores_for_program = sub_device_for_program.cores(HalProgrammableCoreType::TENSIX);
 
     std::shared_ptr<Program> program = std::make_shared<Program>();
 
@@ -157,10 +157,7 @@ int main() {
     };
     // Specify data layout on a single physical device
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = true};
     // Allocate buffers in distributed memory space for first MeshWorkload
     auto add_src0_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
     auto add_src1_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());

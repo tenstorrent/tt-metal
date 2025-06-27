@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
-#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -12,7 +12,7 @@ namespace tt_metal {
 template <PoolType pool>
 Tensor pool_2d(const Tensor& input, const MemoryConfig& memory_config, const std::optional<DataType>& output_dtype) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
-    auto input_shape = input.padded_shape();
+    const auto& input_shape = input.padded_shape();
     switch (pool) {
         case PoolType::AVG: {
             uint32_t height_without_padding = input.logical_shape()[-2];

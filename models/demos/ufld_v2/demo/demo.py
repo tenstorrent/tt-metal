@@ -36,9 +36,7 @@ from models.demos.ufld_v2.tests.ufld_v2_e2e_performant import UFLDPerformantRunn
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
-def test_ufld_v2_demo(
-    batch_size, input_channels, height, width, device, use_pretrained_weight, use_program_cache, reset_seeds
-):
+def test_ufld_v2_demo(batch_size, input_channels, height, width, device, use_pretrained_weight, reset_seeds):
     reference_model = TuSimple34(input_height=height, input_width=width)
     if use_pretrained_weight:
         logger.info(f"Demo Inference using Pre-trained Weights")

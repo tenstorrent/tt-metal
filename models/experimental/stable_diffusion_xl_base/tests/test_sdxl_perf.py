@@ -33,7 +33,6 @@ def test_unet(
     conv_weights_dtype,
     transformer_weights_dtype,
     iterations,
-    use_program_cache,
     reset_seeds,
 ):
     run_unet_model(
@@ -51,7 +50,7 @@ def test_unet(
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_unet_perf_device():
-    expected_device_perf_cycles_per_iteration = 336_562_102
+    expected_device_perf_cycles_per_iteration = 274_713_570
 
     command = f"pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

@@ -37,7 +37,6 @@ void set_or_update_runtime_arguments(
 
     const auto ashape = input_tensor.padded_shape();
     const auto bshape = batch_mean_tensor.padded_shape();
-    const auto cshape = c.padded_shape();
 
     const auto [aN, aC, aHt, aWt] = extract_shape_dims(input_tensor);
     const auto [bN, bC, bHt, bWt] = extract_shape_dims(batch_mean_tensor);

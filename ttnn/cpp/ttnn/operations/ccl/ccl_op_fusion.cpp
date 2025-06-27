@@ -76,12 +76,7 @@ void AllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
 }
 
 void ReduceScatterFusedOpSignaler::init_reduce_scatter(
-    Program& program,
-    const IDevice* device,
-    const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
-    FusedOpSignalerMode fused_op_signaler_mode) {
-    this->fused_op_signaler_mode = fused_op_signaler_mode;
-
+    Program& program, const IDevice* device, const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal) {
     // Clear the existing receiver cores
     this->fused_op_receiver_cores_noc.clear();
 
@@ -112,6 +107,12 @@ void ReduceScatterFusedOpSignaler::init_reduce_scatter(
 
     // Set the number of fused op cores to signal
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+
+    if (this->num_fused_op_cores_to_signal > 1) {
+        this->fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
+    } else {
+        this->fused_op_signaler_mode = FusedOpSignalerMode::SINGLE;
+    }
 
     initialized_reduce_scatter = true;
 }

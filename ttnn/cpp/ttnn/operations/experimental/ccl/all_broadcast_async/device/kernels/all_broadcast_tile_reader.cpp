@@ -6,8 +6,8 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 #include <utility>
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;

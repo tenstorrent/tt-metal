@@ -176,19 +176,24 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             is_in_tiled,
             UNTILIZE_BLOCK_SIZE);
 
-        const auto& pad_config = kernel_config.pad_config;
+        const auto& pad_config0 = kernel_config.pad_config0;
+        const auto& pad_config1 = kernel_config.pad_config1;
         const auto& gather_config0 = kernel_config.gather_config0;
         const auto& gather_config1 = kernel_config.gather_config1;
 
-        const auto pad_config_tensor =
-            sliding_window::construct_on_host_config_tensor(pad_config, this->parallel_config_);
+        const auto pad_config_tensor0 =
+            sliding_window::construct_on_host_config_tensor(pad_config0, this->parallel_config_);
+        const auto pad_config_tensor1 =
+            sliding_window::construct_on_host_config_tensor(pad_config1, this->parallel_config_);
         const auto gather_config_tensor0 =
             sliding_window::construct_on_host_config_tensor(gather_config0, this->parallel_config_);
         const auto gather_config_tensor1 =
             sliding_window::construct_on_host_config_tensor(gather_config1, this->parallel_config_);
 
-        auto pad_config_device_tensor =
-            sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, is_block_sharded, device);
+        auto pad_config_device_tensor0 =
+            sliding_window::move_config_tensor_to_device(pad_config_tensor0, parallel_config_, is_block_sharded, device);
+        auto pad_config_device_tensor1 =
+            sliding_window::move_config_tensor_to_device(pad_config_tensor1, parallel_config_, is_block_sharded, device);
         auto gather_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
             gather_config_tensor0, parallel_config_, is_block_sharded, device);
         auto gather_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
@@ -205,7 +210,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             pad_val_,
             config_.num_cores_nhw,
             max_out_nsticks_per_core_,
-            pad_config_device_tensor,
+            pad_config_device_tensor0,
+            pad_config_device_tensor1,
             gather_config_device_tensor0,
             gather_config_device_tensor1,
             number_of_blocks_per_core,

@@ -60,7 +60,8 @@ public:
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
-        tt::tt_metal::detail::SetFabricConfig(fabric_config, num_routing_planes);
+        tt::tt_metal::detail::SetFabricConfig(
+            fabric_config, tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, num_routing_planes);
         devices_map_ = tt::tt_metal::detail::CreateDevices(ids);
         for (auto& [id, device] : devices_map_) {
             devices_.push_back(device);
@@ -156,6 +157,13 @@ void RunTestMCastConnAPI(
     uint32_t fwd_hops = 1,
     RoutingDirection bwd_dir = RoutingDirection::E,
     uint32_t bwd_hops = 1);
+
+void RunTestChipMCast1D(
+    BaseFabricFixture* fixture,
+    RoutingDirection dir,
+    uint32_t start_distance,
+    uint32_t range,
+    bool enable_fabric_tracing = false);
 
 void RunTestLineMcast(
     BaseFabricFixture* fixture, RoutingDirection unicast_dir, const std::vector<McastRoutingInfo>& mcast_routing_info);

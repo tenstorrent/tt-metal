@@ -105,8 +105,8 @@ std::vector<ttnn::TensorSpec> RotaryEmbeddingLlamaFusedQK::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& q_input_tensor = input_tensors.at(0);
     const auto& k_input_tensor = input_tensors.at(1);
-    auto q_shape = q_input_tensor.logical_shape();
-    auto k_shape = k_input_tensor.logical_shape();
+    const auto& q_shape = q_input_tensor.logical_shape();
+    const auto& k_shape = k_input_tensor.logical_shape();
     return {
         TensorSpec(
             q_shape, TensorLayout(q_input_tensor.dtype(), PageConfig(q_input_tensor.layout()), q_output_mem_config)),

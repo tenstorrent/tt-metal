@@ -17,16 +17,16 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "input_val, scalar",
     [
         (0.36719, 0.5),
-        (0, 0.06719),
-        (0, 0.002),
-        (3.4 * 10**38, 1),
-        (-1, -3.4 * 10**38),
+        (0.0, 0.06719),
+        (0.0, 0.002),
+        (3.4 * 10**38, 1.0),
+        (-1.0, -3.4 * 10**38),
         (3.4 * 10**38, -3.4 * 10**38),
-        (float("inf"), 1),
+        (float("inf"), 1.0),
         (1, -float("inf")),
         (3.4 * 10**38, float("inf")),
         (-3.4 * 10**38, -float("inf")),
-        (11, 1),
+        (11.0, 1.0),
     ],
 )
 def test_unary_min_fill_val_fp32(input_shapes, input_val, scalar, device):
@@ -58,16 +58,16 @@ def test_unary_min_fill_val_fp32(input_shapes, input_val, scalar, device):
     [
         (0.36719, 0.5),
         (0.0034, 0.0023),
-        (0, 0.06719),
-        (0, 0.002),
-        (3.4 * 10**38, 1),
-        (-1, -3.4 * 10**38),
+        (0.0, 0.06719),
+        (0.0, 0.002),
+        (3.4 * 10**38, 1.0),
+        (-1.0, -3.4 * 10**38),
         (3.4 * 10**38, -3.4 * 10**38),
-        (float("inf"), 1),
-        (1, -float("inf")),
+        (float("inf"), 1.0),
+        (1.0, -float("inf")),
         (3.4 * 10**38, float("inf")),
         (-3.4 * 10**38, -float("inf")),
-        (11, 1),
+        (11.0, 1.0),
     ],
 )
 def test_unary_min_fill_val_bf16(input_shapes, input_val, scalar, device):
@@ -104,7 +104,7 @@ def test_unary_min_fill_val_bf16(input_shapes, input_val, scalar, device):
         (-3.3 * 10**38, 3.3 * 10**38),
     ],
 )
-@pytest.mark.parametrize("scalar", [0.5, 0, 20, 3.4 * 10**38, -3.4 * 10**38])
+@pytest.mark.parametrize("scalar", [0.5, 0.0, 20.0, 3.4 * 10**38, -3.4 * 10**38])
 def test_unary_min_bf16(input_shapes, low, high, scalar, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
@@ -137,11 +137,13 @@ def test_unary_min_bf16(input_shapes, low, high, scalar, device):
 @pytest.mark.parametrize(
     "low, high",
     [
-        (-100, 100),
+        (-10.0, 100.0),
         (-1.7 * 10**38, 1.7 * 10**38),
     ],
 )
-@pytest.mark.parametrize("scalar", [0.5, 0.1, 0, 1, 10, 3.4 * 10**38, -3.4 * 10**38, -float("inf"), float("inf")])
+@pytest.mark.parametrize(
+    "scalar", [0.5, 0.1, 0.0, 1.0, 10.0, 3.4 * 10**38, -3.4 * 10**38, -float("inf"), float("inf")]
+)
 def test_unary_min_fp32(input_shapes, low, high, scalar, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.float32)

@@ -159,8 +159,8 @@ TEST_F(MeshTraceTestT3000, EltwiseBinaryMeshTrace) {
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
 
     // Separate Mesh into top and bottom rows
-    MeshCoordinateRange row_0 = t3k_top_row();
-    MeshCoordinateRange row_1 = t3k_bottom_row();
+    const MeshCoordinateRange& row_0 = t3k_top_row();
+    const MeshCoordinateRange& row_1 = t3k_bottom_row();
     // Separate Mesh into 3 columns
     MeshCoordinateRange col_0({0, 0}, {1, 1});
     MeshCoordinateRange col_1({0, 2}, {1, 2});
@@ -356,10 +356,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
     uint32_t num_tiles = 32;
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size * num_tiles,
-        .buffer_type = tt_metal::BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = single_tile_size * num_tiles, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = true};
 
     ReplicatedBufferConfig global_buffer_config{
         .size = single_tile_size * num_tiles,

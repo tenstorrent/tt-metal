@@ -72,7 +72,7 @@ Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryCo
 Tensor AutoFormat::move_tensor_to_device_and_pad(
     const Tensor& input, IDevice* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
     using namespace tt::constants;
-    const auto device_shape = input.padded_shape();
+    const auto& device_shape = input.padded_shape();
     const Shape new_device_shape(
         {device_shape[0],
          device_shape[1],

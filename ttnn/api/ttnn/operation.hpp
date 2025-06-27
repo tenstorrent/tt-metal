@@ -249,7 +249,7 @@ struct ProfilerInfo {
 
 inline MemoryConfig DEFAULT_OUTPUT_MEMORY_CONFIG;
 
-static void set_default_operation_output_memory_config(const MemoryConfig& memory_config) {
+inline void set_default_operation_output_memory_config(const MemoryConfig& memory_config) {
     DEFAULT_OUTPUT_MEMORY_CONFIG = memory_config;
 }
 

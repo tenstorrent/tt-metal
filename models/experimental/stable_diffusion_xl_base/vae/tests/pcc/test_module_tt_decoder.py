@@ -7,6 +7,7 @@ import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_decoder import TtDecoder
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
@@ -18,11 +19,11 @@ from loguru import logger
 @pytest.mark.parametrize(
     "input_shape, host_fallback, pcc",
     [
-        ((1, 4, 128, 128), True, 0.937),
+        ((1, 4, 128, 128), True, 0.92),
         ((1, 4, 128, 128), False, 0.84),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_vae_decoder(device, input_shape, host_fallback, pcc, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"

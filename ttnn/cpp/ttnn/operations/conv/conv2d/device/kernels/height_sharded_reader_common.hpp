@@ -19,10 +19,10 @@ FORCE_INLINE void zero_out_tiles() {
 
     noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
     for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read_one_packet_with_state(zeros_noc_addr, write_addr);
+        noc_async_read_one_packet_with_state<true>(zeros_noc_addr, write_addr);
         write_addr += MEM_ZEROS_SIZE;
     }
-    noc_async_write_barrier();
+    noc_async_read_barrier();
 }
 
 template <

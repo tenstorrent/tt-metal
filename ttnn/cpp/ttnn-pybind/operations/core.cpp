@@ -266,7 +266,6 @@ void py_module(py::module& module) {
             layout (ttnn.Layout): the desired layout, either `ttnn.ROW_MAJOR_LAYOUT` or `ttnn.TILE_LAYOUT`.
             dtype (ttnn.DataType, optional): the optional output data type.
             memory_config (ttnn.MemoryConfig, optional): the optional output memory configuration.
-            device (ttnn.Device | ttnn.MeshDevice): the device/mesh device whose worker thread on the host should be used for the layout conversion.
 
         Returns:
             ttnn.Tensor: the tensor with the requested layout.
@@ -284,25 +283,13 @@ void py_module(py::module& module) {
                const ttnn::Tensor& tensor,
                const ttnn::Layout layout,
                const std::optional<ttnn::DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               IDevice* device) -> ttnn::Tensor { return self(tensor, layout, dtype, memory_config, device); },
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
+                return self(tensor, layout, dtype, memory_config);
+            },
             py::arg("tensor"),
             py::arg("layout"),
             py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("device") = nullptr},
-        ttnn::pybind_overload_t{
-            [](const std::decay_t<decltype(ttnn::to_layout)> self,
-               const ttnn::Tensor& tensor,
-               const ttnn::Layout layout,
-               const std::optional<ttnn::DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               MeshDevice* device) -> ttnn::Tensor { return self(tensor, layout, dtype, memory_config, device); },
-            py::arg("tensor"),
-            py::arg("layout"),
-            py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("device") = nullptr});
+            py::arg("memory_config") = std::nullopt});
 
     module.def(
         "num_cores_to_corerangeset",

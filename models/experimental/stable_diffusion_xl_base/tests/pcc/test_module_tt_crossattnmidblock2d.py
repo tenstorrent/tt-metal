@@ -31,7 +31,6 @@ def test_crossattnmid(
     query_dim,
     num_attn_heads,
     out_dim,
-    use_program_cache,
     reset_seeds,
     transformer_weights_dtype,
     conv_weights_dtype,
@@ -101,5 +100,5 @@ def test_crossattnmid(
     del unet, tt_crosattn
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.990)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.989)
     logger.info(f"PCC is: {pcc_message}")

@@ -43,7 +43,6 @@ void set_or_update_runtime_arguments(
     const auto& input = tensor_args.input;
 
     const auto input_shape = input.padded_shape();
-    const auto output_shape = output.padded_shape();
 
     const auto [iN, iC, iHt, iWt] = extract_shape_dims(input);
     const auto [oN, oC, oHt, oWt] = extract_shape_dims(output);
@@ -140,7 +139,6 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto input = tensor_args.input;
-    auto input_shape = input.logical_shape();
     uint32_t data_size = input.element_size();
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
 

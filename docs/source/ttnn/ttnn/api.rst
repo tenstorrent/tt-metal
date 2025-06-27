@@ -436,6 +436,7 @@ Data Movement
    ttnn.untilize
    ttnn.untilize_with_unpadding
    ttnn.indexed_fill
+   ttnn.experimental.gather
 
 Normalization
 =============
@@ -545,7 +546,6 @@ Vision
    :template: function.rst
 
    ttnn.upsample
-   ttnn.downsample
 
 KV Cache
 ========

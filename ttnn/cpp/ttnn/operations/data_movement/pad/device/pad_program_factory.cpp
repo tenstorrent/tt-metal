@@ -79,7 +79,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
         (std::uint32_t)src_log2_stick_size,
         (std::uint32_t)dst_stick_size_is_power_of_two,
         (std::uint32_t)dst_log2_stick_size};
-    std::vector<uint32_t> writer_ct_args = reader_ct_args;
+    const std::vector<uint32_t>& writer_ct_args = reader_ct_args;
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     bfloat16 bfloat_zero = bfloat16(0.0f);
@@ -802,7 +802,6 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     const float pad_value) {
     Program program{};
 
-    auto output_shape = output_padded_shape;
     const auto& a_shape = a.logical_shape();
     uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
     uint32_t NCH = H * C * N;
@@ -952,7 +951,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
-            auto src_tensor = input_tensors.at(0);
+            const auto& src_tensor = input_tensors.at(0);
 
             auto dst_tensor = output_tensors.at(0);
 
@@ -989,9 +988,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
             for (uint32_t i = 0; i < num_cores_total; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-                { SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first); }
+                {
+                    SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
+                }
 
-                { SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second); }
+                {
+                    SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
+                }
             }
         };
 
@@ -1185,7 +1188,6 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     const float pad_value) {
     Program program{};
 
-    auto output_shape = output_padded_shape;
     const auto& a_shape = a.logical_shape();
     uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
     uint32_t num_unpadded_sticks = H * C * N;

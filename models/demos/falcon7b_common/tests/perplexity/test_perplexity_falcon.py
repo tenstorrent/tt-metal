@@ -40,7 +40,6 @@ def test_perplexity(
     model_location_generator,
     get_tt_cache_path,
     mesh_device,
-    use_program_cache,
 ):
     assert is_wormhole_b0(), "This test is only for Wormhole B0"
 

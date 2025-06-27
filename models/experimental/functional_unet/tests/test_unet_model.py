@@ -64,7 +64,7 @@ def run_unet_model(batch, groups, device, iterations=1):
 @pytest.mark.parametrize("batch", [1])
 @pytest.mark.parametrize("groups", [4])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
-def test_unet_model(batch, groups, device, use_program_cache, reset_seeds):
+def test_unet_model(batch, groups, device, reset_seeds):
     if (
         not is_wormhole_b0(device)
         and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,4 +25,5 @@ struct CumSumOperation {
 namespace ttnn::experimental {
 constexpr auto cumsum = decorators::
     register_operation<"ttnn::experimental::cumsum", ttnn::operations::experimental::reduction::CumSumOperation>();
+
 }  // namespace ttnn::experimental

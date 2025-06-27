@@ -60,6 +60,27 @@ ALWI void cos_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_cosine_op<
 /**
  * Please refer to documentation for any_init.
  */
+ALWI void acosh_tile_init() { MATH((llk_math_eltwise_unary_sfpu_acosh_init<APPROX>())); }
+
+// clang-format off
+/**
+ * Performs element-wise computation of the hyperbolic cosine operation on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void acosh_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_acosh<APPROX>(idst))); }
+
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void tan_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tan_init<APPROX>())); }
 
 // clang-format off
@@ -77,4 +98,25 @@ ALWI void tan_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tan_init<APPROX>()
  */
  // clang-format on
 ALWI void tan_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_tan_op<APPROX>(idst))); }
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void asinh_tile_init() { MATH((llk_math_eltwise_unary_sfpu_asinh_init<APPROX>())); }
+
+// clang-format off
+/**
+ * Performs element-wise computation of the inverse hyperbolic sine operation on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void asinh_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_asinh<APPROX>(idst))); }
 }  // namespace ckernel

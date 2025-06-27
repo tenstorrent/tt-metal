@@ -60,7 +60,6 @@ def test_demo(
     use_weights_from_ultralytics,
     model_type,
     model_task,
-    use_program_cache,
     reset_seeds,
 ):
     disable_persistent_kernel_cache()
@@ -99,7 +98,7 @@ def test_demo(
             performant_runner._capture_yolov9_trace_2cqs()
             logger.info("Inferencing [TTNN] Model")
 
-            preds = performant_runner.run(torch_input_tensor=im)
+            preds = performant_runner.run(torch_input_tensor=im.permute(0, 2, 3, 1))
             preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
             if enable_segment:
                 detect1_out, detect2_out, detect3_out = [

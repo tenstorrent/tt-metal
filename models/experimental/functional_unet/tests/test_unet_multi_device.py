@@ -25,7 +25,7 @@ from models.experimental.functional_unet.tests.common import (
 @pytest.mark.parametrize("batch", [1])
 @pytest.mark.parametrize("groups", [4])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
-def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, reset_seeds):
+def test_unet_multi_device_model(batch, groups, mesh_device, reset_seeds):
     if not is_n300_with_eth_dispatch_cores(mesh_device) and not is_t3k_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300 or T3000")
 

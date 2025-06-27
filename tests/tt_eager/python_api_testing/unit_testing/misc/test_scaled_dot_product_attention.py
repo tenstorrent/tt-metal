@@ -328,7 +328,7 @@ def test_sdpa_tt_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtyp
         [1, 71, 1, 2048, 64],  # Falcon-7B
     ),
 )
-def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_program_cache):
+def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
@@ -349,7 +349,7 @@ def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_ch
     (
         [1, 8, 1, 2048, 128],  # Llama2-70B
         [1, 16, 2, 128, 128],  # GQA
-        [1, 16, 16, 4096, 96],  # Llama3.2-11B-Vision
+        [1, 16, 16, 4096, 96],  # Llama-3.2-11B-Vision
         [1, 71, 1, 2048, 64],  # Falcon-7B
         [8, 8, 1, 2048, 128],  # Llama2-70B large batch
     ),
@@ -524,7 +524,6 @@ def test_sdpa_chunked(
     page_block_size,
     q_dtype,
     k_dtype,
-    use_program_cache,
     use_high_precision_compute=False,
 ):
     for _ in range(2):
@@ -576,7 +575,6 @@ def test_sdpa_chunked_iterate_batch(
     page_block_size,
     q_dtype,
     k_dtype,
-    use_program_cache,
     use_high_precision_compute=False,
 ):
     """
@@ -751,9 +749,7 @@ def test_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_ch
         "d128",
     ],
 )
-def test_joint_sdpa_program_cache(
-    device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, use_program_cache
-):
+def test_joint_sdpa_program_cache(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype):
     dummy_tensors = []
     for _ in range(3):
         dummy_tensors.append(
