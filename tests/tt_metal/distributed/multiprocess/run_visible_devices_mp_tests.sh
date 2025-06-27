@@ -32,6 +32,6 @@ if [ "$ALL_PASSED" = true ]; then
     echo "[distributed tests] All tests passed!"
     exit 0
 else
-    echo "Some tests failed!"
+    echo "[distributed tests] Some tests failed!"
     exit 1
 fi
