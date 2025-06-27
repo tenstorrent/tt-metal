@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import collections.abc
 
@@ -10,7 +11,7 @@ from torch import nn
 from models.experimental.deit.tt.deit_config import DeiTConfig
 
 
-class DeiTPatchEmbeddings(nn.Module):
+class DeiTPatchEmbeddings(LightweightModule):
     """
     implemented for cpu only.
     """

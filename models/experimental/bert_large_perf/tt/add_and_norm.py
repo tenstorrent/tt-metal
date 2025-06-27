@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import pytest
 from loguru import logger
 
@@ -18,7 +19,7 @@ from models.utility_functions import (
 )
 
 
-class TtAddAndNormModel(torch.nn.Module):
+class TtAddAndNormModel(LightweightModule):
     def __init__(self, config, state_dict, var_scaler, device, lnorm_type):
         super().__init__()
 
@@ -85,7 +86,7 @@ class TtAddAndNormModel(torch.nn.Module):
         return self.add_and_norm(a, b)
 
 
-class PytorchAddAndNormModel(torch.nn.Module):
+class PytorchAddAndNormModel(LightweightModule):
     def __init__(self, hugging_face_reference_model, lnorm_type):
         super().__init__()
         if lnorm_type == "attention":

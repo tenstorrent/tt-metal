@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import ttnn
 import math
@@ -42,7 +43,7 @@ class _MBConvConfig:
     input_channels: int
     out_channels: int
     num_layers: int
-    block: Callable[..., torch.nn.Module]
+    block: Callable[..., LightweightModule]
 
     @staticmethod
     def adjust_channels(channels: int, width_mult: float, min_value: Optional[int] = None) -> int:
@@ -63,7 +64,7 @@ class MBConvConfig(_MBConvConfig):
         do_adjust_input_channels: bool = True,
         width_mult: float = 1.0,
         depth_mult: float = 1.0,
-        block: Optional[Callable[..., torch.nn.Module]] = None,
+        block: Optional[Callable[..., LightweightModule]] = None,
     ):
         if do_adjust_input_channels:
             input_channels = self.adjust_channels(input_channels, width_mult)
@@ -91,7 +92,7 @@ class MBConvConfig(_MBConvConfig):
         return int(math.ceil(num_layers * depth_mult))
 
 
-class TtEfficientnetMbConv(torch.nn.Module):
+class TtEfficientnetMbConv(LightweightModule):
     """
     This block implements the Squeeze-and-Excitation block from https://arxiv.org/abs/1709.01507 (see Fig. 1).
     Parameters ``activation``, and ``scale_activation`` correspond to ``delta`` and ``sigma`` in eq. 3.
@@ -99,8 +100,8 @@ class TtEfficientnetMbConv(torch.nn.Module):
     Args:
         input_channels (int): Number of channels in the input image
         squeeze_channels (int): Number of squeeze channels
-        activation (Callable[..., torch.nn.Module], optional): ``delta`` activation. Default: ``torch.nn.SiLU``
-        scale_activation (Callable[..., torch.nn.Module]): ``sigma`` activation. Default: ``torch.nn.Sigmoid``
+        activation (Callable[..., LightweightModule], optional): ``delta`` activation. Default: ``torch.nn.SiLU``
+        scale_activation (Callable[..., LightweightModule]): ``sigma`` activation. Default: ``torch.nn.Sigmoid``
     """
 
     def __init__(
@@ -126,7 +127,7 @@ class TtEfficientnetMbConv(torch.nn.Module):
 
         self.use_res_connect = cnf.stride == 1 and cnf.input_channels == cnf.out_channels
 
-        layers: List[torch.nn.Module] = []
+        layers: List[LightweightModule] = []
 
         # expand
         expanded_channels = cnf.adjust_channels(cnf.input_channels, cnf.expand_ratio)

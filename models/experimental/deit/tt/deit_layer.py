@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from torch import nn
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Tuple, Union
 
 import ttnn
@@ -14,7 +14,7 @@ from models.experimental.deit.tt.deit_intermediate import TtDeiTIntermediate
 from models.experimental.deit.tt.deit_output import TtDeiTOutput
 
 
-class TtDeiTLayer(nn.Module):
+class TtDeiTLayer(LightweightModule):
     """This corresponds to the Block class in the timm implementation."""
 
     def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:

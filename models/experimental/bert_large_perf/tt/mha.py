@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import pytest
 from loguru import logger
 import math
@@ -233,7 +234,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     return mha_
 
 
-class TtMultiHeadAttentionModel(torch.nn.Module):
+class TtMultiHeadAttentionModel(LightweightModule):
     def __init__(self, config, encoder_idx, state_dict, device):
         super().__init__()
         qw = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"])
@@ -253,7 +254,7 @@ class TtMultiHeadAttentionModel(torch.nn.Module):
         return result
 
 
-class PytorchMultiHeadAttentionModel(torch.nn.Module):
+class PytorchMultiHeadAttentionModel(LightweightModule):
     def __init__(self, hugging_face_reference_model):
         super().__init__()
         self.mha = hugging_face_reference_model.bert.encoder.layer[0].attention.self

@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 from typing import Optional
 from models.experimental.bert_tiny.tt.bert_self_attention import TtBertselfattention
 from models.experimental.bert_tiny.tt.bert_output import TtBertoutput
 
 
-class TtBertattention(nn.Module):
+class TtBertattention(LightweightModule):
     def __init__(self, config, encoder_idx: int, state_dict=None, device=None, mem_config=None):
         super().__init__()
 

@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
@@ -11,7 +11,7 @@ import ttnn
 from models.helper_funcs import Linear as TtLinear
 
 
-class TtFFN(nn.Module):
+class TtFFN(LightweightModule):
     def __init__(self, config, state_dict=None, base_address="", device=None):
         super().__init__()
         self.config = config

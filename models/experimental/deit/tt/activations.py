@@ -2,15 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import math
 from collections import OrderedDict
 
 import torch
 import ttnn
-from torch import Tensor, nn
+from torch import Tensor
 
 
-class GELUActivation(nn.Module):
+class GELUActivation(LightweightModule):
     """
     Original Implementation of the GELU activation function in Google BERT repo when initially created. For
     information: OpenAI GPT's GELU is slightly different (and gives slightly different results): 0.5 * x * (1 +

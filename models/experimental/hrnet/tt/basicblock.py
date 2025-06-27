@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 
 import ttnn
 from tt_lib.fallback_ops import fallback_ops
@@ -10,7 +10,7 @@ from models.utility_functions import torch_to_tt_tensor_rm
 from models.experimental.hrnet.hrnet_utils import create_batchnorm
 
 
-class TtBasicBlock(nn.Module):
+class TtBasicBlock(LightweightModule):
     expansion = 1
 
     def __init__(self, in_ch, out_ch, state_dict, base_address, device, stride=1):
