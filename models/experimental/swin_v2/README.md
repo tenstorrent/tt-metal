@@ -1,7 +1,7 @@
 # Swin_V2
 
 ## Platforms:
-Wormhole N150, N300
+  Wormhole N150, N300
 
 
 ## Introduction
@@ -12,11 +12,11 @@ Swin Transformer v2 builds upon the original Swin Transformer to tackle key chal
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
   - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
-
+- login to huggingface with: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
+   - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens
 
 ## How to Run
-Command to run the inference pipeline with random weights and random tensor:
-
+- Command to run the model:
 ```
 pytest models/experimental/swin_v2/tests/pcc/test_ttnn_swin_v2_s.py
 ```
@@ -31,6 +31,13 @@ Use the following command to run the e2e perf:
     pytest --disable-warnings models/experimental/swin_v2/tests/test_e2e_performant.py
     ```
 
+### Performant Demo on ImageNet:
+- Make sure your HuggingFace token is set ([See Prerequisites](#prerequisites) for instructions)
+
+Use the following command to run the Demo on ImageNet dataset:
+```bash
+pytest  models/experimental/swin_v2/demo/demo.py
+```
 
 ## Details
 - Entry point for the model is models/experimental/swin_v2/tt/tt_swin_transformer.py

@@ -293,6 +293,15 @@ run_vanilla_unet_demo() {
  # vanilla_unet demo
  pytest -n auto models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
 }
+
+# commenting out the test from CI due to HF issue. TODO explore AWS alternative suggested by infra team.
+# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
+# run_swin_v2_demo() {
+
+#   pytest -n auto models/demos/swin_v2/demo/demo.py::test_swin_v2 --timeout 600
+
+# }
+
 run_yolov8x_perf() {
 
   pytest -n auto --disable-warnings models/demos/yolov8x/demo/demo.py --timeout 600
