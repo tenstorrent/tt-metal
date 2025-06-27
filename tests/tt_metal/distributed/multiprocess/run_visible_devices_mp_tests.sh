@@ -20,7 +20,7 @@ for config in "${DEVICE_CONFIGS[@]}"; do
     TT_METAL_VISIBLE_DEVICES="$config" mpirun -np 1 ./build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests
 
     if [ $? -eq 0 ]; then
-        echo "✓ Test passed for configuration: $config"
+        echo "✓ [distributed tests] Test passed for configuration: $config"
     else
         echo "✗ Test failed for configuration: $config"
         ALL_PASSED=false
