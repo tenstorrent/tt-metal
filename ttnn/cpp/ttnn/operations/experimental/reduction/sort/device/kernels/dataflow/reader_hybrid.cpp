@@ -6,6 +6,8 @@
 
 #include "debug/dprint.h"
 
+#include "hybrid_common.hpp"
+
 #include <cstdint>
 #include <utility>
 
@@ -49,6 +51,8 @@ void kernel_main() {
     constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(11);
     constexpr bool ascending = get_compile_time_arg_val(12) == 1;
 
+    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(13));
+
     // Constants
     constexpr uint32_t one_tile = 1;
     const uint16_t core_id = get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
@@ -91,6 +95,8 @@ void kernel_main() {
     noc_async_read_barrier();
     DPRINT << "READER: Starting" << ENDL();  // TODO: Remove
 
+    sem_ptr_t sem_self_exchange_ptr = reinterpret_cast<sem_ptr_t>(sem_exchange_addr);
+
     for (uint32_t h = 0; h < Ht; h++) {
         // Read input value data
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
@@ -128,8 +134,28 @@ void kernel_main() {
                         pair_id++;
                     }
                 }
-            }
-        }
+
+                // TOOD: We don't need to check for each tile if it's outside or inside core. We can simply check the
+                // first one
+                //       For a given sub, all tiles are either in-core or outside
+                //       If inside => do nothing
+                //      Otherwise => exchange
+                const std::pair<uint32_t, uint32_t> remote_core_physical =
+                    get_core_physical_coordinates(other_core_id, physical_core_lookup_table_cb_index);
+
+                sort_noc_exchange_Wt_tiles(
+                    index_tensor_output_accessor,
+                    input_tensor_peer_cb_index,
+                    number_of_tiles_per_core,
+                    index_tensor_output_tile_size_bytes,
+                    remote_core_physical.first,
+                    remote_core_physical.second,
+                    sem_self_ptr);
+            }  // sub
+
+            // TODO: PUT BARRIER HERE
+
+        }  // stages
 
         DPRINT << "READER: AFTER LOGIC:" << ENDL();  // TODO: Remove
         // Write output index data

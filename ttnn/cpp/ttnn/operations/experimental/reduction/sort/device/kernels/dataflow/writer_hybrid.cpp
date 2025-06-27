@@ -77,6 +77,10 @@ void kernel_main() {
             generate_index_tile(index_tensor_cb_index, core_id * number_of_tiles_per_core + w);
             // PAUSE(); // TODO: Remove
         }  // w loop
+
+        for () {
+        }
+
         // Write value tensor to DRAM
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
             cb_wait_front(value_tensor_cb_index, one_tile);

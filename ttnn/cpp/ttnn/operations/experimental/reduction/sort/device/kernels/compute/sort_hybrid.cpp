@@ -33,6 +33,8 @@ void MAIN {
     constexpr uint32_t index_tensor_transposed_cb_index = get_compile_time_arg_val(10);
     constexpr uint32_t value_tensor_cb_index = get_compile_time_arg_val(11);
     constexpr uint32_t index_tensor_output_cb_index = get_compile_time_arg_val(12);
+    constexpr uint32_t input_tensor_peer_cb_index = get_compile_time_arg_val(13);  // TOFIX
+    constexpr uint32_t index_tensor_peer_cb_index = get_compile_time_arg_val(14);  // TOFIX
 
     // Constants
     constexpr uint32_t one_tile = 1;
@@ -82,14 +84,14 @@ void MAIN {
                     uint32_t j = i ^ sub_dist;
                     if (j > i) {
                         if (pair_id >= processing_pair_start && pair_id < processing_pair_end) {
+                            // Local sorting
+
+                            // Determine direction for this comparison block
+                            const bool ascending_block = ((i >> stage) & 1) == 0;
+                            const bool dir = ascending_block == ascending;
+
                             if (i >= global_tile_start && i < global_tile_end && j >= global_tile_start &&
                                 j < global_tile_end) {
-                                // Local sorting
-
-                                // Determine direction for this comparison block
-                                const bool ascending_block = ((i >> stage) & 1) == 0;
-                                const bool dir = ascending_block == ascending;
-
                                 // Get indexes of tiles to compare
                                 const uint32_t left_tile_id = i - global_tile_start;
                                 const uint32_t right_tile_id = j - global_tile_start;
@@ -122,6 +124,72 @@ void MAIN {
                                 tile_regs_release();
                             } else {
                                 // TODO: Swapping tiles
+
+                                const uint32_t tile_id = 0;  // TODO: Compute correct index
+
+                                tile_regs_acquire();
+                                // Read from
+                                copy_tile_to_dst_init_short_with_dt(
+                                    input_tensor_transposed_cb_index, index_tensor_transposed_cb_index);
+                                copy_tile(index_tensor_transposed_cb_index, tile_id, index_dest_start);
+
+                                copy_tile_to_dst_init_short_with_dt(
+                                    index_tensor_transposed_cb_index, input_tensor_transposed_cb_index);
+                                copy_tile(input_tensor_transposed_cb_index, tile_id, input_dest_start);
+
+                                tile_regs_commit();
+
+                                tile_regs_wait();
+
+                                // Send current index to reader
+                                cb_reserve_back(index_tensor_cb_index, one_tile);
+                                pack_reconfig_data_format(index_tensor_output_cb_index);
+                                pack_tile<true>(index_dest_start, index_tensor_output_cb_index, left_tile_id);
+                                cb_reserve_back(index_tensor_cb_index, one_tile);
+
+                                // Send current tile to writer
+                                cb_reserve_back(value_tensor_cb_index, one_tile);
+                                pack_reconfig_data_format(value_tensor_cb_index);
+                                pack_tile<true>(input_dest_start, value_tensor_cb_index, left_tile_id);
+                                cb_push_back(value_tensor_cb_index, one_tile);
+
+                                tile_regs_release();
+
+                                // TODO: Do we need to Sync Unpacker/Packer ?
+                                //       It may not be necessary because dest regs values are different
+
+                                // Read other indices from reader
+                                tile_regs_acquire();
+                                cb_wait_front(index_tensor_peer_cb_index, one_tile);
+                                copy_tile_to_dst_init_short_with_dt(
+                                    input_tensor_transposed_cb_index, index_tensor_peer_cb_index);
+                                copy_tile(index_tensor_peer_cb_index, tile_id, index_dest_end);
+                                cb_pop_front(index_tensor_peer_cb_index, one_tile);
+
+                                // Read other tile from writer
+                                cb_wait_front(input_tensor_peer_cb_index, one_tile);
+                                copy_tile_to_dst_init_short_with_dt(
+                                    index_tensor_peer_cb_index, input_tensor_peer_cb_index);
+                                copy_tile(input_tensor_peer_cb_index, tile_id, input_dest_end);
+                                cb_pop_front(input_tensor_peer_cb_index, one_tile);
+
+                                ckernel::topk_local_sort(0, (int)dir, 5);
+
+                                tile_regs_commit();
+
+                                tile_regs_wait();
+                                pack_reconfig_data_format(input_tensor_transposed_cb_index);
+                                pack_tile<true>(input_dest_start, input_tensor_transposed_cb_index, left_tile_id);
+                                pack_tile<true>(input_dest_end, input_tensor_transposed_cb_index, right_tile_id);
+
+                                pack_reconfig_data_format(index_tensor_transposed_cb_index);
+                                pack_tile<true>(index_dest_start, index_tensor_transposed_cb_index, left_tile_id);
+                                pack_tile<true>(index_dest_end, index_tensor_transposed_cb_index, right_tile_id);
+                                tile_regs_release();
+
+                                // TODO: Sync Unpacker/Packer
+                                //       Otherwise, unpacker could start next iteration while packer is not done yet
+                                //       Note: This may be a problem for both conditional
                             }
                         }
                         pair_id++;
