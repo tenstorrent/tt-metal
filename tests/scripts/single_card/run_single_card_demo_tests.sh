@@ -223,6 +223,12 @@ run_yolov9c_perf() {
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov9c/demo/demo.py --timeout 600
 
 }
+run_yolov8s_perf() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov8s/demo/demo.py --timeout 600
+
+}
+
 
 run_mobilenetv2_perf(){
 
