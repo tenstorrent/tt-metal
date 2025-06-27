@@ -507,14 +507,6 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
     torch_output_tensor = torch.nn.functional.group_norm(torch_input_tensor, num_groups)
     torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
 
-    # Generate ttnn tensor
-    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
-    tt_input_tensor = ttnn.from_torch(
-        tt_input_tensor,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
-
     # Generate input mask
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
     input_mask_tensor = ttnn.from_torch(
@@ -533,47 +525,53 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
     sharded_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
-    tt_input_tensor = ttnn.to_device(tt_input_tensor, device, memory_config=sharded_mem_config)
 
-    # Define the compute configs
+    # Helper function to execute group_norm for a given compute config
+    def do_group_norm_for_config(compute_config):
+        tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+        tt_input_tensor = ttnn.from_torch(
+            tt_input_tensor,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=sharded_mem_config,
+        )
+
+        tt_output_tensor = ttnn.group_norm(
+            tt_input_tensor,
+            num_groups=num_groups,
+            input_mask=input_mask_tensor,
+            memory_config=sharded_mem_config,
+            core_grid=grid_size,
+            compute_kernel_config=compute_config,
+        )
+        tt_output_tensor_host = ttnn.from_device(tt_output_tensor)
+        tt_output_tensor_host = ttnn.to_torch(tt_output_tensor_host)
+
+        ttnn.deallocate(tt_input_tensor)
+        ttnn.deallocate(tt_output_tensor)
+
+        return tt_output_tensor_host
+
+    # Execute low-accuracy groupnorm
     config_low = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
+    tt_output_low = do_group_norm_for_config(config_low)
+    _, pcc_low = comp_pcc(torch_output_tensor, tt_output_low)
+
+    # Execute high-accuracy groupnorm
     config_high = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
-
-    # Execute low-accuracy groupnorm
-    tt_output_tensor_low = ttnn.group_norm(
-        tt_input_tensor,
-        num_groups=num_groups,
-        input_mask=input_mask_tensor,
-        memory_config=sharded_mem_config,
-        core_grid=grid_size,
-        compute_kernel_config=config_low,
-    )
-    tt_output_tensor_low = ttnn.from_device(tt_output_tensor_low)
-    tt_output_tensor_low = ttnn.to_torch(tt_output_tensor_low)
-
-    # Execute high-accuracy groupnorm
-    tt_output_tensor_high = ttnn.group_norm(
-        tt_input_tensor,
-        num_groups=num_groups,
-        input_mask=input_mask_tensor,
-        memory_config=sharded_mem_config,
-        core_grid=grid_size,
-        compute_kernel_config=config_high,
-    )
-    tt_output_tensor_high = ttnn.from_device(tt_output_tensor_high)
-    tt_output_tensor_high = ttnn.to_torch(tt_output_tensor_high)
+    tt_output_high = do_group_norm_for_config(config_high)
+    _, pcc_high = comp_pcc(torch_output_tensor, tt_output_high)
 
     # Verify that the higher-accuracy config is closer to torch
-    _, pcc_high = comp_pcc(torch_output_tensor, tt_output_tensor_high)
-    _, pcc_low = comp_pcc(torch_output_tensor, tt_output_tensor_low)
     assert pcc_high > pcc_low, "High-accuracy config should have higher PCC than low-accuracy config"
