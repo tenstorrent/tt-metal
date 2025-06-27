@@ -29,7 +29,7 @@ done
 
 echo
 if [ "$ALL_PASSED" = true ]; then
-    echo "All tests passed!"
+    echo "[distributed tests] All tests passed!"
     exit 0
 else
     echo "Some tests failed!"
