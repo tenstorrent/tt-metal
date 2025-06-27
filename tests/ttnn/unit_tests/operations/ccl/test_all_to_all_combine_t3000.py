@@ -259,8 +259,7 @@ def run_all_to_all_combine_test(
                 topology=topology,
                 memory_config=output_memory_config,
                 global_semaphore=ccl_semaphore_handles[i],
-                axis=axis
-                # subdevice_id=worker_sub_device_id,
+                axis=axis,
             )
 
             ttnn.synchronize_device(mesh_device)
@@ -335,8 +334,6 @@ def test_all_to_all_combine_no_trace(
     topology,
     dtype,
 ):
-    torch.set_printoptions(threshold=10000)
-
     devices = mesh_shape[0] * mesh_shape[1]
     batch = batches_per_device * devices
     experts = experts_per_device * devices
@@ -384,5 +381,3 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
     assert output_tensor.shape == (select_experts_k, batch * mesh_dim, 1, hidden_size)
     assert expert_mapping.shape == (1, 1, experts, devices)
     assert metadata_tensor.shape == (devices, batch, 1, select_experts_k)
-
-    assert_with_pcc(output_tensor, output_tensor)
