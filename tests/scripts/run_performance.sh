@@ -16,6 +16,7 @@ run_perf_models_other() {
     fi
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
+
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/sentence_bert/tests/test_sentence_bert_e2e_performant.py -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py -m $test_marker
@@ -39,6 +40,8 @@ run_perf_models_other() {
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/metal_BERT_large_11/tests -m $test_marker
 
         # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg_unet/tests -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/vanilla_unet/test -m $test_marker
 
         # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov9c/tests/perf -m $test_marker
 
