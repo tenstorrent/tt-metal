@@ -455,12 +455,12 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
     TensorSpec spec(shape, TensorLayout(data_type, PageConfig(layout), MemoryConfig{}));
     auto output_buffer = std::vector<T>(spec.padded_shape().volume());
 
-    if constexpr (IntType<T>) {
+    if constexpr (std::is_same_v<T, uint32_t>) {
         auto rand_value = std::bind(std::uniform_int_distribution<T>(low, high), RANDOM_GENERATOR);
         for (auto index = 0; index < output_buffer.size(); index++) {
             output_buffer[index] = rand_value();
         }
-    } else if constexpr (std::floating_point<T>) {
+    } else if constexpr (std::is_same_v<T, float>) {
         auto rand_value = std::bind(std::uniform_real_distribution<T>(low, high), RANDOM_GENERATOR);
         for (auto index = 0; index < output_buffer.size(); index++) {
             output_buffer[index] = rand_value();
@@ -471,14 +471,6 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
         for (auto index = 0; index < output_buffer.size(); index++) {
             output_buffer[index] = ::bfloat16(rand_value());
         }
-    } else if constexpr (std::is_same_v<T, uint8_t>) {
-        // TODO: It is quick fix, but uniform_int_distribution can't be used with uint8_t
-        auto rand_value = std::bind(std::uniform_int_distribution<T>(low, high), RANDOM_GENERATOR);
-        for (auto index = 0; index < output_buffer.size(); index++) {
-            output_buffer[index] = rand_value();
-        }
-    } else {
-        static_assert(false, "random::random(...) error: DataType not supported!");
     }
 
     return Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);
