@@ -345,32 +345,12 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 void Cluster::open_driver(const bool &skip_driver_allocs) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
-        std::unordered_set<chip_id_t> chips_set;
+        std::unordered_set<chip_id_t> pcie_visible_devices;
         // generate the cluster desc and pull chip ids from there
         auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
         if (rtoptions_.is_visible_devices_specified()) {
-            const auto& visible_devices = rtoptions_.get_visible_devices();
-            std::vector<int> desired_logical_ids;
-
-            for (auto& [logical_id, pci_id] : temp_cluster_desc->get_chips_with_mmio()) {
-                if (std::find(visible_devices.begin(), visible_devices.end(), pci_id) != visible_devices.end()) {
-                    desired_logical_ids.push_back(logical_id);
-                }
-            }
-
-            TT_FATAL(
-                !desired_logical_ids.empty(),
-                "No visible devices found in cluster descriptor. Requested devices: {}",
-                fmt::format("{}", fmt::join(visible_devices, ",")));
-
-            const auto& chips_grouped_by_mmio = temp_cluster_desc->get_chips_grouped_by_closest_mmio();
-            for (int logical_id : desired_logical_ids) {
-                auto it = chips_grouped_by_mmio.find(logical_id);
-                TT_FATAL(
-                    it != chips_grouped_by_mmio.end(), "Logical ID {} not found in chips grouped by MMIO", logical_id);
-                for (const auto& chip_id : it->second) {
-                    chips_set.emplace(chip_id);
-                }
+            for (auto& visible_device : rtoptions_.get_visible_devices()) {
+                pcie_visible_devices.emplace(visible_device);
             }
         }
         // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
@@ -384,7 +364,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = num_host_mem_ch_per_mmio_device,
             .sdesc_path = get_soc_description_file(this->arch_, this->target_type_),
-            .pci_target_devices = chips_set,
+            .pci_target_devices = pcie_visible_devices,
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
