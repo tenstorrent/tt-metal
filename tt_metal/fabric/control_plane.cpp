@@ -1416,7 +1416,6 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
 
     size_t eth_endpoint_idx = 0;
     size_t total_physical_channels = all_connected_channels.size();
-    size_t fabric_routed_channels = 0;
 
     // Iterate through all physically connected channels for reporting
     for (const auto& eth_channel_id : all_connected_channels) {
@@ -1490,7 +1489,6 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
         // Mark this connection as valid for fabric communication
         fabric_connections.valid_connections_mask |= (1u << eth_endpoint_idx);
         eth_endpoint_idx++;
-        fabric_routed_channels++;
     }
 
     TT_FATAL(

@@ -396,9 +396,6 @@ void DevicePool::initialize_active_devices() const {
         if (tt_fabric::is_2d_fabric_config(fabric_config)) {
             // TODO: need to write routing tables for unified 2d fabric.
             // write routing tables to all ethernet cores
-            tt::tt_metal::MetalContext::instance()
-                .get_control_plane().write_routing_tables_to_all_chips();
-        } else {
             tt::tt_metal::MetalContext::instance().get_control_plane().write_routing_tables_to_all_chips();
         }
 
