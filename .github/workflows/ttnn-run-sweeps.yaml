@@ -51,10 +51,12 @@ on:
           - eltwise.unary.tril.tril_pytorch2
           - eltwise.unary.clamp.clamp
           - eltwise.unary.clamp.clamp_forge
+          - eltwise.unary.clamp.clamp_sharded
           - eltwise.unary.clamp.clamp_pytorch2
           - eltwise.unary.clamp.clamp_min_pytorch2
           - eltwise.unary.clip.clip
           - eltwise.unary.cbrt.cbrt
+          - eltwise.unary.cbrt.cbrt_sharded
           - eltwise.unary.rsub.rsub
           - eltwise.unary.rsub.rsub_sharded
           - eltwise.unary.rsub.rsub_pytorch2
@@ -71,6 +73,7 @@ on:
           - eltwise.unary.trunc.trunc_sharded
           - eltwise.unary.floor.floor
           - eltwise.unary.floor.floor_forge
+          - eltwise.unary.floor.floor_sharded
           - eltwise.unary.floor.floor_pytorch2
           - eltwise.unary.clone.clone
           - eltwise.unary.elu.elu
@@ -320,6 +323,7 @@ on:
           - eltwise.unary.isneginf.isneginf_sharded
           - eltwise.unary.isposinf.isposinf
           - eltwise.unary.isposinf.isposinf_sharded
+          - eltwise.binary.add.add_sharded
           - eltwise.binary.add.add_all_pytorch2
           - eltwise.binary.add.add_set2_pytorch2
           - eltwise.binary.add.add_different_memory_configs
@@ -347,6 +351,7 @@ on:
           - eltwise.unary_complex.angle_bw.angle_bw
           - eltwise.unary_complex.conj_bw
           - eltwise.binary.subtract.subtract
+          - eltwise.binary.subtract.subtract_sharded
           - eltwise.binary.subtract.subtract_tensor_pytorch2
           - eltwise.binary.subtract.subtract_forge
           - eltwise.binary.multiply.multiply
@@ -356,9 +361,11 @@ on:
           - eltwise.binary.multiply.multiply_llama
           - eltwise.binary.multiply.mul_no_act_llama
           - eltwise.binary.div.div
+          - eltwise.binary.div.div_sharded
           - eltwise.binary.div.div_tensor_pytorch2
           - eltwise.binary.div.div_forge
           - eltwise.binary.div_no_nan.div_no_nan
+          - eltwise.binary.div_no_nan.div_no_nan_sharded
           - eltwise.binary.logical_or.logical_or_
           - eltwise.binary.logical_or.logical_or
           - eltwise.binary.logical_or.logical_or_output
