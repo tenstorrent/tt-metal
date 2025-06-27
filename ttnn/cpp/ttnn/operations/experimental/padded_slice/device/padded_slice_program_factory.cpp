@@ -261,7 +261,7 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     }
     uint32_t cb_page_size = tt::round_up(output_row_size_bytes, alignment);
 
-    CBHandle cb_src0, cb_temp_padded_row;
+    CBHandle cb_src0;
     uint32_t num_output_sticks_per_core = output_shard_spec.shape[0];
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(
@@ -274,6 +274,7 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
         tt::tt_metal::CircularBufferConfig cb_temp_pad_config =
             tt::tt_metal::CircularBufferConfig(1 * output_row_size_bytes, {{temp_pad_cb_index, cb_data_format}})
                 .set_page_size(temp_pad_cb_index, output_row_size_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_temp_pad_config);
     }
 
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
