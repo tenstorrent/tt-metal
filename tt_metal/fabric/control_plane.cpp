@@ -283,9 +283,7 @@ std::optional<LocalMeshBinding> ControlPlane::initialize_local_mesh_binding() {
         return coord_rank_pair.value() == local_mesh_binding.host_rank;
     }) != host_ranks.end();
 
-    if (!is_valid_host_rank) {
-        TT_THROW("Invalid TT_HOST_RANK: Local mesh binding host_rank {} not found in mesh graph descriptor", local_mesh_binding.host_rank);
-    }
+    TT_FATAL(is_valid_host_rank, "Invalid TT_HOST_RANK: Local mesh binding host_rank {} not found in mesh graph descriptor", local_mesh_binding.host_rank);
 
     return local_mesh_binding;
 }
