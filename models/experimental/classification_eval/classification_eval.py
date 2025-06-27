@@ -162,7 +162,6 @@ def evaluation(
 def test_vit_image_classification_eval(
     mesh_device,
     model_type,
-    use_program_cache,
     batch_size_per_device,
     model_location_generator,
 ):
@@ -219,7 +218,6 @@ def test_resnet50_image_classification_eval(
     act_dtype,
     weight_dtype,
     model_location_generator,
-    use_program_cache,
 ):
     from models.demos.ttnn_resnet.tests.resnet50_performant_imagenet import ResNet50Trace2CQ
     from models.demos.ttnn_resnet.tests.demo_utils import get_batch
@@ -263,7 +261,7 @@ def test_resnet50_image_classification_eval(
 )
 @pytest.mark.parametrize("batch_size, res", [[8, 224]])
 def test_mobilenetv2_image_classification_eval(
-    device, model_type, batch_size, res, model_location_generator, use_program_cache, reset_seeds
+    device, model_type, batch_size, res, model_location_generator, reset_seeds
 ):
     from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
     from models.demos.mobilenetv2.tests.mobilenetv2_e2e_performant import MobileNetV2Trace2CQ
