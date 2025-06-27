@@ -192,7 +192,6 @@ def test_unet(
     time_ids_shape,
     conv_weights_dtype,
     transformer_weights_dtype,
-    use_program_cache,
     reset_seeds,
 ):
     run_unet_model(

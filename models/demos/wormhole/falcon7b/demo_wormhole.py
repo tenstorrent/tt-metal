@@ -44,7 +44,6 @@ def test_demo(
     model_location_generator,
     get_tt_cache_path,
     mesh_device,
-    use_program_cache,
     is_ci_env,
 ):
     if is_ci_env:

@@ -55,7 +55,6 @@ def test_crossattnup(
     out_dim,
     block_id,
     pcc,
-    use_program_cache,
     reset_seeds,
     transformer_weights_dtype,
     conv_weights_dtype,

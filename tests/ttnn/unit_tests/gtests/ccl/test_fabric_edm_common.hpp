@@ -2957,8 +2957,17 @@ void Run1DFabricPacketSendTest(
                 rt_args_out.push_back(is_connected_in_direction);
                 if (is_connected_in_direction) {
                     if (use_device_init_fabric) {
+                        const auto& device_fabric_node_id =
+                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+                        const auto& connected_device_fabric_node_id =
+                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_device->id());
                         tt::tt_fabric::append_fabric_connection_rt_args(
-                            device->id(), connected_device->id(), link, program, {worker_core}, rt_args_out);
+                            device_fabric_node_id,
+                            connected_device_fabric_node_id,
+                            link,
+                            program,
+                            {worker_core},
+                            rt_args_out);
                     } else {
                         const auto connection = local_device_fabric_handle->uniquely_connect_worker(device, direction);
                         const auto new_rt_args = ttnn::ccl::worker_detail::generate_edm_connection_rt_args(
@@ -3400,8 +3409,11 @@ void generate_1d_fabric_on_full_mesh_worker_rt_args(
                                      std::vector<uint32_t>& rt_args_out) {
         rt_args_out.push_back(is_connected_in_direction);
         if (is_connected_in_direction) {
+            const auto& device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+            const auto& connected_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_device->id());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                device->id(), connected_device->id(), link, program, {worker_core}, rt_args_out);
+                device_fabric_node_id, connected_device_fabric_node_id, link, program, {worker_core}, rt_args_out);
         }
     };
 
@@ -4006,8 +4018,17 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
                     bool is_connected_in_direction, IDevice* connected_device, std::vector<uint32_t>& rt_args_out) {
                     rt_args_out.push_back(is_connected_in_direction);
                     if (is_connected_in_direction) {
+                        const auto& device_fabric_node_id =
+                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+                        const auto& connected_device_fabric_node_id =
+                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_device->id());
                         tt::tt_fabric::append_fabric_connection_rt_args(
-                            device->id(), connected_device->id(), l, program, {worker_core}, rt_args_out);
+                            device_fabric_node_id,
+                            connected_device_fabric_node_id,
+                            l,
+                            program,
+                            {worker_core},
+                            rt_args_out);
                     }
                 };
 

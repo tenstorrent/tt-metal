@@ -595,15 +595,6 @@ def get_devices(request):
     return devices
 
 
-# Deprecated, cache is active by default
-@pytest.fixture(scope="function")
-def use_program_cache(request):
-    devices = get_devices(request)
-    yield
-    for dev in devices:
-        dev.disable_and_clear_program_cache()
-
-
 @pytest.fixture(scope="function")
 def tracy_profile():
     from tracy import Profiler
@@ -679,6 +670,29 @@ def pytest_addoption(parser):
         default=None,
         help="Check determinism every nth iteration",
     )
+    parser.addoption(
+        "--grid-size",
+        action="store",
+        default=None,
+        help="Size of chip grid for the test to run on. Grid size is defined by nubmer of cores in row x number of cores in column, e.g., 8x8",
+    )
+
+
+@pytest.fixture
+def grid_size(request):
+    """
+    Fixture to set the chip grid size for the test to run on.
+    If --grid-size is provided, it returns a tuple of integers (rows, columns).
+    If not provided, it defaults to None.
+    """
+    grid_size_str = request.config.getoption("--grid-size")
+    if grid_size_str:
+        try:
+            rows, cols = map(int, grid_size_str.split("x"))
+            return (rows, cols)
+        except ValueError:
+            raise ValueError(f"Invalid grid size format: {grid_size_str}. Use format 'rows x cols'.")
+    return None
 
 
 # Indicates the iteration interval at which determinism is verified for the op output

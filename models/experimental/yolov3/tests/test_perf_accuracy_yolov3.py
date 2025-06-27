@@ -228,7 +228,6 @@ def run_perf_yolov3(expected_inference_time, expected_compile_time, model_locati
 )
 def test_perf_bare_metal(
     device,
-    use_program_cache,
     expected_inference_time,
     expected_compile_time,
     model_location_generator,
@@ -251,7 +250,6 @@ def test_perf_bare_metal(
 )
 def test_perf_virtual_machine(
     device,
-    use_program_cache,
     expected_inference_time,
     expected_compile_time,
     model_location_generator,
