@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 import models.experimental.nanogpt.tt.nanogpt_mlp as nanogpt_mlp
 import models.experimental.nanogpt.tt.nanogpt_attention as nanogpt_attention
 
 
-class TtBlock(nn.Module):
+class TtBlock(LightweightModule):
     def __init__(self, config, base_address, device, tt_cache_path, dtype):
         super().__init__()
 

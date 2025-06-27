@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 import math
 from models.helper_funcs import Linear
@@ -13,7 +13,7 @@ from models.utility_functions import (
 )
 
 
-class TtCausalSelfAttention(nn.Module):
+class TtCausalSelfAttention(LightweightModule):
     def __init__(self, config, base_address, device, tt_cache_path, dtype):
         super().__init__()
         assert config.n_embd % config.n_head == 0

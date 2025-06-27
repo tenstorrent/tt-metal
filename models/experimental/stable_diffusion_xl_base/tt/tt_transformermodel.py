@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 import re
 
@@ -14,7 +14,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 )
 
 
-class TtTransformer2DModel(nn.Module):
+class TtTransformer2DModel(LightweightModule):
     def __init__(
         self,
         device,

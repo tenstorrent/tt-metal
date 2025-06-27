@@ -2,15 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-import torch.nn as nn
 
 import open_clip
 from PIL import Image
 from typing import Union, List, Optional
 
 
-class CLIPEncoder(nn.Module):
+class CLIPEncoder(LightweightModule):
     """
     A class for encoding images and texts using a specified CLIP model and computing the similarity between them.
 
@@ -20,7 +20,7 @@ class CLIPEncoder(nn.Module):
         The version of the CLIP model to be used.
     pretrained: str
         The pre-trained weights to load.
-    model: nn.Module
+    model: LightweightModule
         The CLIP model.
     preprocess: Callable
         The preprocessing transform to apply to the input image.

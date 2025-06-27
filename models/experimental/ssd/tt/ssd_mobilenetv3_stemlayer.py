@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 from models.experimental.ssd.tt.ssd_mobilenetv3_convlayer import (
     TtMobileNetV3ConvLayer,
 )
 
 
-class TtMobileNetV3Stem(nn.Module):
+class TtMobileNetV3Stem(LightweightModule):
     def __init__(
         self,
         config,

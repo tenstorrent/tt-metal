@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
@@ -12,7 +12,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 )
 
 
-class TtAttention(nn.Module):
+class TtAttention(LightweightModule):
     def __init__(
         self,
         device,

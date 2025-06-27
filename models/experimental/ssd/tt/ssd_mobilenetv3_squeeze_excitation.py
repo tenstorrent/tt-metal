@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 import tt_lib.fallback_ops as fallback_ops
 from models.utility_functions import (
@@ -10,7 +10,7 @@ from models.utility_functions import (
 )
 
 
-class TtSqueezeExcitation(torch.nn.Module):
+class TtSqueezeExcitation(LightweightModule):
     def __init__(
         self,
         config,

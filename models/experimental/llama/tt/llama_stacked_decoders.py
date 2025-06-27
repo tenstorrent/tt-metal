@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import ttnn
 from models.utility_functions import (
@@ -11,7 +12,7 @@ from models.experimental.llama.tt.llama_layer_norm import TtLlamaRMSNorm
 from models.experimental.llama.tt.llama_decoder import TtLlamaDecoderLayer
 
 
-class TtLlamaDecoderModelStacked(torch.nn.Module):
+class TtLlamaDecoderModelStacked(LightweightModule):
     def __init__(
         self,
         device,

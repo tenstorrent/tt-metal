@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Union
-import torch.nn as nn
 import ttnn
 
 import tt_lib.fallback_ops as fallback_ops
@@ -16,7 +16,7 @@ ACT_FN_1 = ttnn.relu
 ACT_FN_2 = ttnn.hardswish
 
 
-class TtMobileNetV3ConvLayer(nn.Module):
+class TtMobileNetV3ConvLayer(LightweightModule):
     def __init__(
         self,
         config,

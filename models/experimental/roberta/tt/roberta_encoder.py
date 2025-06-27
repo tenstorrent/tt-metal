@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import torch.nn as nn
 
@@ -24,7 +25,7 @@ class TtBaseModelOutputWithPastAndCrossAttentions:
 
 
 # Copied from transformers.models.bert.modeling_bert.BertEncoder with Bert->Roberta
-class TtRobertaEncoder(nn.Module):
+class TtRobertaEncoder(LightweightModule):
     def __init__(
         self,
         config,

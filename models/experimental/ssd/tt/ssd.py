@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-from torch import nn
 import ttnn
 import tt_lib.fallback_ops as fallback_ops
 from typing import List, Optional, Tuple, Dict, OrderedDict
@@ -24,7 +24,7 @@ from torchvision.models.detection._utils import BoxCoder, Matcher, SSDMatcher
 from torchvision.models.detection.transform import GeneralizedRCNNTransform
 
 
-class TtSSD(nn.Module):
+class TtSSD(LightweightModule):
     __annotations__ = {
         "box_coder": BoxCoder,
         "proposal_matcher": Matcher,

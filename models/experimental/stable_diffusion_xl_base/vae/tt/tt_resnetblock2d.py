@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import ttnn
 
@@ -15,7 +15,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_config, get_DRAM_GN_config
 
 
-class TtResnetBlock2D(nn.Module):
+class TtResnetBlock2D(LightweightModule):
     def __init__(self, device, state_dict, module_path, model_config, conv_shortcut=False, gn_fallback=False):
         super().__init__()
 

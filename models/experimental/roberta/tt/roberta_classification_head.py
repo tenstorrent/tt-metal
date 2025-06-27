@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 
 import ttnn
 
@@ -11,7 +11,7 @@ from models.utility_functions import tt2torch_tensor, pad_by_zero
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
-class TtRobertaClassificationHead(nn.Module):
+class TtRobertaClassificationHead(LightweightModule):
     """Head for sentence-level classification tasks."""
 
     def __init__(self, config, state_dict, base_address, device):

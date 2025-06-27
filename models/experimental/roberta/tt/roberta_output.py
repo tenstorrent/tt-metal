@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-import torch.nn as nn
 
 from functools import partial
 
@@ -17,7 +17,7 @@ from models.utility_functions import (
 
 
 # Copied from transformers.models.bert.modeling_bert.BertOutput
-class TtRobertaOutput(nn.Module):
+class TtRobertaOutput(LightweightModule):
     def __init__(
         self,
         config,

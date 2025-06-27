@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from torch import nn
 import ttnn
 
@@ -20,7 +21,7 @@ from models.experimental.ssd.tt.ssd_mobilenetv3_inverted_residual import (
 )
 
 
-class TtSSDLiteFeatureExtractorMobileNet(nn.Module):
+class TtSSDLiteFeatureExtractorMobileNet(LightweightModule):
     def __init__(
         self,
         config,

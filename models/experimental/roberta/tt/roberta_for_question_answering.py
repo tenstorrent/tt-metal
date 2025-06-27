@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-import torch.nn as nn
 
 from typing import Optional, Tuple, Union
 from dataclasses import dataclass
@@ -26,7 +26,7 @@ class TtQuestionAnsweringModelOutput:
     attentions: ttnn.Tensor = None
 
 
-class TtRobertaForQuestionAnswering(nn.Module):
+class TtRobertaForQuestionAnswering(LightweightModule):
     def __init__(
         self,
         config,

@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import ttnn
-import torch.nn as nn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_decoder import TtDecoder
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
 
 
-class TtAutoencoderKL(nn.Module):
+class TtAutoencoderKL(LightweightModule):
     def __init__(self, device, state_dict, model_config, batch_size=1, gn_fallback=False):
         super().__init__()
 

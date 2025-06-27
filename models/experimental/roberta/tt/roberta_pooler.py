@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-import torch.nn as nn
 
 import ttnn
 
@@ -16,7 +16,7 @@ from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
 # Copied from transformers.models.bert.modeling_bert.BertPooler
-class TtRobertaPooler(nn.Module):
+class TtRobertaPooler(LightweightModule):
     def __init__(
         self,
         config,

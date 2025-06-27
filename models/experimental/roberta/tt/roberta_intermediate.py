@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-import torch.nn as nn
 
 import ttnn
 
@@ -16,7 +16,7 @@ from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
 # Copied from transformers.models.bert.modeling_bert.BertIntermediate
-class TtRobertaIntermediate(nn.Module):
+class TtRobertaIntermediate(LightweightModule):
     def __init__(self, config, state_dict, base_address, device, fall_back_to_torch_gelu=True):
         super().__init__()
         self.mem_config = ttnn.L1_MEMORY_CONFIG

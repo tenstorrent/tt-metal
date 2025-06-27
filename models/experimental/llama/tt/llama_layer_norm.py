@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from torch import nn
+from models.common.lightweightmodule import LightweightModule
 from models.utility_functions import pad_by_zero
 
 import ttnn
 
 
-class TtLlamaRMSNorm(nn.Module):
+class TtLlamaRMSNorm(LightweightModule):
     def __init__(
         self,
         device,
