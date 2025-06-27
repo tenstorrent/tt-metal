@@ -6,7 +6,7 @@ import json
 import math
 
 import ttnn
-from models.experimental.yolov8s.tt.tt_yolov8s_utils import ttnn_decode_bboxes
+from models.demos.yolov8s.tt.tt_yolov8s_utils import ttnn_decode_bboxes
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
 try:
@@ -16,7 +16,7 @@ try:
 except ModuleNotFoundError:
     use_signpost = False
 
-with open("models/experimental/yolov8s/tt/configs.json", "r") as file:
+with open("models/demos/yolov8s/tt/configs.json", "r") as file:
     configs = json.load(file)
 
 conv_config = configs["conv_config"]
@@ -717,7 +717,7 @@ class TtDetectionModel:
 
     def __call__(self, x):
         N, C, H, W = x.shape
-        min_channels = 8
+        min_channels = 16
         if C < min_channels:
             channel_padding_needed = min_channels - C
             nchw = ttnn.pad(x, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
@@ -746,8 +746,7 @@ class TtDetectionModel:
 
         c2f_4, out_h, out_w = self.c2f_4(conv_3)
         ttnn.deallocate(conv_3)
-        # c2f_4 = ttnn.sharded_to_interleaved(c2f_4, ttnn.L1_MEMORY_CONFIG)
-        # c2f_4 = ttnn.reallocate(c2f_4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         conv_5, out_h, out_w = self.conv_5(c2f_4)
 
         if use_signpost:
@@ -755,17 +754,15 @@ class TtDetectionModel:
 
         c2f_6, out_h, out_w = self.c2f_6(conv_5)
         ttnn.deallocate(conv_5)
-        # c2f_6 = ttnn.reallocate(c2f_6, memory_config=ttnn.L1_MEMORY_CONFIG)
+
         c2f_6 = ttnn.sharded_to_interleaved(c2f_6, ttnn.L1_MEMORY_CONFIG)
         conv_7, out_h, out_w = self.conv_7(c2f_6)
-        # conv_7 = ttnn.sharded_to_interleaved(conv_7, ttnn.L1_MEMORY_CONFIG)
 
         if use_signpost:
             signpost(header="start c2f_8")
 
         c2f_8, out_h, out_w = self.c2f_8(conv_7, reshard_bottleneck_input=True)
         ttnn.deallocate(conv_7)
-        # c2f_8 = ttnn.sharded_to_interleaved(c2f_8, ttnn.L1_MEMORY_CONFIG)
 
         if use_signpost:
             signpost(header="start sppf_9")
