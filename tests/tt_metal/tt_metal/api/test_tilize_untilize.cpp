@@ -587,7 +587,13 @@ INSTANTIATE_TEST_SUITE_P(
         ));
 
 // Note: tuple is used for ::testing::Combine
-using TilizeUntilizeBigBuffersParams = std::tuple<PhysicalSize, TensorLayoutType, TensorLayoutType, bool, bool>;
+using TilizeUntilizeBigBuffersParams = std::tuple<
+    PhysicalSize,
+    TensorLayoutType,
+    TensorLayoutType,
+    bool,  // transpose_within_face
+    bool   // transpose_of_faces
+    >;
 
 void TilizeUntilizeBigBufferImpl(const TilizeUntilizeBigBuffersParams& params) {
     PhysicalSize shape = std::get<0>(params);

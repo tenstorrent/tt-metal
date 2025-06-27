@@ -533,7 +533,10 @@ StorageType Tensor::storage_type() const {
         this->storage());
 }
 
-ttnn::Shape Tensor::strides() const { return ttnn::Shape(tt::tt_metal::compute_strides(this->padded_shape())); }
+ttnn::Shape Tensor::strides() const {
+    auto s = tt::tt_metal::compute_strides(this->padded_shape());
+    return ttnn::Shape(s.begin(), s.end());
+}
 
 uint64_t Tensor::logical_volume() const { return logical_shape().volume(); }
 uint64_t Tensor::physical_volume() const { return padded_shape().volume(); }
