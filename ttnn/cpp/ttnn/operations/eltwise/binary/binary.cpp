@@ -414,21 +414,20 @@ inline auto invoke_binary_ng(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
     if (use_legacy ? *use_legacy
-                   : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations)) {
-        if ((not detail::is_binary_ng_only(lhs, rhs, binary_op_type)) or *use_legacy) {
-            const std::vector activations(post_activations.begin(), post_activations.end());
-            const std::optional lhs_activation =
-                lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
+                   : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
+                         (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
+        const std::vector activations(post_activations.begin(), post_activations.end());
+        const std::optional lhs_activation =
+            lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
 
-            if constexpr (requires { detail::preprocess_inputs(binary_op_type, lhs, rhs); }) {
-                auto [a, b] = detail::preprocess_inputs(binary_op_type, lhs, rhs);
+        if constexpr (requires { detail::preprocess_inputs(binary_op_type, lhs, rhs); }) {
+            auto [a, b] = detail::preprocess_inputs(binary_op_type, lhs, rhs);
 
-                return ttnn::prim::binary(
-                    queue_id, a, b, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
-            } else {
-                return ttnn::prim::binary(
-                    queue_id, lhs, rhs, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
-            }
+            return ttnn::prim::binary(
+                queue_id, a, b, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
+        } else {
+            return ttnn::prim::binary(
+                queue_id, lhs, rhs, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
         }
     }
 
@@ -595,8 +594,9 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
     if (use_legacy ? *use_legacy
-                   : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations)) {
-        if ((not detail::is_binary_ng_only(lhs, rhs, binary_op_type)) or *use_legacy) {
+                   : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
+                         (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
+        {
             return detail::binary_impl(DefaultQueueId, binary_op_type, lhs, rhs, dtype, memory_config, output);
         }
     }
