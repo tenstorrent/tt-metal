@@ -3,16 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for functional implementations of Qwen2.5-VL modules."""
 
-import os
+import importlib
 import json
+import os
+from glob import glob
+
 import pytest
 import torch
-import torch.nn.functional as torch_F
-from glob import glob
 from scipy.stats import pearsonr
-import numpy as np
-import importlib
-import sys
 
 
 def get_script_dir():
@@ -37,7 +35,7 @@ def implementation(request, mesh_device):
 
     if module_name == "functional_ttnn":
         try:
-            import ttnn
+            pass
         except ImportError:
             pytest.skip("TTNN not available")
 

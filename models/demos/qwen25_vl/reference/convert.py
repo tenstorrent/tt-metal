@@ -7,8 +7,9 @@ The nested format is used by the functional implementations in functional.py.
 """
 
 import os
-import torch
 from collections import defaultdict
+
+import torch
 from model import Qwen2_5_VLForConditionalGeneration
 
 

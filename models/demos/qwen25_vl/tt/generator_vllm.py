@@ -3,28 +3,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import ttnn
-import torch
 from types import SimpleNamespace
 from typing import Union
 
+import torch
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLForConditionalGeneration as Ref_Qwen2_5_VLForConditionalGeneration,
 )
+from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext
+from vllm.model_executor.models.interfaces import SupportsMultiModal
 
-from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
+import ttnn
 from models.demos.qwen25_vl.tt.common import (
     PagedAttentionConfig,
-    preprocess_inputs_prefill,
     merge_vision_tokens,
     multimodal_rope_from_hf,
+    preprocess_inputs_prefill,
 )
+from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
-
-from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext
-from vllm.model_executor.models.interfaces import SupportsMultiModal
 
 
 def get_platform_specific_optimizations(model_name):

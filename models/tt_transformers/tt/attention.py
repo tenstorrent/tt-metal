@@ -10,8 +10,8 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
+from models.tt_transformers.tt.common import first_five
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
-from models.tt_transformers.tt.common import first_five, last_five
 
 # Potential warning that we don't want to show for every layer and token
 global_padded_head_warning_shown = False

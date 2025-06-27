@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import re
 import os
+import re
 from pathlib import Path
 
 import torch
@@ -452,7 +452,8 @@ def permute_1d(tensor):
     reals = reshaped[..., 0]
     imags = reshaped[..., 1]
     return torch.cat((reals, imags), dim=-1)
-    
+
+
 def convert_rope_style_hf_to_meta(cos_hf: torch.Tensor, sin_hf: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Converts RoPE cos/sin tensors from Hugging Face style (half-dim duplicated)

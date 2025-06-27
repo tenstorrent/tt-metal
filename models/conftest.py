@@ -14,6 +14,7 @@ from PIL import Image
 def ensure_gc():
     gc.collect()
 
+
 import pytest
 import torchvision.transforms as transforms
 from PIL import Image

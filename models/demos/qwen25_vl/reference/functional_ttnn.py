@@ -6,10 +6,12 @@ Functional stubs for Qwen2.5-VL modules that match input/output shapes.
 TTNN implementation version.
 """
 
-import torch
-import ttnn
-from typing import Optional, Tuple, List, Dict
 import atexit
+from typing import Dict, List, Optional, Tuple
+
+import torch
+
+import ttnn
 
 # Global device variable to be set from outside
 mesh_device = None

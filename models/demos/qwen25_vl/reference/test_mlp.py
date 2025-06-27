@@ -5,11 +5,12 @@
 
 """Test script for Qwen2_5_VLMLP implementation."""
 
-import os
-import torch
-import ttnn
 import importlib
 import sys
+
+import torch
+
+import ttnn
 
 
 def main():

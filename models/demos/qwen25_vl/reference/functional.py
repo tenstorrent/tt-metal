@@ -6,15 +6,15 @@ Functional stubs for Qwen2.5-VL modules that match input/output shapes.
 These are lightweight implementations for testing and development.
 """
 
+from typing import Dict, List, Optional, Tuple
+
 import torch
 import torch.nn.functional as F
-from typing import Optional, Tuple, List, Dict
 
 
 # This is a no-op function for compatibility with the TTNN implementation
 def set_mesh_device(device):
     """No-op function for compatibility with TTNN implementation."""
-    pass
 
 
 def qwen2_rms_norm(x: torch.Tensor, state_dict: Dict, eps: float = 1e-6) -> torch.Tensor:

@@ -1,17 +1,13 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
-import json
-import math
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import functools
+import json
 import logging
+import os
 from datetime import datetime
-from pathlib import Path
-import shutil
+
+import torch
 
 # -------------------------------
 # Setup logging and output folder
