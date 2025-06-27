@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from loguru import logger
+import pytest
 import ttnn
 
 # tests/ttnn/unit_tests/operations/cl/test_all_to_all_dispatch_t3000.py
@@ -21,7 +22,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
     "mesh_shape, mesh_device", [pytest.param((4, 8), (4, 8), id="4x8_grid")], indirect=["mesh_device"]
 )
 # !TODO figure out why axis=0 hangs
-@pytest.mark.parametrize("axis", [1])  # [0,1])
+@pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -51,9 +52,6 @@ def test_all_to_all_dispatch_no_trace(
     devices = mesh_shape[0] * mesh_shape[1]
     batch = batches_per_device * devices
     experts = experts_per_device * devices
-
-    batch = batches_per_device * dispatch_devices
-    experts = experts_per_device * dispatch_devices
 
     run_all_to_all_combine_test(
         mesh_device,

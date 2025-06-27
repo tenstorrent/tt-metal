@@ -63,10 +63,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
-    auto src_device = mesh_device->get_device(mesh_coordinate);
     const auto src_physical_device_id = mesh_device->get_device(mesh_coordinate)->id();
 
-    const auto fabric_node_id = get_fabric_node_id_from_physical_chip_id(src_device->id());
+    const auto fabric_node_id = get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
     const uint32_t src_mesh_id = *fabric_node_id.mesh_id;
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
@@ -279,9 +278,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     for (auto& neighbor : neighbors) {
         auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
         uint32_t link_id = detail::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
-
+        const auto neighbor_fabric_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(neighbor->id());
         tt::tt_fabric::append_fabric_connection_rt_args(
-            src_physical_device_id, neighbor->id(), link_id, program, sender_core, writer_runtime_args);
+            fabric_node_id, neighbor_fabric_id, link_id, program, sender_core, writer_runtime_args);
     }
 
     tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(0), reader_runtime_args);
