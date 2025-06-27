@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,8 @@ import pytest
 import torch
 from loguru import logger
 
-from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
+import ttnn
+from models.demos.yolov8s.tests.yolov8s_e2e_performant import Yolov8sTrace2CQ
 from models.utility_functions import run_for_wormhole_b0
 
 
@@ -24,22 +25,30 @@ from models.utility_functions import run_for_wormhole_b0
 )
 def test_run_yolov8s_trace_2cqs_inference(
     device,
+    use_program_cache,
     batch_size,
     model_location_generator,
 ):
-    performant_runner = YOLOv8sPerformantRunner(device, batch_size)
+    yolov8s_trace_2cq = Yolov8sTrace2CQ()
+
+    yolov8s_trace_2cq.initialize_yolov8s_trace_2cqs_inference(
+        device,
+        batch_size,
+    )
 
     input_shape = (batch_size, 3, 640, 640)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+    tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     inference_iter_count = 10
     inference_time_iter = []
     for iter in range(0, inference_iter_count):
         t0 = time.time()
-        output = performant_runner.run(torch_input_tensor)
+        # tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        output = yolov8s_trace_2cq.execute_yolov8s_trace_2cqs_inference(tt_inputs_host)
         t1 = time.time()
         inference_time_iter.append(t1 - t0)
-    performant_runner.release()
+    yolov8s_trace_2cq.release_yolov8s_trace_2cqs_inference()
     inference_time_avg = round(sum(inference_time_iter) / len(inference_time_iter), 6)
     logger.info(
         f"ttnn_yolov8s_640x640_batch_size_{batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size/inference_time_avg)}"
