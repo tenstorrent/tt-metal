@@ -596,18 +596,6 @@ def get_devices(request):
 
 
 @pytest.fixture(scope="function")
-def use_program_cache(request):
-    devices = get_devices(request)
-    if not devices:
-        logger.warning("No device fixture found to apply program cache to: PROGRAM CACHE DISABLED")
-    for dev in devices:
-        dev.enable_program_cache()
-    yield
-    for dev in devices:
-        dev.disable_and_clear_program_cache()
-
-
-@pytest.fixture(scope="function")
 def tracy_profile():
     from tracy import Profiler
 

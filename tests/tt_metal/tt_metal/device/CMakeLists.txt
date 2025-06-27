@@ -27,6 +27,7 @@ target_sources(
         test_device_cluster_api.cpp
         test_device_pool.cpp
         test_device.cpp
+        test_simulator_device.cpp
         test_galaxy_cluster_api.cpp
 )
 target_include_directories(

@@ -8,9 +8,9 @@ import transformers
 import pytest
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.sentence_bert.ttnn.common import custom_preprocessor
-from models.experimental.sentence_bert.reference.sentence_bert import BertAttention
-from models.experimental.sentence_bert.ttnn.ttnn_sentencebert_attention import TtnnSentenceBertAttention
+from models.demos.sentence_bert.ttnn.common import custom_preprocessor
+from models.demos.sentence_bert.reference.sentence_bert import BertAttention
+from models.demos.sentence_bert.ttnn.ttnn_sentencebert_attention import TtnnSentenceBertAttention
 
 
 @pytest.mark.parametrize(

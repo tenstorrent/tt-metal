@@ -26,7 +26,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 )
 def test_mamba_conv(
     device: ttnn.Device,
-    use_program_cache,
     model_version: MambaPretrainedModelName,
     seqlen: int,
     pcc: float,

@@ -35,7 +35,6 @@ def test_transformerblock(
     num_attn_heads,
     out_dim,
     pcc,
-    use_program_cache,
     reset_seeds,
     transformer_weights_dtype,
 ):

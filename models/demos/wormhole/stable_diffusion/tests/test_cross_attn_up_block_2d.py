@@ -84,7 +84,6 @@ def test_cross_attn_up_block_2d_512x512(
     out_channels,
     shard_end_core,
     shard_shape,
-    use_program_cache,
 ):
     # TODO
     # setup pytorch model
