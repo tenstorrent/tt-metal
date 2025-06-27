@@ -128,27 +128,49 @@ def run_tt_image_gen(
     profiler.start("denoising_loop")
     for i, t in tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
         unet_outputs = []
-        for unet_slice in range(len(tt_time_ids)):
-            latent_model_input = tt_latents
-            noise_pred, noise_shape = run_tt_iteration(
-                ttnn_device,
-                tt_unet,
-                tt_scheduler,
-                latent_model_input,
-                input_shape,
-                tt_prompt_embeds[iter][unet_slice],
-                tt_time_ids[unet_slice],
-                ttnn.unsqueeze(tt_text_embeds[iter][unet_slice], dim=0),
-                t,
-                i,
-            )
-            C, H, W = noise_shape
 
-            unet_outputs.append(noise_pred)
+        latent_model_input = tt_latents
+        noise_pred, noise_shape = run_tt_iteration(
+            ttnn_device,
+            tt_unet,
+            tt_scheduler,
+            latent_model_input,
+            input_shape,
+            tt_prompt_embeds[iter],  # ovo sharduj
+            tt_time_ids,  # ovo sharduj
+            ttnn.unsqueeze(tt_text_embeds[iter], dim=0),  # ovo sharduj, ostalo repliciraj
+            t,
+            i,
+        )
+        C, H, W = noise_shape
+
+        unet_outputs.append(noise_pred)
+        mem_config = ttnn.create_sharded_memory_config(
+            shape=(2, 1, H * W, 8),
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        print("Before all gather")
+
+        noise_pred = ttnn.to_layout(noise_pred, ttnn.ROW_MAJOR_LAYOUT)
+        noise_pred = ttnn.pad(noise_pred, (0, 0, 0, 0, 0, 4))  # pad to (2, 1, H * W, 8)
+
+        noise_pred = ttnn.all_gather(noise_pred, dim=0, memory_config=mem_config)
+        print("After all gather")
+        noise_pred = ttnn.to_memory_config(noise_pred, ttnn.DRAM_MEMORY_CONFIG)
+        noise_pred = ttnn.to_layout(noise_pred, ttnn.TILE_LAYOUT)
 
         # perform guidance
-        noise_pred_uncond, noise_pred_text = unet_outputs
+        noise_pred_uncond, noise_pred_text = noise_pred[0], noise_pred[1]
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+        mem_config_2 = ttnn.create_sharded_memory_config(
+            shape=(1, 1, H * W, 32),
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        noise_pred = ttnn.to_memory_config(noise_pred, mem_config_2)
 
         ttnn.deallocate(noise_pred_uncond)
         ttnn.deallocate(noise_pred_text)
