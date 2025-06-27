@@ -27,6 +27,13 @@ public:
     constexpr bool test(E single) const noexcept {
         return (bits_ & static_cast<Underlying>(single)) == static_cast<Underlying>(single);
     }
+    void set(E single, bool value = true) noexcept {
+        if (value) {
+            bits_ |= static_cast<Underlying>(single);
+        } else {
+            bits_ &= ~static_cast<Underlying>(single);
+        }
+    }
 
     constexpr Underlying raw() const noexcept { return bits_; }
 
