@@ -97,8 +97,7 @@ def run_max_pool2d(
     )
 
     output_host = output.cpu()
-    output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
-    output_pytorch = output_pytorch_padded[:, :, :, :in_c]
+    output_pytorch = torch.Tensor(ttnn.to_torch(output_host))
     e2e_perf = stop_measuring_time(start_time)
 
     ## reference
@@ -110,7 +109,6 @@ def run_max_pool2d(
         return_indices=False,
         ceil_mode=False,
     )(act)
-    golden_pytorch = golden_pytorch[:, :in_c, :, :]
 
     golden_shape = golden_pytorch.shape
     output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])

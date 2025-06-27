@@ -42,6 +42,13 @@ def run_avg_pool2d(
     in_n, in_c, in_h, in_w = input_shape
     torch.manual_seed(0)
     torch_input = randomize_tensor(tensor_map, input_shape)
+    counter = 1
+    for n in range(in_n):
+        for c in range(in_c):
+            for h in range(in_h):
+                for w in range(in_w):
+                    torch_input[n, c, h, w] = counter
+                    counter += 1
 
     ## Test setup for Actual.
     ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -98,6 +105,21 @@ def run_avg_pool2d(
     )
     ttnn_output = ttnn.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
     ttnn_output = ttnn.to_torch(ttnn_output)
+    # print("TTNN output")
+    # for n in range(ttnn_output.shape[0]):
+    #     for c in range(ttnn_output.shape[1]):
+    #         for h in range(ttnn_output.shape[2]):
+    #             for w in range(ttnn_output.shape[3]):
+    #                 value = ttnn_output[n, c, h, w]
+    #                 print(f"Index: ({n}, {c}, {h}, {w}), Value: {value.item()}")
+
+    # print("Torch output")
+    # for n in range(torch_output.shape[0]):
+    #     for c in range(torch_output.shape[1]):
+    #         for h in range(torch_output.shape[2]):
+    #             for w in range(torch_output.shape[3]):
+    #                 value = torch_output[n, c, h, w]
+    #                 print(f"Index: ({n}, {c}, {h}, {w}), Value: {value.item()}")
 
     ## Assertion
     assert_with_pcc(torch_output, ttnn_output, 0.99)

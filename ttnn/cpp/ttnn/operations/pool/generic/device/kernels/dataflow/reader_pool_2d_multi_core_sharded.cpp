@@ -50,7 +50,7 @@ void kernel_main() {
     constexpr int32_t pad_w = get_compile_time_arg_val(3);
 
     // channel size in bytes, multiple of 32
-    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(4);
+    constexpr uint32_t in_aligned_nbytes_c = get_compile_time_arg_val(4);
 
     // input tensor height / width / channels
     constexpr int32_t in_w = get_compile_time_arg_val(5);
@@ -84,6 +84,7 @@ void kernel_main() {
     constexpr uint32_t pool_type = (bool)get_compile_time_arg_val(25);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(26);
     constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
+    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(28);
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
 
@@ -192,11 +193,13 @@ void kernel_main() {
             uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
             uint16_t top_left_local_index = reader_indices_ptr[counter++];
             uint32_t h_multiples = 0;
-            for (uint32_t h = 0; h < window_h; ++h, h_multiples += in_w_padded) {
-                const uint32_t stick_offset = top_left_local_index + h_multiples;
-                const uint32_t read_offset = in_l1_read_base_addr + (stick_offset * in_nbytes_c);
-                noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
-                out_l1_write_addr += in_nbytes_c * window_w;
+            for (uint32_t h = 0; h < window_h; ++h) {
+                for (uint32_t w = 0; w < window_w; ++w) {
+                    const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
+                    const uint32_t read_offset = in_l1_read_base_addr + (stick_offset * in_nbytes_c);
+                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c);
+                    out_l1_write_addr += in_aligned_nbytes_c;
+                }
             }
             noc_async_read_barrier();
             cb_push_back(in_cb_id, npages_to_reserve);

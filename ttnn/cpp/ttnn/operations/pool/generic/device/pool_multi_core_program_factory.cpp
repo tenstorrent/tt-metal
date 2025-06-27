@@ -275,8 +275,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_nbytes = datum_size(in_df);
     const uint32_t out_nbytes = datum_size(out_df);
 
-    const uint32_t in_nbytes_c = input_shape[3] / num_shards_c * in_nbytes;     // row of input (channels)
-    const uint32_t out_nbytes_c = output_shape[3] / num_shards_c * out_nbytes;  // row of output (channels)
+    const uint32_t in_nbytes_c = in_c / num_shards_c * in_nbytes;  // row of input (channels)
+    const uint32_t in_aligned_nbytes_c =
+        tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * in_nbytes;
+    const uint32_t out_nbytes_c = in_c / num_shards_c * out_nbytes;  // row of output (channels)
 
     constexpr tt::DataFormat indices_df =
         tt::DataFormat::RawUInt16;  // datatype_to_dataformat_converter(reader_indices.dtype());
@@ -368,7 +370,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
     const uint32_t raw_in_cb_npages = input.shard_spec().value().shape[0];
-    const uint32_t raw_in_cb_pagesize = in_nbytes_c;
+    const uint32_t raw_in_cb_pagesize = input_shape[3] / num_shards_c * in_nbytes;
     auto [raw_in_cb_id, raw_in_cb] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, raw_in_cb_pagesize, raw_in_cb_npages, in_df, input.buffer());
 
@@ -514,7 +516,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         kernel_size_h,
         kernel_size_w,
         pad_w,
-        in_nbytes_c,
+        in_aligned_nbytes_c,
         in_w,
         input_shape[3] / num_shards_c,
         split_reader,  // enable split reader
@@ -537,7 +539,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         clear_value_cb_id,
         (uint32_t)pool_type,
         one_scalar_per_core,
-        config_cb_id};
+        config_cb_id,
+        in_nbytes_c};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -642,6 +645,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "in_ntiles_c: {}", in_ntiles_c);
         log_debug(tt::LogOp, "in_nblocks_c: {}", in_nblocks_c);
         log_debug(tt::LogOp, "in_nbytes_c: {}", in_nbytes_c);
+        log_debug(tt::LogOp, "in_aligned_nbytes_c: {}", in_aligned_nbytes_c);
         log_debug(tt::LogOp, "out_ntiles_c: {}", out_ntiles_c);
         log_debug(tt::LogOp, "nblocks: {}", nblocks);
         log_debug(tt::LogOp, "ncores: {}", ncores);
@@ -697,7 +701,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto top_left_indices =
         sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, false, true);
     auto reader_indices = sliding_window::construct_on_host_config_tensor(top_left_indices, parallel_config);
-    log_debug(tt::LogOp, "reader_indices shape: {}", reader_indices.logical_shape());
+    log_info(tt::LogOp, "reader_indices shape: {}", reader_indices.logical_shape());
     auto reader_indices_on_device =
         sliding_window::move_config_tensor_to_device(reader_indices, parallel_config, is_block_sharded, input.device());
 

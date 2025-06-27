@@ -56,12 +56,10 @@ static Tensor pool2d_invoke(
     auto input_shape = sliding_window_config.get_input_shape();
     auto input_tensor_shape = input_tensor.logical_shape();
     auto input_padded_shape = ttnn::Shape(
-        {input_tensor_shape[0],
-         input_tensor_shape[1],
-         input_tensor_shape[2],
-         tt::round_up(input_tensor_shape[3], tt::constants::TILE_WIDTH)});
+        {input_tensor_shape[0], input_tensor_shape[1], input_tensor_shape[2], tt::round_up(input_tensor_shape[3], 8)});
     auto input_padded_tensor = input_tensor;
     input_padded_tensor = input_padded_tensor.reshape(input_tensor_shape, input_padded_shape);
+    log_info(tt::LogOp, "input_padded_tensor shape: {}", input_padded_tensor.logical_shape());
     auto input_tensor_sharded = input_padded_tensor;
     // pool output is row major
     bool is_out_tiled = false;
@@ -87,10 +85,10 @@ static Tensor pool2d_invoke(
         parallel_config = conv::determine_parallel_config(
             shard_layout,
             batch_size,
-            channels_padded,
+            channels,
             output_shape[1],
             output_shape[2],
-            channels_padded,
+            channels,
             input_tensor.device()->compute_with_storage_grid_size(),
             ShardOrientation::ROW_MAJOR,
             false,
