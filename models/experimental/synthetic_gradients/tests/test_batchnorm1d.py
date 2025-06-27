@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 from torch import nn
 
@@ -25,7 +26,7 @@ def batchnorm1d_inference(gamma, beta, running_mean, running_var, epsilon):
     return batchnorm1d_inference_
 
 
-class PytorchBatchNorm1D(nn.Module):
+class PytorchBatchNorm1D(LightweightModule):
     def __init__(self, input_dim):
         super(PytorchBatchNorm1D, self).__init__()
 

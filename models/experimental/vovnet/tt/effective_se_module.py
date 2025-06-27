@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 
 from models.utility_functions import (
     tt_to_torch_tensor,
@@ -12,7 +12,7 @@ import ttnn
 from tt_lib import fallback_ops
 
 
-class TtEffectiveSEModule(nn.Module):
+class TtEffectiveSEModule(LightweightModule):
     def __init__(
         self,
         in_channels: int,

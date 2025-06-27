@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch.nn as nn
 
 from torchvision import models
@@ -18,7 +19,7 @@ from models.utility_functions import (
 from models.experimental.vgg.vgg_utils import format_tensor
 
 
-class TtVGG(nn.Module):
+class TtVGG(LightweightModule):
     def __init__(
         self,
         features: List,

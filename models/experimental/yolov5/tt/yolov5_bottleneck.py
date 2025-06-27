@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.yolov5.tt.yolov5_conv import TtYolov5Conv
 
 
-class TtYolov5Bottleneck(torch.nn.Module):
+class TtYolov5Bottleneck(LightweightModule):
     # Standard bottleneck
     def __init__(
         self, state_dict, base_address, device, c1, c2, shortcut=True, g=1, e=0.5

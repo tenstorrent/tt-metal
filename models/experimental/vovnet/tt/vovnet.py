@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch.nn as nn
 import timm
 import ttnn
@@ -23,7 +24,7 @@ model_cfgs = dict(
 )
 
 
-class TtVoVNet(nn.Module):
+class TtVoVNet(LightweightModule):
     def __init__(
         self,
         cfg=model_cfgs,
@@ -42,8 +43,8 @@ class TtVoVNet(nn.Module):
             num_classes (int): Number of classifier classes (default: 1000)
             global_pool (str): Global pooling type (default: 'avg')
             output_stride (int): Output stride of network, one of (8, 16, 32) (default: 32)
-            norm_layer (Union[str, nn.Module]): normalization layer
-            act_layer (Union[str, nn.Module]): activation layer
+            norm_layer (Union[str, LightweightModule]): normalization layer
+            act_layer (Union[str, LightweightModule]): activation layer
             kwargs (dict): Extra kwargs overlayed onto cfg
         """
         super(TtVoVNet, self).__init__()

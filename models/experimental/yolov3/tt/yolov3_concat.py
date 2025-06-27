@@ -2,12 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 
 import ttnn
 
 
-class TtConcat(nn.Module):
+class TtConcat(LightweightModule):
     # Concatenate a list of tensors along dimension
     def __init__(self, device, state_dict, base_address, dimension=1):
         super().__init__()

@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Tuple
 import torch
-import torch.nn as nn
 
 import ttnn
 
@@ -25,7 +25,7 @@ import ttnn
 from tt_lib.fallback_ops import fallback_ops
 
 
-class TtSwinLayer(nn.Module):
+class TtSwinLayer(LightweightModule):
     def __init__(
         self,
         config,

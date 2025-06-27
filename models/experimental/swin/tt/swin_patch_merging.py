@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Tuple
-import torch.nn as nn
 
 
 from models.utility_functions import (
@@ -16,7 +16,7 @@ from tt_lib.fallback_ops import fallback_ops
 import ttnn
 
 
-class TtSwinPatchMerging(nn.Module):
+class TtSwinPatchMerging(LightweightModule):
     def __init__(
         self,
         config,

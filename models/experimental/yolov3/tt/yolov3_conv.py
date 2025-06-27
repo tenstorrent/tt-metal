@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 from loguru import logger
 import ttnn
 
 from models.experimental.yolov3.tt.yolov3_conv2d import TtConv2D
 
 
-class TtConv(nn.Module):
+class TtConv(LightweightModule):
     # Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)
 
     def __init__(

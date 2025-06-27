@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Tuple
 import collections.abc
-import torch.nn as nn
 
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
@@ -15,7 +15,7 @@ import ttnn
 from tt_lib.fallback_ops import fallback_ops
 
 
-class TtSwinPatchEmbeddings(nn.Module):
+class TtSwinPatchEmbeddings(LightweightModule):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
         self.config = config

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 from torch import nn
 
@@ -14,7 +15,7 @@ from models.experimental.t5.tt.t5_layer_cross_attention import TtT5LayerCrossAtt
 from models.experimental.t5.tt.t5_layer_ff import TtT5LayerFF
 
 
-class TtT5Block(nn.Module):
+class TtT5Block(LightweightModule):
     def __init__(
         self,
         config,

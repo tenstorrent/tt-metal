@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from models.common.lightweightmodule import LightweightModule
 from tt_lib.fallback_ops import fallback_ops
 import ttnn
 from models.experimental.yolov5.tt.yolov5_conv import TtYolov5Conv
 
 
-class TtYolov5SPPF(torch.nn.Module):
+class TtYolov5SPPF(LightweightModule):
     # Standard bottleneck
     def __init__(self, state_dict, base_address, device, c1, c2, k=5):
         super().__init__()

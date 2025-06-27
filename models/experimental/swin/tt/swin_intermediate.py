@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-import torch.nn as nn
 
 from models.utility_functions import (
     tt_to_torch_tensor,
@@ -13,7 +13,7 @@ from models.experimental.swin.swin_helper_funcs import linear as TtLinear
 import ttnn
 
 
-class TtSwinIntermediate(nn.Module):
+class TtSwinIntermediate(LightweightModule):
     def __init__(
         self,
         config,
