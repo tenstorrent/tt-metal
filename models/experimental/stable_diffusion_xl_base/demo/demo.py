@@ -30,9 +30,6 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
     if isinstance(prompts, str):
         prompts = [prompts]
 
-    needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
-    prompts = prompts + [""] * needed_padding
-
     guidance_scale = 5.0
 
     # 0. Set up default height and width for unet
@@ -180,10 +177,10 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         device=ttnn_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=1),
     )
     ttnn_add_text_embeds = ttnn.from_torch(
-        torch_add_text_embeds,
+        torch_add_text_embeds[0],
         dtype=ttnn.bfloat16,
         device=ttnn_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -191,29 +188,37 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
     )
 
-    ttnn_add_time_id1 = ttnn.from_torch(
-        negative_add_time_ids.squeeze(0),
+    torch_add_time_ids = torch.stack([negative_add_time_ids.squeeze(0), add_time_ids.squeeze(0)], dim=0)
+
+    # ttnn_add_time_id1 = ttnn.from_torch(
+    #     negative_add_time_ids.squeeze(0),
+    #     dtype=ttnn.bfloat16,
+    #     device=ttnn_device,
+    #     layout=ttnn.TILE_LAYOUT,
+    #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    #     mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
+    # )
+    # ttnn_add_time_id2 = ttnn.from_torch(
+    #     add_time_ids.squeeze(0),
+    #     dtype=ttnn.bfloat16,
+    #     device=ttnn_device,
+    #     layout=ttnn.TILE_LAYOUT,
+    #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    #     mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
+    # )
+    # ttnn_time_ids = [ttnn_add_time_id1, ttnn_add_time_id2] # ovo treba da se spoji u jedan tensor
+
+    ttnn_time_ids = ttnn.from_torch(
+        torch_add_time_ids,
         dtype=ttnn.bfloat16,
         device=ttnn_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
+        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
     )
-    ttnn_add_time_id2 = ttnn.from_torch(
-        add_time_ids.squeeze(0),
-        dtype=ttnn.bfloat16,
-        device=ttnn_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
-    )
-    ttnn_time_ids = [ttnn_add_time_id1, ttnn_add_time_id2]
     ttnn_text_embeds = [
-        [
-            ttnn_add_text_embed[0],
-            ttnn_add_text_embed[1],
-        ]
-        for ttnn_add_text_embed in ttnn_add_text_embeds
+        ttnn_add_text_embeds[0][0],
+        ttnn_add_text_embeds[0][1],
     ]
 
     scaling_factor = ttnn.from_torch(
@@ -252,8 +257,8 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         tt_scheduler,
         latent_model_input,
         ttnn_prompt_embeds,
-        ttnn_time_ids,
-        ttnn_text_embeds,
+        ttnn_time_ids[0],
+        ttnn_add_text_embeds,
         [ttnn_timesteps[0]],
         extra_step_kwargs,
         guidance_scale,
@@ -281,7 +286,7 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
             latents,
             ttnn_prompt_embeds,
             ttnn_time_ids,
-            ttnn_text_embeds,
+            ttnn_add_text_embeds,
             ttnn_timesteps,
             extra_step_kwargs,
             guidance_scale,
