@@ -42,6 +42,7 @@ inline void reduce_h_fused(
     constexpr uint32_t num_out_rows = 1;
     constexpr uint32_t num_output_faces = (is_partial_tile ? 1 : 2);
     DPRINT << "tile_id" << tile_id << ENDL();
+    print_full_tile(curr_in_cb_id, 0);
     cb_reserve_back(out_cb_id, num_output_tiles);
     tile_regs_acquire();
     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
