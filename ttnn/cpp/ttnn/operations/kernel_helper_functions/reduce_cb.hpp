@@ -11,6 +11,20 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
 
+// pairwise_reduce_cb
+// DISCLAIMER EXAMPLE USES SMALL TILE SHAPES PURELY FOR EXPLANATION REASONS
+// Imagine you had the following tiles
+// [[1,1,1,1][1,1,1,1][1,1,1,1][1,1,1,1]]
+// first we apply scaler multiplier of n
+// [[1,1,1,1][1,1,1,1][1,1,1,1][1,1,1,1]] * n -> [[n,n,n,n][n,n,n,n][n,n,n,n][n,n,n,n]]
+// [n,n,n,n]+[n,n,n,n], [n,n,n,n]+[n,n,n,n]->[2n,2n,2n,2n][2n,2n,2n,2n]
+// We push the result to the cb_intermediate and continue
+// [2n,2n,2n,2n] + [2n,2n,2n,2n] -> [4n,4n,4n,4n]
+// Now we use reduce tile with the scaler multiplier of 1
+// reduce_tile([4n,4n,4n,4n])->[16n]
+//
+// We do this instead of using reduce_tile repeatedly to reduce the accumulation sum error
+//
 // Requirements:
 // len(cb_in) == cb_length
 // len(cb_interdiate) == cb_length == len(cb_in)
@@ -25,7 +39,7 @@ void pairwise_reduce_cb(
     uint32_t cb_intermediate,
     uint32_t cb_out,
     uint32_t cb_length,
-    const uint32_t num_dst_regs) {
+    uint32_t num_dst_regs) {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;
     binary_op_init_common(cb_in, cb_scaler, cb_intermediate);
@@ -93,7 +107,6 @@ void pairwise_reduce_cb(
         // We are okay with floor divide since we subtracted one if cb_length is odd
         cb_length = cb_length / 2;
     }
-    // TODO change this to a cb
     reconfig_data_format(cb_intermediate, cb_scaler);
     pack_reconfig_data_format(cb_out);
     reduce_init<reduce_type, reduce_dim>(cb_intermediate, cb_scaler, cb_out);

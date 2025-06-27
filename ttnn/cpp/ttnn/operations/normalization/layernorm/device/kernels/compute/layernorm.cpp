@@ -67,15 +67,6 @@ void MAIN {
 
     pack_reconfig_data_format(cb_scaler);
     cb_wait_front(cb_scaler, 2);  // comes from the reader
-    // init_sfpu(cb_scaler, cb_scaler);
-    // fill_tile_init();
-    // tile_regs_acquire();
-    // fill_tile(0, 1.0f);
-    // tile_regs_commit();
-    // tile_regs_wait();
-    // pack_tile(0, cb_scaler);
-    // cb_push_back(cb_scaler, 1);  // second cb_scaler index now has 1 as its value
-    // tile_regs_release();
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in, cb_inb, cb_x);
 #else
