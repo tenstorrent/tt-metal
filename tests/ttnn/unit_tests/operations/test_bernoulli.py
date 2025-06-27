@@ -90,7 +90,7 @@ def test_bernoulli(shape, seed, in_dtype, out_dtype, device, is_out_alloc):
 @pytest.mark.parametrize("in_dtype", ["float32"])
 @pytest.mark.parametrize("out_dtype", ["float32"])
 @pytest.mark.parametrize("is_out_alloc", [True, False])
-def test_bernoulli_callback(shape, seed, in_dtype, out_dtype, device, is_out_alloc, use_program_cache):
+def test_bernoulli_callback(shape, seed, in_dtype, out_dtype, device, is_out_alloc):
     torch.manual_seed(seed)
     num_program_cache_entries_list = []
     for _ in range(2):

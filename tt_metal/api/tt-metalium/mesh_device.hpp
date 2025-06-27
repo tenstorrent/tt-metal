@@ -49,6 +49,9 @@ struct ProgramCache;
 }  // namespace tt_metal
 }  // namespace tt
 
+namespace tt::tt_fabric {
+class FabricNodeId;
+}
 namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
@@ -218,13 +221,14 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
-    void reset_cores() override;
-    void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
+    bool compile_fabric() override;
+    void configure_fabric() override;
     void init_fabric() override;
     bool close() override;
     void enable_program_cache() override;
+    void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override;
     std::size_t num_program_cache_entries() override;
@@ -258,6 +262,7 @@ public:
     std::vector<IDevice*> get_devices() const;
     IDevice* get_device(chip_id_t physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
+    tt_fabric::FabricNodeId get_device_fabric_node_id(const MeshCoordinate& coord) const;
 
     DeviceIds get_device_ids() const;
 

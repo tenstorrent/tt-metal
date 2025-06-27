@@ -6,6 +6,9 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
+import os
+
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 from models.demos.llama3_subdevices.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
@@ -82,7 +85,6 @@ def run_all_gather_impl(
     num_links,
     input_dtype,
     layout,
-    use_program_cache,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
@@ -304,7 +306,6 @@ def test_all_gather_only(
     input_dtype,
     layout,
     num_iters,
-    use_program_cache,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
@@ -320,7 +321,6 @@ def test_all_gather_only(
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
         function_level_defaults,
         input_shard_shape,
         input_shard_grid,
@@ -359,6 +359,7 @@ def test_all_gather_only(
 @pytest.mark.parametrize("num_iters, warmup_iters", [[200, 20]])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize("fused_add", [True])
+@pytest.mark.parametrize("use_noc1_only", [False])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -377,14 +378,91 @@ def test_tg_trace_rms_fuse(
     num_links,
     num_iters,
     warmup_iters,
+    function_level_defaults,
+    input_shard_grid,
+    output_shard_grid,
+    trace_mode,
+    use_noc1_only,
+    use_new_version,
+    fused_add,
+):
+    profiler = BenchmarkProfiler()
+    run_rms_trace(
+        mesh_device,
+        num_devices,
+        elements_per_batch,
+        num_links,
+        function_level_defaults,
+        input_shard_grid,
+        output_shard_grid,
+        ttnn.Topology.Linear,
+        fused_add,
+        use_noc1_only=use_noc1_only,
+        num_iters=num_iters,
+        warmup_iters=warmup_iters,
+        profiler=profiler,
+        use_new_version=use_new_version,
+        trace_mode=trace_mode,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
+    [
+        # RMS NORM ALL GATHER FUSION
+        (
+            4,
+            8192,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(x, y),
+                        ttnn.CoreCoord(x, y),
+                    )
+                    for x, y in PREFETCHER_NOC1_GRID
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("use_new_version", [True])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[200, 20]])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("fused_add", [True])
+@pytest.mark.parametrize("use_noc1_only", [False])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_6u_trace_rms_fuse(
+    mesh_device,
+    num_devices,
+    elements_per_batch,
+    num_links,
+    num_iters,
+    warmup_iters,
     use_program_cache,
     function_level_defaults,
     input_shard_grid,
     output_shard_grid,
     trace_mode,
+    use_noc1_only,
     use_new_version,
     fused_add,
 ):
+    if not is_RING_6U:
+        pytest.skip("This test is only for 6U TG devices")
     profiler = BenchmarkProfiler()
     run_rms_trace(
         mesh_device,
@@ -395,8 +473,9 @@ def test_tg_trace_rms_fuse(
         function_level_defaults,
         input_shard_grid,
         output_shard_grid,
-        ttnn.Topology.Linear,
+        ttnn.Topology.Ring,
         fused_add,
+        use_noc1_only=use_noc1_only,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         profiler=profiler,
@@ -436,6 +515,7 @@ def test_tg_trace_rms_fuse(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize("fused_add", [True, False])
+@pytest.mark.parametrize("use_noc1_only", [True, False])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("residual_dtype", [ttnn.bfloat16])
@@ -452,11 +532,11 @@ def test_rms_fuse(
     elements_per_batch,
     num_links,
     num_iters,
-    use_program_cache,
     function_level_defaults,
     input_shard_grid,
     output_shard_grid,
     fused_add,
+    use_noc1_only,
     input_dtype,
     residual_dtype,
     output_dtype,
@@ -467,12 +547,12 @@ def test_rms_fuse(
         num_devices,
         elements_per_batch,
         num_links,
-        use_program_cache,
         function_level_defaults,
         input_shard_grid,
         output_shard_grid,
         topology,
         fused_add,
+        use_noc1_only=use_noc1_only,
         output_dtype=output_dtype,
         num_iters=num_iters,
         input_dtype=input_dtype,
@@ -562,7 +642,6 @@ def test_concat_fuse(
     layout,
     num_iters,
     warmup_iters,
-    use_program_cache,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
@@ -580,7 +659,6 @@ def test_concat_fuse(
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
         function_level_defaults,
         input_shard_shape,
         input_shard_grid,
@@ -677,7 +755,6 @@ def test_concat_fuse_6u(
     layout,
     num_iters,
     warmup_iters,
-    use_program_cache,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
@@ -686,6 +763,8 @@ def test_concat_fuse_6u(
     tensor_mem_layout,
     trace_mode,
 ):
+    if not is_RING_6U:
+        pytest.skip("This test is only for 6U TG devices")
     profiler = BenchmarkProfiler()
     run_concat_fuse_impl(
         mesh_device,
@@ -695,7 +774,6 @@ def test_concat_fuse_6u(
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
         function_level_defaults,
         input_shard_shape,
         input_shard_grid,

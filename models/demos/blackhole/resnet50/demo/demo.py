@@ -23,9 +23,7 @@ test_run_resnet50_trace_2cqs_inference.__test__ = False
         (32, 100),
     ),
 )
-def test_demo_imagenet(
-    batch_size, use_program_cache, iterations, imagenet_label_dict, model_location_generator, mesh_device
-):
+def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_location_generator, mesh_device):
     run_resnet_imagenet_inference(batch_size, iterations, imagenet_label_dict, model_location_generator, mesh_device)
 
 
@@ -37,9 +35,7 @@ def test_demo_imagenet(
         (32, "models/demos/ttnn_resnet/demo/images/"),
     ),
 )
-def test_demo_sample(
-    mesh_device, use_program_cache, batch_size, input_loc, imagenet_label_dict, model_location_generator
-):
+def test_demo_sample(mesh_device, batch_size, input_loc, imagenet_label_dict, model_location_generator):
     run_resnet_inference(batch_size, input_loc, imagenet_label_dict, mesh_device, model_location_generator)
 
 
@@ -56,7 +52,6 @@ def test_demo_sample(
 )
 def test_demo_trace_with_imagenet(
     mesh_device,
-    use_program_cache,
     batch_size,
     iterations,
     imagenet_label_dict,
@@ -66,7 +61,6 @@ def test_demo_trace_with_imagenet(
 ):
     test_run_resnet50_trace_2cqs_inference(
         mesh_device,
-        use_program_cache,
         batch_size,
         iterations,
         imagenet_label_dict,

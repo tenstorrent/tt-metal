@@ -24,7 +24,8 @@ from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 DECODER_OP_START_INDEX = 4
-DECODER_OP_END_INDEX = -21
+DECODER_OP_END_INDEX = -23
+NUM_OPS_IN_SAMPLING = 13
 
 DECODER_PREFIX = "model"
 MODEL_TAIL_PREFIX = "model_tail"
@@ -50,7 +51,7 @@ MAX_TYPE = "max"
             1,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos
         ),
@@ -98,7 +99,6 @@ def test_llama_demo(
     sampling_params,
     optimizations,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     reset_seeds,
     stress_test,
@@ -409,8 +409,11 @@ def test_llama_TG_perf_device(
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
     # Excluding compile run and capture trace entries
-    df_model_compilation = df[: int(len(df) / 3)]
-    df_model_trace = df[int(len(df) / 3 * 2) :]
+    len_without_second_sampling_compile_run = (
+        len(df) - NUM_OPS_IN_SAMPLING
+    )  # Need to subtract 1x sampling due to second compile run for sampling needed to get random sampling
+    df_model_compilation = df[: int(len_without_second_sampling_compile_run / 3)]
+    df_model_trace = df[int(len_without_second_sampling_compile_run / 3 * 2) + NUM_OPS_IN_SAMPLING :]
 
     # Excluding model embeddings and lmhead+sampling ops
     df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
@@ -794,18 +797,17 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
-    # Exclude compilaton and capture trace runs
-    df_model = df[int(len(df) / 3 * 2) :]
+    # Excluding compile run and capture trace entries
+    len_without_second_sampling_compile_run = (
+        len(df) - NUM_OPS_IN_SAMPLING
+    )  # Need to subtract 1x sampling due to second compile run for sampling needed to get random sampling
+    df_model = df[int(len_without_second_sampling_compile_run / 3 * 2) + NUM_OPS_IN_SAMPLING :]
 
     df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     assert len(df_layers) % num_layers == 0
     df_layers = df_layers[int(len(df_layers) / num_layers) :]  # Exclude first layer
 
     df_model_tail = df_model[DECODER_OP_END_INDEX:]
-
-    all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
-        orient="records"
-    )
 
     (
         _,

@@ -15,6 +15,7 @@ from models.tt_transformers.tt.common import (
     freqs_to_rotation_matrix,
     num_to_core_range_set,
     calculate_hidden_dim,
+    get_base_model_name,
     get_out_subblock_w,
     encode_prompt_instruct,
     encode_prompt_hf,
@@ -439,8 +440,8 @@ class TtModelArgs:
     )
 
     LOCAL_LLAMA_PARAMS = {
-        "LLAMA3_1_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama3.1-70B-Instruct",
-        "LLAMA3_3_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama3.3-70B-Instruct",
+        "LLAMA3_1_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama-3.1-70B-Instruct",
+        "LLAMA3_3_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama-3.3-70B-Instruct",
     }
 
     def __init__(
@@ -463,6 +464,7 @@ class TtModelArgs:
         self.from_hf_url = False  # updated below if true
         self.max_prefill_chunk_size = max_seq_len
         self.use_prefetcher = False
+        self.max_top_k = 32
 
         if self.num_devices == 32:
             self.use_prefetcher = True
@@ -695,7 +697,19 @@ class TtModelArgs:
             )
 
             self.model_config["DECODE_SAMPLING_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(1, 1, max(self.max_batch_size, self.tile_size), self.tile_size),
+                shape=(1, 1, max(self.max_batch_size, self.tile_size), self.max_top_k),
+                core_grid=shard_grid,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            num_cores = 32
+            shard_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                start_core, num_cores, core_grid, row_wise=False
+            )
+            self.model_config["DECODE_LOGITS_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(1, 1, max(self.max_batch_size, self.tile_size), self.padded_vocab_size // num_cores),
                 core_grid=shard_grid,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1927,10 +1941,7 @@ class TtModelArgs:
 
     @property
     def base_model_name(self):
-        # HuggingFace name contains a dash, but Meta name does not (e.g. Llama-3.1-70B vs Llama3.1-70B)
-        # Until we switch to HF weights-first, we need to force the dash out
-        model_name = self.model_name.replace("Llama-", "Llama")
-        return model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
+        return get_base_model_name(self.model_name)
 
     @property
     def vision_chunk_ntok(self):
@@ -1957,24 +1968,24 @@ class TtModelArgs:
         # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
         # Set the model name based on the checkpoint directory being loaded
         if "3.2-1B" in checkpoint_dir:
-            self.model_name = "Llama3.2-1B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.2-1B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
         elif "3.2-3B" in checkpoint_dir:
-            self.model_name = "Llama3.2-3B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.2-3B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
         elif "3.1-8B" in checkpoint_dir:
-            self.model_name = "Llama3.1-8B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.1-8B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
         elif "3.2-11B" in checkpoint_dir:
-            self.model_name = "Llama3.2-11B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8  # shared with 3.1-8B
         elif "3.1-70B" in checkpoint_dir:
-            self.model_name = "Llama3.1-70B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.1-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
             self.max_prefill_chunk_size = 128 * 1024
         elif "3.3-70B" in checkpoint_dir:
-            self.model_name = "Llama3.3-70B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.3-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
             self.max_prefill_chunk_size = 128 * 1024

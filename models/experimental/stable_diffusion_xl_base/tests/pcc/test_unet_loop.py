@@ -45,7 +45,8 @@ def run_tt_denoising(
             tt_latent_model_input,
             [B, C, H, W],
             ttnn_prompt_embeds[iter][unet_slice],
-            ttnn_added_cond_kwargs[iter][unet_slice],
+            ttnn_added_cond_kwargs[iter][unet_slice]["time_ids"],
+            ttnn_added_cond_kwargs[iter][unet_slice]["text_embeds"],
             tt_t,
             iter,
         )
@@ -385,7 +386,8 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, cla
         tt_latent_model_input,
         [B, C, H, W],
         ttnn_prompt_embeds[0][0],
-        ttnn_added_cond_kwargs[0][0],
+        ttnn_added_cond_kwargs[0][0]["time_ids"],
+        ttnn_added_cond_kwargs[0][0]["text_embeds"],
         ttnn_timesteps[0],
         0,
     )
@@ -460,7 +462,6 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, cla
 )
 def test_unet_loop(
     device,
-    use_program_cache,
     is_ci_env,
     prompt,
     num_inference_steps,

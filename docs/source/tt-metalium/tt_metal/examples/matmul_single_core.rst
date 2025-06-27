@@ -7,7 +7,7 @@ Now that we have a basic understanding of how to use the TT Metal API and buildi
 
 This example introduces the concept of using separate data movement and compute kernels that communicate through circular buffers. The compute kernel uses the powerful matrix engine to perform efficient tile-wise matrix multiplication, while data movement kernels handle reading input data from DRAM and writing results back.
 
-We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/matmul_single_core/`` directory.
+We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/matmul/matmul_single_core/`` directory.
 
 Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``matmul_single_core`` executable in the ``build/programming_examples`` directory. For example:
 
@@ -16,6 +16,8 @@ Building the example can be done by adding a ``--build-programming-examples`` fl
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
     ./build/programming_examples/matmul_single_core
+
+.. _mm_single_core_device_initialization:
 
 Device Initialization & Program Setup
 -------------------------------------
@@ -342,7 +344,9 @@ The writer kernel consumes tiles from the output circular buffer ``cb_id_out0`` 
         }
     }
 
-Kernel exexution and result verification
+.. _mm_single_core_kernel_execution:
+
+Kernel execution and result verification
 ----------------------------------------
 
 On the host side, runtime arguments are configured for each kernel. These typically include DRAM buffer addresses (for A, B, and C) and tile counts (``Mt``, ``Kt``, ``Nt``) that define the scope of the operation for the current invocation.
@@ -394,3 +398,5 @@ This single-core matrix multiplication example highlights several key architectu
 * **Separation of data movement and compute**: By using dedicated RISC-V processors for data movement (reader/writer kernels) and the matrix engine for computation, complex data orchestration patterns do not sacrifice compute throughput. The data movement processors can handle complex access patterns while the compute units remain fully utilized.
 * **Tiled operations**: The hardware is optimized for tiled operations, making tile-based algorithms essential for achieving peak performance. All matrices are processed in tile units, matching the natural granularity of the underlying hardware accelerators.
 * **Pipelined data movement**: The circular buffer architecture with double buffering enables overlapped execution - while the compute kernel processes current tiles, the data movement kernels can simultaneously fetch the next set of tiles. This pipelining ensures efficient utilization of compute resources by minimizing idle time.
+
+Next we will explore the :ref:`MatMul_Multi_Core example <MatMul_Multi_Core example>`, which extends these concepts to a multi-core setup, demonstrating how to scale matrix multiplication across multiple Tensix cores for even greater performance.

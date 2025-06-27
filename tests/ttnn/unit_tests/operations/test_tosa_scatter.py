@@ -49,7 +49,8 @@ def test_tosa_scatter_normal(N, K, W, C, input_dtype, index_dtype, input_layout,
     torch_index = torch_index.unsqueeze(-1).expand([N, W, C])
 
     torch_output = torch.scatter(torch_input, dim=dim, index=torch_index, src=torch_source)
-    ttnn_output = ttnn.experimental.tosa_scatter(ttnn_input, ttnn_index, ttnn_source)
-    assert ttnn_output.shape == ttnn_input.shape
-    assert ttnn_output.dtype == ttnn_input.dtype
-    torch.testing.assert_close(ttnn.to_torch(ttnn_output), torch_output)
+    for _ in range(2):
+        ttnn_output = ttnn.experimental.tosa_scatter(ttnn_input, ttnn_index, ttnn_source)
+        assert ttnn_output.shape == ttnn_input.shape
+        assert ttnn_output.dtype == ttnn_input.dtype
+        torch.testing.assert_close(ttnn.to_torch(ttnn_output), torch_output)

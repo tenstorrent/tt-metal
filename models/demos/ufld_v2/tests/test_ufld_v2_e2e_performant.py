@@ -21,7 +21,6 @@ from models.utility_functions import run_for_wormhole_b0
 )
 def test_run_ufldv2_trace_2cqs_inference(
     device,
-    use_program_cache,
     batch_size,
     model_location_generator,
 ):

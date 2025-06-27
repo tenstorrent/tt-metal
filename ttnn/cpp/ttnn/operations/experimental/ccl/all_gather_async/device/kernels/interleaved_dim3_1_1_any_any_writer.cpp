@@ -23,50 +23,40 @@ using ttnn::ccl::Topology;
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(1);
 constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);
-constexpr BufferType intermediate_type = static_cast<BufferType>(get_compile_time_arg_val(3));
-constexpr BufferType output_type = static_cast<BufferType>(get_compile_time_arg_val(4));
-constexpr uint32_t cb_forward_id = get_compile_time_arg_val(5);
-constexpr uint32_t cb_backward_id = get_compile_time_arg_val(6);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(7);
-constexpr uint32_t intermediate_page_size = get_compile_time_arg_val(8);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(9);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(10);
-constexpr bool dynamic_alternate = get_compile_time_arg_val(11);
-constexpr bool fuse_op = get_compile_time_arg_val(12);
-constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(13));
-constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(14);
-
-constexpr uint32_t N_DRAM_BANKS = 12;
-constexpr uint32_t my_chip_id_x = my_chip_id % N_DRAM_BANKS;
-constexpr uint32_t my_chip_id_y = my_chip_id / N_DRAM_BANKS;
+constexpr BufferType output_type = static_cast<BufferType>(get_compile_time_arg_val(3));
+constexpr uint32_t cb_output_id = get_compile_time_arg_val(4);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);
+constexpr uint32_t output_page_size = get_compile_time_arg_val(6);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
+constexpr bool dynamic_alternate = get_compile_time_arg_val(9);
+constexpr bool fuse_op = get_compile_time_arg_val(10);
+constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(11));
+constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(12);
+constexpr bool direction = get_compile_time_arg_val(13);  // 1 is forward, 0 is backward
 
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-
     uint32_t arg_idx = 0;
-    address_t intermediate_address = get_arg_val<address_t>(arg_idx++);
     address_t output_address = get_arg_val<address_t>(arg_idx++);
     uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
     uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t output_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t gather_dim = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
-    size_t out_ready_sem_forward = get_arg_val<uint32_t>(arg_idx++);
-    size_t out_ready_sem_backward = get_arg_val<uint32_t>(arg_idx++);
-
-    uint32_t pages_in_row_offset = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t row_offset = get_arg_val<uint32_t>(arg_idx++);
-
-    uint32_t intermediate_packet_offset_x = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t intermediate_packet_offset_y = get_arg_val<uint32_t>(arg_idx++);
-
+    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
-
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;
 
@@ -74,289 +64,222 @@ void kernel_main() {
         arg_idx = arg_for_fab;
         op_signaler_sender = OpSignaler(arg_idx);
     }
-
     // packet header cb
     cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
+    auto packet_header_buffer_addr = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);
     cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
+    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_seminc_forward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_seminc_backward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-
     // pre-populate packet headers
-    volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
-        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
-    volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
-        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
-    pkt_hdr_forward->to_chip_unicast(1);
-    pkt_hdr_backward->to_chip_unicast(1);
+    volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
+    pkt_hdr->to_chip_unicast(1);
 
-    // interleaved addrgen
-    constexpr bool intermediate_is_dram = intermediate_type == tt::tt_metal::BufferType::DRAM;
-    auto intermediate_addrgen = InterleavedAddrGenFast<intermediate_is_dram>{
-        .bank_base_address = intermediate_address,
-        .page_size = intermediate_page_size,
-        .data_format = get_dataformat(cb_forward_id)};
     constexpr bool output_is_dram = output_type == tt::tt_metal::BufferType::DRAM;
     auto output_addrgen = InterleavedAddrGenFast<output_is_dram>{
         .bank_base_address = output_address,
-        .page_size = intermediate_page_size,
-        .data_format = get_dataformat(cb_forward_id)};
+        .page_size = output_page_size,
+        .data_format = get_dataformat(cb_output_id)};
 
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.open();
-    }
+    fabric_connection.open();
 
-    uint32_t forward_writes = 0;
-    uint32_t backward_writes = 0;
+    uint32_t slice_writes = 0;
 
     // Write out the local slice to both DRAM and forward and backward
-    // TODO: send as rt args
-
-    // end of rt args
-
-    uint32_t intermediate_packet_id_x = my_chip_id_x + intermediate_packet_offset_x;
-    uint32_t intermediate_packet_id_y = my_chip_id_y + intermediate_packet_offset_y;
-    if (intermediate_packet_id_x >= N_DRAM_BANKS) {
-        intermediate_packet_id_x -= N_DRAM_BANKS;
-        intermediate_packet_id_y++;
-    }
-
+    uint32_t pages_read_in_row = start_pages_read_in_row;
+    uint32_t row_offset = start_row_offset;
     uint32_t tiles_read = input_tile_id_start;
     uint32_t tiles_to_read = input_tile_id_end;
     uint32_t tile_id_start = my_chip_id * input_tensor_Wt;
-    uint32_t pages_read_in_row = pages_in_row_offset;
-    uint32_t rows = row_offset;
-    DPRINT << "WRITER: Reading tiles...\n";
-    while (tiles_read < tiles_to_read) {
-        uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-        cb_wait_front(cb_forward_id, num_pages_to_read);
-        size_t l1_read_addr = get_read_ptr(cb_forward_id);
 
-        for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-            const uint32_t actual_num_pages = min(num_pages_to_read - j, contig_pages_advanced);
-            for (uint32_t i = 0; i < actual_num_pages; i++) {
-                uint64_t noc0_dest_noc_addr =
-                    get_noc_addr(tile_id_start + rows + pages_read_in_row, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                noc_async_write_tile(
-                    tile_id_start + rows + pages_read_in_row,
-                    output_addrgen,
-                    l1_read_addr + i * intermediate_page_size);
+    if (gather_dim == 3) {
+        tile_id_start = my_chip_id * input_tensor_Wt;
+    } else {
+        tile_id_start = my_chip_id * input_tensor_Ht * input_tensor_Wt;
+    }
+    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+        while (tiles_read < tiles_to_read) {
+            uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
+            cb_wait_front(cb_output_id, packet_size_in_pages);
+            size_t l1_read_addr = get_read_ptr(cb_output_id);
 
+            for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
+                uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
+                uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                if (direction == 1) {
+                    noc_async_write_tile(tile_id, output_addrgen, l1_read_addr);
+                    if (num_targets_backward_direction) {
+                        write_and_advance_local_read_address_for_fabric_write_backward(
+                            noc0_dest_noc_addr,
+                            pkt_hdr,
+                            fabric_connection,
+                            l1_read_addr,
+                            output_page_size * contig_pages_advanced);
+                    } else {
+                        l1_read_addr += output_page_size * contig_pages_advanced;
+                    }
+                } else {
+                    if (num_targets_forward_direction) {
+                        write_and_advance_local_read_address_for_fabric_write_forward(
+                            noc0_dest_noc_addr,
+                            pkt_hdr,
+                            fabric_connection,
+                            l1_read_addr,
+                            output_page_size * contig_pages_advanced);
+                    } else {
+                        l1_read_addr += output_page_size * contig_pages_advanced;
+                    }
+                }
                 pages_read_in_row += 1;
                 if (pages_read_in_row >= input_tensor_Wt) {
-                    rows += output_tensor_Wt;
+                    row_offset += output_tensor_Wt;
                     pages_read_in_row = 0;
                 }
+                tiles_read += contig_pages_advanced;
             }
-
-            const uint32_t payload_size_bytes = intermediate_page_size * actual_num_pages;
-            uint32_t intermediate_packet_first_tile_id =
-                intermediate_packet_id_x + contig_pages_advanced * N_DRAM_BANKS * intermediate_packet_id_y;
-
-            uint64_t remote_noc0_dest_noc_addr =
-                get_noc_addr(intermediate_packet_first_tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
-            write_and_advance_local_read_address_for_fabric_write(
-                remote_noc0_dest_noc_addr,
-                pkt_hdr_forward,
-                pkt_hdr_backward,
-                fabric_connection,
-                l1_read_addr,
-                payload_size_bytes);
-            tiles_read += actual_num_pages;
-
-            intermediate_packet_id_x += ring_size;
-            if (intermediate_packet_id_x >= N_DRAM_BANKS) {
-                intermediate_packet_id_x -= N_DRAM_BANKS;
-                intermediate_packet_id_y++;
-            }
+            cb_pop_front(cb_output_id, packet_size_in_pages);
         }
-        cb_pop_front(cb_forward_id, num_pages_to_read);
+        tile_id_start += output_tensor_Wt * output_tensor_Ht;
+        tiles_read = input_tile_id_start;
+        tiles_to_read = input_tile_id_end;
+        pages_read_in_row = start_pages_read_in_row;
+        row_offset = start_row_offset;
     }
 
-    DPRINT << "WRITER: Done first\n";
-
-    // 2. unicast output ready semaphore forward
-    uint64_t out_ready_sem_noc_addr_in_pkt_forward =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_backward, 0);
-    auto* pkt_hdr_fwd = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc_forward);
-    pkt_hdr_fwd->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        out_ready_sem_noc_addr_in_pkt_forward,
+    // 2. unicast output ready semaphore
+    uint64_t out_ready_sem_noc_addr_in_pkt =
+        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
+    auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+    pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        out_ready_sem_noc_addr_in_pkt,
         static_cast<uint16_t>(1),  // increment 1
         32});
-    // Write the unicast packet (forward)
-    if (fabric_connection.has_forward_connection()) {
-        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        pkt_hdr_fwd->to_chip_unicast(1);
-        fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc_forward, sizeof(PACKET_HEADER_TYPE));
-    }
-    // 2. unicast output ready semaphore backward
-    uint64_t out_ready_sem_noc_addr_in_pkt_backward =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_forward, 0);
-    auto* pkt_hdr_bwd = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc_backward);
-    pkt_hdr_bwd->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        out_ready_sem_noc_addr_in_pkt_backward,
-        static_cast<uint16_t>(1),  // increment 1
-        32});
-    // Write the mcast packet (backward)
-    if (fabric_connection.has_backward_connection()) {
-        fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-        pkt_hdr_bwd->to_chip_unicast(1);
-        fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc_backward, sizeof(PACKET_HEADER_TYPE));
+    // Write the unicast packet
+    if (direction == 1) {
+        if (num_targets_backward_direction) {
+            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+            pkt_hdr_sem_inc->to_chip_unicast(1);
+            fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        }
+    } else {
+        if (num_targets_forward_direction) {
+            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+            pkt_hdr_sem_inc->to_chip_unicast(1);
+            fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        }
     }
 
     // increment locally
-    if (fuse_op) {
+    if (fuse_op && direction == 1) {
         // Synchronize and signal that the local tensor slice is available
         op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
     }
 
-    uint32_t forward_writes_expected, backward_writes_expected;
+    uint32_t writes_expected = 0;
     if (topology == Topology::Linear) {
-        forward_writes_expected = num_targets_backward_direction;
-        backward_writes_expected = num_targets_forward_direction;
+        if (direction == 1 && num_targets_backward_direction) {
+            writes_expected = num_targets_forward_direction;
+        } else if (direction == 0 && num_targets_forward_direction) {
+            writes_expected = num_targets_backward_direction;
+        }
     } else if (topology == Topology::Ring) {
-        forward_writes_expected = num_targets_forward_direction - 1;
-        backward_writes_expected = num_targets_backward_direction - 1;
+        if (direction == 1) {
+            writes_expected = num_targets_backward_direction - 1;
+        } else {
+            writes_expected = num_targets_forward_direction - 1;
+        }
     }
 
-    uint32_t actual_backward_slice_id_x = my_chip_id_x;
-    uint32_t actual_backward_slice_id_y = my_chip_id_y;
-    uint32_t actual_forward_slice_id_x = my_chip_id_x;
-    uint32_t actual_forward_slice_id_y = my_chip_id_y;
-    while (((backward_writes < backward_writes_expected) && fabric_connection.has_backward_connection()) ||
-           ((forward_writes < forward_writes_expected) && fabric_connection.has_forward_connection())) {
-        // unicast forward
+    while (slice_writes < writes_expected) {
+        // Direction == backward
         // Did I get something from my left to send to my right?
         // In the linear case, I expect num_targets_backward_direction slices from the left, and check if I have a
         // neighbor to the right
         // In the ring case, I expect to write to the right num_forward_target times
-        if ((forward_writes < forward_writes_expected) && fabric_connection.has_forward_connection()) {
-            tiles_read = input_tile_id_start;
-            int slice_chip_id = my_chip_id - forward_writes - 1;
-            uint32_t actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
-            tiles_to_read = input_tile_id_end;
-
-            actual_forward_slice_id_x =
-                (actual_forward_slice_id_x == 0) ? ring_size - 1 : actual_forward_slice_id_x - 1;
-
-            intermediate_packet_id_x = actual_forward_slice_id_x + intermediate_packet_offset_x;
-            intermediate_packet_id_y = actual_forward_slice_id_y + intermediate_packet_offset_y;
-            if (intermediate_packet_id_x >= N_DRAM_BANKS) {
-                intermediate_packet_id_x -= N_DRAM_BANKS;
-                intermediate_packet_id_y++;
-            }
-
-            while (tiles_read < tiles_to_read) {
-                uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                cb_wait_front(cb_forward_id, num_pages_to_read);
-                size_t l1_read_addr = get_read_ptr(cb_forward_id);
-                for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-                    const uint32_t payload_size_bytes =
-                        intermediate_page_size * min(num_pages_to_read - j, contig_pages_advanced);
-
-                    uint32_t intermediate_packet_first_tile_id =
-                        intermediate_packet_id_x + contig_pages_advanced * N_DRAM_BANKS * intermediate_packet_id_y;
-                    uint64_t remote_noc0_dest_noc_addr = get_noc_addr(
-                        intermediate_packet_first_tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
-                    write_and_advance_local_read_address_for_fabric_write_forward(
-                        remote_noc0_dest_noc_addr,
-                        pkt_hdr_forward,
-                        fabric_connection,
-                        l1_read_addr,
-                        payload_size_bytes);
-
-                    tiles_read += min(num_pages_to_read - j, contig_pages_advanced);
-
-                    intermediate_packet_id_x += ring_size;
-                    if (intermediate_packet_id_x >= N_DRAM_BANKS) {
-                        intermediate_packet_id_x -= N_DRAM_BANKS;
-                        intermediate_packet_id_y++;
-                    }
-                }
-                cb_pop_front(cb_forward_id, num_pages_to_read);
-            }
-            // 2. unicast output ready semaphore forward
-            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-            pkt_hdr_fwd->to_chip_unicast(1);
-            fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                packet_header_buffer_seminc_forward, sizeof(PACKET_HEADER_TYPE));
-            forward_writes++;
-        }
-
-        // unicast backward
+        // Direction == forward
         // Did I get something from my right to send to my left?
         // In the linear case, I expect num_targets_forward_direction slices from the right, and check if I have a
         // neighbor to the left
         // In the ring case, I expect to write to the left num_backward_target times
-        if ((backward_writes < backward_writes_expected) && fabric_connection.has_backward_connection()) {
-            tiles_read = input_tile_id_start;
-            uint32_t slice_chip_id = my_chip_id + backward_writes + 1;
-            uint32_t actual_slice_chip_id = (slice_chip_id >= ring_size) ? slice_chip_id - ring_size : slice_chip_id;
-            tiles_to_read = input_tile_id_end;
+        int slice_chip_id;
+        uint32_t actual_slice_chip_id;
+        if (direction == 1) {
+            slice_chip_id = my_chip_id + slice_writes + 1;
+            actual_slice_chip_id = (slice_chip_id >= (int)ring_size) ? slice_chip_id - ring_size : slice_chip_id;
+        } else {
+            slice_chip_id = my_chip_id - slice_writes - 1;
+            actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
+        }
+        uint32_t tiles_read = input_tile_id_start;
+        uint32_t tiles_to_read = input_tile_id_end;
+        uint32_t tile_id_start = actual_slice_chip_id * input_tensor_Wt;
+        uint32_t row_offset = start_row_offset;
+        uint32_t pages_read_in_row = start_pages_read_in_row;
+        uint32_t slice_Wt = input_tensor_Wt;
+        uint32_t stride_Wt = output_tensor_Wt;
 
-            actual_backward_slice_id_x =
-                (actual_backward_slice_id_x == ring_size - 1) ? 0 : actual_backward_slice_id_x + 1;
-            intermediate_packet_id_x = actual_backward_slice_id_x + intermediate_packet_offset_x;
-            intermediate_packet_id_y = actual_backward_slice_id_y + intermediate_packet_offset_y;
-            if (intermediate_packet_id_x >= N_DRAM_BANKS) {
-                intermediate_packet_id_x -= N_DRAM_BANKS;
-                intermediate_packet_id_y++;
-            }
-
+        if (gather_dim == 3) {
+            tile_id_start = actual_slice_chip_id * input_tensor_Wt;
+        } else {
+            tile_id_start = actual_slice_chip_id * input_tensor_Ht * input_tensor_Wt;
+        }
+        for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                cb_wait_front(cb_backward_id, num_pages_to_read);
-                size_t l1_read_addr = get_read_ptr(cb_backward_id);
+                cb_wait_front(cb_output_id, packet_size_in_pages);
+                size_t l1_read_addr = get_read_ptr(cb_output_id);
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-                    const uint32_t payload_size_bytes =
-                        intermediate_page_size * min(num_pages_to_read - j, contig_pages_advanced);
-                    uint32_t intermediate_packet_first_tile_id =
-                        intermediate_packet_id_x + contig_pages_advanced * N_DRAM_BANKS * intermediate_packet_id_y;
-                    uint64_t remote_noc0_dest_noc_addr = get_noc_addr(
-                        intermediate_packet_first_tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
-                    write_and_advance_local_read_address_for_fabric_write_backward(
-                        remote_noc0_dest_noc_addr,
-                        pkt_hdr_backward,
-                        fabric_connection,
-                        l1_read_addr,
-                        payload_size_bytes);
-
-                    tiles_read += min(num_pages_to_read - j, contig_pages_advanced);
-
-                    intermediate_packet_id_x += ring_size;
-                    if (intermediate_packet_id_x >= N_DRAM_BANKS) {
-                        intermediate_packet_id_x -= N_DRAM_BANKS;
-                        intermediate_packet_id_y++;
+                    uint64_t noc0_dest_noc_addr = get_noc_addr(
+                        tile_id_start + row_offset + pages_read_in_row, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                    pages_read_in_row += 1;
+                    if (pages_read_in_row >= slice_Wt) {
+                        row_offset += stride_Wt;
+                        pages_read_in_row = 0;
                     }
+
+                    if (direction == 1) {
+                        write_and_advance_local_read_address_for_fabric_write_backward(
+                            noc0_dest_noc_addr,
+                            pkt_hdr,
+                            fabric_connection,
+                            l1_read_addr,
+                            contig_pages_advanced * output_page_size);
+                    } else {
+                        write_and_advance_local_read_address_for_fabric_write_forward(
+                            noc0_dest_noc_addr,
+                            pkt_hdr,
+                            fabric_connection,
+                            l1_read_addr,
+                            contig_pages_advanced * output_page_size);
+                    }
+                    tiles_read += contig_pages_advanced;
                 }
-                cb_pop_front(cb_backward_id, num_pages_to_read);
+                cb_pop_front(cb_output_id, packet_size_in_pages);
             }
-
-            // 2. unicast output ready semaphore backward
-            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-            pkt_hdr_bwd->to_chip_unicast(1);
-            fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-                packet_header_buffer_seminc_backward, sizeof(PACKET_HEADER_TYPE));
-            backward_writes++;
+            tile_id_start += output_tensor_Wt * output_tensor_Ht;
+            tiles_read = input_tile_id_start;
+            tiles_to_read = input_tile_id_end;
+            row_offset = start_row_offset;
+            pages_read_in_row = start_pages_read_in_row;
         }
+        // 2. unicast output ready semaphore
+        if (direction == 1) {
+            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+            pkt_hdr_sem_inc->to_chip_unicast(1);
+            fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+            pkt_hdr_sem_inc->to_chip_unicast(1);
+            fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        }
+        slice_writes++;
     }
 
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.close();
-    }
+    fabric_connection.close();
 
     noc_async_write_barrier();
-    DPRINT << "Done WRITER.\n";
 }

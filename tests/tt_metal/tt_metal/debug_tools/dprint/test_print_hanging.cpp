@@ -83,4 +83,9 @@ TEST_F(DPrintFixture, TensixTestPrintHanging) {
 
     // Since the dprint server gets killed from a timeout, only run on one device.
     this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, this->devices_[0]);
+    // Since the dprint server exited with an exception, detach manually
+    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+    for (unsigned int id = 0; id < num_devices; id++) {
+        DprintServerDetach(id);
+    }
 }

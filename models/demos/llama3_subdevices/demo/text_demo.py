@@ -151,7 +151,7 @@ def create_tt_model(
 # input_prompts (string): input json file with prompts to process. See models/tt_transformers/demo/*.json for list of input files
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
-# max_seq_len (int): Maximum context length supported by the model (Llama3.1 and Llama3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
+# max_seq_len (int): Maximum context length supported by the model (Llama-3.1 and Llama-3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
 # batch_size (int): Number of users in a batch (Supports 1/2/4/8/16/32 batches)
 # max_generated_tokens (int): Maximum number of tokens to generate for each user (Note that the users will stop generation before this limit if they reach a EoS token)
 # paged_attention (bool): Whether to use paged attention or default attention (vLLM requires paged attention)
@@ -277,7 +277,6 @@ def test_demo_text(
     optimizations,
     stop_at_eos,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     ci_only,
     reset_seeds,
@@ -330,7 +329,7 @@ def test_demo_text(
     if print_to_file:
         # Creat batch output file
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_directory = "models/tt_transformers/demo/output"
+        output_directory = "models/demos/llama3_subdevices/demo/output"
         os.makedirs(output_directory, exist_ok=True)
         os.chmod(output_directory, 0o755)
         output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"
@@ -554,6 +553,7 @@ def test_demo_text(
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=device_sampling_params,
+                    reset_inputs=True,
                 )
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
@@ -767,23 +767,23 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama3.1-70B", "Llama3.3-70B", "Deepseek-R1-Distill-70B"]
-    # model_args.base_model_name = "Llama3.1-70B"
+    supported_models = ["Llama-3.1-70B", "Llama-3.3-70B", "Deepseek-R1-Distill-70B"]
+    # model_args.base_model_name = "Llama-3.1-70B"
     supported_devices = ["TG"]
 
     tt_device_name = model_args.device_name
 
     # Set the target times to first token for every combination of device and model
     target_prefill_tok_s = {
-        "TG_Llama3.1-70B": 1050,  # TODO Update target
-        "TG_Llama3.3-70B": 1050,
+        "TG_Llama-3.1-70B": 1050,  # TODO Update target
+        "TG_Llama-3.3-70B": 1050,
         "TG_Deepseek-R1-Distill-70B": 1050,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 
     # Set the target decode timesfor every combination of device and model
     target_decode_tok_s_u = {
-        "TG_Llama3.1-70B": 20,  # TODO Update target
-        "TG_Llama3.3-70B": 20,
+        "TG_Llama-3.1-70B": 20,  # TODO Update target
+        "TG_Llama-3.3-70B": 20,
         "TG_Deepseek-R1-Distill-70B": 20,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 

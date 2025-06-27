@@ -43,4 +43,7 @@ std::string watcher_get_log_file_name();
 // Helper function to get the current watcher dump count
 int watcher_get_dump_count();
 
+// Helper to return the watcher mutex lock
+std::unique_lock<std::mutex> watcher_get_lock();
+
 }  // namespace tt

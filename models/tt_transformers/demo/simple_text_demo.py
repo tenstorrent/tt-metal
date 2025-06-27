@@ -167,7 +167,7 @@ def prepare_generator_args(
 # input_prompts (string): input json file with prompts to process. See models/tt_transformers/demo/*.json for list of input files
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
-# max_seq_len (int): Maximum context length supported by the model (Llama3.1 and Llama3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
+# max_seq_len (int): Maximum context length supported by the model (Llama-3.1 and Llama-3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
 # batch_size (int): Number of users in a batch (Supports 1/2/4/8/16/32 batches)
 # max_generated_tokens (int): Maximum number of tokens to generate for each user (Note that the users will stop generation before this limit if they reach a EoS token)
 # paged_attention (bool): Whether to use paged attention or default attention (vLLM requires paged attention)
@@ -458,7 +458,6 @@ def test_demo_text(
     optimizations,
     stop_at_eos,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     ci_only,
     data_parallel,
@@ -854,7 +853,7 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama3.2-1B", "Llama3.2-3B", "Llama3.1-8B", "Llama3.2-11B", "Llama3.1-70B", "Mistral-7B"]
+    supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
     supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
 
     tt_device_name = model_args[0].device_name
@@ -875,30 +874,30 @@ def test_demo_text(
 
         # Set the target decode t/s/u for every combination of device and model (optional - for tracking benchmark data)
         dict_target_decode_tok_s_u = {
-            "N150_Llama3.2-1B": 160,
-            "N300_Llama3.2-1B": 250,  # TODO Update target
-            "T3K_Llama3.2-1B": 300,  # TODO Update target
-            "TG_Llama3.2-1B": 300,  # TODO Update target
+            "N150_Llama-3.2-1B": 160,
+            "N300_Llama-3.2-1B": 250,  # TODO Update target
+            "T3K_Llama-3.2-1B": 300,  # TODO Update target
+            "TG_Llama-3.2-1B": 300,  # TODO Update target
             #
-            "N150_Llama3.2-3B": 60,
-            "N300_Llama3.2-3B": 100,  # TODO Update target
-            "T3K_Llama3.2-3B": 150,  # TODO Update target
-            "TG_Llama3.2-3B": 150,  # TODO Update target
+            "N150_Llama-3.2-3B": 60,
+            "N300_Llama-3.2-3B": 100,  # TODO Update target
+            "T3K_Llama-3.2-3B": 150,  # TODO Update target
+            "TG_Llama-3.2-3B": 150,  # TODO Update target
             #
-            "N150_Llama3.1-8B": 23,
-            "P150_Llama3.1-8B": 23,  # TODO Update target
-            "N300_Llama3.1-8B": 38,
-            "P300_Llama3.1-8B": 38,
-            "T3K_Llama3.1-8B": 45,
-            "TG_Llama3.1-8B": 45,  # TODO Update target
+            "N150_Llama-3.1-8B": 23,
+            "P150_Llama-3.1-8B": 23,  # TODO Update target
+            "N300_Llama-3.1-8B": 38,
+            "P300_Llama-3.1-8B": 38,
+            "T3K_Llama-3.1-8B": 45,
+            "TG_Llama-3.1-8B": 45,  # TODO Update target
             #
-            "N150_Llama3.2-11B": 23,
-            "N300_Llama3.2-11B": 38,  # TODO Update target
-            "T3K_Llama3.2-11B": 45,  # TODO Update target
-            "TG_Llama3.2-11B": 45,  # TODO Update target
+            "N150_Llama-3.2-11B": 23,
+            "N300_Llama-3.2-11B": 38,  # TODO Update target
+            "T3K_Llama-3.2-11B": 45,  # TODO Update target
+            "TG_Llama-3.2-11B": 45,  # TODO Update target
             #
-            "T3K_Llama3.1-70B": 20,  # TODO Update target
-            "TG_Llama3.1-70B": 20,  # TODO Update target
+            "T3K_Llama-3.1-70B": 20,  # TODO Update target
+            "TG_Llama-3.1-70B": 20,  # TODO Update target
             #
             "N150_Mistral-7B": 23,
             "N300_Mistral-7B": 38,  # TODO Update target

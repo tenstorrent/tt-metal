@@ -10,89 +10,18 @@ permissions:
   contents: write
   packages: write
 
+
+# Some explanation:
+# is-release-candidate is always true, unless the workflow is manually dispatched on a tag
+# should-create-release is used to avoid creating a duplicate release
+# if we are running on main branch, don't upload any artifacts or create a gh release
+# if we are promoting a release candidate, don't rerun the tests
+
 jobs:
-  build-artifact:
-    needs: create-tag
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      build-wheel: true
-  build-artifact-profiler:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      tracy: true
-      build-wheel: true
-  test-wheels:
-    needs: build-artifact
-    uses: ./.github/workflows/_test-wheels-impl.yaml
-    with:
-      from-precompiled: true
-    secrets: inherit
-  single-card-demos:
-    needs: build-artifact
-    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      arch: wormhole_b0
-  t3000-demos:
-    needs: build-artifact
-    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  t3000-model-perf:
-    needs: [build-artifact, build-artifact-profiler]
-    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-  galaxy-4u-demos:
-    needs: build-artifact
-    uses: ./.github/workflows/tg-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  galaxy-6u-demos:
-    needs: build-artifact
-    uses: ./.github/workflows/tg-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: topology-6u
-  blackhole-demos:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
-    with:
-      runner-label: BH
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   get-params:
     runs-on: ubuntu-latest
     outputs:
       is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
-      should-create-release: ${{ steps.get-should-create-release.outputs.should-create-release }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -110,7 +39,95 @@ jobs:
           # Run once to check for errors
           ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }}
           shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }})
-          echo "should-create-release=$shouldCreateRelease" >> "$GITHUB_OUTPUT"
+          if [ "$shouldCreateRelease" != "true" ]; then
+            echo "should-create-release is false, no release needed. Exiting workflow."
+            exit 1
+          fi
+          echo "should-create-release is true, proceeding with release workflow."
+  build-artifact:
+    needs: create-tag
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      version: 22.04
+      build-wheel: true
+  build-artifact-profiler:
+    needs: create-tag
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      version: 22.04
+      tracy: true
+      build-wheel: true
+  test-wheels:
+    needs: [build-artifact, get-params]
+    if: needs.get-params.outputs.is-release-candidate == 'true'
+    uses: ./.github/workflows/_test-wheels-impl.yaml
+    with:
+      from-precompiled: true
+    secrets: inherit
+  single-card-demos:
+    needs: build-artifact
+    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      arch: wormhole_b0
+  t3000-demos:
+    needs: [build-artifact, get-params]
+    if: needs.get-params.outputs.is-release-candidate == 'true'
+    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  t3000-model-perf:
+    needs: [build-artifact, build-artifact-profiler, get-params]
+    if: needs.get-params.outputs.is-release-candidate == 'true'
+    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+  galaxy-4u-demos:
+    needs: [build-artifact, get-params]
+    if: needs.get-params.outputs.is-release-candidate == 'true'
+    uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  galaxy-6u-demos:
+    needs: [build-artifact, get-params]
+    if: needs.get-params.outputs.is-release-candidate == 'true'
+    uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology: topology-6u
+  blackhole-demos:
+    needs: [build-artifact, get-params]
+    if: needs.get-params.outputs.is-release-candidate == 'true'
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
+    with:
+      runner-label: BH
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   create-tag:
     needs: get-params
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
@@ -174,6 +191,7 @@ jobs:
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
+    if: github.ref != 'refs/heads/main'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -183,10 +201,6 @@ jobs:
         uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
         with:
           output-files: tt-metalium.tar.gz
-      - name: Download Wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name : Download release notes
@@ -197,8 +211,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: changelog
-      - name: Assert wheels exist
-        run: ls -arhl ttnn-*.whl
       - name: Release
         # A major release has not been tagged yet, so we need to do this to avoid
         # Node 16 deprecation warning message
@@ -215,7 +227,6 @@ jobs:
             README.md
             INSTALLING.md
             models/MODEL_UPDATES.md
-            ttnn-*.whl
             tt-metalium.tar.gz
           fail_on_unmatched_files: true
   create-docker-release-image:
@@ -226,10 +237,11 @@ jobs:
     ]
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
+    if: github.ref != 'refs/heads/main'
     with:
       base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       version: ${{ needs.create-tag.outputs.version }}
-      is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
+      is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' }}
   release-docs:
     needs: [
       build-artifact,
@@ -237,7 +249,7 @@ jobs:
       create-tag,
       create-and-upload-draft-release
     ]
-    if: ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
+    if: ${{ needs.get-params.outputs.is-release-candidate !='true' }}
     uses: ./.github/workflows/docs-latest-public.yaml
     with:
       version: ${{ needs.create-tag.outputs.version }}
@@ -245,14 +257,15 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     secrets: inherit
-  publish-to-test-pypi:
+  publish-to-pypi:
     name: >-
-      Publish Python 🐍 distribution 📦 to Test PyPI
+      Publish Python 🐍 distribution 📦 to PyPI
     needs: [build-artifact, test-wheels]
     runs-on: ubuntu-latest
+    if: github.ref != 'refs/heads/main'
     environment:
-      name: testpypi
-      url: https://test.pypi.org/p/ttnn
+      name: pypi
+      url: https://pypi.org/project/ttnn/
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
     steps:
@@ -261,7 +274,5 @@ jobs:
       with:
         name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
         path: dist/
-    - name: Publish distribution 📦 to Test PyPI
+    - name: Publish distribution 📦 to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        repository-url: https://test.pypi.org/legacy/

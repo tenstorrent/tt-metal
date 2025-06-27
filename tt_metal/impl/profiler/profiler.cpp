@@ -55,7 +55,8 @@ std::vector<uint32_t> read_control_buffer_from_core(
     std::vector<uint32_t> control_buffer;
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active()) {
+    if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active() &&
+        !isGalaxyMMIODevice(device)) {
         if (auto mesh_device = device->get_mesh_device()) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
@@ -94,7 +95,8 @@ void write_control_buffer_to_core(
     const std::vector<uint32_t>& control_buffer) {
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active()) {
+    if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active() &&
+        !isGalaxyMMIODevice(device)) {
         if (auto mesh_device = device->get_mesh_device()) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
@@ -118,8 +120,8 @@ void write_control_buffer_to_core(
     }
 }
 
-bool useSlowDispatchForReading(ProfilerDumpState state) {
-    return state == ProfilerDumpState::FORCE_UMD_READ || onlyProfileDispatchCores(state);
+bool useSlowDispatchForReading(const IDevice* device, ProfilerDumpState state) {
+    return state == ProfilerDumpState::FORCE_UMD_READ || onlyProfileDispatchCores(state) || isGalaxyMMIODevice(device);
 }
 
 void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
@@ -757,20 +759,42 @@ void DeviceProfiler::logNocTracePacketDataToJson(
             noc_trace_json_log.push_back(std::move(data));
         } else if (std::holds_alternative<EMD::FabricNoCEvent>(ev_md_contents)) {
             EMD::FabricNoCEvent fabric_noc_event = std::get<EMD::FabricNoCEvent>(ev_md_contents);
-            auto phys_coord =
-                getPhysicalAddressFromVirtual(device_id, {fabric_noc_event.dst_x, fabric_noc_event.dst_y});
-            noc_trace_json_log.push_back(nlohmann::ordered_json{
+
+            nlohmann::ordered_json data = {
                 {"run_host_id", run_host_id},
                 {"op_name", opname},
                 {"proc", risc_name},
                 {"sx", core_x},
                 {"sy", core_y},
                 {"type", magic_enum::enum_name(ev_md.noc_xfer_type)},
-                {"dx", phys_coord.x},
-                {"dy", phys_coord.y},
                 {"routing_fields_type", magic_enum::enum_name(fabric_noc_event.routing_fields_type)},
                 {"timestamp", timestamp},
-            });
+            };
+
+            // For scatter write operations, include additional scatter information
+            if (ev_md.noc_xfer_type == EMD::NocEventType::FABRIC_UNICAST_SCATTER_WRITE) {
+                data["scatter_address_index"] = fabric_noc_event.mcast_end_dst_x;
+                data["scatter_total_addresses"] = fabric_noc_event.mcast_end_dst_y;
+            }
+
+            // handle dst coordinates correctly for different NocEventType
+            if (KernelProfilerNocEventMetadata::isFabricUnicastEventType(ev_md.noc_xfer_type)) {
+                auto phys_coord =
+                    getPhysicalAddressFromVirtual(device_id, {fabric_noc_event.dst_x, fabric_noc_event.dst_y});
+                data["dx"] = phys_coord.x;
+                data["dy"] = phys_coord.y;
+            } else {
+                auto phys_start_coord =
+                    getPhysicalAddressFromVirtual(device_id, {fabric_noc_event.dst_x, fabric_noc_event.dst_y});
+                data["mcast_start_x"] = phys_start_coord.x;
+                data["mcast_start_y"] = phys_start_coord.y;
+                auto phys_end_coord = getPhysicalAddressFromVirtual(
+                    device_id, {fabric_noc_event.mcast_end_dst_x, fabric_noc_event.mcast_end_dst_y});
+                data["mcast_end_x"] = phys_end_coord.x;
+                data["mcast_end_y"] = phys_end_coord.y;
+            }
+
+            noc_trace_json_log.push_back(std::move(data));
         } else if (std::holds_alternative<EMD::FabricRoutingFields>(ev_md_contents)) {
             uint32_t routing_fields_value = std::get<EMD::FabricRoutingFields>(ev_md_contents).routing_fields_value;
             noc_trace_json_log.push_back(nlohmann::ordered_json{
@@ -897,15 +921,16 @@ void DeviceProfiler::serializeJsonNocTraces(
 
             // determine hop count and other routing metadata from routing fields value
             uint32_t routing_fields_value = fabric_routing_fields_event.at("routing_fields_value").get<uint32_t>();
-            int hops = 0;
-            // TODO: extract multicast start hop and end hop from routing fields value
+            int start_distance = 0;
+            int range = 0;
             switch (routing_fields_type) {
                 case KernelProfilerNocEventMetadata::FabricPacketType::REGULAR: {
-                    hops = get_routing_hops(routing_fields_value);
+                    std::tie(start_distance, range) = get_routing_start_distance_and_range(routing_fields_value);
                     break;
                 }
                 case KernelProfilerNocEventMetadata::FabricPacketType::LOW_LATENCY: {
-                    hops = get_low_latency_routing_hops(routing_fields_value);
+                    std::tie(start_distance, range) =
+                        get_low_latency_routing_start_distance_and_range(routing_fields_value);
                     break;
                 }
                 case KernelProfilerNocEventMetadata::FabricPacketType::LOW_LATENCY_MESH: {
@@ -921,31 +946,47 @@ void DeviceProfiler::serializeJsonNocTraces(
                     tt::LogMetal,
                     "[profiler noc tracing] Fabric edm_location->channel lookup failed for event in op '{}' at ts {}: "
                     "src_dev={}, "
-                    "eth_core=({}, {}), hops={}. Keeping original events.",
+                    "eth_core=({}, {}), start_distance={}. Keeping original events.",
                     fabric_event.value("op_name", "N/A"),
                     fabric_event.value("timestamp", 0.0),
                     device_id,
                     phys_eth_route_coord.x,
                     phys_eth_route_coord.y,
-                    hops);
+                    start_distance);
                 return std::nullopt;
             }
 
             tt::tt_fabric::chan_id_t eth_chan = *eth_chan_opt;
 
-            CoreCoord dst_coord = {fabric_event.at("dx").get<int>(), fabric_event.at("dy").get<int>()};
-
             nlohmann::ordered_json modified_write_event = local_noc_write_event;
             modified_write_event["timestamp"] = fabric_event["timestamp"];
 
             // replace original eth core destination with true destination
-            modified_write_event["dx"] = dst_coord.x;
-            modified_write_event["dy"] = dst_coord.y;
+            auto noc_xfer_type = magic_enum::enum_cast<KernelProfilerNocEventMetadata::NocEventType>(
+                fabric_event["type"].get<std::string>());
+
+            if (!noc_xfer_type.has_value() ||
+                !KernelProfilerNocEventMetadata::isFabricEventType(noc_xfer_type.value())) {
+                log_error(
+                    tt::LogMetal,
+                    "[profiler noc tracing] Failed to parse noc transfer type: {}",
+                    fabric_event["type"].get<std::string>());
+                return std::nullopt;
+            }
+
+            if (KernelProfilerNocEventMetadata::isFabricUnicastEventType(noc_xfer_type.value())) {
+                modified_write_event["dx"] = fabric_event.at("dx").get<int>();
+                modified_write_event["dy"] = fabric_event.at("dy").get<int>();
+            } else {
+                log_error(tt::LogMetal, "[profiler noc tracing] Noc multicasts in fabric events are not supported!");
+                return std::nullopt;
+            }
 
             // replace the type with fabric event type
             modified_write_event["type"] = fabric_event["type"];
 
-            modified_write_event["fabric_send"] = {{"eth_chan", eth_chan}, {"hops", hops}};
+            modified_write_event["fabric_send"] = {
+                {"eth_chan", eth_chan}, {"start_distance", start_distance}, {"range", range}};
 
             return modified_write_event;
         } catch (const nlohmann::json::exception& e) {
@@ -1146,7 +1187,7 @@ void DeviceProfiler::dumpResults(
         }
 
         if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-            if (useSlowDispatchForReading(state)) {
+            if (useSlowDispatchForReading(device, state)) {
                 issueSlowDispatchReadFromProfilerBuffer(device);
             } else {
                 issueFastDispatchReadFromProfilerBuffer(device);
@@ -1193,7 +1234,7 @@ void DeviceProfiler::dumpResults(
 
                 std::vector<uint32_t> core_l1_data_buffer;
                 if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-                    if (useSlowDispatchForReading(state)) {
+                    if (useSlowDispatchForReading(device, state)) {
                         core_l1_data_buffer = issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
                     } else {
                         core_l1_data_buffer = issueFastDispatchReadFromL1DataBuffer(device, worker_core);
@@ -1528,6 +1569,10 @@ bool getDeviceProfilerState() { return tt::tt_metal::MetalContext::instance().rt
 bool onlyProfileDispatchCores(ProfilerDumpState state) {
     return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
            state == ProfilerDumpState::ONLY_DISPATCH_CORES;
+}
+
+bool isGalaxyMMIODevice(const IDevice* device) {
+    return tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device->is_mmio_capable();
 }
 
 }  // namespace tt_metal

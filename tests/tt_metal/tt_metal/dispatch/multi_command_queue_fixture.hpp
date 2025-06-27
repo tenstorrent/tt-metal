@@ -140,6 +140,7 @@ protected:
         }
 
         std::vector<int> devices_to_open;
+        devices_to_open.reserve(tt::tt_metal::GetNumAvailableDevices());
         for (int i = 0; i < tt::tt_metal::GetNumAvailableDevices(); ++i) {
             devices_to_open.push_back(i);
         }
@@ -163,5 +164,21 @@ protected:
 class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture {};
 
 class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
+
+class MultiCommandQueueOnFabricMultiDeviceFixture : public MultiCommandQueueMultiDeviceFixture {
+protected:
+    void SetUp() override {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
+            GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
+        }
+        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
+        MultiCommandQueueMultiDeviceFixture::SetUp();
+    }
+
+    void TearDown() override {
+        MultiCommandQueueMultiDeviceFixture::TearDown();
+        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
+    }
+};
 
 }  // namespace tt::tt_metal

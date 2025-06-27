@@ -24,12 +24,6 @@ COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d11
     ((50),),
 )
 @pytest.mark.parametrize(
-    "classifier_free_guidance",
-    [
-        (True),
-    ],
-)
-@pytest.mark.parametrize(
     "vae_on_device",
     [
         (True),
@@ -40,11 +34,9 @@ COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d11
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
 def test_accuracy_sdxl(
-    device,
-    use_program_cache,
+    mesh_device,
     is_ci_env,
     num_inference_steps,
-    classifier_free_guidance,
     vae_on_device,
     captions_path,
     coco_statistics_path,
@@ -73,12 +65,10 @@ def test_accuracy_sdxl(
     logger.info(f"Start inference from prompt index: {start_from} to {start_from + num_prompts}")
 
     images = test_demo(
-        device,
-        use_program_cache,
+        mesh_device,
         is_ci_env,
         prompts[start_from : start_from + num_prompts],
         num_inference_steps,
-        classifier_free_guidance,
         vae_on_device,
         evaluation_range,
     )
@@ -106,6 +96,7 @@ def test_accuracy_sdxl(
     print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
 
     data = {
+        "model": "sdxl",  # For compatibility with current processes
         "metadata": {
             "device": "N150",
             "device_vae": vae_on_device,
@@ -113,11 +104,15 @@ def test_accuracy_sdxl(
             "num_prompts": num_prompts,
             "model_name": "sdxl",
         },
-        "metrics": {
-            "average_clip": average_clip_score,
-            "deviation_clip": deviation_clip_score,
-            "fid_score": fid_score,
-        },
+        "benchmarks_summary": [
+            {
+                "device": "N150",
+                "model": "sdxl",
+                "average_clip": average_clip_score,
+                "deviation_clip": deviation_clip_score,
+                "fid_score": fid_score,
+            }
+        ],
     }
 
     out_root, file_name = "test_reports", "sdxl_test_results.json"
