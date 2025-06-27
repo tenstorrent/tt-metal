@@ -13,7 +13,7 @@
         },
         "AllGatherConcat_0": {
             "op_name": "AllGatherConcat",
-            "kernel_duration": 12541.880208333332,
+            "kernel_duration": 11884.732638888889 ,
             "op_to_op": 909.3484848484849,
             "first_to_last_start": 2055.777777777778,
             "non-overlapped-dispatch-time": 12462.644444444442,
@@ -201,7 +201,7 @@
         "AllGatherAsync_1": {
             "op_name": "AllGatherAsync_1",
             "kernel_duration": 11966.91903409091,
-            "op_to_op": 742.9545454545455,
+            "op_to_op": 2422.0,
             "non-overlapped-dispatch-time": 3521.8,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
@@ -236,7 +236,7 @@
         },
         "BinaryDeviceOperation_2": {
             "op_name": "BinaryDeviceOperation_Indices_Correction",
-            "kernel_duration": 3447.309659090909,
+            "kernel_duration": 3421.53125,
             "op_to_op": 735.5454545454545,
             "non-overlapped-dispatch-time": 7268.7,
             "kernel_duration_relative_margin": 0.2,
@@ -254,7 +254,7 @@
         },
         "InterleavedToShardedDeviceOperation_1": {
             "op_name": "InterleavedToSharded_1",
-            "kernel_duration": 1650.4005681818182,
+            "kernel_duration": 974.84375,
             "op_to_op": 757.2272727272727,
             "non-overlapped-dispatch-time": 2611.15,
             "kernel_duration_relative_margin": 0.2,
@@ -263,7 +263,7 @@
         },
         "InterleavedToShardedDeviceOperation_2": {
             "op_name": "InterleavedToSharded_2",
-            "kernel_duration": 1452.78125,
+            "kernel_duration":  1453.34375,
             "op_to_op": 761.3636363636364,
             "non-overlapped-dispatch-time": 2869.15,
             "kernel_duration_relative_margin": 0.2,
@@ -317,7 +317,7 @@
         },
         "ReshardDeviceOperation_1": {
             "op_name": "Reshard_1",
-            "kernel_duration": 3272.434659090909,
+            "kernel_duration": 4412.8125,
             "op_to_op": 692.3181818181819,
             "non-overlapped-dispatch-time": 5203.55,
             "kernel_duration_relative_margin": 0.2,
@@ -326,7 +326,7 @@
         },
         "Sampling_0": {
             "op_name": "Sampling_0",
-            "kernel_duration": 74001.71306818182,
+            "kernel_duration": 76003.5625,
             "op_to_op": 61393.90909090909,
             "non-overlapped-dispatch-time": 90340.2,
             "kernel_duration_relative_margin": 0.2,
@@ -344,8 +344,8 @@
         },
         "ShardedToInterleavedDeviceOperation_1": {
             "op_name": "ShardedToInterleavedDeviceOperation_1",
-            "kernel_duration": 1177.0113636363637,
-            "op_to_op": 742.1363636363636,
+            "kernel_duration": 1159.96875,
+            "op_to_op": 901.0,
             "non-overlapped-dispatch-time": 2297.1,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
@@ -354,7 +354,7 @@
         "TopK_0": {
             "op_name": "TopK_0",
             "kernel_duration": 615934.5340909091,
-            "op_to_op": 1508.0,
+            "op_to_op": 733.0,
             "non-overlapped-dispatch-time": 5187.35,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.3,
