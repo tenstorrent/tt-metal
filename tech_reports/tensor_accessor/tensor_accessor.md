@@ -1,24 +1,20 @@
-# Sharded Accessor Guide
+# Tensor Accessor Guide
 
 ## Overview
 
-The [ShardedAccessor](../../tt_metal/hw/inc/accessor/tensor_accessor.h) is a utility for efficiently accessing sharded tensors distributed across multiple memory banks. It provides an abstraction that handles the mapping from logical tensor indices to physical memory locations.
+The [TensorAccessor](../../tt_metal/hw/inc/accessor/tensor_accessor.h) is a utility for efficiently accessing all tensors distributed across multiple memory banks. It provides an abstraction that handles the mapping from logical tensor indices to physical memory locations.
 
 The main thing to keep in mind when working with it is that developer can choose which arguments of accessor are passed through compile time arguments, which through common-runtime arguments.
-Parameters consist of [rank, number of banks, tensor shape, shard shape, banks coordinates]
+Parameters may consist of rank, number of banks, tensor shape, shard shape, banks coordinates, etc.
 
 
 ## Host-Side Setup
 
 ```c++
-// Get accessor arguments based on buffer distribution specification
-const auto& buffer_distribution_spec =
-    mesh_buffer->device_local_config().sharding_args.buffer_distribution_spec().value();
-
-// Choose which parts are compile-time vs runtime
+const auto accessor_args = TensorAccessorArgs(buffer);
+// You can choose which parts are compile-time vs runtime
 // Options include: CTA (all compile-time), RankCRTA, NumBanksCRTA, TensorShapeCRTA, ShardShapeCRTA, BankCoordsCRTA
-const auto accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
-    *mesh_device, buffer_distribution_spec, shard_view->core_type(), ArgConfig::NumBanksCRTA | ArgConfig::BankCoordsCRTA); // Number of banks and bank coordinates passed through crta, rest - cta
+const auto accessor_args = TensorAccessorArgs(buffer, tensor_accessor::ArgConfig::NumBanksCRTA | tensor_accessor::ArgConfig::BankCoordsCRTA); // Number of banks and bank coordinates passed through crta, rest - cta
 
 // Setting up device kernel with these arguments
 KernelHandle kernel_id = CreateKernel(
@@ -62,35 +58,35 @@ constexpr uint32_t base_idx_cta = 0;
 constexpr uint32_t base_idx_crta = 1;
 
 // This object keeps track of the location of arguments for the sharded accessor
-auto args = nd_sharding::make_args<base_idx_cta, base_idx_crta>();
+auto args = make_tensor_accessor_args<base_idx_cta, base_idx_crta>();
 // crta base index can be a runtime variable too:
-auto args = nd_sharding::make_args<base_idx_cta>(base_idx_crta);
+auto args = make_tensor_accessor_args<base_idx_cta>(base_idx_crta);
 
 constexpr uint32_t new_base_idx_cta = base_idx_cta + args.compile_time_args_skip();
 // new_base_idx_crta might be constexpr if rank and number of banks are static
 uint32_t new_base_idx_crta = base_idx_crta + args.runtime_args_skip();
 
 // Create a ShardedAccessor with runtime page size
-auto sharded_accessor = nd_sharding::make_sharded_accessor_from_args(args, bank_base_address, page_size);
+auto tensor_accessor = make_tensor_accessor_from_args(args, bank_base_address, page_size);
 ```
 
 - Manual arguments
 Sometimes you might need more control. For example you want to reuse same bank coordinates between different accessors. In such case you can manually create DistributionSpec from rank, number of banks, tensor/shard shape and bank coordinates:
 
 ```c++
-using tensor_shape = nd_sharding::ArrayStaticWrapper<10, 10>;
-using shard_shape = nd_sharding::ArrayStaticWrapper<3, 3>;
-using banks_coords = nd_sharding::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
-auto dspec = nd_sharding::make_dspec<2, 16, tensor_shape, shard_shape, banks_coords>();
-auto sharded_accessor = nd_sharding::make_sharded_accessor_from_dspec(std::move(dspec), 0, 1024);
+using tensor_shape = tensor_accessor::detail::ArrayStaticWrapper<10, 10>;
+using shard_shape = tensor_accessor::detail::ArrayStaticWrapper<3, 3>;
+using banks_coords = tensor_accessor::detail::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
+auto dspec = tensor_accessor::detail::make_dspec<2, 16, tensor_shape, shard_shape, banks_coords>();
+auto tensor_accessor = make_tensor_accessor_from_dspec(std::move(dspec), 0, 1024);
 
 // You can also mix constexpr/runtime values:
 uint32_t tensor_shape[2] = {10, 10};
 uint32_t shard_shape[2] = {3, 3};
-using dyn = nd_sharding::ArrayDynamicWrapper;
-using banks_coords = nd_sharding::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
-auto dspec = nd_sharding::make_dspec<0, 16, dyn, dyn, banks_coords>(2, 0, tensor_shape, shard_shape, nullptr);
-auto sharded_accessor = nd_sharding::make_sharded_accessor_from_dspec(std::move(dspec), 0, 1024);
+using dyn = ensor_accessor::detail::ArrayDynamicWrapper;
+using banks_coords = ensor_accessor::detail::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
+auto dspec = ensor_accessor::detail::make_dspec<0, 16, dyn, dyn, banks_coords>(2, 0, tensor_shape, shard_shape, nullptr);
+auto tensor_accessor = ensor_accessor::detail::make_sharded_accessor_from_dspec(std::move(dspec), 0, 1024);
 
 ```
 
@@ -100,10 +96,10 @@ Address Calculation
 
 ```c++
 // Get the NOC address for a given page
-uint32_t noc_addr = sharded_accessor.get_noc_addr(page_id);
+uint32_t noc_addr = tensor_accessor.get_noc_addr(page_id);
 
 // Get bank ID and offset for a given page
-auto [bank_id, bank_offset] = sharded_accessor.get_bank_and_offset(page_id);
+auto [bank_id, bank_offset] = tensor_accessor.get_bank_and_offset(page_id);
 ```
 
 Data Transfer
@@ -111,19 +107,22 @@ Data Transfer
 ```c++
 // read a page from memory
 uint32_t l1_write_addr = get_write_ptr(cb_id);  // Address to write to in L1 memory
-sharded_accessor.noc_async_read_page(page_id, l1_write_addr);
+auto noc_addr = tensor_accessor.get_noc_addr(page_id);
+noc_async_read(noc_addr, l1_write_addr, page_size);
 noc_async_read_barrier();  // Wait for read to complete
 
 // write a page to memory
 uint32_t l1_read_addr = get_read_ptr(cb_id);  // Address to read from in L1 memory
-sharded_accessor.noc_async_write_page(page_id, l1_read_addr);
+auto noc_addr = tensor_accessor.get_noc_addr(page_id);
+noc_async_write(l1_read_addr, noc_addr, page_size);
+noc_async_write_barrier();
 ```
 
 Distribution Spec Information
 
 ```c++
-// Access information about the tensor / shard / banks
-const auto& dspec = sharded_accessor.dspec();
+// Access information about the tensor / shard / banks (Only available for sharded tensors)
+const auto& dspec = tensor_accessor.dspec();
 
 auto rank = dspec.rank();
 auto num_banks = dspec.num_banks();
@@ -145,7 +144,7 @@ Note: In case containers size is CTA, then shapes, strides, coords are `std::arr
 
 
 ## Performance Considerations
-- If rank is static, then construction of ShardedAccessor is 0-cost, meaning that everything is precomputed in compile time.
+- If rank is static, then construction of TensorAccessor is 0-cost, meaning that everything is precomputed in compile time.
 - Calculation of address scales ~lineary with number rank
 
 
