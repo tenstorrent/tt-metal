@@ -9,6 +9,7 @@ import ttnn
 from models.demos.segformer.tests.perf.segformer_test_infra import SegformerTrace2CQ
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import run_for_wormhole_b0
+from loguru import logger
 
 
 @run_for_wormhole_b0()
@@ -48,6 +49,9 @@ def test_perf_segformer_trace_2cq(
         expected_inference_time=expected_inference_time,
         comments="trace_2cq",
     )
+
+    # Log FPS (Frames Per Second)
+    logger.info(f"[PERF] Segformer FPS: {batch_size / segformer_t2cq.inference_time:.2f}")
 
     assert (
         segformer_t2cq.inference_time < expected_inference_time
