@@ -13,7 +13,7 @@ ALL_PASSED=true
 
 for config in "${DEVICE_CONFIGS[@]}"; do
     echo
-    echo "Testing with TT_METAL_VISIBLE_DEVICES=\"$config\""
+    echo "[distributed tests] Testing with TT_METAL_VISIBLE_DEVICES=\"$config\""
     echo "------------------------------------------------"
 
     # Run with mpirun, setting the environment variable
