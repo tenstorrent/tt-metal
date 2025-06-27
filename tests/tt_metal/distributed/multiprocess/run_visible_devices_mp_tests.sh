@@ -5,7 +5,7 @@
 # Array of device configurations to test
 DEVICE_CONFIGS=("0" "1" "2" "3" "0,1" "0,3" "1,2" "2,3")
 
-echo "Testing TT_METAL_VISIBLE_DEVICES functionality with distributed_mp_unit_tests"
+echo "[distributed tests] Testing TT_METAL_VISIBLE_DEVICES functionality with distributed_mp_unit_tests"
 echo "============================================================================"
 
 # Track overall success
