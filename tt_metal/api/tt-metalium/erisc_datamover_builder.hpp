@@ -71,7 +71,7 @@ enum class FabricEriscDatamoverAxis : std::size_t {
     Invalid = 2,
 };
 
-enum class FabricEriscDatamoverContextSwitchType {
+enum class FabricEriscDatamoverContextSwitchType : uint8_t {
     // Context switch at the interval only if idle for a certain number of cycles
     WAIT_FOR_IDLE = 0,
     // Context switch every interval
