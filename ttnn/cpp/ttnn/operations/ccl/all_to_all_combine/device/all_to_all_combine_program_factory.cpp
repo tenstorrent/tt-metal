@@ -50,7 +50,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
 
-    tt::tt_metal::Program program{};
+    Program program{};
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& metadata_tensor = tensor_args.metadata_tensor;
@@ -87,40 +87,39 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     auto output_spec = output_tensor.get_tensor_spec();
     auto metadata_spec = metadata_tensor.get_tensor_spec();
 
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool mapping_is_dram = mapping_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool metadata_is_dram = metadata_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const bool mapping_is_dram = mapping_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const bool metadata_is_dram = metadata_tensor.buffer()->buffer_type() == BufferType::DRAM;
 
     const auto input_page_size_bytes = input_spec.compute_page_size_bytes();
     const auto mapping_page_size_bytes = mapping_spec.compute_page_size_bytes();
     const auto metadata_page_size_bytes = metadata_spec.compute_page_size_bytes();
 
-    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-    const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const auto l1_alignment = hal::get_l1_alignment();
+    const auto dram_alignment = hal::get_dram_alignment();
 
     const auto aligned_input_page_size_bytes = tt::align(input_page_size_bytes, input_is_dram? dram_alignment:l1_alignment);
     const auto aligned_mapping_page_size_bytes = tt::align(mapping_page_size_bytes, l1_alignment);
     const auto aligned_metadata_page_size_bytes = tt::align(metadata_page_size_bytes, l1_alignment);
 
-    auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-    auto mapping_data_format = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.get_dtype());
-    auto metadata_data_format = tt::tt_metal::datatype_to_dataformat_converter(metadata_tensor.get_dtype());
+    auto input_data_format = datatype_to_dataformat_converter(input_tensor.get_dtype());
+    auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.get_dtype());
+    auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.get_dtype());
 
     // Anything less will lead to deadlocks. It's clear why, TODO fix it.
     const uint32_t buffering_factor = experts_per_device;
 
     // input sharded buffer
     const auto data_cb_id = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig cb_data_config =
-        tt::tt_metal::CircularBufferConfig(buffering_factor * aligned_input_page_size_bytes, {{data_cb_id, input_data_format}})
+    CircularBufferConfig cb_data_config =
+        CircularBufferConfig(buffering_factor * aligned_input_page_size_bytes, {{data_cb_id, input_data_format}})
             .set_page_size(data_cb_id, aligned_input_page_size_bytes);
 
     // full mapping buffer
     const auto mapping_tensor_cb_id = tt::CBIndex::c_1;
-    tt::tt_metal::CircularBufferConfig cb_mapping_tensor_config =
-        tt::tt_metal::CircularBufferConfig(
-            aligned_mapping_page_size_bytes, {{mapping_tensor_cb_id, mapping_data_format}})
+    CircularBufferConfig cb_mapping_tensor_config =
+        CircularBufferConfig(aligned_mapping_page_size_bytes, {{mapping_tensor_cb_id, mapping_data_format}})
             .set_page_size(mapping_tensor_cb_id, aligned_mapping_page_size_bytes);
 
     // scratch space to store and share indices of per device experts
@@ -129,28 +128,25 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto aligned_local_expert_page_size_bytes =
         tt::align(experts_per_device * sizeof(local_experts_t), l1_alignment);
     const auto local_experts_dataformat = datatype_to_dataformat_converter(convert_to_data_type<local_experts_t>());
-    tt::tt_metal::CircularBufferConfig cb_local_experts_config =
-        tt::tt_metal::CircularBufferConfig(
-            aligned_local_expert_page_size_bytes, {{local_experts_cb_id, local_experts_dataformat}})
+    CircularBufferConfig cb_local_experts_config =
+        CircularBufferConfig(aligned_local_expert_page_size_bytes, {{local_experts_cb_id, local_experts_dataformat}})
             .set_page_size(local_experts_cb_id, aligned_local_expert_page_size_bytes);
 
     // metadata page buffer
     const auto metadata_cb_id = tt::CBIndex::c_3;
-    tt::tt_metal::CircularBufferConfig cb_metadata_config =
-        tt::tt_metal::CircularBufferConfig(aligned_metadata_page_size_bytes, {{metadata_cb_id, metadata_data_format}})
+    CircularBufferConfig cb_metadata_config =
+        CircularBufferConfig(aligned_metadata_page_size_bytes, {{metadata_cb_id, metadata_data_format}})
             .set_page_size(metadata_cb_id, aligned_metadata_page_size_bytes);
 
     // client interface
     constexpr auto num_headers = 2;  // data unicast headers and atomic inc "multicast" headers
     const auto client_interface_cb_id = tt::CBIndex::c_4;
-    tt::tt_metal::CircularBufferConfig client_interface_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_headers * tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
-            .set_page_size(client_interface_cb_id, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
+    CircularBufferConfig client_interface_cb_config =
+        CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
+            .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
 
     const auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set =
-        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    auto subdevice_core_range_set = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, subdevice_id);
 
     const auto subdevice_cores = corerange_to_cores(subdevice_core_range_set);
 
@@ -171,13 +167,11 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     auto sender_core = sender_cores.at(0);
 
     // create circular buffers
-    const auto input_cb_handle = tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_data_config);
-    const auto mapping_cb_handle = tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_mapping_tensor_config);
-    const auto local_experts_cb_handle =
-        tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_local_experts_config);
-    const auto metadata_cb_handle = tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_metadata_config);
-    const auto client_interface_cb =
-        tt::tt_metal::CreateCircularBuffer(program, sender_core, client_interface_cb_config);
+    const auto input_cb_handle = CreateCircularBuffer(program, sender_core, cb_data_config);
+    const auto mapping_cb_handle = CreateCircularBuffer(program, sender_core, cb_mapping_tensor_config);
+    const auto local_experts_cb_handle = CreateCircularBuffer(program, sender_core, cb_local_experts_config);
+    const auto metadata_cb_handle = CreateCircularBuffer(program, sender_core, cb_metadata_config);
+    const auto client_interface_cb = CreateCircularBuffer(program, sender_core, client_interface_cb_config);
 
     const uint32_t flat_mesh_idx = mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
 
@@ -198,12 +192,10 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         mapping_is_dram,
         metadata_is_dram};
 
-    const tt::tt_metal::DataMovementConfig reader_config{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-        .noc = tt::tt_metal::NOC::NOC_1,
-        .compile_args = reader_compile_time_args};
+    const DataMovementConfig reader_config{
+        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args};
 
-    tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
+    KernelHandle ternary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/reader_all_to_all_combine.cpp",
         sender_core,
@@ -212,7 +204,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto& axis = operation_attributes.axis;
 
     const uint32_t batch_replicate_dim = axis.has_value() ? mesh_device->shape()[axis.value()] : 1;
-    const auto fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t max_packet_size_bytes =
         input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
@@ -253,13 +245,13 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         writer_defines["REPLICATE_GROUP_AXIS"] = std::to_string(axis.value());
     }
 
-    const tt::tt_metal::DataMovementConfig writer_config{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-        .noc = tt::tt_metal::NOC::NOC_0,
+    const DataMovementConfig writer_config{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = NOC::NOC_0,
         .compile_args = writer_compile_time_args,
         .defines = writer_defines};
 
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
+    KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/writer_all_to_all_combine.cpp",
         sender_core,
@@ -278,13 +270,13 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     for (auto& neighbor : neighbors) {
         auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
         uint32_t link_id = detail::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
-        const auto neighbor_fabric_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(neighbor->id());
-        tt::tt_fabric::append_fabric_connection_rt_args(
+        const auto neighbor_fabric_id = get_fabric_node_id_from_physical_chip_id(neighbor->id());
+        append_fabric_connection_rt_args(
             fabric_node_id, neighbor_fabric_id, link_id, program, sender_core, writer_runtime_args);
     }
 
-    tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(0), reader_runtime_args);
-    tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, sender_cores.at(0), writer_runtime_args);
+    SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(0), reader_runtime_args);
+    SetRuntimeArgs(program, unary_writer_kernel_id, sender_cores.at(0), writer_runtime_args);
 
     return {
         std::move(program),
@@ -307,8 +299,8 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
         auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
         auto& core = shared_variables.core;
 
-        auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
-        auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
+        auto& reader_runtime_args = GetRuntimeArgs(program, ternary_reader_kernel_id, core);
+        auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
 
         reader_runtime_args.at(0) = tensor_args.mapping_tensor.mesh_buffer()->get_device_buffer(coord)->address();
         reader_runtime_args.at(1) = tensor_args.metadata_tensor.mesh_buffer()->get_device_buffer(coord)->address();
