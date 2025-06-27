@@ -108,6 +108,20 @@ class AllGatherConfig(OpConfigBase):
     memory_config: ttnn.MemoryConfig
     mesh_device: ConfigDevice
 
+@dataclass
+class RMSNormConfig(OpConfigBase):
+    """RMSNorm config"""
+
+    epsilon: float
+    weight: ConfigWeight
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
+    stats_memcfg: ttnn.MemoryConfig | None = None
+    output_memcfg: ttnn.MemoryConfig | None = None
+    output_dtype: ttnn.DataType = ttnn.bfloat16
+    is_distributed: bool = False
+    topology: ttnn.Topology = ttnn.Topology.Linear
+
+
 
 ConfigWithOp = dict[str, Any] | OpConfigBase
 ConfigWithoutOp = dict[str, Any]

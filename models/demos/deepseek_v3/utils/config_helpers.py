@@ -10,6 +10,7 @@ import ttnn
 
 # Constants
 TILE_SIZE = 32
+NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 
 
 # Compute kernel configurations
@@ -500,3 +501,7 @@ def save_and_get_path(path, tensor):
     ttnn.dump_tensor(path, tensor)
     ttnn.deallocate(tensor)
     return str(path)
+
+def round_to_nearest_tile_size(value):
+    """Round a value to the nearest multiple of TILE_SIZE."""
+    return math.ceil(value / TILE_SIZE) * TILE_SIZE
