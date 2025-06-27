@@ -31,6 +31,16 @@ public:
 
     Tile tile() const { return tensor_layout_.get_tile(); }
 
+    TensorSpec sharded_by_dims(
+        tt::stl::Span<const int32_t> dims,
+        CoreRangeSet grid,
+        ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+    TensorSpec sharded_across_dims(
+        tt::stl::Span<const int32_t> dims,
+        CoreRangeSet grid,
+        ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+    TensorSpec block_sharded(CoreRange grid) const;
+
     Strides compute_strides() const { return tensor_layout_.compute_strides(logical_shape_); }
     BufferShardingArgs compute_buffer_sharding_args() const {
         return tensor_layout_.compute_buffer_sharding_args(logical_shape_);
