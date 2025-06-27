@@ -438,13 +438,21 @@ namespace random {
 
 inline auto RANDOM_GENERATOR = std::mt19937(0);
 
+// the effect of instantiating a template uniform_int_distribution is undefined
+// unless IntType satisfy the following concept according to 26.6.2.1 General requirements [rand.req.genl]
+template <typename T>
+concept IntType =
+    std::is_same_v<T, short> || std::is_same_v<T, int> || std::is_same_v<T, long> || std::is_same_v<T, long long> ||
+    std::is_same_v<T, unsigned short> || std::is_same_v<T, unsigned int> || std::is_same_v<T, unsigned long> ||
+    std::is_same_v<T, unsigned long long>;
+
 inline void seed(std::size_t seed) { RANDOM_GENERATOR = std::mt19937(seed); }
 
 template <typename T>
 static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layout = Layout::ROW_MAJOR) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
 
-    TensorSpec spec(shape, TensorLayout(data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+    TensorSpec spec(shape, TensorLayout(data_type, PageConfig(layout), MemoryConfig{}));
     auto output_buffer = std::vector<T>(spec.padded_shape().volume());
 
     if constexpr (std::is_same_v<T, uint32_t>) {
@@ -465,7 +473,7 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
         }
     }
 
-    return Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec).to_layout(layout);
+    return Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);
 }
 
 inline Tensor random(

@@ -224,9 +224,43 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 
     program_dispatch::ProgramDispatchMetadata dispatch_metadata;
+    // Expected number of workers from the previous run
     uint32_t expected_num_workers_completed = sysmem_manager.get_bypass_mode()
                                                   ? trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores
                                                   : expected_num_workers_completed_[*sub_device_id];
+    const auto updated_worker_counts =
+        program_dispatch::get_expected_num_workers_completed_updates(expected_num_workers_completed, num_workers);
+
+    // Need to stall and reset counters if host wraps
+    if (updated_worker_counts.wrapped) [[unlikely]] {
+        get_config_buffer_mgr(*sub_device_id).mark_completely_full(0);
+        if (sysmem_manager.get_bypass_mode()) {
+            capture_expected_worker_count_reset_cmd(expected_num_workers_completed, sub_device_id);
+        } else {
+            for (auto device : mesh_device_->get_devices()) {
+                program_dispatch::reset_expected_num_workers_completed_on_device(
+                    device, sub_device_id, expected_num_workers_completed, id());
+            }
+        }
+    }
+
+    if (sysmem_manager.get_bypass_mode()) {
+        if (mcast_go_signals) {
+            // The workload contains programs that required a go signal mcast. Capture this here
+            // to accurately update the launch msg ring buffer state post trace execution on all
+            // mcast cores.
+            trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
+        }
+        if (unicast_go_signals) {
+            trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_unicast++;
+        }
+        // Update the expected number of workers dispatch must wait on
+        trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores = updated_worker_counts.current;
+    } else {
+        expected_num_workers_completed_[*sub_device_id] = updated_worker_counts.current;
+    }
+    expected_num_workers_completed = updated_worker_counts.previous;
+
     // Reserve space in the L1 Kernel Config Ring Buffer for this workload.
     program_dispatch::reserve_space_in_kernel_config_buffer(
         this->get_config_buffer_mgr(*sub_device_id),
@@ -331,21 +365,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].inc_unicast_wptr(1);
     }
 
-    if (sysmem_manager.get_bypass_mode()) {
-        if (mcast_go_signals) {
-            // The workload contains programs that required a go signal mcast. Capture this here
-            // to accurately update the launch msg ring buffer state post trace execution on all
-            // mcast cores.
-            trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
-        }
-        if (unicast_go_signals) {
-            trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_unicast++;
-        }
-        // Update the expected number of workers dispatch must wait on
-        trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores += num_workers;
-    } else {
-        expected_num_workers_completed_[*sub_device_id] += num_workers;
-    }
     // From the dispatcher's perspective, binaries are now committed to DRAM
     mesh_workload.impl().set_program_binary_status(mesh_device_id, ProgramBinaryStatus::Committed);
     mesh_workload.set_last_used_command_queue_for_testing(this);
@@ -983,6 +1002,32 @@ void FDMeshCommandQueue::reset_prefetcher_cache_manager() { prefetcher_cache_man
 
 int FDMeshCommandQueue::get_prefetcher_cache_sizeB() const {
     return this->prefetcher_cache_manager_->get_cache_sizeB();
+}
+
+void FDMeshCommandQueue::capture_expected_worker_count_reset_cmd(
+    uint32_t previous_expected_workers, SubDeviceId sub_device) {
+    for (auto device : mesh_device_->get_devices()) {
+        auto& sysmem_manager = device->sysmem_manager();
+        uint32_t sysmem_manager_offset = sysmem_manager.get_issue_queue_write_ptr(id_);
+        program_dispatch::reset_expected_num_workers_completed_on_device(
+            device, sub_device, previous_expected_workers, id());
+
+        // Find the coordinate for this device by iterating over all coordinates
+        MeshCoordinate device_coord{0xffffffff};
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            if (mesh_device_->get_device(coord) == device) {
+                device_coord = coord;
+                break;
+            }
+        }
+        TT_ASSERT(device_coord != MeshCoordinate{0xffffffff});
+        auto mesh_trace_md = MeshTraceStagingMetadata{
+            MeshCoordinateRange{device_coord},
+            device_coord,
+            sysmem_manager_offset,
+            sysmem_manager.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
+        ordered_mesh_trace_md_.push_back(mesh_trace_md);
+    }
 }
 
 }  // namespace tt::tt_metal::distributed
