@@ -118,6 +118,7 @@ void MAIN {
     constexpr uint32_t sync_cb_id2 = get_compile_time_arg_val(19);
     constexpr uint32_t sync_cb_id3 = get_compile_time_arg_val(20);
     constexpr uint32_t sync_cb_id4 = get_compile_time_arg_val(21);
+    constexpr uint32_t sync_cb_id5 = get_compile_time_arg_val(22);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -146,10 +147,10 @@ void MAIN {
         remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
 
     // wait for initialization to complete
-    cb_wait_front(sync_cb_id1, 2);
     if constexpr (split_reader) {
         cb_wait_front(sync_cb_id2, 2);
     }
+    cb_wait_front(sync_cb_id1, 2);
 
     // DPRINT << "nsticks_per_core_by_nblocks: " << nsticks_per_core_by_nblocks << ENDL();
 
@@ -188,10 +189,10 @@ void MAIN {
 
                 if (max_rows_interm_remainder == max_rows_for_reduction - 2 || chunk == interm_reduction_chunks - 1) {
                     // sync PACK and UNPACK so intermediate reduction gets packed before the final reduction is unpacked
-                    cb_wait_front(sync_cb_id1, 2);
-                    cb_pop_front(sync_cb_id1, 2);
-                    cb_reserve_back(sync_cb_id1, 2);
-                    cb_push_back(sync_cb_id1, 2);
+                    cb_reserve_back(sync_cb_id5, 2);
+                    cb_push_back(sync_cb_id5, 2);
+                    cb_wait_front(sync_cb_id5, 2);
+                    cb_pop_front(sync_cb_id5, 2);
 
                     // perform the final reduction over the first N - 1 whole chunks // Reduction of final 2 sticks.
                     reduce_h_fused<
