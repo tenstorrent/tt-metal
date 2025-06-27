@@ -24,12 +24,18 @@ void kernel_main() {
     // DPRINT << "reduction_receiver out_ready_sem_wait_value: " << out_ready_sem_wait_value << "\n";
     // DPRINT << "reduction_receiver before out_ready_sem_value: "
     //    << *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) << "\n";
-    while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
+    // while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
+    volatile tt_l1_ptr uint32_t* out_ready_sema =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
+    noc_semaphore_wait(out_ready_sema, out_ready_sem_wait_value);
+    // noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr),
+    // out_ready_sem_wait_value);
     // {
     //     DPRINT << "reduction_receiver out_ready_sem_value in progress: " << *reinterpret_cast<volatile tt_l1_ptr
     //     uint32_t*>(out_ready_sem_bank_addr) << "\n";
     // }
     // kernel_sleep(100000000);
+    // kernel_sleep(10000);
 
     // DPRINT << "reduction_receiver afterward out_ready_sem_value: "
     //        << *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) << "\n";

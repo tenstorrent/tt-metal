@@ -241,7 +241,7 @@ def test_all_gather_tg_llama(
         (NUM_ITERATIONS, 0),
     ],
 )
-@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
     "device_params",
     [

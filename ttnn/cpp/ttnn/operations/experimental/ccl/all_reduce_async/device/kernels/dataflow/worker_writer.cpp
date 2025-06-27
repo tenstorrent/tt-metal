@@ -162,6 +162,7 @@ void kernel_main() {
                 static_cast<uint16_t>(32),
                 true);
             noc_async_writes_flushed();
+            noc_semaphore_inc(sema_noc_addr, 1);
         } else {
             write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
@@ -257,7 +258,7 @@ void kernel_main() {
         fabric_connection.close_finish();
     }
 
-    // noc_async_write_barrier();
+    noc_async_write_barrier();
 
     // DPRINT << "writer done \n";
 }
