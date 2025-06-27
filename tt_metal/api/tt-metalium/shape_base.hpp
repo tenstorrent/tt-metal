@@ -8,7 +8,6 @@
 
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
-#include <iterator>
 
 namespace tt::tt_metal {
 
@@ -26,10 +25,6 @@ public:
         init();
     }
     explicit ShapeBase(tt::stl::Span<const uint32_t> span) : value_(span.begin(), span.end()) { init(); }
-    template <std::input_iterator It>
-    explicit ShapeBase(It first, It last) : value_(first, last) {
-        init();
-    }
 
     template <std::size_t N>
     bool operator==(const std::array<uint32_t, N>& other) const {
