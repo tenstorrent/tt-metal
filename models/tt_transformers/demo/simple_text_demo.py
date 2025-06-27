@@ -980,7 +980,7 @@ def test_demo_text(
                 # N300 targets
                 "N300_Qwen2.5-7B": 150,
                 # T3K targets
-                "T3K_Llama3.1-70B": 245,
+                "T3K_Llama3.1-70B": 181,
                 "T3K_Qwen2.5-72B": 211,
                 "T3K_Qwen3-32B": 470,
             }
@@ -993,7 +993,7 @@ def test_demo_text(
                 # N300 targets
                 "N300_Qwen2.5-7B": 10,
                 # T3K targets
-                "T3K_Llama3.1-70B": 11,
+                "T3K_Llama3.1-70B": 14,
                 "T3K_Qwen2.5-72B": 13,
                 "T3K_Qwen3-32B": 11,
             }
