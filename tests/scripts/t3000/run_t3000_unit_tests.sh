@@ -114,9 +114,9 @@ run_t3000_falcon7b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
-  pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_mlp.py ; fail+=$?
-  pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_attention.py ; fail+=$?
-  pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_decoder.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_mlp.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_attention.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_decoder.py ; fail+=$?
   #pytest models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py
 
   # Record the end time
@@ -164,13 +164,13 @@ run_t3000_llama3-small_tests() {
 
   # Run all Llama3 tests for 1B, 3B and 8B weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+    TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
+    TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+    TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
+    TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
+    TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+    TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
+    TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
@@ -222,13 +222,13 @@ run_t3000_llama3.1-70b_tests() {
   # Llama3.1-70B weights
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
 
-  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
-  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
-  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
-  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
-  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -251,13 +251,13 @@ run_t3000_llama3.2-90b_tests() {
   # use repacked weights to shorten unit test time by loading only the necessary weights
   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/repacked/
 
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -277,13 +277,13 @@ run_t3000_mistral_tests() {
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
   hf_model="/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
 
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_attention.py
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_attention_prefill.py
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_embedding.py
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_mlp.py
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_rms_norm.py
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_decoder.py
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_attention.py
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_attention_prefill.py
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_embedding.py
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_mlp.py
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_rms_norm.py
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_decoder.py
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py
 
 }
 
@@ -298,15 +298,15 @@ run_t3000_llama3.2-11b-vision_unit_tests() {
   # Llama3.2-11B
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_block.py ; fail+=$?
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1" ; fail+=$?
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1" ; fail+=$?
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_block.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1" ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1" ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -330,15 +330,15 @@ run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests() {
   # Use MESH_DEVICE env variable to run on an N300 mesh
   mesh_device=N300
 
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_block.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1" ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1" ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_block.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1" ; fail+=$?
+  TT_METAL_FD_FABRIC=true MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1" ; fail+=$?
+  TT_METAL_FD_FABRIC=true MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -360,15 +360,15 @@ run_t3000_llama3.2-90b-vision_unit_tests() {
   # use repacked weights to shorten unit test time by loading only the necessary weights
   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/repacked/
 
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_block.py ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1" ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1" ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_block.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1" ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1" ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -386,15 +386,15 @@ run_t3000_mixtral_tests() {
 
   echo "LOG_METAL: Running run_t3000_mixtral_tests"
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_attention.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_rms_norm.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_embedding.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_decoder.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_attention.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_rms_norm.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_embedding.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_decoder.py ; fail+=$?
   # Mixtral prefill tests
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp_prefill.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe_prefill.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp_prefill.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe_prefill.py ; fail+=$?
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
@@ -411,10 +411,10 @@ run_t3000_grok_tests() {
 
   echo "LOG_METAL: Running run_t3000_grok_tests"
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_rms_norm.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_attention.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_mlp.py --timeout=500; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_moe.py --timeout=600; fail+=$?
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_rms_norm.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_attention.py ; fail+=$?
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_mlp.py --timeout=500; fail+=$?
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_moe.py --timeout=600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -432,7 +432,7 @@ run_t3000_unet_shallow_tests() {
 
   echo "LOG_METAL: Running run_t3000_unet_shallow_tests"
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_unet/tests/test_unet_multi_device.py; fail+=$?
+  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_unet/tests/test_unet_multi_device.py; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
