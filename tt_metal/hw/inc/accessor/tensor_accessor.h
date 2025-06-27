@@ -68,12 +68,34 @@ public:
         size_t bank_page_offset;
     };
 
+    PageMapping get_bank_and_offset_rank4_or_more(uint32_t page_id) const {
+        size_t flattened_shard_id = 0;
+        size_t page_offset_within_shard = 0;
+        for (int i = dspec().rank() - 1; i >= 0; --i) {
+            // Check that page_coord is within bounds
+            uint32_t page_coord = page_id % dspec().tensor_shape()[i];
+            ASSERT(page_coord < dspec().tensor_shape()[i]);
+            page_id /= dspec().tensor_shape()[i];
+            flattened_shard_id += (page_coord / dspec().shard_shape()[i]) * dspec().shard_grid_strides()[i];
+            page_offset_within_shard += (page_coord % dspec().shard_shape()[i]) * dspec().shard_strides()[i];
+        }
+
+        // NOTE: This assumes shards are round-robin assigned across banks
+        size_t bank_id = flattened_shard_id % dspec().num_banks();
+        size_t bank_shard_id = flattened_shard_id / dspec().num_banks();
+
+        size_t bank_page_offset = bank_shard_id * dspec().shard_volume() + page_offset_within_shard;
+
+        return {bank_id, bank_page_offset};
+    }
+
     PageMapping get_bank_and_offset(uint32_t page_id) const {
         // Check that page_id is within bounds
         ASSERT(page_id < dspec().tensor_volume());
-        // TODO: Should be possible to directly implement bank_and_offset logic with page_id and skip computing the
-        // page_coord
-        // std::array<uint32_t, detail::MAX_RANK> page_coord;
+        if (dspec().rank() >= 4) {
+            return get_bank_and_offset_rank4_or_more(page_id);
+        }
+
         typename DSpec::Shape page_coord;
         if constexpr (!DSpec::has_static_rank) {
             // If rank is not known at compile time, we need to use the _page_coord buffer for span
