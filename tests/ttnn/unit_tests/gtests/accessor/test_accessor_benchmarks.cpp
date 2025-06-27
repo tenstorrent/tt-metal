@@ -8,6 +8,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include <string>
+#include <cstdint>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>

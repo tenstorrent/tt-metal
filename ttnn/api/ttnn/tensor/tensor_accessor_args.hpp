@@ -7,6 +7,9 @@
 #include <tt-metalium/buffer.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 
+#include <cstdint>
+#include <vector>
+
 namespace tt::tt_metal {
 
 struct TensorAccessorArgs {

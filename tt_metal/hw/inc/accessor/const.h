@@ -5,8 +5,9 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 
 namespace tensor_accessor {
 constexpr std::size_t MAX_RANK = 8;                            // Maximum rank supported by the accessor
-constexpr std::size_t UNKNOWN = static_cast<std::size_t>(-1);  // Used to indicate unknown values
+constexpr std::size_t UNKNOWN = std::numeric_limits<std::size_t>::max();  // Used to indicate unknown values
 }  // namespace tensor_accessor
