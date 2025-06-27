@@ -134,21 +134,6 @@ def run_demo_inference(
         pipeline.scheduler, num_inference_steps, cpu_device, None, None
     )
 
-    # Convert timesteps to ttnn
-    # ttnn_timesteps = []
-    # for t in timesteps:
-    #     scalar_tensor = torch.tensor(t).unsqueeze(0)
-    #     ttnn_timesteps.append(
-    #         ttnn.from_torch(
-    #             scalar_tensor,
-    #             dtype=ttnn.bfloat16,
-    #             device=ttnn_device,
-    #             layout=ttnn.TILE_LAYOUT,
-    #             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    #             mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
-    #         )
-    #     )
-
     num_channels_latents = pipeline.unet.config.in_channels
     assert num_channels_latents == 4, f"num_channels_latents is {num_channels_latents}, but it should be 4"
 
@@ -181,50 +166,6 @@ def run_demo_inference(
         text_encoder_projection_dim=text_encoder_projection_dim,
     )
     negative_add_time_ids = add_time_ids
-
-    # torch_prompt_embeds = torch.stack([negative_prompt_embeds_torch, prompt_embeds_torch], dim=1)
-    # torch_add_text_embeds = torch.stack([negative_pooled_prompt_embeds_torch, pooled_prompt_embeds_torch], dim=1)
-    # ttnn_prompt_embeds = ttnn.from_torch(
-    #     torch_prompt_embeds,
-    #     dtype=ttnn.bfloat16,
-    #     device=ttnn_device,
-    #     layout=ttnn.TILE_LAYOUT,
-    #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    #     mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
-    # )
-    # ttnn_add_text_embeds = ttnn.from_torch(
-    #     torch_add_text_embeds,
-    #     dtype=ttnn.bfloat16,
-    #     device=ttnn_device,
-    #     layout=ttnn.ROW_MAJOR_LAYOUT,
-    #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    #     mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
-    # )
-
-    # ttnn_add_time_id1 = ttnn.from_torch(
-    #     negative_add_time_ids.squeeze(0),
-    #     dtype=ttnn.bfloat16,
-    #     device=ttnn_device,
-    #     layout=ttnn.TILE_LAYOUT,
-    #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    #     mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
-    # )
-    # ttnn_add_time_id2 = ttnn.from_torch(
-    #     add_time_ids.squeeze(0),
-    #     dtype=ttnn.bfloat16,
-    #     device=ttnn_device,
-    #     layout=ttnn.TILE_LAYOUT,
-    #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    #     mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
-    # )
-    # ttnn_time_ids = [ttnn_add_time_id1, ttnn_add_time_id2]
-    # ttnn_text_embeds = [
-    #     [
-    #         ttnn_add_text_embed[0],
-    #         ttnn_add_text_embed[1],
-    #     ]
-    #     for ttnn_add_text_embed in ttnn_add_text_embeds
-    # ]
 
     scaling_factor = ttnn.from_torch(
         torch.Tensor([pipeline.vae.config.scaling_factor]),
@@ -270,19 +211,6 @@ def run_demo_inference(
         ]
         for ttnn_add_text_embed in tt_add_text_embeds
     ]
-    # latents_clone = latents.clone()
-
-    # latents = ttnn.from_torch(
-    #     latents,
-    #     dtype=ttnn.bfloat16,
-    #     device=ttnn_device,
-    #     layout=ttnn.TILE_LAYOUT,
-    #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    #     mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
-    # )
-
-    # UNet will deallocate the input tensor
-    # latent_model_input = ttnn.clone(latents)
 
     logger.info("Performing warmup run, to make use of program caching in actual inference...")
     prepare_input_tensors(
@@ -396,16 +324,6 @@ def run_demo_inference(
                 img.save(f"output/output{len(images) + start_from}.png")
                 logger.info(f"Image saved to output/output{len(images) + start_from}.png")
 
-        # latents = latents_clone.clone()
-        # latents = ttnn.from_torch(
-        #     latents,
-        #     dtype=ttnn.bfloat16,
-        #     device=ttnn_device,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
-        # )
-
     return images
 
 
@@ -414,7 +332,14 @@ def run_demo_inference(
 )
 @pytest.mark.parametrize(
     "prompt",
-    (("An astronaut riding a green horse"),),
+    (
+        (
+            [
+                "An astronaut riding a green horse",
+                "A futuristic cityscape at sunset, with flying cars and glowing skyscrapers, ultra-detailed, cinematic lighting, 4k",
+            ]
+        ),
+    ),
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
