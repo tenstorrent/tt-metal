@@ -13,7 +13,6 @@ void kernel_main() {
     // need to have these as compile-time, they are inner loop bouds / unroll loops / constexpr conditionals based on
     // them
     constexpr uint32_t window_outer = get_compile_time_arg_val(4);
-    constexpr uint32_t window_inner = get_compile_time_arg_val(5);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);
     constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(9);

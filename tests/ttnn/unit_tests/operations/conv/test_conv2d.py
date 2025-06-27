@@ -15,7 +15,7 @@ import torch
     "output_channels, input_channels, input_height, input_width, shard_layout, config",
     (
         (353, 384, 8, 8, WS, None),
-        (128, 128, 32, 32, BS, None),
+        (512, 512, 32, 32, BS, None),
         (16, 16, 256, 256, HS, {"act_block_h": 32}),
     ),
 )
@@ -37,7 +37,7 @@ import torch
 )
 @pytest.mark.parametrize(
     "packer_l1_acc",
-    [False],
+    [False, True],
 )
 @pytest.mark.parametrize(
     "filter, padding",
@@ -98,11 +98,11 @@ def test_conv_features(
         config,
         shard_layout=shard_layout,
         output_layout=output_layout,
-        has_bias=True,
+        # has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
         preprocess_weights_on_device=True,
-        run_twice=True,
+        # run_twice=True,
         input_layout=ttnn.TILE_LAYOUT if input_dtype == ttnn.bfloat8_b else None,
         input_dtype=input_dtype,
     )

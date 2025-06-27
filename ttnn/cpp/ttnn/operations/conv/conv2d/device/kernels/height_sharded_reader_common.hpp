@@ -42,12 +42,15 @@ FORCE_INLINE void read_sticks(
 
     while (num_elems--) {
         reader_idx++;
+        // DPRINT << "reader_idx: " << reader_idx << ENDL();
         uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
         uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
 
         if constexpr (dilation_w == 1) {
             for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                 uint32_t act_l1_offset = reader_offset + (ind * conv_act_c_read_bytes);
+                // DPRINT << "stick idx: " << ind << ENDL();
+                // DPRINT << HEX() << "act_l1_offset: " << act_l1_offset << DEC()<< ENDL();
                 noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
                 l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
             }

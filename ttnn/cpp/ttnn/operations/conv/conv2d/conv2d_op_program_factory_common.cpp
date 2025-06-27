@@ -5,6 +5,7 @@
 #include "conv2d_op_program_factory_common.hpp"
 #include <cstdint>
 #include <optional>
+#include <tt-logger/tt-logger.hpp>
 #include <vector>
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/constants.hpp"
