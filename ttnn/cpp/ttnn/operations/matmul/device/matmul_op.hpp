@@ -58,8 +58,6 @@ ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tens
  */
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor, bool bcast_batch);
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 

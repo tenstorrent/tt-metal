@@ -363,12 +363,7 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
         batch_size_b == 1,
         "Second input cannot be currently batched when running matmul using "
         "1d systolic array");
-    TT_FATAL(
-        (batch_size_a * m_size) % ttnn::TILE_SIZE == 0 && k_size % ttnn::TILE_SIZE == 0 &&
-            n_size % ttnn::TILE_SIZE == 0,
-        "The last two dimensions of the first tensor and the last dimension "
-        "of the second tensor must be a multiple of "
-        "tile size");
+
     uint32_t batch_and_m_tiles = (batch_size_a * m_size) / ttnn::TILE_SIZE;
     uint32_t k_tiles = k_size / ttnn::TILE_SIZE;
     uint32_t n_tiles = n_size / ttnn::TILE_SIZE;
@@ -674,13 +669,6 @@ MatmulProgramConfig create_matmul_program_config(
     const auto& input_tensor_b_memory_config = input_tensor_b.memory_config();
     bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
     bool a_is_sharded = input_tensor_a.is_sharded();
-    TT_FATAL(inteneded_k_size_of_a == inteneded_k_size_of_b, "The k dimension does not match between tensors");
-    TT_FATAL(
-        (batch_size_a * m_size) % ttnn::TILE_SIZE == 0 && k_size % ttnn::TILE_SIZE == 0 &&
-            n_size % ttnn::TILE_SIZE == 0,
-        "The last two dimensions of the first tensor and the last dimension "
-        "of the second tensor must be a multiple of "
-        "tile size");
     auto core_coord = input_tensor_a.device()->compute_with_storage_grid_size();
     bool has_user_core_coord = user_core_coord.has_value();
     if (has_user_core_coord) {
@@ -843,11 +831,10 @@ MatmulProgramConfig get_matmul_program_config(
     const uint32_t bias_single_tile_size,
     const MemoryConfig& output_mem_config,
     const std::optional<UnaryWithParam>& fused_activation,
-    const bool matmul,
+    const bool is_batched_matmul,
     const std::optional<const CoreCoord> user_core_coord,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype) {
-    TT_FATAL(input_tensor_a.is_sharded(), "Error");
     bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
     // TODO: allow overwriting of grid size by user_core_coord after allowing
     // support of arbitrary compute grid and more generic sharded output tensor
@@ -857,154 +844,31 @@ MatmulProgramConfig get_matmul_program_config(
     auto in0_tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.tensor_spec().tile().get_tile_shape();
 
-    // MCAST matmuls only support input_b in INTERLEAVED
-    if (matmul) {
-        TT_FATAL(input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
-        if ((input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or
-             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) and
-            (grid_size.x > 1 or grid_size.y > 1)) {
-            TT_FATAL(input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
-
-            bool per_core_N_equals_subblock_w_constraint = false;
-            if (output_mem_config.is_sharded()) {
-                TT_FATAL(input_tensor_a.memory_config().buffer_type() == output_mem_config.buffer_type(), "Error");
-                TT_FATAL(input_tensor_a.memory_config().memory_layout() == output_mem_config.memory_layout(), "Error");
-                per_core_N_equals_subblock_w_constraint = true;
-            }
-
-            uint32_t M = input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
-            uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
-            uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
-            auto shard_shape = input_tensor_a.shard_spec().value().shape;
-
-            bool mcast_in0;
-            uint32_t per_core_M;
-            uint32_t per_core_N;
-            uint32_t in0_block_w;
-            if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-                mcast_in0 = true;
-                per_core_M = M;
-                per_core_N = div_up(N, input_tensor_a.shard_spec().value().grid.num_cores());
-                in0_block_w = std::gcd(shard_shape[1] / in0_tile_shape[1], K);
-            } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-                mcast_in0 = false;
-                per_core_M = shard_shape[0] / in0_tile_shape[0];
-                per_core_N = N;  // Only necessary if output is sharded; otherwise, can
-                                 // set this to be < N
-                in0_block_w = K;
-            } else {
-                TT_THROW(
-                    "Input tensor must be WIDTH or HEIGHT sharded for 1D mcast "
-                    "matmul!");
-            }
-
-            auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
-                input_tensor_a,
-                input_tensor_b,
-                bias_single_tile_size,
-                per_core_M,
-                per_core_N,
-                in0_block_w,
-                estimate_interm_tile_size(compute_kernel_config, output_dtype),
-                /*adjust_in0_block_w=*/false);
-            uint32_t out_block_h = mutlti_dim_per_core_factor[0];
-            uint32_t out_block_w = mutlti_dim_per_core_factor[1];
-
-            auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
-                out_block_h, out_block_w, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
-            auto out_subblock_h = std::get<0>(subblock_hw);
-            auto out_subblock_w = std::get<1>(subblock_hw);
-
-            return MatmulMultiCoreReuseMultiCast1DProgramConfig{
-                .compute_with_storage_grid_size = grid_size,
-                .in0_block_w = in0_block_w,
-                .out_subblock_h = out_subblock_h,
-                .out_subblock_w = out_subblock_w,
-                .out_block_h = out_block_h,
-                .out_block_w = out_block_w,
-                .per_core_M = per_core_M,
-                .per_core_N = per_core_N,
-                .fuse_batch = true,
-                .fused_activation = fused_activation,
-                .mcast_in0 = mcast_in0,
-            };
-        } else if (
-            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
-            (grid_size.x > 1 and grid_size.y > 1)) {
-            bool transpose_mcast = input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
-
-            bool per_core_N_equals_subblock_w_constraint = false;
-            if (output_mem_config.is_sharded()) {
-                TT_FATAL(input_tensor_a.memory_config().buffer_type() == output_mem_config.buffer_type(), "Error");
-                TT_FATAL(input_tensor_a.memory_config().memory_layout() == output_mem_config.memory_layout(), "Error");
-                per_core_N_equals_subblock_w_constraint = true;
-            }
-
-            uint32_t M = input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
-            uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
-            uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
-
-            auto shard_shape = input_tensor_a.shard_spec().value().shape;
-            uint32_t virtual_x = transpose_mcast ? grid_size.y : grid_size.x;
-            uint32_t virtual_y = transpose_mcast ? grid_size.x : grid_size.y;
-            bool cores_along_x_match_grid_size = virtual_x == (K / (shard_shape[1] / in0_tile_shape[1]));
-            bool cores_along_y_match_grid_size = virtual_y == (M / (shard_shape[0] / in0_tile_shape[0]));
-            TT_FATAL(
-                cores_along_y_match_grid_size || virtual_y == div_up(M, (shard_shape[0] / in0_tile_shape[0])),
-                "Num cores along y must match provided grid size!");
-            TT_FATAL(
-                cores_along_x_match_grid_size || virtual_x == div_up(K, (shard_shape[1] / in0_tile_shape[1])),
-                "Num cores along x must match provided grid size!");
-
-            uint32_t per_core_M = div_up(M, virtual_y);
-            uint32_t per_core_N = div_up(N, virtual_x);
-            uint32_t in0_block_w = cores_along_x_match_grid_size ? std::gcd(shard_shape[1] / in0_tile_shape[1], K) : 1;
-
-            auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
-                input_tensor_a,
-                input_tensor_b,
-                bias_single_tile_size,
-                per_core_M,
-                per_core_N,
-                in0_block_w,
-                estimate_interm_tile_size(compute_kernel_config, output_dtype),
-                /*adjust_in0_block_w=*/false);
-            uint32_t out_block_h = mutlti_dim_per_core_factor[0];
-            uint32_t out_block_w = mutlti_dim_per_core_factor[1];
-
-            auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
-                out_block_h, out_block_w, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
-            auto out_subblock_h = std::get<0>(subblock_hw);
-            auto out_subblock_w = std::get<1>(subblock_hw);
-
-            return MatmulMultiCoreReuseMultiCastProgramConfig{
-                .compute_with_storage_grid_size = grid_size,
-                .in0_block_w = in0_block_w,
-                .out_subblock_h = out_subblock_h,
-                .out_subblock_w = out_subblock_w,
-                .out_block_h = out_block_h,
-                .out_block_w = out_block_w,
-                .per_core_M = per_core_M,
-                .per_core_N = per_core_N,
-                .transpose_mcast = transpose_mcast,
-                .fused_activation = fused_activation,
-            };
-        }
-    } else {
+    if (is_batched_matmul) {
         // TODO: Need a better criteria for BMMs and
         // MatmulMultiCoreReuseProgramConfig
-        TT_FATAL(input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED, "Error");
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
+            "Input tensor A cannot use WIDTH_SHARDED memory layout for this matmul operation");
 
         bool per_core_N_equals_subblock_w_constraint = false;
         if (output_mem_config.is_sharded()) {
-            TT_FATAL(input_tensor_a.memory_config().buffer_type() == output_mem_config.buffer_type(), "Error");
-            TT_FATAL(input_tensor_a.memory_config().memory_layout() == output_mem_config.memory_layout(), "Error");
+            TT_FATAL(
+                input_tensor_a.memory_config().buffer_type() == output_mem_config.buffer_type(),
+                "Input tensor A buffer type ({}) must match output buffer type ({})",
+                input_tensor_a.memory_config().buffer_type(),
+                output_mem_config.buffer_type());
+            TT_FATAL(
+                input_tensor_a.memory_config().memory_layout() == output_mem_config.memory_layout(),
+                "Input tensor A memory layout ({}) must match output memory layout ({})",
+                input_tensor_a.memory_config().memory_layout(),
+                output_mem_config.memory_layout());
             per_core_N_equals_subblock_w_constraint = true;
         }
 
-        uint32_t M = input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
-        uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
-        uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
+        uint32_t M = input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1] / in0_tile_shape[0];
+        uint32_t K = input_tensor_a.get_padded_shape()[-1] / in0_tile_shape[1];
+        uint32_t N = input_tensor_b.get_padded_shape()[-1] / in1_tile_shape[1];
 
         auto in0_shard_shape = input_tensor_a.shard_spec().value().shape;
         uint32_t per_core_M = in0_shard_shape[0] / in0_tile_shape[0];
@@ -1017,18 +881,31 @@ MatmulProgramConfig get_matmul_program_config(
         auto out_subblock_w = std::get<1>(subblock_hw);
 
         // TODO: Temporarily allow for single core; should support bcast_batch in general
-        uint32_t batch_size_a = get_batch_size(input_tensor_a.padded_shape());
-        uint32_t batch_size_b = get_batch_size(input_tensor_b.padded_shape());
-        bool broadcast_batch = batch_size_a > 1 and batch_size_b == 1;
-        TT_FATAL(!broadcast_batch, "Error");
+        uint32_t batch_size_a = get_batch_size(input_tensor_a.get_padded_shape());
+        uint32_t batch_size_b = get_batch_size(input_tensor_b.get_padded_shape());
+        TT_FATAL(
+            batch_size_a == 1 || batch_size_b > 1,
+            "Broadcasting batch dimensions is not supported for batched matrix multiplication. Batch sizes must match "
+            "or both be 1. Got: {} vs {}",
+            batch_size_a,
+            batch_size_b);
 
         if (input_tensor_b.is_sharded()) {
             TT_FATAL(
-                input_tensor_a.memory_config().buffer_type() == input_tensor_b.memory_config().buffer_type(), "Error");
+                input_tensor_a.memory_config().buffer_type() == input_tensor_b.memory_config().buffer_type(),
+                "Buffer type mismatch between input tensors A and B. Got: {} vs {}",
+                input_tensor_a.memory_config().buffer_type(),
+                input_tensor_b.memory_config().buffer_type());
             TT_FATAL(
                 input_tensor_a.memory_config().memory_layout() == input_tensor_b.memory_config().memory_layout(),
-                "Error");
-            TT_FATAL(input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid, "Error");
+                "Memory layout mismatch between input tensors A and B. Got: {} vs {}",
+                input_tensor_a.memory_config().memory_layout(),
+                input_tensor_b.memory_config().memory_layout());
+            TT_FATAL(
+                input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
+                "Shard grid mismatch between input tensors A and B. Got: {} vs {}",
+                input_tensor_a.shard_spec().value().grid,
+                input_tensor_b.shard_spec().value().grid);
             TT_FATAL(
                 input_tensor_a.shard_spec().value().orientation == input_tensor_b.shard_spec().value().orientation,
                 "Orientation mismatch a {} vs b {}.",
@@ -1045,6 +922,163 @@ MatmulProgramConfig get_matmul_program_config(
             .per_core_N = per_core_N,
         };
     }
+
+    // This is a unbatched matmul
+    // MCAST matmuls only support input_b in INTERLEAVED
+    TT_FATAL(
+        input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "MCAST matmuls only support input_b in INTERLEAVED memory layout. Got: {}",
+        input_tensor_b.memory_config().memory_layout());
+
+    if ((input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or
+         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) and
+        (grid_size.x > 1 or grid_size.y > 1)) {
+        TT_FATAL(
+            input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+            "For 1D mcast matmul with width/height sharded input, shard orientation must be ROW_MAJOR. Got: {}",
+            input_tensor_a.shard_spec().value().orientation);
+
+        bool per_core_N_equals_subblock_w_constraint = output_mem_config.is_sharded();
+        if (output_mem_config.is_sharded()) {
+            TT_FATAL(
+                input_tensor_a.memory_config().buffer_type() == output_mem_config.buffer_type(),
+                "Buffer type mismatch between input_a and output when output is sharded. Got: {} vs {}",
+                input_tensor_a.memory_config().buffer_type(),
+                output_mem_config.buffer_type());
+            TT_FATAL(
+                input_tensor_a.memory_config().memory_layout() == output_mem_config.memory_layout(),
+                "Memory layout mismatch between input_a and output when output is sharded. Got: {} vs {}",
+                input_tensor_a.memory_config().memory_layout(),
+                output_mem_config.memory_layout());
+        }
+
+            uint32_t M = input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
+            uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
+            uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
+            auto shard_shape = input_tensor_a.shard_spec().value().shape;
+
+        bool mcast_in0;
+        uint32_t per_core_M;
+        uint32_t per_core_N;
+        uint32_t in0_block_w;
+        if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+            mcast_in0 = true;
+            per_core_M = M;
+            per_core_N = div_up(N, input_tensor_a.shard_spec().value().grid.num_cores());
+            in0_block_w = std::gcd(shard_shape[1] / in0_tile_shape[1], K);
+        } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+            mcast_in0 = false;
+            per_core_M = shard_shape[0] / in0_tile_shape[0];
+            per_core_N = N;  // Only necessary if output is sharded; otherwise, can
+                             // set this to be < N
+            in0_block_w = K;
+        } else {
+            TT_THROW(
+                "Input tensor must be WIDTH or HEIGHT sharded for 1D mcast "
+                "matmul!");
+        }
+
+        auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
+            input_tensor_a,
+            input_tensor_b,
+            bias_single_tile_size,
+            per_core_M,
+            per_core_N,
+            in0_block_w,
+            estimate_interm_tile_size(compute_kernel_config, output_dtype),
+            /*adjust_in0_block_w=*/false);
+        uint32_t out_block_h = mutlti_dim_per_core_factor[0];
+        uint32_t out_block_w = mutlti_dim_per_core_factor[1];
+
+        auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
+            out_block_h, out_block_w, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
+        auto out_subblock_h = std::get<0>(subblock_hw);
+        auto out_subblock_w = std::get<1>(subblock_hw);
+
+        return MatmulMultiCoreReuseMultiCast1DProgramConfig{
+            .compute_with_storage_grid_size = grid_size,
+            .in0_block_w = in0_block_w,
+            .out_subblock_h = out_subblock_h,
+            .out_subblock_w = out_subblock_w,
+            .out_block_h = out_block_h,
+            .out_block_w = out_block_w,
+            .per_core_M = per_core_M,
+            .per_core_N = per_core_N,
+            .fuse_batch = true,
+            .fused_activation = fused_activation,
+            .mcast_in0 = mcast_in0,
+        };
+    }
+
+    if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
+        (grid_size.x > 1 and grid_size.y > 1)) {
+        bool transpose_mcast = input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
+
+        bool per_core_N_equals_subblock_w_constraint = output_mem_config.is_sharded();
+        if (output_mem_config.is_sharded()) {
+            TT_FATAL(
+                input_tensor_a.memory_config().buffer_type() == output_mem_config.buffer_type(),
+                "Buffer type mismatch between input_a and output when output is sharded. Got: {} vs {}",
+                input_tensor_a.memory_config().buffer_type(),
+                output_mem_config.buffer_type());
+            TT_FATAL(
+                input_tensor_a.memory_config().memory_layout() == output_mem_config.memory_layout(),
+                "Memory layout mismatch between input_a and output when output is sharded. Got: {} vs {}",
+                input_tensor_a.memory_config().memory_layout(),
+                output_mem_config.memory_layout());
+        }
+
+        uint32_t M = input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
+        uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
+        uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
+
+        auto shard_shape = input_tensor_a.shard_spec().value().shape;
+        uint32_t virtual_x = transpose_mcast ? grid_size.y : grid_size.x;
+        uint32_t virtual_y = transpose_mcast ? grid_size.x : grid_size.y;
+        bool cores_along_x_match_grid_size = virtual_x == (K / (shard_shape[1] / in0_tile_shape[1]));
+        bool cores_along_y_match_grid_size = virtual_y == (M / (shard_shape[0] / in0_tile_shape[0]));
+        TT_FATAL(
+            cores_along_y_match_grid_size || virtual_y == div_up(M, (shard_shape[0] / in0_tile_shape[0])),
+            "Num cores along y must match provided grid size!");
+        TT_FATAL(
+            cores_along_x_match_grid_size || virtual_x == div_up(K, (shard_shape[1] / in0_tile_shape[1])),
+            "Num cores along x must match provided grid size!");
+
+        uint32_t per_core_M = div_up(M, virtual_y);
+        uint32_t per_core_N = div_up(N, virtual_x);
+        uint32_t in0_block_w = cores_along_x_match_grid_size ? std::gcd(shard_shape[1] / in0_tile_shape[1], K) : 1;
+
+        auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
+            input_tensor_a,
+            input_tensor_b,
+            bias_single_tile_size,
+            per_core_M,
+            per_core_N,
+            in0_block_w,
+            estimate_interm_tile_size(compute_kernel_config, output_dtype),
+            /*adjust_in0_block_w=*/false);
+        uint32_t out_block_h = mutlti_dim_per_core_factor[0];
+        uint32_t out_block_w = mutlti_dim_per_core_factor[1];
+
+        auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
+            out_block_h, out_block_w, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
+        auto out_subblock_h = std::get<0>(subblock_hw);
+        auto out_subblock_w = std::get<1>(subblock_hw);
+
+        return MatmulMultiCoreReuseMultiCastProgramConfig{
+            .compute_with_storage_grid_size = grid_size,
+            .in0_block_w = in0_block_w,
+            .out_subblock_h = out_subblock_h,
+            .out_subblock_w = out_subblock_w,
+            .out_block_h = out_block_h,
+            .out_block_w = out_block_w,
+            .per_core_M = per_core_M,
+            .per_core_N = per_core_N,
+            .transpose_mcast = transpose_mcast,
+            .fused_activation = fused_activation,
+        };
+    }
+
     return create_matmul_program_config(
         input_tensor_a,
         input_tensor_b,
@@ -1093,14 +1127,13 @@ inline MatmulProgramConfig generate_matmul_program_config(
                 output_dtype);
         }
     } else {
-        bool bmm = user_run_batched;
         return get_matmul_program_config(
             input_tensor_a,
             input_tensor_b,
             bias_single_tile_size,
             mem_config,
             std::nullopt,
-            !bmm,
+            user_run_batched,
             user_core_coord,
             compute_kernel_config,
             output_dtype);
@@ -1265,7 +1298,12 @@ ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tens
 
     // Handle batch dimensions for the case where b_rank > a_rank
     for (auto index = 0; index < rank_difference; ++index) {
-        TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");
+        TT_FATAL(
+            input_shape_b[index] == 1,
+            "When in1 rank ({}) greater than in0 rank ({}), front dimensions need to be 1. Got: {}",
+            b_rank,
+            a_rank,
+            input_shape_b[index]);
         output_shape[index] = input_shape_b[index];
     }
 
@@ -1483,7 +1521,9 @@ void Matmul::validate(
     const bool is_optional_output_tensor =
         !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
 
-    TT_FATAL(optional_input_tensors.size() == 1, "Error");
+    // We will never have more than 1 optional input tensor, but we assert to be safe
+    TT_ASSERT(
+        optional_input_tensors.size() == 1, "Expected 1 optional input tensor, got: {}", optional_input_tensors.size());
 
     const auto output_tensor_spec = this->compute_output_specs(input_tensors, {}, optional_input_tensors).at(0);
     if (is_optional_output_tensor) {
@@ -1526,8 +1566,6 @@ void Matmul::validate(
         }
     }
 
-    TT_FATAL(this->bcast_batch.has_value(), "Error: bcast_batch field should have been automatically populated");
-    TT_FATAL(this->output_tile.has_value(), "Error: output_tile field should have been automatically populated");
     if (this->bcast_batch.value()) {
         TT_FATAL(
             get_batch_size(b_shape) == 1,
@@ -1535,9 +1573,7 @@ void Matmul::validate(
             "BCMK*11KN=BCMN or equivalent");
     } else {
         // same condition as above, different message
-        TT_FATAL(
-            a_shape.rank() == b_shape.rank() && "bmm (non-bcast matmul) expects input tensors of the same rank",
-            "Error");
+        TT_FATAL(a_shape.rank() == b_shape.rank(), "bmm (non-bcast matmul) expects input tensors of the same rank");
         for (auto i = 0; i < a_shape.rank() - 2; i++) {
             TT_FATAL(
                 a_shape[i] == b_shape[i],
@@ -1594,7 +1630,10 @@ void Matmul::validate(
                 input_tensors[i].dtype());
         }
     } else {
-        TT_FATAL(input_tensors.size() == 2, "Error");
+        TT_FATAL(
+            input_tensors.size() == 2,
+            "For standard matmul operation, exactly 2 input tensors are required, got: {}",
+            input_tensors.size());
     }
 
     if (optional_bias.has_value()) {
@@ -1632,10 +1671,10 @@ void Matmul::validate(
     }
 
     if (this->untilize_out) {
-        TT_FATAL(this->output_dtype.has_value(), "Error");
+        TT_FATAL(this->output_dtype.has_value(), "Output dtype must be specified when untilize_out is enabled");
         TT_FATAL(
             (this->output_dtype.value() == DataType::BFLOAT16) || (this->output_dtype.value() == DataType::FLOAT32),
-            "Unsupported data type: {}",
+            "Unsupported data type: {} for untilize_out, only BFLOAT16 and FLOAT32 are supported.",
             this->output_dtype.value());
         TT_FATAL(
             std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config),
@@ -1664,22 +1703,22 @@ void Matmul::validate(
             if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                 TT_FATAL(
                     program_config.per_core_M % program_config.out_block_h == 0,
-                    "Error: incompatible values {} and {}",
+                    "incompatible values {} and {}",
                     program_config.per_core_M,
                     program_config.out_block_h);
                 TT_FATAL(
                     program_config.per_core_N % program_config.out_block_w == 0,
-                    "Error: incompatible values {} and {}",
+                    "incompatible values {} and {}",
                     program_config.per_core_N,
                     program_config.out_block_w);
                 TT_FATAL(
                     program_config.out_block_h % program_config.out_subblock_h == 0,
-                    "Error: incompatible values {} and {}",
+                    "incompatible values {} and {}",
                     program_config.out_block_h,
                     program_config.out_subblock_h);
                 TT_FATAL(
                     program_config.out_block_w % program_config.out_subblock_w == 0,
-                    "Error: incompatible values {} and {}",
+                    "incompatible values {} and {}",
                     program_config.out_block_w,
                     program_config.out_subblock_w);
                 TT_FATAL(
@@ -1741,23 +1780,23 @@ void Matmul::validate(
                 }
                 if (program_config.mcast_in0 || program_config.gather_in0) {
                     if (input_tensor_a.is_sharded()) {
-                        TT_FATAL(program_config.fuse_batch, "Error: Batch fusion must be enabled.");
+                        TT_FATAL(program_config.fuse_batch, "Batch fusion must be enabled.");
                         TT_FATAL(
                             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-                            "Error: input_tensor_a must be width sharded. Provided tensor memory layout: {}",
+                            "input_tensor_a must be width sharded. Provided tensor memory layout: {}",
                             input_tensor_a.memory_config().memory_layout());
                         if (this->output_mem_config.is_sharded()) {
                             TT_FATAL(
                                 input_tensor_a.memory_config().buffer_type() == this->output_mem_config.buffer_type(),
-                                "Error: Buffer type mismatch.");
+                                "Buffer type mismatch.");
                             TT_FATAL(
                                 input_tensor_a.memory_config().memory_layout() ==
                                     this->output_mem_config.memory_layout(),
-                                "Error: Memory layout mismatch.");
+                                "Memory layout mismatch.");
                         }
                         TT_FATAL(
                             input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
-                            "Error: Shard orientation must be ROW_MAJOR.");
+                            "Shard orientation must be ROW_MAJOR.");
                         uint32_t M = (program_config.fuse_batch
                                           ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
                                           : input_tensor_a.padded_shape()[-2]) /
@@ -1769,29 +1808,29 @@ void Matmul::validate(
                         auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
                         // No padding
-                        TT_FATAL(M == per_core_M, "Error: M ({}) must be equal to per_core_M ({}).", M, per_core_M);
+                        TT_FATAL(M == per_core_M, "M ({}) must be equal to per_core_M ({}).", M, per_core_M);
                         TT_FATAL(
                             per_core_M == (shard_shape[0] / in0_tile_shape[0]),
-                            "Error: per_core_M must be equal to shard_shape[0] ({}) / in0_tile_shape[0] ({}).",
+                            "per_core_M must be equal to shard_shape[0] ({}) / in0_tile_shape[0] ({}).",
                             shard_shape[0],
                             in0_tile_shape[0]);
                         TT_FATAL(
                             K % program_config.in0_block_w == 0,
-                            "Error: K {} must be divisible by in0_block_w {}.",
+                            "K {} must be divisible by in0_block_w {}.",
                             K,
                             program_config.in0_block_w);
                         if (!program_config.gather_in0) {  // Padding allowed for gather_in0
                             TT_FATAL(
-                            (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
-                            "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
-                            shard_shape[1],
-                            in0_tile_shape[1]);
+                                (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
+                                "shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
+                                shard_shape[1],
+                                in0_tile_shape[1]);
                         }
                     }
                     if (this->output_mem_config.is_sharded()) {
                         TT_FATAL(
                             this->output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-                            "Error: Output memory layout must be WIDTH_SHARDED. Provided tensor memory layout: {}",
+                            "Output memory layout must be WIDTH_SHARDED. Provided tensor memory layout: {}",
                             this->output_mem_config.memory_layout());
                         uint32_t M = (program_config.fuse_batch
                                           ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
@@ -1802,14 +1841,14 @@ void Matmul::validate(
                         uint32_t per_core_N = program_config.per_core_N;
 
                         // No padding
-                        TT_FATAL(M == per_core_M, "Error: M {} must be equal to per_core_M {}.", M, per_core_M);
+                        TT_FATAL(M == per_core_M, "M {} must be equal to per_core_M {}.", M, per_core_M);
 
                         TT_FATAL(
                             program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
-                            "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");
+                            "out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");
                         TT_FATAL(
                             program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
-                            "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
+                            "out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
                     }
                     if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1 &&
                         input_tensor_b.memory_config().is_sharded()) {
@@ -1830,22 +1869,22 @@ void Matmul::validate(
                     }
                 } else {
                     if (input_tensor_a.memory_config().is_sharded()) {
-                        TT_FATAL(program_config.fuse_batch, "Error: Batch fusion must be enabled.");
+                        TT_FATAL(program_config.fuse_batch, "Batch fusion must be enabled.");
                         TT_FATAL(
                             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-                            "Error: input_tensor_a must be height sharded.");
+                            "input_tensor_a must be height sharded.");
                         if (this->output_mem_config.is_sharded()) {
                             TT_FATAL(
                                 input_tensor_a.memory_config().buffer_type() == this->output_mem_config.buffer_type(),
-                                "Error: Buffer type mismatch.");
+                                "Buffer type mismatch.");
                             TT_FATAL(
                                 input_tensor_a.memory_config().memory_layout() ==
                                     this->output_mem_config.memory_layout(),
-                                "Error: Memory layout mismatch.");
+                                "Memory layout mismatch.");
                         }
                         TT_FATAL(
                             input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
-                            "Error: Shard orientation must be ROW_MAJOR.");
+                            "Shard orientation must be ROW_MAJOR.");
                         uint32_t M = (program_config.fuse_batch
                                           ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
                                           : input_tensor_a.padded_shape()[-2]) /
@@ -1855,19 +1894,19 @@ void Matmul::validate(
                         auto shard_shape = input_tensor_a.shard_spec().value().shape;
                         TT_FATAL(
                             div_up(M, per_core_M) <= input_tensor_a.shard_spec().value().grid.num_cores(),
-                            "Error: M must be divisible by per_core_M.");
+                            "M must be divisible by per_core_M.");
                         TT_FATAL(
                             per_core_M == (shard_shape[0] / in0_tile_shape[0]),
-                            "Error: per_core_M must be equal to shard_shape[0] / in0_tile_shape[0].");
-                        TT_FATAL(K % program_config.in0_block_w == 0, "Error: K must be divisible by in0_block_w.");
+                            "per_core_M must be equal to shard_shape[0] / in0_tile_shape[0].");
+                        TT_FATAL(K % program_config.in0_block_w == 0, "K must be divisible by in0_block_w.");
                         TT_FATAL(
                             K == (shard_shape[1] / in0_tile_shape[1]),
-                            "Error: K must be equal to shard_shape[1] / in0_tile_shape[1].");
+                            "K must be equal to shard_shape[1] / in0_tile_shape[1].");
                     }
                     if (this->output_mem_config.is_sharded()) {
                         TT_FATAL(
                             this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-                            "Error: Output memory layout must be HEIGHT_SHARDED.");
+                            "Output memory layout must be HEIGHT_SHARDED.");
                         uint32_t M = (program_config.fuse_batch
                                           ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
                                           : input_tensor_a.padded_shape()[-2]) /
@@ -1876,29 +1915,49 @@ void Matmul::validate(
                         uint32_t per_core_M = program_config.per_core_M;
                         uint32_t per_core_N = program_config.per_core_N;
 
-                        TT_FATAL(N == per_core_N, "Error: N must be equal to per_core_N.");
+                        TT_FATAL(N == per_core_N, "N must be equal to per_core_N.");
                         TT_FATAL(
                             program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
-                            "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");
+                            "out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");
                         TT_FATAL(
                             program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
-                            "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
+                            "out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
                     }
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-                        "Error: Operand B must be interleaved.");
+                        "Operand B must be interleaved.");
                 }
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                TT_FATAL(input_tensor_a.is_sharded(), "Error");
-                TT_FATAL(this->output_mem_config.is_sharded(), "Error");
-                TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED, "Error");
                 TT_FATAL(
-                    input_tensor_a.memory_config().buffer_type() == this->output_mem_config.buffer_type(), "Error");
+                    input_tensor_a.is_sharded(),
+                    "Input tensor A must be sharded for MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.");
                 TT_FATAL(
-                    input_tensor_a.memory_config().memory_layout() == this->output_mem_config.memory_layout(), "Error");
-                TT_FATAL(input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
+                    this->output_mem_config.is_sharded(),
+                    "Output tensor must be sharded for MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.");
+                TT_FATAL(
+                    input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+                    "Input tensor A memory layout must be WIDTH_SHARDED for "
+                    "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig, but got {}",
+                    input_tensor_a.memory_config().memory_layout());
+                TT_FATAL(
+                    input_tensor_a.memory_config().buffer_type() == this->output_mem_config.buffer_type(),
+                    "Input tensor A buffer type ({}) must match output buffer type ({}) for "
+                    "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.",
+                    input_tensor_a.memory_config().buffer_type(),
+                    this->output_mem_config.buffer_type());
+                TT_FATAL(
+                    input_tensor_a.memory_config().memory_layout() == this->output_mem_config.memory_layout(),
+                    "Input tensor A memory layout ({}) must match output memory layout ({}) for "
+                    "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.",
+                    input_tensor_a.memory_config().memory_layout(),
+                    this->output_mem_config.memory_layout());
+                TT_FATAL(
+                    input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+                    "Input tensor A shard orientation must be ROW_MAJOR for "
+                    "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig, but got {}",
+                    input_tensor_a.shard_spec().value().orientation);
                 uint32_t M = input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
                 uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
                 uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
@@ -1907,39 +1966,69 @@ void Matmul::validate(
                 auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
                 // No padding
-                TT_FATAL(M == per_core_M, "Error");
-                TT_FATAL(M == 1, "currently only support in0 tensor height of tile height");
-                TT_FATAL(per_core_M == (shard_shape[0] / in0_tile_shape[0]), "Error");
-                TT_FATAL(K % program_config.in0_block_w == 0, "Error");
-                TT_FATAL((shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0, "Error");
+                TT_FATAL(
+                    M == per_core_M,
+                    "M ({}) must be equal to per_core_M ({}) for "
+                    "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.",
+                    M,
+                    per_core_M);
+                TT_FATAL(
+                    M == 1,
+                    "Input tensor A height in tiles (M) must be 1 for "
+                    "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig, but got {}.",
+                    M);
+                TT_FATAL(
+                    per_core_M == (shard_shape[0] / in0_tile_shape[0]),
+                    "per_core_M ({}) must be equal to shard_shape[0] / TILE_HEIGHT ({}) for "
+                    "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.",
+                    per_core_M,
+                    (shard_shape[0] / in0_tile_shape[0]));
+                TT_FATAL(
+                    K % program_config.in0_block_w == 0,
+                    "K ({}) must be divisible by in0_block_w ({}) for "
+                    "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.",
+                    K,
+                    program_config.in0_block_w);
+                TT_FATAL(
+                    (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
+                    "shard_shape[1] / TILE_WIDTH ({}) must be divisible by in0_block_w ({}) for "
+                    "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.",
+                    (shard_shape[1] / in0_tile_shape[1]),
+                    program_config.in0_block_w);
 
                 // tensor in1
-                TT_FATAL(input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED, "Error");
+                TT_FATAL(
+                    input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+                    "Input tensor B memory layout must be WIDTH_SHARDED for "
+                    "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig, but got {}",
+                    input_tensor_b.memory_config().memory_layout());
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
                 check_tensor_in_grid(input_tensor_a, program_config.compute_with_storage_grid_size);
                 check_tensor_in_grid(input_tensor_b, program_config.compute_with_storage_grid_size);
                 TT_FATAL(
                     program_config.per_core_M % program_config.out_block_h == 0,
-                    "Error: incompatible values {} and {}",
+                    "incompatible values {} and {}",
                     program_config.per_core_M,
                     program_config.out_block_h);
                 TT_FATAL(
                     program_config.per_core_N % program_config.out_block_w == 0,
-                    "Error: incompatible values {} and {}",
+                    "incompatible values {} and {}",
                     program_config.per_core_N,
                     program_config.out_block_w);
                 TT_FATAL(
                     program_config.out_block_h % program_config.out_subblock_h == 0,
-                    "Error: incompatible values {} and {}",
+                    "incompatible values {} and {}",
                     program_config.out_block_h,
                     program_config.out_subblock_h);
                 TT_FATAL(
                     program_config.out_block_w % program_config.out_subblock_w == 0,
-                    "Error: incompatible values {} and {}",
+                    "incompatible values {} and {}",
                     program_config.out_block_w,
                     program_config.out_subblock_w);
                 if (input_tensor_a.memory_config().is_sharded()) {
-                    TT_FATAL(program_config.fuse_batch, "Error");
+                    TT_FATAL(
+                        program_config.fuse_batch,
+                        "Batch fusion must be enabled for MatmulMultiCoreReuseMultiCastProgramConfig.");
                     auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
                     uint32_t M =
                         input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
@@ -1958,40 +2047,84 @@ void Matmul::validate(
                         if (program_config.transpose_mcast) {
                             TT_FATAL(
                                 input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR,
-                                "Error");
+                                "If Input tensor A is block sharded, the shard orientation must be COL_MAJOR when "
+                                "transpose_mcast is true, but "
+                                "got {} for MatmulMultiCoreReuseMultiCastProgramConfig.",
+                                input_tensor_a.shard_spec().value().orientation);
                         } else {
                             TT_FATAL(
                                 input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
-                                "Error");
+                                "If Input tensor A is block sharded, the shard orientation must be ROW_MAJOR when "
+                                "transpose_mcast is false, but "
+                                "got {} for MatmulMultiCoreReuseMultiCastProgramConfig.",
+                                input_tensor_a.shard_spec().value().orientation);
                         }
                         if (this->output_mem_config.is_sharded()) {
                             TT_FATAL(
                                 input_tensor_a.memory_config().buffer_type() == this->output_mem_config.buffer_type(),
-                                "Error");
+                                "If Input tensor A is block sharded and output tensor is sharded, the buffer type ({}) "
+                                "must match output buffer type ({}) for MatmulMultiCoreReuseMultiCastProgramConfig.",
+                                input_tensor_a.memory_config().buffer_type(),
+                                this->output_mem_config.buffer_type());
                             TT_FATAL(
                                 input_tensor_a.memory_config().memory_layout() ==
                                     this->output_mem_config.memory_layout(),
-                                "Error");
+                                "If Input tensor A is block sharded and output tensor is sharded, the memory layout "
+                                "({}) must match output memory layout ({}) for "
+                                "MatmulMultiCoreReuseMultiCastProgramConfig.",
+                                input_tensor_a.memory_config().memory_layout(),
+                                this->output_mem_config.memory_layout());
                         }
 
                     } else if (tensor_a_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-                        TT_FATAL(!program_config.transpose_mcast, "Error");
-                        TT_FATAL(K == program_config.in0_block_w, "Error");
-                        TT_FATAL(program_config.in0_block_w == (shard_shape[1] / in0_tile_shape[1]), "Error");
+                        TT_FATAL(
+                            !program_config.transpose_mcast,
+                            "If input tensor A is height sharded, transpose_mcast must be false for "
+                            "MatmulMultiCoreReuseMultiCastProgramConfig.");
+                        TT_FATAL(
+                            K == program_config.in0_block_w,
+                            "If input tensor A is height sharded, K ({}) must be equal to in0_block_w ({}) for "
+                            "MatmulMultiCoreReuseMultiCastProgramConfig.",
+                            K,
+                            program_config.in0_block_w);
+                        TT_FATAL(
+                            program_config.in0_block_w == (shard_shape[1] / in0_tile_shape[1]),
+                            "If input tensor A is height sharded, in0_block_w ({}) must be equal to shard_shape[1] / "
+                            "TILE_WIDTH ({}) for MatmulMultiCoreReuseMultiCastProgramConfig.",
+                            program_config.in0_block_w,
+                            (shard_shape[1] / in0_tile_shape[1]));
                         TT_FATAL(
                             input_tensor_a.shard_spec()->grid.bounding_box().start_coord.x ==
                                 input_tensor_a.shard_spec()->grid.bounding_box().end_coord.x,
-                            "Error");
+                            "If input tensor A is height sharded, it must be sharded on a single column for "
+                            "MatmulMultiCoreReuseMultiCastProgramConfig.");
                     }
 
-                    TT_FATAL(per_core_M == (shard_shape[0] / in0_tile_shape[0]), "Error");
-                    TT_FATAL((shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0, "Error");
+                    TT_FATAL(
+                        per_core_M == (shard_shape[0] / in0_tile_shape[0]),
+                        "If input tensor A is sharded, per_core_M ({}) must be equal to shard_shape[0] / TILE_HEIGHT "
+                        "({}) for MatmulMultiCoreReuseMultiCastProgramConfig.",
+                        per_core_M,
+                        (shard_shape[0] / in0_tile_shape[0]));
+                    TT_FATAL(
+                        (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
+                        "If input tensor A is sharded, shard_shape[1] / TILE_WIDTH ({}) must be divisible by "
+                        "in0_block_w ({}) for MatmulMultiCoreReuseMultiCastProgramConfig.",
+                        (shard_shape[1] / in0_tile_shape[1]),
+                        program_config.in0_block_w);
                 }
 
                 if (input_tensor_b.memory_config().is_sharded()) {
-                    TT_FATAL(!program_config.transpose_mcast, "Error");
+                    TT_FATAL(
+                        !program_config.transpose_mcast,
+                        "If input tensor B is sharded, transpose_mcast must be false for "
+                        "MatmulMultiCoreReuseMultiCastProgramConfig.");
                     auto tensor_b_memory_layout = input_tensor_b.memory_config().memory_layout();
-                    TT_FATAL(tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Error");
+                    TT_FATAL(
+                        tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+                        "If input tensor B is sharded, the memory layout must be WIDTH_SHARDED for "
+                        "MatmulMultiCoreReuseMultiCastProgramConfig, but got {}.",
+                        tensor_b_memory_layout);
                     if (input_tensor_b.buffer()->buffer_type() != tt_metal::BufferType::DRAM) {
                         const auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
                         TT_FATAL(
@@ -2013,7 +2146,11 @@ void Matmul::validate(
                 }
 
                 if (this->output_mem_config.is_sharded()) {
-                    TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED, "Error");
+                    TT_FATAL(
+                        this->output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+                        "If output tensor is sharded, the memory layout must be BLOCK_SHARDED for "
+                        "MatmulMultiCoreReuseMultiCastProgramConfig, but got {}.",
+                        this->output_mem_config.memory_layout());
                     uint32_t M =
                         input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
                     uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
@@ -2022,10 +2159,10 @@ void Matmul::validate(
 
                     TT_FATAL(
                         program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
-                        "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");
+                        "out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");
                     TT_FATAL(
                         program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
-                        "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
+                        "out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
                 }
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
                 uint32_t M = input_tensor_a.padded_shape()[-2] / in0_tile_shape[0];
@@ -2052,24 +2189,24 @@ void Matmul::validate(
                     TT_FATAL(
                         M % per_core_M == 0, "per_core_M, {}, must divide M, {}, if per_core_M < M!", per_core_M, M);
                 }
-                TT_FATAL(N == per_core_N, "Error: N, {}, is not equal to per_core_N, {}", N, per_core_N);
+                TT_FATAL(N == per_core_N, "N, {}, is not equal to per_core_N, {}", N, per_core_N);
                 if (input_tensor_a.is_sharded()) {
                     TT_FATAL(
                         input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
-                        "Error: memory layout, {}, is not width sharded",
+                        "memory layout, {}, is not width sharded",
                         input_tensor_a.memory_config().memory_layout());
                     auto in0_shard_shape = input_tensor_a.shard_spec().value().shape;
 
-                    TT_FATAL(K == in0_shard_shape[1], "Error: K, {}, needs to be equal to {}", K, in0_shard_shape[1]);
+                    TT_FATAL(K == in0_shard_shape[1], "K, {}, needs to be equal to {}", K, in0_shard_shape[1]);
                     TT_FATAL(
                         in0_shard_shape[1] == program_config.in0_block_w * in0_tile_shape[1],
-                        "Error: {} needs to equal {} * {}",
+                        "{} needs to equal {} * {}",
                         in0_shard_shape[1],
                         program_config.in0_block_w,
                         in0_tile_shape[1]);
                     TT_FATAL(
                         per_core_M * in0_tile_shape[0] == in0_shard_shape[0],
-                        "Error: {} * {} needs to equal {}",
+                        "{} * {} needs to equal {}",
                         per_core_M,
                         in0_tile_shape[0],
                         in0_shard_shape[0]);
@@ -2180,7 +2317,7 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
     auto tile_width_ratio = output_tile.get_tile_shape()[1] / in1_tile_shape[1];
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
 
-    TT_FATAL(this->output_dtype.has_value(), "Error: output_dtype field should have been populated");
+    TT_FATAL(this->output_dtype.has_value(), "output_dtype field should have been populated");
     if (this->output_mem_config.is_sharded()) {
         const auto& optional_bias = optional_input_tensors.at(0);
         uint32_t bias_single_tile_size = 0;
@@ -2375,15 +2512,14 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
     const auto& bias = optional_input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
-    TT_FATAL(this->output_dtype.has_value(), "Error: output_dtype field should have been populated");
+    TT_FATAL(this->output_dtype.has_value(), "output_dtype field should have been populated");
     tt::tt_metal::DataType output_dtype = this->output_dtype.value();
 
-    bool fuse_batch = true;
     // TODO: If input_tensor_a.padded_shape()[0] * input_tensor_a.padded_shape()[1] * ... except last two
     // dimensions == 1, does matmuls work if we treat it as bmm
     // TODO: Only for MatmulMultiCoreReuseProgramConfig we allow this as single core matmul/bmm
-    TT_FATAL(this->compute_kernel_config.has_value(), "Error: compute_kernel_config field should have been populated");
-    TT_FATAL(this->bcast_batch.has_value(), "Error: bcast_batch field should have been populated");
+    TT_FATAL(this->compute_kernel_config.has_value(), "compute_kernel_config field should have been populated");
+    TT_FATAL(this->bcast_batch.has_value(), "bcast_batch field should have been populated");
     bool broadcast_batch = this->bcast_batch.value();
     uint32_t bias_single_tile_size = 0;
     if (bias.has_value()) {
