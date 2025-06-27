@@ -497,13 +497,16 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
     Test that a high-accuracy compute kernel config produces a higher PCC with torch
     than a lower-accuracy compute kernel config.
     """
+
     torch.manual_seed(0)
     input_shape = (N, C, H, W)
     grid_size = ttnn.CoreGrid(y=8, x=8)
+
     # Execute torch group_norm
     torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
     torch_output_tensor = torch.nn.functional.group_norm(torch_input_tensor, num_groups)
     torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
     # Generate ttnn tensor
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
     tt_input_tensor = ttnn.from_torch(
@@ -511,6 +514,7 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
         dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
+
     # Generate input mask
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
     input_mask_tensor = ttnn.from_torch(
@@ -520,6 +524,7 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+
     # Generate shard config
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
