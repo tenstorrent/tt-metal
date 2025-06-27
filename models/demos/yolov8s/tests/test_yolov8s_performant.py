@@ -4,7 +4,7 @@
 
 import pytest
 
-from models.experimental.yolov8s.tests.yolov8s_performant import (
+from models.demos.yolov8s.runner.yolov8s_performant import (
     run_yolov8s_inference,
     run_yolov8s_trace_2cqs_inference,
     run_yolov8s_trace_inference,

@@ -26,6 +26,7 @@
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "fabric_host_interface.h"
+#include "fabric_types.hpp"
 #include "hal_types.hpp"
 #include "intermesh_constants.hpp"
 #include "impl/context/metal_context.hpp"
@@ -134,7 +135,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     const IntraMeshConnectivity& intra_mesh_connectivity,
     tt_metal::FabricConfig fabric_config,
     tt_metal::FabricReliabilityMode reliability_mode) {
-    if (fabric_config == tt_metal::FabricConfig::CUSTOM) {
+    if (fabric_config == tt_metal::FabricConfig::CUSTOM || fabric_config == tt_metal::FabricConfig::DISABLED) {
         return;
     }
     auto topology = FabricContext::get_topology_from_config(fabric_config);
@@ -857,7 +858,7 @@ size_t ControlPlane::get_num_live_routing_planes(
 // Only builds the routing table representation, does not actually populate the routing tables in memory of the
 // fabric routers on device
 void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
-    tt_metal::FabricReliabilityMode reliability_mode) {
+    tt::tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
@@ -965,8 +966,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
         }
     }
 
-    this->initialize_dynamic_routing_plane_counts(
-        intra_mesh_connectivity, tt::tt_metal::MetalContext::instance().get_fabric_config(), reliability_mode);
+    this->initialize_dynamic_routing_plane_counts(intra_mesh_connectivity, fabric_config, reliability_mode);
 
     // Order the ethernet channels so that when we use them for deciding connections, indexing into ports per direction
     // is consistent for each each neighbouring chip.
@@ -1501,10 +1501,8 @@ void ControlPlane::set_routing_mode(uint16_t mode) {
 
 uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
 
-void ControlPlane::initialize_fabric_context(
-    tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
+void ControlPlane::initialize_fabric_context(tt_metal::FabricConfig fabric_config) {
     TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
-    tt::tt_metal::MetalContext::instance().set_fabric_config(fabric_config, reliability_mode);
     this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);
 }
 
