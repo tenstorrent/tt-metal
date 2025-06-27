@@ -6,9 +6,11 @@
 #include "context/metal_context.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
+#include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_mux_config.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"
+#include <bit>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_align.hpp"
 #include "tt_metal.hpp"
@@ -19,9 +21,6 @@
 namespace tt::tt_metal {
 
 void RelayMux::GenerateStaticConfigs() {
-    constexpr uint32_t k_NumSlotsPerChannel = 16;
-    constexpr uint32_t k_BufferSize = 4096;
-
     uint32_t l1_base = 0;
     uint32_t l1_size = 0;
 
@@ -46,11 +45,11 @@ void RelayMux::GenerateStaticConfigs() {
 
     // Count number of value kernels that need the channels
     const auto kernels_requiring_full_size_channel =
-        std::count_if(upstream_kernels_.begin(), upstream_kernels_.end(), [](const FDKernel* kernel) {
+        (uint32_t)std::count_if(upstream_kernels_.begin(), upstream_kernels_.end(), [](const FDKernel* kernel) {
             return kernel->GetNodeId() != -1;
         });
     const auto kernels_requiring_header_only_channel =
-        std::count_if(downstream_kernels_.begin(), downstream_kernels_.end(), [](const FDKernel* kernel) {
+        (uint32_t)std::count_if(downstream_kernels_.begin(), downstream_kernels_.end(), [](const FDKernel* kernel) {
             return kernel->GetNodeId() != -1;
         });
 
@@ -60,15 +59,25 @@ void RelayMux::GenerateStaticConfigs() {
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
-    static_config_.buffer_size_bytes = fabric_context.get_fabric_packet_header_size_bytes() + k_BufferSize;
+
+    // Buffer size for the Mux must matching downstream fabric router size
+    // Round down to nearest power of 2
+    uint32_t mux_buffer_size = std::bit_floor(tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    uint32_t header_size = fabric_context.get_fabric_packet_header_size_bytes();
+    static_config_.buffer_size_bytes = header_size + mux_buffer_size;
+    uint32_t num_slots = 16;
+    if (mux_buffer_size < 3072) {
+        // Due to 2D fabric having smaller buffer size more slots can be used
+        num_slots = 32;
+    }
 
     // FabricMuxConfig only accepts Worker or Idle Eth. Eth is not accepted.
     CoreType mux_config_core = GetCoreType() == CoreType::WORKER ? CoreType::WORKER : CoreType::IDLE_ETH;
     mux_kernel_config_ = std::make_shared<tt::tt_fabric::FabricMuxConfig>(
         static_config_.num_full_size_channels.value(),
         static_config_.num_header_only_channels.value(),
-        k_NumSlotsPerChannel,
-        k_NumSlotsPerChannel,
+        num_slots,
+        num_slots,
         static_config_.buffer_size_bytes.value(),
         static_config_.buffer_base_address.value(),
         mux_config_core);
@@ -76,14 +85,18 @@ void RelayMux::GenerateStaticConfigs() {
 
     log_debug(
         tt::LogMetal,
-        "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {}",
+        "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {} Channel Size: {}, Num "
+        "Slots: {}, L1 Size: {}",
         device_->id(),
         kernels_requiring_header_only_channel,
         kernels_requiring_full_size_channel,
         static_config_.buffer_size_bytes.value(),
         logical_core_.str(),
         GetVirtualCore().str(),
-        d2h_);
+        d2h_,
+        mux_buffer_size,
+        num_slots,
+        l1_size);
 
     uint32_t mux_buffer_end =
         mux_kernel_config_->get_start_address_to_clear() + mux_kernel_config_->get_num_bytes_to_clear();

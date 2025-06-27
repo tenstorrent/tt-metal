@@ -23,6 +23,7 @@
 #include "dispatch_s.hpp"
 #include "eth_router.hpp"
 #include "fabric_edm_types.hpp"
+#include "fabric_types.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
@@ -223,8 +224,12 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.is_2d_fabric =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_topology() ==
             tt_fabric::Topology::Mesh;
+        static_config_.is_2d_fabric_dynamic =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_config() ==
+            tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC;
     } else {
         static_config_.is_2d_fabric = false;
+        static_config_.is_2d_fabric_dynamic = false;
     }
 }
 
@@ -501,6 +506,9 @@ void PrefetchKernel::CreateKernel() {
         defines["FABRIC_RELAY"] = "1";
         if (static_config_.is_2d_fabric.value_or(false)) {
             defines["FABRIC_2D"] = "1";
+        }
+        if (static_config_.is_2d_fabric_dynamic.value_or(false)) {
+            defines["FABRIC_2D_DYNAMIC"] = "1";
         }
     }
     // Compile at Os on IERISC to fit in code region.
