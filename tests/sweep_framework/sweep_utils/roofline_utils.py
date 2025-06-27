@@ -5,6 +5,7 @@
 import ttnn
 from loguru import logger
 from tests.ttnn.utils_for_testing import check_with_pcc
+from models.utility_functions import is_wormhole_b0
 
 
 def get_product(lst):
@@ -17,10 +18,12 @@ def get_product(lst):
 def get_byte_count(tensor):
     shape = tensor.padded_shape
     dtype = tensor.dtype
-    if dtype == ttnn.float32:
+    if dtype in (ttnn.float32, ttnn.uint32, ttnn.int32):
         count = 4
     elif dtype == ttnn.bfloat16:
         count = 2
+    elif dtype == ttnn.uint8:
+        count = 1
     elif dtype == ttnn.bfloat8_b:
         count = 1.0625
     else:
