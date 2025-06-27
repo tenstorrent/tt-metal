@@ -339,7 +339,7 @@ def run_max_pool(
             # # partial grid tests
             # [1, 32, 10, 10],  # BH
             # [1, 32, 6, 6],  # WH
-            [1, 320, 48, 48],
+            [1, 128, 20, 20],
         )
     ),
 )
@@ -350,7 +350,7 @@ def run_max_pool(
         # (3, 3),
         # (5, 5),
         # (9, 9),
-        (36, 36),
+        (13, 13),
     ),
 )
 @pytest.mark.parametrize(
@@ -360,7 +360,7 @@ def run_max_pool(
         # (1, 1),
         # (2, 2),
         # (4, 4),
-        (0, 0),
+        (6, 6),
     ),
 )
 @pytest.mark.parametrize(
@@ -395,7 +395,7 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device,
         device,
         torch_tensor_map,
         dtype,
-        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
     )
 
