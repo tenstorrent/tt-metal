@@ -188,8 +188,7 @@ private:
     void validate_mesh_connections(MeshId mesh_id) const;
     void validate_mesh_connections() const;
 
-    std::vector<chip_id_t> get_mesh_physical_chip_ids(
-        std::uint32_t mesh_ns_size, std::uint32_t mesh_ew_size, chip_id_t nw_chip_physical_chip_id) const;
+    std::vector<chip_id_t> get_mesh_physical_chip_ids(std::uint32_t mesh_ns_size, std::uint32_t mesh_ew_size) const;
 
     std::pair<FabricNodeId, chan_id_t> get_connected_mesh_chip_chan_ids(
         FabricNodeId fabric_node_id, chan_id_t chan_id) const;
