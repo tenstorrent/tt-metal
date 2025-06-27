@@ -223,9 +223,7 @@ def evaluation(
             input_tensor = input_tensor.reshape(1, 1, h * w * n, c)
             ttnn_im = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
             ttnn_im = ttnn.pad(ttnn_im, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
-        elif model_name == "YOLOv8s_World":
-            ttnn_im = torch.clone(im)
-        elif model_name == "YOLOv8s":
+        elif model_name in ["YOLOv8s", "YOLOv8s_World"]:
             ttnn_im = im.clone()
         else:
             ttnn_im = im.permute((0, 2, 3, 1))
@@ -425,7 +423,7 @@ def test_run_yolov4_eval(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov8s_world(device, model_type, res, use_program_cache, reset_seeds):
+def test_yolov8s_world(device, model_type, res, reset_seeds):
     from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
     from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import attempt_load
 
@@ -602,7 +600,7 @@ def test_yolov9c(device, model_type, res, reset_seeds):
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov8s(device, model_type, res, use_program_cache, reset_seeds):
+def test_yolov8s(device, model_type, res, reset_seeds):
     from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
 
     if model_type == "torch_model":
@@ -610,10 +608,7 @@ def test_yolov8s(device, model_type, res, use_program_cache, reset_seeds):
         torch_model = torch_model.model
         model = torch_model.eval()
     else:
-        model = YOLOv8sPerformantRunner(
-            device,
-            use_program_cache,
-        )
+        model = YOLOv8sPerformantRunner(device, device_batch_size=1)
         logger.info("Inferencing using ttnn Model")
 
     save_dir = "models/demos/yolov8s/demo/runs"
