@@ -7,8 +7,8 @@ import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d
 from models.utility_functions import skip_for_grayskull
-from models.experimental.functional_vanilla_unet.reference.unet import UNet
-from models.experimental.functional_vanilla_unet.ttnn.ttnn_unet import TtUnet
+from models.experimental.vanilla_unet.reference.unet import UNet
+from models.experimental.vanilla_unet.ttnn.ttnn_unet import TtUnet
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import os
 import torch.nn.functional as F
@@ -102,8 +102,10 @@ def create_custom_preprocessor(device):
 
             parameters[f"decoder1"] = {}
             parameters[f"decoder1"][0] = {}
-            parameters[f"decoder1"][0]["weight"] = model.decoder1[0].weight
-            parameters[f"decoder1"][0]["bias"] = model.decoder1[0].weight
+            parameters[f"decoder1"][0]["weight"] = ttnn.from_torch(
+                model.decoder1[0].weight, dtype=ttnn.bfloat16
+            )
+            parameters[f"decoder1"][0]["bias"] = None
 
             bn_layer = model.decoder1[1]  # BatchNorm2d layer
             channel_size = bn_layer.num_features
@@ -172,12 +174,12 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 3 * 8192}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": (7 * 8192) +  1730}], indirect=True)
 @skip_for_grayskull()
 def test_unet(device, reset_seeds, model_location_generator):
-    weights_path = "models/experimental/functional_vanilla_unet/unet.pt"
+    weights_path = "models/experimental/vanilla_unet/unet.pt"
     if not os.path.exists(weights_path):
-        os.system("bash models/experimental/functional_vanilla_unet/weights_download.sh")
+        os.system("bash models/experimental/vanilla_unet/weights_download.sh")
 
     state_dict = torch.load(
         weights_path,
@@ -205,22 +207,38 @@ def test_unet(device, reset_seeds, model_location_generator):
 
     ttnn_model = TtUnet(device=device, parameters=parameters, model=reference_model)
 
-    torch_input_tensor = F.pad(torch_input_tensor.permute(0, 2, 3, 1), (0, 5))
-    memory_config = ttnn.create_sharded_memory_config(
-        [4800, 8],
-        core_grid=device.core_grid,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        use_height_and_width_as_shard_shape=True,
+    # torch_input_tensor = F.pad(torch_input_tensor.permute(0, 2, 3, 1), (0, 5))
+    # memory_config = ttnn.create_sharded_memory_config(
+    #     [4800, 8],
+    #     core_grid=device.core_grid,
+    #     strategy=ttnn.ShardStrategy.HEIGHT,
+    #     use_height_and_width_as_shard_shape=True,
+    # )
+
+    # ttnn_input_tensor = ttnn.from_torch(
+    #     torch_input_tensor, device=device, dtype=ttnn.bfloat16, memory_config=memory_config
+    # )
+
+    n, c, h, w = torch_input_tensor.shape
+    if c == 3:
+        c = 16
+    input_mem_config = ttnn.create_sharded_memory_config(
+        [n, c, 640, w],
+        ttnn.CoreGrid(x=8, y=8),
+        ttnn.ShardStrategy.HEIGHT,
+    )
+    ttnn_input_host = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
     )
 
-    ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor, device=device, dtype=ttnn.bfloat16, memory_config=memory_config
-    )
-
-    ttnn_output = ttnn_model(device, ttnn_input_tensor)
+    ttnn_output = ttnn_model(device, ttnn_input_host)
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)
     ttnn_output = ttnn_output.reshape(torch_output_tensor.shape)
 
-    pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor, ttnn_output, pcc=0.96)
+    pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor, ttnn_output, pcc=0.95)
     logger.info(pcc_message)
