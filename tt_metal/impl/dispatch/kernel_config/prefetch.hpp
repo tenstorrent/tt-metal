@@ -54,6 +54,7 @@ struct prefetch_static_config_t {
     std::optional<uint32_t> my_fabric_sync_status_addr;
 
     std::optional<bool> is_2d_fabric;
+    std::optional<bool> is_2d_fabric_dynamic;
 
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
