@@ -58,6 +58,7 @@ try:
         read_arc_telemetry_entry,
     )
     from ttexalens.device import Device
+    from ttexalens.hardware.noc_block import NocBlock
     from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
     from ttexalens.hw.tensix.blackhole.blackhole import BlackholeDevice
     from ttexalens.firmware import ELF
@@ -183,12 +184,12 @@ def check_ARC(dev):
         # Heartbeat must be between 10 and 50
         if heartbeats_per_second < 10:
             print(
-                f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}500{RST}hb/s"
+                f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}10{RST}hb/s"
             )
             raiseTTTriageError(check_ARC.__doc__)
         if heartbeats_per_second > 50:
             print(
-                f"ARC heartbeat is too high: {RED}{heartbeats_per_second}{RST}hb/s. Expected at most {BLUE}20000{RST}hb/s"
+                f"ARC heartbeat is too high: {RED}{heartbeats_per_second}{RST}hb/s. Expected at most {BLUE}50{RST}hb/s"
             )
             raiseTTTriageError(check_ARC.__doc__)
 
@@ -247,26 +248,46 @@ def check_NOC(dev):
 
 def collect_pcs_from_riscv(
     dev: Device,
-    block_type: str = "functional_workers",
+    blocks: list[NocBlock],
     signal_names: list[str] = ["brisc_pc", "trisc0_pc", "trisc1_pc", "trisc2_pc", "ncrisc_pc"],
 ):
     """Collect PC from RISC-V cores through the debug bus."""
 
     pcs = dict()  # location -> {pc_name -> pc}
     # Get the PC from the RISC-V cores
-    for loc in dev.get_block_locations(block_type=block_type):
-        store = dev.get_block(loc).debug_bus
-        assert store is not None, f"Debug bus not found for location {loc.to_str('logical')}"
+    for block in blocks:
+        store = block.debug_bus
+        assert store is not None, f"Debug bus not found for location {block.location.to_str('logical')}"
         pc_dict = dict()
         for sig in signal_names:
-            pc = store.read_signal(sig)
-            if sig == "ncrisc_pc":
-                if pc & 0xF0000000 == 0x70000000:
-                    pc = pc | 0x80000000  # Turn the topmost bit on as it was lost on debug bus
+            if sig == "erisc_pc" or sig == "idle_erisc_pc":
+                pc = block.get_risc_debug("erisc").read_gpr(32)
+            else:
+                pc = store.read_signal(sig)
+                if sig == "ncrisc_pc":
+                    if pc & 0xF0000000 == 0x70000000:
+                        pc = pc | 0x80000000  # Turn the topmost bit on as it was lost on debug bus
 
             pc_dict[sig] = pc
-        pcs[loc] = pc_dict
+        pcs[block.location] = pc_dict
     return pcs
+
+def print_pcs_from_riscv(pcs, signal_names: list[str]):
+    # PC dump through debug bus
+    table = []
+    header_row = ["Loc", *signal_names]
+    table.append(header_row)
+
+    # Dump PC through debug bus
+    if VERBOSE or VVERBOSE:
+        for loc, pc_dict in pcs.items():
+            loc_row = [f"{loc.to_str('logical')}"]
+            for sig in header_row[1:]:
+                pc = pc_dict[sig]
+                loc_row.append(f"0x{pc:x}")
+            table.append(loc_row)
+
+    verbose(tabulate(table, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
 
 
 def check_riscV(dev: Device):
@@ -313,24 +334,15 @@ def check_riscV(dev: Device):
         print(f"{ORANGE}RISC-V soft resets check is not available on this device.{RST}")
 
     # Collect PC from RISC-V cores through debug bus
-    signal_names = ["brisc_pc", "trisc0_pc", "trisc1_pc", "trisc2_pc", "ncrisc_pc"]
-    pcs = collect_pcs_from_riscv(dev, signal_names=signal_names)
+    signal_names_tensix = ["brisc_pc", "trisc0_pc", "trisc1_pc", "trisc2_pc", "ncrisc_pc"]
+    signal_names_eth = ["erisc_pc"] if type(dev) == WormholeDevice else ["erisc0_pc", "erisc1_pc"]
 
-    # PC dump through debug bus
-    table = []
-    header_row = ["Loc", *signal_names]
-    table.append(header_row)
+    pcs_tensix = collect_pcs_from_riscv(dev, signal_names=signal_names_tensix, blocks=dev.get_blocks(block_type="functional_workers"))
+    pcs_idle_eth = collect_pcs_from_riscv(dev, signal_names=signal_names_eth, blocks=dev.idle_eth_blocks)
 
-    # Dump PC through debug bus
-    if VERBOSE or VVERBOSE:
-        for loc, pc_dict in pcs.items():
-            loc_row = [f"{loc.to_str('logical')}"]
-            for sig in header_row[1:]:
-                pc = pc_dict[sig]
-                loc_row.append(f"0x{pc:x}")
-            table.append(loc_row)
-
-    verbose(tabulate(table, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
+    # Printing
+    print_pcs_from_riscv(pcs_tensix, signal_names_tensix)
+    print_pcs_from_riscv(pcs_idle_eth, signal_names_eth)
 
 
 def format_callstack(cs):
@@ -348,88 +360,47 @@ def format_callstack(cs):
         result.append(line)
     return result
 
+def get_firmware_elf_path(a_kernel_path: str, risc_name: str) -> str:
+    firmware_elf_path = a_kernel_path + f"../../../firmware/{risc_name.lower()}/{risc_name.lower()}.elf"
+    return os.path.realpath(firmware_elf_path)
 
-def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
-    """Print the running operations on the device."""
-    title(dump_running_ops.__doc__)
-
-    if inspector_data is None:
-        print(f"  {ORANGE}We don't have inspector data. We will skip running ops dump.{RST}")
-        return
-
-    # Get brisc.elf which we will use to get to the important offsets.
-    a_kernel_path = next(iter(inspector_data.kernels.values())).path
-    brisc_elf_path = a_kernel_path + "../../../firmware/brisc/brisc.elf"
-    brisc_elf_path = os.path.realpath(brisc_elf_path)
-
-    if not os.path.exists(brisc_elf_path):
-        raiseTTTriageError(f"BRISC ELF file {brisc_elf_path} does not exist.")
-    brisc_elf = parse_elf(brisc_elf_path, context)
-
-    if not brisc_elf:
-        raiseTTTriageError(
-            f"Failed to extract DWARF info from ELF file {brisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
-        )
-        return
-
-    ProgrammableCoreTypes_TENSIX = brisc_elf.enumerators[
-        "ProgrammableCoreType::TENSIX"
-    ].value  # This is how to access the value of an enumerator
-
-    pcs = collect_pcs_from_riscv(dev)
-
-    enum_values = {
-        "TensixProcessorTypes": {
-            "BRISC": brisc_elf.enumerators["TensixProcessorTypes::DM0"].value,
-            "NCRISC": brisc_elf.enumerators["TensixProcessorTypes::DM1"].value,
-            "TRISC0": brisc_elf.enumerators["TensixProcessorTypes::MATH0"].value,
-            "TRISC1": brisc_elf.enumerators["TensixProcessorTypes::MATH1"].value,
-            "TRISC2": brisc_elf.enumerators["TensixProcessorTypes::MATH2"].value,
-        },
-        "dispatch_core_processor_classes": {
-            "BRISC": brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_DM0"].value,
-            "NCRISC": brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_DM1"].value,
-            "TRISC0": brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"].value,
-            "TRISC1": brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"].value,
-            "TRISC2": brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"].value,
-        },
-    }
-
+def do_stuff(dev, blocks, enum_values, inspector_data, programmable_core_type, fw_elf, pcs, a_kernel_path):
     if VVERBOSE:
         printout_table = [
             ["Loc", "Proc", "RD PTR", "Base", "Offset", "Kernel ID:Name", "PC", "Kernel Callstack", "Kernel Path"]
         ]
     elif VERBOSE:
-        printout_table = [["Loc", *enum_values["TensixProcessorTypes"].keys(), "Kernel ID:Name"]]
+        printout_table = [["Loc", *enum_values["ProcessorTypes"].keys(), "Kernel ID:Name"]]
     else:
         return
 
     elf_cache = dict()
 
     # Get the kernel_config_base for each core
-    for loc in dev.get_block_locations(block_type="functional_workers"):
+    for block in blocks:
+        loc = block.location
         if VERBOSE:
             row = [loc.to_str("logical")]
 
-        for proc_name in enum_values["TensixProcessorTypes"].keys():
-            proc_type = enum_values["TensixProcessorTypes"][proc_name]
+        for proc_name in enum_values["ProcessorTypes"].keys():
+            proc_type = enum_values["ProcessorTypes"][proc_name]
             proc_class = enum_values["dispatch_core_processor_classes"][proc_name]
 
             # Create a local wrapper for mem_reader that captures loc and dev
             loc_mem_reader = ELF.get_mem_reader(context, dev.id(), loc)
 
-            launch_msg_rd_ptr = mem_access(brisc_elf, "mailboxes->launch_msg_rd_ptr", loc_mem_reader)[0][0]
+            launch_msg_rd_ptr = mem_access(fw_elf, "mailboxes->launch_msg_rd_ptr", loc_mem_reader)[0][0]
 
             # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
             kernel_config_base = mem_access(
-                brisc_elf,
-                f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_config_base[{ProgrammableCoreTypes_TENSIX}]",
+                fw_elf,
+                f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_config_base[{programmable_core_type}]",
                 loc_mem_reader,
             )[0][
                 0
             ]  # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
             kernel_text_offset = mem_access(
-                brisc_elf,
+                fw_elf,
                 f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_text_offset[{proc_type}]",
                 loc_mem_reader,
             )[0][
@@ -437,7 +408,7 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
             ]  # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
             watcher_kernel_id = (
                 mem_access(
-                    brisc_elf,
+                    fw_elf,
                     f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_class}]",
                     loc_mem_reader,
                 )[0][0]
@@ -486,6 +457,197 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
 
             if VVERBOSE:
                 pc = pcs[loc][proc_name.lower() + "_pc"]
+                row = [
+                    loc.to_str("logical"),
+                    proc_name,
+                    str(launch_msg_rd_ptr),
+                    f"0x{kernel_config_base:x}",
+                    f"0x{kernel_text_offset:x}",
+                    f"{watcher_kernel_id}:{kernel_name}",
+                    f"0x{pc:x}",
+                    "",
+                    f"{kernel_path}",
+                ]
+
+            elif VERBOSE:
+                row.append(f"{watcher_kernel_id}:{kernel_name}")
+
+            if kernel_name or kernel_config_base or VVERBOSE:
+                printout_table.append(row)
+                if cs:
+                    for line in format_callstack(cs):
+                        printout_table.append(["", "", "", "", "", "", "", line])
+
+    if VERBOSE or VVERBOSE:
+        print()  # Newline after the last PC
+        print(tabulate(printout_table, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
+
+def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
+    """Print the running operations on the device."""
+    title(dump_running_ops.__doc__)
+
+    if inspector_data is None:
+        print(f"  {ORANGE}We don't have inspector data. We will skip running ops dump.{RST}")
+        return
+
+    a_kernel_path = next(iter(inspector_data.kernels.values())).path
+
+    # Get firmware elfs which we will use to get to the important offsets.
+    brisc_elf_path = get_firmware_elf_path(a_kernel_path, "brisc")
+    idle_erisc_elf_path = get_firmware_elf_path(a_kernel_path, "idle_erisc")
+
+    # Check if firmware elf paths existq
+    if not os.path.exists(brisc_elf_path):
+        raiseTTTriageError(f"BRISC ELF file {brisc_elf_path} does not exist.")
+
+    if not os.path.exists(idle_erisc_elf_path):
+        raiseTTTriageError(f"IDLE ERISC ELF file {idle_erisc_elf_path} does not exist.")
+    
+    # Parse firmware elfs
+    brisc_elf = parse_elf(brisc_elf_path, context)
+    idle_erisc_elf = parse_elf(idle_erisc_elf_path, context)
+
+    # Check if debug info is obtained correctly
+    if not brisc_elf:
+        raiseTTTriageError(
+            f"Failed to extract DWARF info from ELF file {brisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
+        )
+        return
+
+    if not idle_erisc_elf:
+        raiseTTTriageError(
+            f"Failed to extract DWARF info from ELF file {idle_erisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
+        )
+        return
+
+    # Acces the value of enumerator for supported blocks
+    ProgrammableCoreTypes_TENSIX = brisc_elf.enumerators[
+        "ProgrammableCoreType::TENSIX"
+    ].value  
+    ProgrammableCoreTypes_IDLE_ETH = brisc_elf.enumerators["ProgrammableCoreType::IDLE_ETH"].value
+
+    # Collect pcs
+    pcs_tensix = collect_pcs_from_riscv(dev, blocks=dev.get_blocks(block_type="functional_workers"))
+    pcs_idle_eth = collect_pcs_from_riscv(dev, signal_names=["idle_erisc_pc"], blocks = dev.idle_eth_blocks)
+
+    enum_values_tenisx = {
+        "ProcessorTypes": {
+            "BRISC": brisc_elf.enumerators["TensixProcessorTypes::DM0"].value,
+            "NCRISC": brisc_elf.enumerators["TensixProcessorTypes::DM1"].value,
+            "TRISC0": brisc_elf.enumerators["TensixProcessorTypes::MATH0"].value,
+            "TRISC1": brisc_elf.enumerators["TensixProcessorTypes::MATH1"].value,
+            "TRISC2": brisc_elf.enumerators["TensixProcessorTypes::MATH2"].value,
+        },
+        "dispatch_core_processor_classes": {
+            "BRISC": brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_DM0"].value,
+            "NCRISC": brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_DM1"].value,
+            "TRISC0": brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"].value,
+            "TRISC1": brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"].value,
+            "TRISC2": brisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"].value,
+        },
+    }
+
+    enum_values_eth = {
+        "ProcessorTypes": {
+            "IDLE_ERISC": idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
+        },
+        "dispatch_core_processor_classes": {
+            "IDLE_ERISC": idle_erisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"].value
+        }
+    }
+
+    if VVERBOSE:
+        printout_table = [
+            ["Loc", "Proc", "RD PTR", "Base", "Offset", "Kernel ID:Name", "PC", "Kernel Callstack", "Kernel Path"]
+        ]
+    elif VERBOSE:
+        printout_table = [["Loc", *enum_values_eth["ProcessorTypes"].keys(), "Kernel ID:Name"]]
+    else:
+        return
+
+    elf_cache = dict()
+    # Get the kernel_config_base for each core
+    for block in dev.idle_eth_blocks[:-1]:
+        loc = block.location
+        if VERBOSE:
+            row = [loc.to_str("logical")]
+
+        for proc_name in enum_values_eth["ProcessorTypes"].keys():
+            proc_type = enum_values_eth["ProcessorTypes"][proc_name]
+            proc_class = enum_values_eth["dispatch_core_processor_classes"][proc_name]
+
+            # Create a local wrapper for mem_reader that captures loc and dev
+            loc_mem_reader = ELF.get_mem_reader(context, dev.id(), loc)
+
+            launch_msg_rd_ptr = mem_access(idle_erisc_elf, "mailboxes->launch_msg_rd_ptr", loc_mem_reader)[0][0]
+
+            # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
+            kernel_config_base = mem_access(
+                idle_erisc_elf,
+                f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_config_base[{ProgrammableCoreTypes_IDLE_ETH}]",
+                loc_mem_reader,
+            )[0][
+                0
+            ]  # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
+            kernel_text_offset = mem_access(
+                idle_erisc_elf,
+                f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_text_offset[{proc_type}]",
+                loc_mem_reader,
+            )[0][
+                0
+            ]  # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
+            watcher_kernel_id = (
+                mem_access(
+                    idle_erisc_elf,
+                    f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_class}]",
+                    loc_mem_reader,
+                )[0][0]
+                & 0xFFFF
+            )  # enum dispatch_core_processor_classes
+            kernel = inspector_data.kernels.get(watcher_kernel_id)
+            kernel_name = kernel.name if kernel else ""
+
+            cs = []
+            fw_elf_path = a_kernel_path + f"../../../firmware/{proc_name.lower()}/{proc_name.lower()}.elf"
+            fw_elf_path = os.path.realpath(fw_elf_path)
+            kernel_path = ""
+
+            if kernel_name:
+                print(kernel_name)
+                assert kernel is not None, f"Kernel with watcher_kernel_id {watcher_kernel_id} not found."
+                kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
+                kernel_path = os.path.realpath(kernel_path)
+                if not os.path.exists(kernel_path):
+                    raiseTTTriageError(f"Kernel ELF file {kernel_path} does not exist.")
+
+                pc = pcs_idle_eth[loc][proc_name.lower() + "_pc"]
+                if VVERBOSE:
+                    print(f".", end="", flush=True)
+
+                    if fw_elf_path not in elf_cache:
+                        elf_cache[fw_elf_path] = parse_elf(fw_elf_path, context)
+                    if kernel_path not in elf_cache:
+                        elf_cache[kernel_path] = parse_elf(kernel_path, context)
+                    if proc_name == "NCRISC" and type(dev) == WormholeDevice:
+                        kernel_offset = 0xFFC00000
+                    else:
+                        kernel_offset = kernel_config_base + kernel_text_offset
+
+                    cs = top_callstack(
+                        pc, [elf_cache[fw_elf_path], elf_cache[kernel_path]], [None, kernel_offset], context=context
+                    )
+            else:
+                pc = pcs_idle_eth[loc][proc_name.lower() + "_pc"]
+                if VVERBOSE:
+                    print(f".", end="", flush=True)
+
+                    if fw_elf_path not in elf_cache:
+                        elf_cache[fw_elf_path] = parse_elf(fw_elf_path, context)
+
+                    cs = top_callstack(pc, elf_cache[fw_elf_path], context=context)
+
+            if VVERBOSE:
+                pc = pcs_idle_eth[loc][proc_name.lower() + "_pc"]
                 row = [
                     loc.to_str("logical"),
                     proc_name,
