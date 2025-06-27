@@ -309,25 +309,20 @@ void DevicePool::initialize(
 
         if (all_devices_open && any_remote_devices) {
             FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-            if (tt::tt_fabric::is_2d_fabric_config(fabric_config) || hal::get_arch() == tt::ARCH::BLACKHOLE) {
-                // 2D Fabric config or Blackhole
+            if (hal::get_arch() == tt::ARCH::BLACKHOLE) {
                 fallback_to_tunneling();
-                log_debug(
-                    tt::LogMetal, "Cannot launch Dispatch on Fabric on unsupported configuration. Using tunneling.");
-            } else if (fabric_config == FabricConfig::DISABLED) {
-                tt::tt_metal::detail::SetFabricConfig(
-                    FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-                // Previously disabled. Need to init
-                if (fabric_config == FabricConfig::DISABLED) {
-                    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-                }
-                fabric_config = FabricConfig::FABRIC_1D;
-                log_info(tt::LogMetal, "Dispatch on 1D Fabric");
             } else {
-                // Use the same 1D mode
-                tt::tt_metal::detail::SetFabricConfig(
-                    fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-                log_info(tt::LogMetal, "Dispatch on 1D Fabric");
+                if (fabric_config == FabricConfig::DISABLED) {
+                    tt::tt_metal::detail::SetFabricConfig(
+                        FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+                    // Call initialize again because previously it was a no-op
+                    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+                } else {
+                    // Use the same mode
+                    tt::tt_metal::detail::SetFabricConfig(
+                        fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+                }
+                log_info(tt::LogMetal, "Dispatch on {} Fabric", fabric_config);
             }
         } else {
             fallback_to_tunneling();
