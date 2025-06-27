@@ -18,7 +18,7 @@ void kernel_main() {
 
     auto tensor_accessor = make_tensor_accessor_from_args(args, bank_base_address, page_size);
     constexpr uint32_t one_tile = 1;
-    for (size_t i = 0; i < num_dev_pages; ++i) {
+    for (uint32_t i = 0; i < num_dev_pages; ++i) {
         cb_wait_front(cb_id, one_tile);
         uint32_t l1_read_addr = get_read_ptr(cb_id);
         auto noc_addr = tensor_accessor.get_noc_addr(i);
