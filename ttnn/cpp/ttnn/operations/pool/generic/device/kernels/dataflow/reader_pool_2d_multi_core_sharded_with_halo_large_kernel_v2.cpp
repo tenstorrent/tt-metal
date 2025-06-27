@@ -256,7 +256,7 @@ void kernel_main() {
     if constexpr (reader_id == 0) {
         constexpr uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
         // initialize buffers
-        fill_with_val(get_write_ptr(interm_cb_id), TILE_HEIGHT * TILE_WIDTH * in_cb_ntiles, bf16_init_value);
+        clear_out_tiles<interm_cb_id, clear_value_cb_id>();
         if constexpr (one_scalar_per_core) {
             fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
         }
