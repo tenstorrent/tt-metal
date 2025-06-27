@@ -10,7 +10,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, preprocess_inputs_prefill
+from models.tt_transformers.tt.common import (
+    PagedAttentionConfig,
+    get_prefill_rot_mat,
+    preprocess_inputs_prefill,
+    validate_paged_attention_capacity,
+)
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
@@ -180,6 +185,12 @@ def test_tt_model_acc(
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
+        )
+        validate_paged_attention_capacity(
+            page_block_size=page_params["page_block_size"],
+            page_max_num_blocks=page_params["page_max_num_blocks"],
+            batch_size=batch_size,
+            required_tokens_per_user=prefill_len + decode_len,
         )
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)

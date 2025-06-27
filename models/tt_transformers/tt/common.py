@@ -551,3 +551,12 @@ def create_tt_model(
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
 
     return tt_model_args, model, tt_kv_cache, state_dict
+
+
+def validate_paged_attention_capacity(page_block_size, page_max_num_blocks, batch_size, required_tokens_per_user):
+    available_tokens_per_user = (page_block_size * page_max_num_blocks) / batch_size
+    assert required_tokens_per_user <= available_tokens_per_user, (
+        f"PagedAttention underprovisioned: "
+        f"requires {required_tokens_per_user} tokens/user but only {available_tokens_per_user:.0f} available "
+        f"(block_size={page_block_size}, blocks={page_max_num_blocks}, batch_size={batch_size})"
+    )
