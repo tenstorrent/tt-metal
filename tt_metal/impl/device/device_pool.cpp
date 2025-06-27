@@ -302,9 +302,18 @@ void DevicePool::initialize(
 
         const auto fallback_to_tunneling = [&]() {
             tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
-            // Need to reinitialize because FD Fabric setting has changed
-            tt::tt_metal::MetalContext::instance().initialize(
-                dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
+            // This will force MetalContext to reinit it's Cluster to allocate cores for tunneling. Only needed if there
+            // are remote devices
+            if (any_remote_devices) {
+                log_warning(
+                    tt::LogMetal,
+                    "Cannot launch Dispatch on Fabric without all physical devices activated. Using tunneling for "
+                    "remote devices.");
+                tt::tt_metal::MetalContext::instance().set_fabric_config(
+                    tt::tt_metal::MetalContext::instance().get_fabric_config());
+                tt::tt_metal::MetalContext::instance().initialize(
+                    dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
+            }
         };
 
         if (all_devices_open && any_remote_devices) {
@@ -317,6 +326,7 @@ void DevicePool::initialize(
                         FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
                     // Call initialize again because previously it was a no-op
                     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+                    fabric_config = FabricConfig::FABRIC_1D;
                 } else {
                     // Use the same mode
                     tt::tt_metal::detail::SetFabricConfig(
@@ -326,9 +336,6 @@ void DevicePool::initialize(
             }
         } else {
             fallback_to_tunneling();
-            log_debug(
-                tt::LogMetal,
-                "Cannot launch Dispatch on Fabric without all physical devices activated. Using tunneling.");
         }
     }
 
@@ -595,6 +602,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
             if (not _inst->is_device_active(i)) {
                 // Fabric currently requires all devices to be active
                 log_fatal(tt::LogMetal, "Fabric is being used but {} is not active", i);
+                std::cerr << fmt::format("Fabric is being used but {} is not active\n", i);
             }
         }
     }
