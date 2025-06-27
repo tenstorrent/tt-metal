@@ -898,6 +898,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         default_num_eth_txq_data_packet_accept_ahead,
 
         default_handshake_context_switch_timeout,
+        static_cast<uint32_t>(
+            this->firmware_context_switch_type == FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE),
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
 
@@ -1302,6 +1304,10 @@ void FabricEriscDatamoverBuilder::set_firmware_context_switch_interval(size_t in
 
 void FabricEriscDatamoverBuilder::set_wait_for_host_signal(bool wait_for_host_signal) {
     this->wait_for_host_signal = wait_for_host_signal;
+}
+
+void FabricEriscDatamoverBuilder::set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type) {
+    this->firmware_context_switch_type = type;
 }
 
 }  // namespace tt::tt_fabric
