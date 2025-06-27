@@ -1368,18 +1368,14 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
             sizeof(tensix_routing_l1_info_t),
         "ControlPlane: Tensix routing table size mismatch");
     const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
-    const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_desc.get_cores(CoreType::TENSIX, CoordSystem::PHYSICAL);
+    const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
     // Write to all Tensix cores
     // TODO: "mcast" to all tensix cores
     for (const auto& tensix_core : tensix_cores) {
-        auto virtual_core =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
-                physical_chip_id, CoreCoord(tensix_core.x, tensix_core.y));
-
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             (void*)&tensix_routing_info,
             sizeof(tensix_routing_l1_info_t),
-            tt_cxy_pair(physical_chip_id, virtual_core),
+            tt_cxy_pair(physical_chip_id, tensix_core),
             tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
                 tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_TABLE));
     }
@@ -1481,15 +1477,15 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
             edm_config.sender_channels_buffer_index_semaphore_address[sender_channel];
 
         // print dump all info for fabric-routed channels
-        fprintf(stderr, "\t\tDirection: %d (fabric-routed)\n", connection_info.edm_direction);
-        fprintf(stderr, "\t\tNoC XY: 0x%04X\n", connection_info.edm_noc_xy);
-        fprintf(stderr, "\t\tBuffer Base Addr: 0x%08X\n", connection_info.edm_buffer_base_addr);
-        fprintf(stderr, "\t\tNum Buffers: %u\n", connection_info.num_buffers_per_channel);
-        fprintf(stderr, "\t\tL1 Sem Addr: 0x%08X\n", connection_info.edm_l1_sem_addr);
-        fprintf(stderr, "\t\tHandshake Addr: 0x%08X\n", connection_info.edm_connection_handshake_addr);
-        fprintf(stderr, "\t\tWorker Info Addr: 0x%08X\n", connection_info.edm_worker_location_info_addr);
-        fprintf(stderr, "\t\tBuffer Size (bytes): %u\n", connection_info.buffer_size_bytes);
-        fprintf(stderr, "\t\tBuffer Index Sem ID: %u\n\n", connection_info.buffer_index_semaphore_id);
+        // fprintf(stderr, "\t\tDirection: %d (fabric-routed)\n", connection_info.edm_direction);
+        // fprintf(stderr, "\t\tNoC XY: 0x%04X\n", connection_info.edm_noc_xy);
+        // fprintf(stderr, "\t\tBuffer Base Addr: 0x%08X\n", connection_info.edm_buffer_base_addr);
+        // fprintf(stderr, "\t\tNum Buffers: %u\n", connection_info.num_buffers_per_channel);
+        // fprintf(stderr, "\t\tL1 Sem Addr: 0x%08X\n", connection_info.edm_l1_sem_addr);
+        // fprintf(stderr, "\t\tHandshake Addr: 0x%08X\n", connection_info.edm_connection_handshake_addr);
+        // fprintf(stderr, "\t\tWorker Info Addr: 0x%08X\n", connection_info.edm_worker_location_info_addr);
+        // fprintf(stderr, "\t\tBuffer Size (bytes): %u\n", connection_info.buffer_size_bytes);
+        // fprintf(stderr, "\t\tBuffer Index Sem ID: %u\n\n", connection_info.buffer_index_semaphore_id);
 
         // Mark this connection as valid for fabric communication
         fabric_connections.valid_connections_mask |= (1u << eth_endpoint_idx);
@@ -1497,34 +1493,19 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
         fabric_routed_channels++;
     }
 
-    // Print summary
-    fprintf(
-        stderr,
-        "\tSummary for M%dD%d: %zu total physical channels, %zu fabric-routed, %zu unrouted\n\n",
-        *mesh_id,
-        chip_id,
-        total_physical_channels,
-        fabric_routed_channels,
-        total_physical_channels - fabric_routed_channels);
-
     TT_FATAL(
         tt_metal::MetalContext::instance().hal().get_dev_size(
-            tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS) >=
+            tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS) ==
             sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
         "ControlPlane: Tensix fabric connections table size mismatch");
 
-    const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_desc.get_cores(CoreType::TENSIX, CoordSystem::PHYSICAL);
-
+    const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
     // Write to all Tensix cores using multicast for efficiency
     for (const auto& tensix_core : tensix_cores) {
-        auto virtual_core =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
-                physical_chip_id, CoreCoord(tensix_core.x, tensix_core.y));
-
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             (void*)&fabric_connections,
             sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
-            tt_cxy_pair(physical_chip_id, virtual_core),
+            tt_cxy_pair(physical_chip_id, tensix_core),
             tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
                 tt::tt_metal::HalProgrammableCoreType::TENSIX,
                 tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS));

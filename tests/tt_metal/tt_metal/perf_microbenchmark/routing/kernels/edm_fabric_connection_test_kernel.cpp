@@ -65,7 +65,9 @@ void kernel_main() {
     size_t num_messages_index = get_arg_val<uint32_t>(arg_idx++);;
     size_t stall_duration_index = get_arg_val<uint32_t>(arg_idx++);;
 
-    auto fabric_connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+    uint32_t eth_channel = get_arg_val<uint32_t>(rt_args_idx++);
+    auto fabric_connection =
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx, eth_channel);
 
     cb_reserve_back(source_l1_cb_index, 1);
     cb_reserve_back(packet_header_cb, packet_header_size_in_headers);

@@ -72,48 +72,6 @@ struct WorkerToFabricEdmSenderImpl {
 
         constexpr bool is_persistent_fabric = true;
 
-        // const auto direction = get_arg_val<uint32_t>(arg_idx++);
-        // const WorkerXY edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
-        // const auto edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
-        // const uint8_t num_buffers_per_channel = get_arg_val<uint32_t>(arg_idx++);
-        // const size_t edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
-        // const auto edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
-        // const auto edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
-        // const uint16_t buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
-        // const auto edm_copy_of_wr_counter_addr = get_arg_val<uint32_t>(arg_idx++);
-
-        // const auto direction_ = conn.edm_direction;
-        // const WorkerXY edm_worker_xy_ = WorkerXY::from_uint32(conn.edm_noc_xy);
-        // const auto edm_buffer_base_addr_ = conn.edm_buffer_base_addr;
-        // const uint8_t num_buffers_per_channel_ = conn.num_buffers_per_channel;
-        // const size_t edm_l1_sem_id_ = conn.edm_l1_sem_addr;
-        // const auto edm_connection_handshake_l1_addr_ = conn.edm_connection_handshake_addr;
-        // const auto edm_worker_location_info_addr_ = conn.edm_worker_location_info_addr;
-        // const uint16_t buffer_size_bytes_ = conn.buffer_size_bytes;
-        // const auto edm_copy_of_wr_counter_addr_ = conn.buffer_index_semaphore_id;
-
-        // // compare with args passed in
-        // DPRINT << "eth_channel: " << static_cast<uint32_t>(eth_channel) << "\n";
-        // DPRINT << "direction: " << static_cast<uint32_t>(direction_) << " vs " << static_cast<uint32_t>(direction)
-        //        << "\n";
-        // DPRINT << "edm_worker_xy: " << static_cast<uint32_t>(edm_worker_xy_.to_uint32()) << " vs "
-        //        << static_cast<uint32_t>(edm_worker_xy.to_uint32()) << "\n";
-        // DPRINT << "edm_buffer_base_addr: " << static_cast<uint32_t>(edm_buffer_base_addr_) << " vs "
-        //        << static_cast<uint32_t>(edm_buffer_base_addr) << "\n";
-        // DPRINT << "num_buffers_per_channel: " << static_cast<uint32_t>(num_buffers_per_channel_) << " vs "
-        //        << static_cast<uint32_t>(num_buffers_per_channel) << "\n";
-        // DPRINT << "edm_l1_sem_id: " << static_cast<uint32_t>(edm_l1_sem_id_) << " vs "
-        //        << static_cast<uint32_t>(edm_l1_sem_id) << "\n";
-        // DPRINT << "edm_connection_handshake_l1_addr: " << static_cast<uint32_t>(edm_connection_handshake_l1_addr_)
-        //        << " vs " << static_cast<uint32_t>(edm_connection_handshake_l1_addr) << "\n";
-        // DPRINT << "edm_worker_location_info_addr: " << static_cast<uint32_t>(edm_worker_location_info_addr_) << " vs
-        // "
-        //        << static_cast<uint32_t>(edm_worker_location_info_addr) << "\n";
-        // DPRINT << "buffer_size_bytes: " << static_cast<uint32_t>(buffer_size_bytes_) << " vs "
-        //        << static_cast<uint32_t>(buffer_size_bytes) << "\n";
-        // DPRINT << "edm_copy_of_wr_counter_addr: " << static_cast<uint32_t>(edm_copy_of_wr_counter_addr_) << " vs "
-        //        << static_cast<uint32_t>(edm_copy_of_wr_counter_addr) << "\n";
-
         const auto direction = conn.edm_direction;
         const WorkerXY edm_worker_xy = WorkerXY::from_uint32(conn.edm_noc_xy);
         const auto edm_buffer_base_addr = conn.edm_buffer_base_addr;
@@ -123,6 +81,7 @@ struct WorkerToFabricEdmSenderImpl {
         const auto edm_worker_location_info_addr = conn.edm_worker_location_info_addr;
         const uint16_t buffer_size_bytes = conn.buffer_size_bytes;
         const auto edm_copy_of_wr_counter_addr = conn.buffer_index_semaphore_id;
+        // TODO: remove
         arg_idx += 9;
 
         const auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);

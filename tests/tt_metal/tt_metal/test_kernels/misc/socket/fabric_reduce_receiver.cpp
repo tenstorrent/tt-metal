@@ -15,10 +15,12 @@ void kernel_main() {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(5);
 
     size_t rt_args_idx = 0;
+    uint32_t eth_channel = get_arg_val<uint32_t>(rt_args_idx++);
     tt::tt_fabric::WorkerToFabricEdmSender receiver0_fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx, eth_channel);
+    eth_channel = get_arg_val<uint32_t>(rt_args_idx++);
     tt::tt_fabric::WorkerToFabricEdmSender receiver1_fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx, eth_channel);
     receiver0_fabric_connection.open_start();
     receiver1_fabric_connection.open_start();
     // Sanity

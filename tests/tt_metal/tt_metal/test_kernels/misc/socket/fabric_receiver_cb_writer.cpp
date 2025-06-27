@@ -17,8 +17,9 @@ void kernel_main() {
     constexpr uint32_t num_pages = data_size / page_size;
 
     size_t rt_args_idx = 0;
+    uint32_t eth_channel = get_arg_val<uint32_t>(rt_args_idx++);
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx, eth_channel);
     fabric_connection.open_start();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
