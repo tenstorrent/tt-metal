@@ -140,8 +140,59 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
                const Tensor& predicate,
-               const std::variant<float, Tensor>& true_value,
-               const std::variant<float, Tensor>& false_value,
+               const Tensor& true_value,
+               const Tensor& false_value,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<Tensor> output_tensor,
+               QueueId queue_id) {
+                return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
+            },
+            py::arg("predicate"),
+            py::arg("true_value"),
+            py::arg("false_value"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId},
+        ttnn::pybind_overload_t{
+            [](const ternary_operation_t& self,
+               const Tensor& predicate,
+               const float true_value,
+               const Tensor& false_value,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<Tensor> output_tensor,
+               QueueId queue_id) {
+                return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
+            },
+            py::arg("predicate"),
+            py::arg("true_value"),
+            py::arg("false_value"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId},
+        ttnn::pybind_overload_t{
+            [](const ternary_operation_t& self,
+               const Tensor& predicate,
+               const Tensor& true_value,
+               const float false_value,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<Tensor> output_tensor,
+               QueueId queue_id) {
+                return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
+            },
+            py::arg("predicate"),
+            py::arg("true_value"),
+            py::arg("false_value"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId},
+        ttnn::pybind_overload_t{
+            [](const ternary_operation_t& self,
+               const Tensor& predicate,
+               const float true_value,
+               const float false_value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
                QueueId queue_id) {

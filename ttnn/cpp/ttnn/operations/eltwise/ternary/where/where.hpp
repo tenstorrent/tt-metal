@@ -20,10 +20,70 @@ struct WhereOperation {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& predicate,
-        const std::variant<float, Tensor>& value_true,
-        const std::variant<float, Tensor>& value_false,
+        const Tensor& value_true,
+        const Tensor& value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& predicate,
+        const float value_true,
+        const Tensor& value_false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& predicate,
+        const Tensor& value_true,
+        const float value_false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& predicate,
+        const float value_true,
+        const float value_false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& predicate,
+        const Tensor& value_true,
+        const Tensor& value_false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> output_tensor = std::nullopt) {
+        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, output_tensor);
+    }
+
+    static Tensor invoke(
+        const Tensor& predicate,
+        const float value_true,
+        const Tensor& value_false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> output_tensor = std::nullopt) {
+        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, output_tensor);
+    }
+
+    static Tensor invoke(
+        const Tensor& predicate,
+        const Tensor& value_true,
+        const float value_false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> output_tensor = std::nullopt) {
+        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, output_tensor);
+    }
+
+    static Tensor invoke(
+        const Tensor& predicate,
+        const float value_true,
+        const float value_false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> output_tensor = std::nullopt) {
+        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, output_tensor);
+    }
 };
 
 }  // namespace ternary
