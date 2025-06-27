@@ -80,8 +80,12 @@ class TtYolov10Conv2D:
             enable_subblock_padding=False,
             output_layout=ttnn.TILE_LAYOUT,
             act_block_h_override=act_block_h_override,
-            enable_act_double_buffer=enable_act_double_buffer,
-            enable_weights_double_buffer=enable_weights_double_buffer,
+            enable_act_double_buffer=True
+            if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            else enable_act_double_buffer,
+            enable_weights_double_buffer=True
+            if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            else enable_weights_double_buffer,
         )
         if auto_shard:
             self.conv_config.shard_layout = None
