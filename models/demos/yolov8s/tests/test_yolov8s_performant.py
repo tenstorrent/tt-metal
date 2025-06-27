@@ -1,11 +1,10 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-
 import pytest
 
-from models.demos.yolov8s.tests.yolov8s_performant import (
+from models.demos.yolov8s.runner.yolov8s_performant import (
     run_yolov8s_inference,
     run_yolov8s_trace_2cqs_inference,
     run_yolov8s_trace_inference,
@@ -17,7 +16,6 @@ from models.demos.yolov8s.tests.yolov8s_performant import (
 def test_run_yolov8s_inference(
     device,
     device_batch_size,
-    use_program_cache,
 ):
     run_yolov8s_inference(
         device,
@@ -30,7 +28,6 @@ def test_run_yolov8s_inference(
 def test_run_yolov8s_trace_inference(
     device,
     device_batch_size,
-    use_program_cache,
 ):
     run_yolov8s_trace_inference(
         device,
@@ -45,7 +42,6 @@ def test_run_yolov8s_trace_inference(
 def test_run_yolov8s_trace_2cq_inference(
     device,
     device_batch_size,
-    use_program_cache,
 ):
     run_yolov8s_trace_2cqs_inference(
         device=device,
