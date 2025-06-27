@@ -1,6 +1,10 @@
-import torch
-import numpy as np
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
 from argparse import ArgumentParser
+
+import numpy as np
+import torch
 from loguru import logger
 
 
