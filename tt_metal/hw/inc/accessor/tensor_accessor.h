@@ -159,7 +159,7 @@ FORCE_INLINE auto make_tensor_accessor_from_args(
             .page_size = page_size_in,
         };
 #else
-        static_assert(false, "InterleavedAddrGen is only supported in kernel and fw builds");
+        return nullptr;
 #endif
     }
 }
