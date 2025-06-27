@@ -7,8 +7,8 @@ from loguru import logger
 from ultralytics import YOLO
 
 import ttnn
-from models.experimental.yolov8s.tt.tt_yolov8s_utils import custom_preprocessor
-from models.experimental.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
+from models.demos.yolov8s.tt.tt_yolov8s_utils import custom_preprocessor
+from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -27,7 +27,7 @@ def load_ttnn_model(device, torch_model, inp_h, inp_w):
     return ttnn_model
 
 
-class Yolov8TestInfra:
+class YOLOv8sPerformanceRunnerInfra:
     def __init__(
         self,
         device,
@@ -63,7 +63,7 @@ class Yolov8TestInfra:
 
         n, c, h, w = torch_input_tensor.shape
         if c == 3:
-            c = 8
+            c = 16
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
             ttnn.CoreGrid(x=8, y=8),
@@ -104,13 +104,3 @@ class Yolov8TestInfra:
 
     def dealloc_output(self):
         ttnn.deallocate(self.output_tensor)
-
-
-def create_test_infra(
-    device,
-    batch_size,
-):
-    return Yolov8TestInfra(
-        device,
-        batch_size,
-    )

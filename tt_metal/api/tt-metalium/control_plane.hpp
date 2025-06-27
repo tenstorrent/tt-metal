@@ -38,7 +38,8 @@ public:
     void print_all_ethernet_connections() const;
 
     // Converts chip level routing tables to per ethernet channel
-    void configure_routing_tables_for_fabric_ethernet_channels(tt_metal::FabricReliabilityMode reliability_mode);
+    void configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
     void write_routing_tables_to_all_chips() const;
 
     // Return mesh_id, chip_id from physical chip id
@@ -53,7 +54,7 @@ public:
         FabricNodeId fabric_node_id, routing_plane_id_t routing_plane_id) const;
 
     // Return path from device to device in the fabric
-    std::vector<std::pair<chip_id_t, chan_id_t>> get_fabric_route(
+    std::vector<std::pair<FabricNodeId, chan_id_t>> get_fabric_route(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) const;
 
     // Returns the direction in which the data should be forwarded from the src to reach the dest
@@ -98,7 +99,7 @@ public:
     void set_routing_mode(uint16_t mode);
     uint16_t get_routing_mode() const;
 
-    void initialize_fabric_context(tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
+    void initialize_fabric_context(tt_metal::FabricConfig fabric_config);
 
     FabricContext& get_fabric_context() const;
 

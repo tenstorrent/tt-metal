@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.yolov8s.tests.yolov8s_test_infra import create_test_infra
+from models.demos.yolov8s.runner.performant_runner_infra import YOLOv8sPerformanceRunnerInfra
 
 try:
     from tracy import signpost
@@ -18,7 +18,7 @@ def run_yolov8s_inference(
     device,
     device_batch_size,
 ):
-    test_infra = create_test_infra(
+    test_infra = YOLOv8sPerformanceRunnerInfra(
         device=device,
         batch_size=device_batch_size,
     )
@@ -51,7 +51,7 @@ def run_yolov8s_trace_inference(
     device,
     device_batch_size,
 ):
-    test_infra = create_test_infra(
+    test_infra = YOLOv8sPerformanceRunnerInfra(
         device=device,
         batch_size=device_batch_size,
     )
@@ -97,7 +97,7 @@ def run_yolov8s_trace_2cqs_inference(
     device,
     device_batch_size,
 ):
-    test_infra = create_test_infra(
+    test_infra = YOLOv8sPerformanceRunnerInfra(
         device,
         device_batch_size,
     )

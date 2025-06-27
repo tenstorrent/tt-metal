@@ -44,7 +44,6 @@ class MambaPytorch(torch.nn.Module):
 
 def run_inference(
     device: ttnn.Device,
-    use_program_cache,
     model_version: MambaPretrainedModelName,
     mode: ModelMode,
     batch: int,
@@ -149,7 +148,6 @@ buildings, agriculture and land use are among the main sectors causing greenhous
 )
 def test_inference(
     device: ttnn.Device,
-    use_program_cache,
     get_tt_cache_path,
     model_version: MambaPretrainedModelName,
     mode: ModelMode,
@@ -161,7 +159,6 @@ def test_inference(
 ):
     run_inference(
         device,
-        use_program_cache,
         model_version,
         mode,
         batch,
@@ -180,7 +177,6 @@ def test_inference(
 )
 def test_device_perf(
     device: ttnn.Device,
-    use_program_cache,
     get_tt_cache_path,
     iterations,
     model_version="state-spaces/mamba-2.8b",
@@ -190,7 +186,6 @@ def test_device_perf(
 ):
     run_inference(
         device,
-        use_program_cache,
         model_version,
         ModelMode.DECODE,
         batch,

@@ -39,7 +39,6 @@ from models.utility_functions import run_for_wormhole_b0
 @pytest.mark.models_performance_virtual_machine
 def test_e2e_performant(
     device,
-    use_program_cache,
     batch_size,
     act_dtype,
     weight_dtype,
