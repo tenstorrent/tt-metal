@@ -243,10 +243,10 @@ uint32_t calculate_L1_usage(
         return factor * alignment_bytes;
     };
 
-    uint32_t sync_cb_1_2 = 2 * 2 * 2;
+    uint32_t sync_cb_1_2_3_4 = 4 * 2 * 2;
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + in_one_cb_size + clear_value_cb_size + in_cb_config_0_size +
            in_cb_config_1_size + align(out_cb_config_size) /* global, involved */
-           + max_pool_partials_cb_config_size + sync_cb_1_2;
+           + max_pool_partials_cb_config_size + sync_cb_1_2_3_4;
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
