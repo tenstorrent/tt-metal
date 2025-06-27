@@ -16,7 +16,6 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.embedding_1d import Embedding_1D
-from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
 
 
@@ -30,7 +29,7 @@ def temp_dir():
 @pytest.fixture
 def hf_config():
     """Load DeepSeek config for testing."""
-    config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
+    config = AutoConfig.from_pretrained("/proj_sw/user_dev/deepseek-ai", trust_remote_code=True)
     return config
 
 
@@ -83,10 +82,9 @@ def test_embedding_forward_pass(
         model_config = Embedding_1D.decode_model_config(hf_config, mesh_device)
 
     # Create RunConfig using both weight_config and model_config
-    run_config = create_run_config(model_config, weight_config, mesh_device)
+    run_config = Embedding_1D.run_config(model_config, weight_config, mesh_device)
 
     # Instantiate the model
-    tt_embedding = Embedding_1D(hf_config, mesh_device)
 
     # Prepare input - in decode mode batch is placed into seq_len dimension anyway
     torch_input_ids = torch.randint(0, min(1000, hf_config.vocab_size), (1, seq_len))
@@ -101,11 +99,20 @@ def test_embedding_forward_pass(
     )
 
     # TTNN forward pass
-    tt_output = tt_embedding.forward(tt_input_ids, run_config, mesh_device)
-    tt_output_torch = ttnn.to_torch(tt_output)
+    tt_output = Embedding_1D(tt_input_ids, run_config)
+    logger.info(tt_output)
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device,
+            dims=(-2, -1),
+            mesh_shape=tuple(mesh_device.shape),
+        ),
+    )
 
     # Reference forward pass
     reference_output = reference_model(torch_input_ids)
+    print(reference_output.shape)
 
     # Compare outputs
     pcc_required = 0.99  # Embedding should be exact match (just lookup)

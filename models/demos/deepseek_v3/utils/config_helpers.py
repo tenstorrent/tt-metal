@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-from typing import Tuple
+from typing import Sequence
+
+import torch
 
 import ttnn
 
@@ -94,7 +96,7 @@ def matmul_config(
     m: int,
     k: int,
     n: int,
-    grid_size: Tuple[int, int],
+    grid_size: tuple[int, int],
     in0_block_w: int = None,
     fuse_batch: bool = False,
     fused_activation=None,
@@ -386,7 +388,8 @@ def dram_sharded_weight_config(k, n, dram_grid_size):
             )
         }
     )
-    padded_size = math.ceil(n / (TILE_SIZE * dram_cores)) * (TILE_SIZE * dram_cores)
+    padding_multiple = TILE_SIZE * dram_cores
+    padded_size = ((n + padding_multiple - 1) / padding_multiple) * padding_multiple
     shard_spec = ttnn.ShardSpec(dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
@@ -412,7 +415,7 @@ def matmul_config(
     m: int,
     k: int,
     n: int,
-    grid_size: Tuple[int, int],
+    grid_size: tuple[int, int],
     in0_block_w: int = None,
     fuse_batch: bool = False,
     fused_activation=None,
@@ -442,7 +445,7 @@ def matmul_config(
     )
 
 
-def dram_shard_core_grid_for_k_and_n(k: int, n: int) -> Tuple[int, int]:
+def dram_shard_core_grid_for_k_and_n(k: int, n: int) -> tuple[int, int]:
     rows, cols = find_grid_k_n(k // TILE_SIZE, n // TILE_SIZE)
     return ttnn.CoreGrid(x=cols, y=rows)
 
@@ -497,6 +500,20 @@ def save_and_get_path(path, tensor):
     return str(path)
 
 
+def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int] | None = None) -> torch.Tensor:
+    """Dequantize a pytorch tensor using the provided scale."""
+    assert tensor.ndim == inv_scale.ndim and tensor.dtype == torch.float8_e4m3fn and inv_scale.dtype == torch.float32
+    if block_shape is not None:
+        assert len(block_shape) == tensor.ndim and all(
+            inv_scale.shape[i] * block_shape[i] == tensor.shape[i] for i in range(tensor.ndim)
+        )
+    else:
+        assert all(tensor.shape[i] % inv_scale.shape[i] == 0 for i in range(tensor.ndim))
+    for i in range(inv_scale.ndim):
+        inv_scale = inv_scale.repeat_interleave(tensor.shape[i] // inv_scale.shape[i], dim=i)
+    return tensor.bfloat16() * inv_scale.bfloat16()
+
+
 def sub_state_dict(state_dict, prefix):
     """Get a subset of the state dict with a given prefix."""
-    return {k.replace(prefix, ""): v for k, v in state_dict.items() if k.startswith(prefix)}
+    return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
