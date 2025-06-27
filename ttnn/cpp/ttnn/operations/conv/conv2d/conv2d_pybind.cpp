@@ -432,6 +432,7 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
+            bool,
             bool>(),
         py::kw_only(),
         py::arg("weights_dtype") = std::nullopt,
@@ -448,6 +449,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("output_layout") = Layout::TILE,
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
+        py::arg("full_inner_dim") = false,
         py::arg("enable_split_reader") = false,
         py::arg("enable_subblock_padding") = false,
         py::arg("in_place") = false,
@@ -531,10 +533,16 @@ void py_bind_conv2d(py::module& module) {
             Doubles the size of the Weights Circular Buffer to allow for double buffering, preventing stalls of the weights reader kernel.
             This improves performance, but increases the memory usage of the weights tensor.
         )doc");
-    py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader, R"doc(
+    py_conv_config.def_readwrite("full_inner_dim", &Conv2dConfig::full_inner_dim, R"doc(
             This uses both the reader & writer cores to carry out the activation reader operation.
             This is useful when the input tensor is large, and the activation reader is a bottleneck.
             This is only supported for Height Sharded Conv2D.
+        )doc");
+    py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader, R"doc(
+            Applies only to block sharded layout..
+            By default inner dim of activation matrix will be sliced by kernel_h.
+            If L1 constraints allowed it we can use full inner dim.
+            This will increase perf, but it will take more L1 space.
         )doc");
     py_conv_config.def_readwrite("enable_subblock_padding", &Conv2dConfig::enable_subblock_padding);
     py_conv_config.def_readwrite("in_place", &Conv2dConfig::in_place, R"doc(
