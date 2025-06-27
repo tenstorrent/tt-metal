@@ -1,6 +1,6 @@
 # New model bring-up in TT-NN
 
-**Authors**: Dalar Vartanians, Ashai Reddy  
+**Authors**: Dalar Vartanians, Ashai Reddy
 **Correspondence**: `dvartanians@tenstorrent.com`, `arginuga@tenstorrent.com`
 
 
@@ -172,11 +172,11 @@ Reports Folder (sample generated database file and folder structure)            
 
   - Finally, to understand how both of these optimization techniques can be used together refer to [Putting Trace and Multiple Command Queues Together Documentation](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md#3-putting-trace-and-multiple-command-queues-together)
 
-  - The following table and diagram summarize the optimization approaches and ilustrates the concepts.	
+  - The following table and diagram summarize the optimization approaches and ilustrates the concepts.
 
-  - ![optimization_table](images/optimization_table.png)  
-  - ![trace_2cq](images/trace_2cq.png)  
-  
+  - ![optimization_table](images/optimization_table.png)
+  - ![trace_2cq](images/trace_2cq.png)
+
 
 ## 5. Conclusion
 
