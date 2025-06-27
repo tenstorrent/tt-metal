@@ -375,6 +375,9 @@ inline AllocatorPolicies YamlConfigParser::parse_allocator_policies(const YAML::
     if (policies_yaml["receiver"]) {
         policies.receiver_config = parse_core_allocation_config(policies_yaml["receiver"], policies.receiver_config);
     }
+    if (policies_yaml["default_payload_chunk_size"]) {
+        policies.default_payload_chunk_size = parse_scalar<uint32_t>(policies_yaml["default_payload_chunk_size"]);
+    }
     return policies;
 }
 
@@ -385,11 +388,8 @@ inline CoreAllocationConfig YamlConfigParser::parse_core_allocation_config(
         config.policy = detail::core_allocation_policy_mapper.from_string(
             parse_scalar<std::string>(config_yaml["policy"]), "CoreAllocationPolicy");
     }
-    if (config_yaml["max_workers_per_core"]) {
-        config.max_workers_per_core = parse_scalar<uint32_t>(config_yaml["max_workers_per_core"]);
-    }
-    if (config_yaml["default_payload_chunk_size"]) {
-        config.default_payload_chunk_size = parse_scalar<uint32_t>(config_yaml["default_payload_chunk_size"]);
+    if (config_yaml["max_configs_per_core"]) {
+        config.max_configs_per_core = parse_scalar<uint32_t>(config_yaml["max_configs_per_core"]);
     }
     if (config_yaml["initial_pool_size"]) {
         config.initial_pool_size = parse_scalar<uint32_t>(config_yaml["initial_pool_size"]);
@@ -808,15 +808,15 @@ private:
                         for (const auto& value : values) {
                             TestConfig next_config = current_config;
                             next_config.name += "_" + param_name + "_" + value;
-                            if (!next_config.defaults.has_value()) {
-                                next_config.defaults = TrafficPatternConfig{};
-                            }
 
+                            TrafficPatternConfig param_default;
                             if (param_name == "ftype") {
-                                next_config.defaults->ftype = detail::chip_send_type_mapper.from_string(value, "ftype");
+                                param_default.ftype = detail::chip_send_type_mapper.from_string(value, "ftype");
                             } else if (param_name == "ntype") {
-                                next_config.defaults->ntype = detail::noc_send_type_mapper.from_string(value, "ntype");
+                                param_default.ntype = detail::noc_send_type_mapper.from_string(value, "ntype");
                             }
+                            next_config.defaults =
+                                merge_patterns(current_config.defaults.value_or(TrafficPatternConfig{}), param_default);
                             next_level_configs.push_back(next_config);
                         }
                     }
@@ -827,15 +827,15 @@ private:
                         for (const auto& value : values) {
                             TestConfig next_config = current_config;
                             next_config.name += "_" + param_name + "_" + std::to_string(value);
-                            if (!next_config.defaults.has_value()) {
-                                next_config.defaults = TrafficPatternConfig{};
-                            }
 
+                            TrafficPatternConfig param_default;
                             if (param_name == "size") {
-                                next_config.defaults->size = value;
+                                param_default.size = value;
                             } else if (param_name == "num_packets") {
-                                next_config.defaults->num_packets = value;
+                                param_default.num_packets = value;
                             }
+                            next_config.defaults =
+                                merge_patterns(current_config.defaults.value_or(TrafficPatternConfig{}), param_default);
                             next_level_configs.push_back(next_config);
                         }
                     }
@@ -1347,12 +1347,8 @@ private:
         out << YAML::BeginMap;
         out << YAML::Key << "policy";
         out << YAML::Value << to_string(config.policy);
-        out << YAML::Key << "max_workers_per_core";
-        out << YAML::Value << config.max_workers_per_core;
-        if (config.default_payload_chunk_size.has_value()) {
-            out << YAML::Key << "default_payload_chunk_size";
-            out << YAML::Value << config.default_payload_chunk_size.value();
-        }
+        out << YAML::Key << "max_configs_per_core";
+        out << YAML::Value << config.max_configs_per_core;
         out << YAML::Key << "initial_pool_size";
         out << YAML::Value << config.initial_pool_size;
         out << YAML::Key << "pool_refill_size";
@@ -1368,6 +1364,10 @@ private:
         out << YAML::Key << "receiver";
         out << YAML::Value;
         to_yaml(out, policies.receiver_config);
+        if (policies.default_payload_chunk_size.has_value()) {
+            out << YAML::Key << "default_payload_chunk_size";
+            out << YAML::Value << policies.default_payload_chunk_size.value();
+        }
         out << YAML::EndMap;
     }
 

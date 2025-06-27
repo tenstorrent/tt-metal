@@ -34,7 +34,7 @@ public:
         uint32_t l1_unreserved_size,
         uint32_t l1_alignment,
         uint32_t payload_chunk_size,
-        uint32_t num_workers) :
+        uint32_t num_configs) :
         l1_alignment(l1_alignment) {
         // reserve the top space for atomic counters
         atomic_counter_start = l1_unreserved_base;
@@ -42,10 +42,10 @@ public:
 
         // reserve the bottom space for payloads
         payload_buffer_start = atomic_counter_end;
-        payload_buffer_end = payload_buffer_start + payload_chunk_size * num_workers;
+        payload_buffer_end = payload_buffer_start + payload_chunk_size * num_configs;
         TT_FATAL(
             payload_buffer_end <= l1_unreserved_base + l1_unreserved_size,
-            "Overflow when setting up memory map for worker core, try adjusting the chunk size of number of workers");
+            "Overflow when setting up memory map for worker core, try adjusting the chunk size of number of configs");
     }
 
     const uint32_t l1_alignment;
@@ -65,9 +65,9 @@ public:
         uint32_t l1_unreserved_size,
         uint32_t l1_alignment,
         uint32_t payload_chunk_size,
-        uint32_t num_workers) :
+        uint32_t num_configs) :
         payload_chunk_size(payload_chunk_size),
-        memory_map_(l1_unreserved_base, l1_unreserved_size, l1_alignment, payload_chunk_size, num_workers) {
+        memory_map_(l1_unreserved_base, l1_unreserved_size, l1_alignment, payload_chunk_size, num_configs) {
         this->next_atomic_addr_ = this->memory_map_.atomic_counter_start;
         init_payload_buffer_allocator();
     }
@@ -149,7 +149,7 @@ struct CorePool {
         available.reserve(active_pool.size());
         for (const auto& core : active_pool) {
             auto it = core_workload.find(core);
-            if (it == core_workload.end() || it->second < policy.max_workers_per_core) {
+            if (it == core_workload.end() || it->second < policy.max_configs_per_core) {
                 available.push_back(core);
             }
         }
@@ -170,6 +170,7 @@ public:
         uint32_t l1_unreserved_base,
         uint32_t l1_unreserved_size,
         uint32_t l1_alignment,
+        uint32_t default_payload_chunk_size,
         const CoreAllocationConfig& sender_policy,
         const CoreAllocationConfig& receiver_policy);
 
@@ -182,9 +183,10 @@ public:
     uint32_t l1_unreserved_base_;
     uint32_t l1_unreserved_size_;
     uint32_t l1_alignment_;
+    uint32_t default_payload_chunk_size_;
     std::vector<CoreCoord> pristine_cores_;                        // Cores not yet used at all.
     std::array<CorePool, 2> core_pools_;                           // Indexed by CoreType
-    std::unordered_map<CoreCoord, uint32_t> core_workload_;        // map core -> num_workers
+    std::unordered_map<CoreCoord, uint32_t> core_workload_;        // map core -> num_configs
     std::unordered_map<CoreCoord, CoreResources> core_resources_;  // map core -> its memory allocator
 
 private:
@@ -203,12 +205,14 @@ inline TestDeviceResources::TestDeviceResources(
     uint32_t l1_unreserved_base,
     uint32_t l1_unreserved_size,
     uint32_t l1_alignment,
+    uint32_t default_payload_chunk_size,
     const CoreAllocationConfig& sender_policy,
     const CoreAllocationConfig& receiver_policy) :
     node_id_(node_id),
     l1_unreserved_base_(l1_unreserved_base),
     l1_unreserved_size_(l1_unreserved_size),
     l1_alignment_(l1_alignment),
+    default_payload_chunk_size_(default_payload_chunk_size),
     core_pools_{CorePool(sender_policy), CorePool(receiver_policy)} {
     for (size_t y = 0; y < worker_grid_size.y; ++y) {
         for (size_t x = 0; x < worker_grid_size.x; ++x) {
@@ -265,14 +269,16 @@ inline CoreCoord TestDeviceResources::reserve_receiver_core(const std::optional<
 
 inline CoreResources& TestDeviceResources::get_or_create_core_resources(const CoreCoord& core, CoreType core_type) {
     if (core_resources_.find(core) == core_resources_.end()) {
-        const auto& config = core_pools_[static_cast<size_t>(core_type)].policy;
-        // Use the policy's chunk size, or a global default if not specified.
-        uint32_t chunk_size = config.default_payload_chunk_size.value_or(detail::DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES);
-        uint32_t num_workers = config.max_workers_per_core;
+        CoreAllocationConfig policy = core_pools_[static_cast<size_t>(core_type)].policy;
+
         core_resources_.emplace(
             core,
             CoreResources(
-                this->l1_unreserved_base_, this->l1_unreserved_size_, this->l1_alignment_, chunk_size, num_workers));
+                l1_unreserved_base_,
+                l1_unreserved_size_,
+                l1_alignment_,
+                this->default_payload_chunk_size_,
+                policy.max_configs_per_core));
     }
     return core_resources_.at(core);
 }
@@ -307,11 +313,11 @@ inline CoreCoord TestDeviceResources::find_next_available_core(CorePool& pool) {
             const CoreCoord& core = pool.active_pool[idx_to_check];
             auto it = core_workload_.find(core);
 
-            if (it == core_workload_.end() || it->second < pool.policy.max_workers_per_core) {
+            if (it == core_workload_.end() || it->second < pool.policy.max_configs_per_core) {
                 // Found an available core. Update index for next search and return.
                 if (pool.policy.policy == CoreAllocationPolicy::ExhaustFirst) {
                     // For ExhaustFirst, keep pointing to this core until it's full.
-                    if (it == core_workload_.end() || (it->second + 1) < pool.policy.max_workers_per_core) {
+                    if (it == core_workload_.end() || (it->second + 1) < pool.policy.max_configs_per_core) {
                         pool.next_pool_idx = idx_to_check;
                     } else {
                         // Core will be full after this allocation, so move to the next.
@@ -363,14 +369,14 @@ inline void TestDeviceResources::reserve_core_internal(const CoreCoord& core, Co
         std::sort(pool.active_pool.begin(), pool.active_pool.end());
     }
 
-    if (core_workload_[core] >= pool.policy.max_workers_per_core) {
+    if (core_workload_[core] >= pool.policy.max_configs_per_core) {
         TT_THROW(
             "Cannot reserve core [{}, {}] on device {}: It is already at its maximum workload of {} for this core "
             "type.",
             core.x,
             core.y,
             node_id_,
-            pool.policy.max_workers_per_core);
+            pool.policy.max_configs_per_core);
     }
     core_workload_[core]++;
 
@@ -415,14 +421,17 @@ inline TestDeviceResources& GlobalAllocator::get_or_create_device_resources(cons
         uint32_t l1_unreserved_base = device_info_provider_.get_l1_unreserved_base(node_id);
         uint32_t l1_unreserved_size = device_info_provider_.get_l1_unreserved_size(node_id);
         uint32_t l1_alignment = device_info_provider_.get_l1_alignment();
-        all_device_resources_[node_id] = std::make_unique<TestDeviceResources>(
+        all_device_resources_.emplace(
             node_id,
-            worker_grid_size_.value(),
-            l1_unreserved_base,
-            l1_unreserved_size,
-            l1_alignment,
-            policies_.sender_config,
-            policies_.receiver_config);
+            std::make_unique<TestDeviceResources>(
+                node_id,
+                worker_grid_size_.value(),
+                l1_unreserved_base,
+                l1_unreserved_size,
+                l1_alignment,
+                policies_.default_payload_chunk_size.value(),
+                policies_.sender_config,
+                policies_.receiver_config));
     }
     return *all_device_resources_.at(node_id);
 }
@@ -475,7 +484,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 const auto& receiver_policy =
                     get_or_create_device_resources(dst_node_ids.front()).core_pools_[RECEIVER_TYPE_IDX].policy;
                 uint32_t chunk_size =
-                    receiver_policy.default_payload_chunk_size.value_or(detail::DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES);
+                    policies_.default_payload_chunk_size.value_or(detail::DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES);
                 TT_FATAL(
                     pattern.size.value() <= chunk_size,
                     "Requested payload size {} exceeds the per-worker buffer chunk size of {}",

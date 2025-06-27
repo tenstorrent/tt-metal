@@ -293,6 +293,10 @@ int main(int argc, char** argv) {
             test_context.process_traffic_config(built_test);
             log_info(tt::LogTest, "Traffic config processed");
 
+            if (dump_built_tests) {
+                YamlTestConfigSerializer::dump({built_test}, output_stream);
+            }
+
             test_context.compile_programs();
             log_info(tt::LogTest, "Programs compiled");
 
@@ -303,10 +307,6 @@ int main(int argc, char** argv) {
             log_info(tt::LogTest, "Test {} Finished.", built_test.name);
 
             test_context.reset_devices();
-        }
-
-        if (dump_built_tests) {
-            YamlTestConfigSerializer::dump(built_tests, output_stream);
         }
     }
 

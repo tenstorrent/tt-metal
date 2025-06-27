@@ -7,21 +7,21 @@
 # are allocated across all tests in this file.
 # ======================================================================================
 allocation_policies:
+  # This sets the payload chunk size for all workers, sender and receiver.
+  default_payload_chunk_size: 4096
   sender:
     # Policy can be 'RoundRobin' or 'ExhaustFirst'.
     # 'ExhaustFirst' will fill up one core with workers before moving to the next.
     # 'RoundRobin' will distribute workers one by one across available cores.
     policy: ExhaustFirst
-    max_workers_per_core: 2
+    max_configs_per_core: 2
     # The initial number of cores to use for allocation before needing to add more.
     initial_pool_size: 1
     # When the initial pool is exhausted, how many new cores to add.
     pool_refill_size: 1
   receiver:
     policy: RoundRobin
-    max_workers_per_core: 8
-    # You can also specify memory allocation parameters for workers on a core.
-    default_payload_chunk_size: 4096
+    max_configs_per_core: 8
 
 Tests:
   # ======================================================================================
