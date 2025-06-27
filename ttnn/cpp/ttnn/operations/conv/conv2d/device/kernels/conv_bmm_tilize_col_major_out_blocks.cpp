@@ -22,6 +22,8 @@
 
 inline void tilize_in(
     uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
+    DPRINT << "TILIZE IN h: " << in_subblock_h << " w: " << in_block_w << " num_subblocks: " << in_num_subblocks
+           << ENDL();
     tilize_init(in_cb_id, in_block_w, out_cb_id);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
@@ -131,17 +133,26 @@ void MAIN {
 #endif
     UNPACK(uint32_t partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
     PACK(uint32_t partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;)
+    DPRINT << "in1_num_blocks_w: " << in1_num_blocks_w << ENDL();
+    DPRINT << "in0_num_blocks_h: " << in0_num_blocks_h << ENDL();
+    DPRINT << "in0_num_blocks_w: " << in0_num_blocks_w << ENDL();
+
+    DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL();
+    DPRINT << "in1_block_num_tiles: " << in1_block_num_tiles << ENDL();
+
     // in1 num blocks w is the outer loop. Output blocks are computed in col major order.
     for (uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
         for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
-#ifdef BLOCK_SHARDED
-            reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
+            // #ifdef BLOCK_SHARDED
+            //             reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
 
-            tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
+            //             tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks,
+            //             tilized_in0_cb_id);
 
-            mm_block_init_short_with_dt(
-                in0_cb_id, in1_cb_id, in0_pretilize_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-#endif
+            //             mm_block_init_short_with_dt(
+            //                 in0_cb_id, in1_cb_id, in0_pretilize_cb_id, false, out_subblock_w, out_subblock_h,
+            //                 in0_block_w);
+            // #endif
 
             bool enable_reload = false;
 
@@ -155,17 +166,24 @@ void MAIN {
             }
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
-#ifdef WIDTH_SHARDED
-                if (in0_block_w_i % in0_nblocks_w_tilize == 0) {
-                    reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
+                if constexpr (!height_sharded) {
+                    if (in0_block_w_i % 4 == 0) {
+                        reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
 
-                    // DPRINT_MATH(DPRINT<<"Tilize Loop "<<in0_block_h_i<<" "<<in0_block_w_i<<"\n";)
-                    tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
+                        // DPRINT_MATH(DPRINT<<"Tilize Loop "<<in0_block_h_i<<" "<<in0_block_w_i<<"\n";)
+                        tilize_in(
+                            in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
 
-                    mm_block_init_short_with_dt(
-                        in0_cb_id, in1_cb_id, in0_pretilize_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+                        mm_block_init_short_with_dt(
+                            in0_cb_id,
+                            in1_cb_id,
+                            in0_pretilize_cb_id,
+                            false,
+                            out_subblock_w,
+                            out_subblock_h,
+                            in0_block_w);
+                    }
                 }
-#endif
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if constexpr (height_sharded) {
 #if defined PACK_RELU and not defined FUSE_BIAS
@@ -200,8 +218,11 @@ void MAIN {
                         out_subblock_h,
                         in0_block_w);
                 }
+
                 cb_wait_front(mm_in0_cb_id, in0_block_num_tiles);
+                DPRINT_UNPACK(DPRINT << "wait  done act for in0_block_w_i: " << in0_block_w_i << ENDL());
                 cb_wait_front(in1_cb_id, in1_block_num_tiles);
+                DPRINT_UNPACK(DPRINT << "wait  done weights for in0_block_w_i: " << in0_block_w_i << ENDL());
 
                 if (last_out) {
 #if defined PACK_RELU and not defined FUSE_BIAS
@@ -366,6 +387,7 @@ void MAIN {
 
                 cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
+                DPRINT_UNPACK(DPRINT << "pop  done for in0_block_w_i: " << in0_block_w_i << ENDL());
             }  // for in0_num_blocks_w
             if constexpr (matmul_partials_cb == mm_out_cb_id && partials_cb_uses_output) {
                 UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);

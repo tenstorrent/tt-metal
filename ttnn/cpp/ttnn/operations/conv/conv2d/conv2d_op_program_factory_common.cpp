@@ -252,7 +252,7 @@ void allocate_cbs(
 
         std::tie(cb.index, cb.handle) =
             tt::tt_metal::create_cb(cb_index++, program, all_cores, cb.page_size, cb.num_pages, cb.data_format, buffer);
-        log_debug(
+        log_info(
             tt::LogOp,
             "Allocated circular buffer {} with index {}, num pages {}, page size {}, globally allocated: {}",
             magic_enum::enum_name(cb.name),

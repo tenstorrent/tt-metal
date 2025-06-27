@@ -49,7 +49,11 @@ def torch_tensor_map(request):
     return torch_tensor_map
 
 
-def randomize_torch_tensor(torch_tensor_map, tensor_shape, generate_positive_numbers=False):
+def randomize_torch_tensor(torch_tensor_map, tensor_shape, generate_positive_numbers=False, zero_tensor=False):
+    if zero_tensor:
+        torch_tensor = torch.zeros(tensor_shape, dtype=torch.bfloat16).float()
+        return torch_tensor
+
     if generate_positive_numbers:
         torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
         torch_tensor = torch.abs(torch_tensor)
@@ -159,7 +163,7 @@ def run_conv(
     # in order to get valid sqrt values
     sqrt_act_function = activation == "sqrt"
     torch_input_tensor_nchw = randomize_torch_tensor(
-        torch_tensor_map, conv_input_shape, generate_positive_numbers=sqrt_act_function
+        torch_tensor_map, conv_input_shape, generate_positive_numbers=sqrt_act_function, zero_tensor=True
     )
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
@@ -315,7 +319,7 @@ def run_conv(
         # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
         pcc = pcc * 0.99
 
-    torch.set_printoptions(precision=3, sci_mode=False)
+    # torch.set_printoptions(precision=3, sci_mode=False)
     if fast_compare:
         if fp32_accum:
             threshold = 3e-1 + 5e-3 * math.log(input_channels * filter_height * filter_width, 2)
@@ -325,6 +329,8 @@ def run_conv(
         diff = torch.abs(ref - out) / ref.abs().mean()
         assert torch.all(diff < threshold), f"Max diff: {diff.max()}, Threshold: {threshold} "
     else:
+        print(out)
+        print(ref)
         passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
         logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
         assert passing, pcc_msg

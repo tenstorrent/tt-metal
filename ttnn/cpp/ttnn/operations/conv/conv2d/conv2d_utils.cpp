@@ -410,14 +410,16 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     auto grid_size = parallel_config.grid.bounding_box().grid_size();
     uint32_t act_c_num_blocks = get_num_cores_channels_from_parallel_config(parallel_config);
     TT_ASSERT(padded_in_channels % act_c_num_blocks == 0);
-    uint32_t act_block_w =
-        parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED
-            ? round_up(padded_in_channels * window_w, 32)
-            : round_up((padded_in_channels / act_c_num_blocks) * window_h * window_w, tt::constants::TILE_WIDTH);
-    if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
+    uint32_t act_block_w = 0;
+    if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
+        act_block_w = round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
+    } else if (parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
+        act_block_w = round_up(padded_in_channels / act_c_num_blocks * window_w, tt::constants::TILE_WIDTH);
+    } else if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
         TT_ASSERT(padded_in_channels % (32 * parallel_config.grid.num_cores() * act_block_w_div) == 0);
         act_block_w = (padded_in_channels * window_h * window_w) / (parallel_config.grid.num_cores() * act_block_w_div);
     }
+
     TT_ASSERT(act_block_w % 32 == 0);
     uint32_t act_block_w_ntiles = act_block_w / 32;
     uint32_t out_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height_ntile;
