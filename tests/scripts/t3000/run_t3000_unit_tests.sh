@@ -60,19 +60,7 @@ run_t3000_ttfabric_tests() {
 
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
 
-  # Unicast tests
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity --fabric_command 1 --board_type t3k --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity --fabric_command 64 --board_type t3k --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity --fabric_command 65 --board_type t3k --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
-  # Unicast tests for push router
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity --fabric_command 1 --board_type t3k --data_kb_per_tx 10 --push_router
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity --fabric_command 64 --board_type t3k --data_kb_per_tx 10 --push_router
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity --fabric_command 65 --board_type t3k --data_kb_per_tx 10 --push_router
-  # Line Mcast tests
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity --fabric_command 1 --board_type t3k --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --e_depth 3
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity --fabric_command 1 --board_type t3k --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --w_depth 3
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity --fabric_command 1 --board_type t3k --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --n_depth 1
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity --fabric_command 1 --board_type t3k --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --s_depth 1
+  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity.yaml
 
   # Record the end time
   end_time=$(date +%s)

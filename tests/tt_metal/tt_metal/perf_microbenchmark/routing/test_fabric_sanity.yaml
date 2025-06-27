@@ -96,7 +96,7 @@ Tests:
             size: 1024
             num_packets: 100
             destination:
-              device: [0, 7]
+              device: [0, 1]
 
   - name: "TestNocSendTypesMesh"
     fabric_setup:
@@ -112,7 +112,7 @@ Tests:
             size: 1024
             num_packets: 100
             destination:
-              device: [0, 7]
+              device: [0, 1]
 
   - name: "AllToAllUnicastMesh"
     fabric_setup:
@@ -169,7 +169,7 @@ Tests:
             size: 1024
             num_packets: 100
             destination:
-              device: [0, 7]
+              device: [0, 1]
 
   - name: "TestNocSendTypesMesh"
     fabric_setup:
@@ -186,7 +186,7 @@ Tests:
             size: 1024
             num_packets: 100
             destination:
-              device: [0, 7]
+              device: [0, 1]
 
   - name: "AllToAllUnicastMeshDynamic"
     fabric_setup:
