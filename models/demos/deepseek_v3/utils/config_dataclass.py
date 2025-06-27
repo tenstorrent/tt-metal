@@ -100,6 +100,6 @@ class AllGatherConfig(OpConfigBase):
     mesh_device: ConfigDevice
 
 
-ModelConfig = dict[str, "ModelConfig"] | OpConfigBase | str
+ModelConfig = dict[str, "ModelConfig"] | OpConfigBase | str | int
 WeightsConfig = dict[str, "WeightsConfig"] | WeightStub
 RunConfig = dict[str, "RunConfig"] | OpConfigBase

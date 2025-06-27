@@ -59,15 +59,6 @@ class AbstractModule(ABC):
     e.g. kv_cache, or as in this example dynamic program configs for prefill.
     """
 
-    def __new__(cls, x: ttnn.Tensor, cfg: RunConfig) -> ttnn.Tensor:
-        """Initialize the module with the given HuggingFace config and mesh device.
-
-        Args:
-            hf_config: HuggingFace model configuration object
-            mesh_device: TTNN mesh device
-        """
-        return cls.forward(x, cfg)
-
     @classmethod
     @abstractmethod
     def convert_weights(
@@ -206,6 +197,7 @@ class AbstractModule(ABC):
         Returns:
             Output tensor after module computation
         """
+        assert isinstance(cfg, dict), "Expected the RunConfig to be a dict"
         assert "mode" in cfg and isinstance(
             cfg["mode"], InferenceMode
         ), "RunConfig must contain a valid 'mode' key of type InferenceMode"
@@ -215,6 +207,7 @@ class AbstractModule(ABC):
         else:
             return cls._forward_decode(x, cfg)
 
+    @classmethod
     def _forward_prefill(cls, x: ttnn.Tensor, cfg: RunConfig) -> ttnn.Tensor:
         """Forward pass for prefill mode.
 
@@ -228,6 +221,7 @@ class AbstractModule(ABC):
         """
         raise FORWARD_REIMPL_ERR
 
+    @classmethod
     def _forward_decode(cls, x: ttnn.Tensor, cfg: RunConfig) -> ttnn.Tensor:
         """Forward pass for decode mode.
 

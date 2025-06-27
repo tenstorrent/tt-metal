@@ -445,7 +445,7 @@ def matmul_config(
     )
 
 
-def dram_shard_core_grid_for_k_and_n(k: int, n: int) -> tuple[int, int]:
+def dram_shard_core_grid_for_k_and_n(k: int, n: int) -> ttnn.CoreGrid:
     rows, cols = find_grid_k_n(k // TILE_SIZE, n // TILE_SIZE)
     return ttnn.CoreGrid(x=cols, y=rows)
 

@@ -12,7 +12,7 @@ from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import EmbeddingConfig, ModelConfig, WeightsConfig, WeightStub
 
 
-class Embedding_1D(AbstractModule):
+class Embedding1D(AbstractModule):
     """Embedding module with 1D tensor parallelism from TTT code.
     Uses DRAM-sharded weights split 1D across all wormholes"""
 
@@ -62,7 +62,7 @@ class Embedding_1D(AbstractModule):
             Dict containing operator configurations for prefill mode
         """
 
-        return Embedding_1D._embedding_config(mesh_device)
+        return Embedding1D._embedding_config(mesh_device)
 
     @classmethod
     def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, **kwargs) -> ModelConfig:
@@ -72,7 +72,7 @@ class Embedding_1D(AbstractModule):
         Returns:
             Dict containing operator configurations for decode mode
         """
-        return Embedding_1D._embedding_config(mesh_device)
+        return Embedding1D._embedding_config(mesh_device)
 
     @staticmethod
     def _embedding_config(mesh_device: ttnn.MeshDevice) -> ModelConfig:
