@@ -3,29 +3,27 @@
 # SPDX-License-Identifier: Apache-2.0
 """Test module for end-to-end Qwen2.5-VL model inference with optional TT vision model."""
 
+import os
+
+import nltk
 import pytest
 import torch
-import os
 from loguru import logger
-import ttnn
-
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
-from transformers import AutoProcessor
+from nltk.tokenize import word_tokenize
+from nltk.translate.bleu_score import sentence_bleu
 from qwen_vl_utils import process_vision_info
-from models.utility_functions import skip_for_grayskull
+from transformers import AutoProcessor
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
+
+import ttnn
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [{"N150": (1, 1), "N300": (1, 2)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -35,20 +33,18 @@ from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 )
 def test_qwen_vl_end_to_end(
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
     use_tt_vision,
 ):
     """Test end-to-end Qwen2.5-VL model with options to replace vision component."""
-    mesh_device.enable_async(True)
     max_new_tokens = 128
 
     # Load model and processor
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        "Qwen/Qwen2.5-VL-3B-Instruct", torch_dtype="auto", device_map="auto"
-    )
-    processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-3B-Instruct")
+    model_name = os.environ.get("HF_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct")
+    assert "Qwen/Qwen2.5-VL-3B" in model_name, "This test uses only Qwen2.5-VL-3B for accuracy checking"
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_name, torch_dtype="auto", device_map="auto")
+    processor = AutoProcessor.from_pretrained(model_name)
 
     # Sample image input to trigger vision model
     messages = [
@@ -91,10 +87,21 @@ def test_qwen_vl_end_to_end(
 
     # Verify output
     expected_output = "The image depicts a serene beach scene with a person and a dog. The person is sitting on the sandy beach, facing the ocean. They are wearing a plaid shirt and black pants, and they have long hair. The dog, which appears to be a Labrador Retriever, is sitting on the sand and is interacting with the person by placing its paw on their hand. The dog is wearing a harness with a colorful collar. The background shows the ocean with gentle waves, and the sky is clear with a soft light, suggesting it might be early morning or late afternoon. The overall atmosphere of the image is peaceful and joyful."
-    # TT output:      'The image depicts a person sitting on a rocky beach, likely at sunset or sunrise, given the warm, golden light illuminating the scene. The person is wearing a plaid shirt and appears to be holding a device, possibly a phone or camera, with a green screen visible. The water in the background is calm, reflecting the sunlight, and the overall atmosphere is serene and peaceful.'
 
     logger.info(f"Generated output: {output_text}")
     assert len(output_text) > 0, "No output generated from the model"
     logger.info(f"Expected output : {expected_output}")
+
+    # Token-level BLEU score (standard for text generation)
+    try:
+        nltk.data.find("tokenizers/punkt_tab")
+    except LookupError:
+        nltk.download("punkt_tab", quiet=True)
+
+    reference = [word_tokenize(expected_output.lower())]
+    candidate = word_tokenize(output_text.lower())
+    bleu_score = sentence_bleu(reference, candidate)
+    logger.info(f"BLEU score: {bleu_score:.3f}")
+    assert bleu_score > 0.5
 
     logger.info(f"Test passed with {'TorchVisionTransformer' if use_tt_vision else 'original vision model'}")
