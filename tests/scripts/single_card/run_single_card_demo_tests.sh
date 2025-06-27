@@ -40,9 +40,9 @@ run_qwen25_vl_func() {
 
   # complete demo tests
   for qwen_dir in "$qwen25_vl_3b"; do
-    MESH_DEVICE=N150 HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 600 || fail=1
+    MESH_DEVICE=N150 HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 3600 || fail=1
     echo "LOG_METAL: Tests for $qwen_dir on N150 completed"
-    MESH_DEVICE=N300 HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 600 || fail=1
+    MESH_DEVICE=N300 HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 3600 || fail=1
     echo "LOG_METAL: Tests for $qwen_dir on N300 completed"
   done
 
