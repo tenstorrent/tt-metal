@@ -215,25 +215,31 @@ TEST_F(TensorDistributionT3000Test, PartialConcat) {
 
     EXPECT_EQ(count_unique_buffers(sharded_tensor), kNumRows);
 
-    auto composer = create_mesh_composer(
-        *mesh_device_,
-        MeshComposerConfig{
-            .dims = {-1, 0},
-            .mesh_shape_override = MeshShape(2, 1),
-        });
-    Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
+    // Full concat.
+    EXPECT_THAT(
+        aggregate_tensor(
+            sharded_tensor,
+            *create_mesh_composer(
+                *mesh_device_,
+                MeshComposerConfig{
+                    .dims = {-1, 0},
+                }))
+            .to_vector<float>(),
+        // `0, 1, 2` resides on rows; `10, 11, 12` resides on columns.
+        ElementsAre(0, 1, 2, 10, 11, 12, 0, 1, 2, 10, 11, 12, 0, 1, 2, 10, 11, 12, 0, 1, 2, 10, 11, 12));
 
-    Tensor expected_tensor = Tensor::from_vector(
-        std::vector<float>{// Shard at (0, 0):
-                           0,
-                           1,
-                           2,
-                           // Shard at (1, 0):
-                           10,
-                           11,
-                           12},
-        get_tensor_spec(ttnn::Shape{1, 1, 1, 6}, DataType::FLOAT32));
-    EXPECT_TRUE(ttnn::allclose<float>(concatenated_tensor, expected_tensor));
+    // Partial concat over first (2, 1) submesh.
+    EXPECT_THAT(
+        aggregate_tensor(
+            sharded_tensor,
+            *create_mesh_composer(
+                *mesh_device_,
+                MeshComposerConfig{
+                    .dims = {-1, 0},
+                    .mesh_shape_override = MeshShape(2, 1),
+                }))
+            .to_vector<float>(),
+        ElementsAre(0, 1, 2, 10, 11, 12));
 }
 
 class TensorDistributionT3000Test2D : public TensorDistributionT3000Test,
