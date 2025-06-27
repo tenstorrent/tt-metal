@@ -143,7 +143,7 @@ class UNetConv2D:
         override_core_grid=None,
         mesh_mapper=None,
     ):
-        assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
+        assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on WH or 10x13/10x11 on BH"
 
         self.device = device
         self.batch_size = conv.batch_size

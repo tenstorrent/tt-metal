@@ -69,5 +69,5 @@ def test_unet_model(batch, groups, device, reset_seeds):
         device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
         and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 130
     ):
-        pytest.skip(f"Shallow UNet only support 110 cores on BH (was {device.compute_with_storage_grid_size()})")
+        pytest.skip(f"Shallow UNet only support 110 or 130 cores on BH (was {device.compute_with_storage_grid_size()})")
     run_unet_model(batch, groups, device)
