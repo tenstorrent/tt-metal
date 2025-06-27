@@ -5,6 +5,8 @@
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
 #include <fmt/format.h>
+#include <cstdint>
+#include <vector>
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
