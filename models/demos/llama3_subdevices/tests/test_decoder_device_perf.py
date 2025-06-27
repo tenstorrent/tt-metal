@@ -249,21 +249,26 @@ def build_duration_per_instance_dict(input_dict, num_layers):
 def average_per_instance_dict(input_dict):
     averaged_dict = {}
     for op_code_with_id in input_dict:
-        averaged_dict[op_code_with_id] = sum(input_dict[op_code_with_id]) / len(input_dict[op_code_with_id])
+        input_dict_values = [v if v is not None else 0 for v in input_dict[op_code_with_id]]
+        averaged_dict[op_code_with_id] = (
+            sum(input_dict_values) / len(input_dict_values) if len(input_dict_values) > 0 else 0
+        )
     return averaged_dict
 
 
 def min_per_instance_dict(input_dict):
     min_dict = {}
     for op_code_with_id in input_dict:
-        min_dict[op_code_with_id] = min(input_dict[op_code_with_id])
+        input_dict_values = [v if v is not None else 0 for v in input_dict[op_code_with_id]]
+        min_dict[op_code_with_id] = min(input_dict[op_code_with_id]) if len(input_dict_values) > 0 else 0
     return min_dict
 
 
 def max_per_instance_dict(input_dict):
     max_dict = {}
     for op_code_with_id in input_dict:
-        max_dict[op_code_with_id] = max(input_dict[op_code_with_id])
+        input_dict_values = [v if v is not None else 0 for v in input_dict[op_code_with_id]]
+        max_dict[op_code_with_id] = max(input_dict[op_code_with_id]) if len(input_dict_values) > 0 else 0
     return max_dict
 
 
