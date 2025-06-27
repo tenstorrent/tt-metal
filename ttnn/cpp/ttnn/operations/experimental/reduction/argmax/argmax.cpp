@@ -8,7 +8,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax.hpp"
 #include "ttnn/operations/creation.hpp"
-#include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "cpp/ttnn/operations/eltwise/ternary/where/where.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/core/core.hpp"
 

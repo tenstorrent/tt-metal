@@ -6,7 +6,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "cpp/ttnn/operations/eltwise/ternary/where/where.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include <tt-metalium/constants.hpp>
 #include "tools/profiler/op_profiler.hpp"
