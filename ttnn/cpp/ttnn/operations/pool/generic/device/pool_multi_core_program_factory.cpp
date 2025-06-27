@@ -332,7 +332,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // CBs
     const uint32_t multi_buffering_factor = 2;
 
-    const uint32_t split_reader = 1;
+    const uint32_t split_reader = 0;
 
     // scalar CB as coefficient of reduce
     using tt::tt_metal::CBHandle;
@@ -578,7 +578,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
             "reader_pool_2d_multi_core_sharded.cpp";
     }
-
+    /*
+     * tt::tt_metal::NOC::RISCV_0(1)_default: diff threads
+     * same thing to processor
+     */
     auto reader0_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = tt::tt_metal::NOC::RISCV_0_default,
@@ -642,9 +645,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
         "cb_copy.cpp";
 
+    /***
+     * TODO: comment out reserve/waits to see if kernel launched, in case the kernel is stacked.
+     *  ***/
+
     auto cb_copy_config = tt::tt_metal::DataMovementConfig{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-        .noc = tt::tt_metal::NOC::RISCV_0_default,
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = tt::tt_metal::NOC::RISCV_1_default,
         .compile_args = cb_copy_args};
     CreateKernel(program, cb_coppy_kernel_fname, all_cores, cb_copy_config);
 
