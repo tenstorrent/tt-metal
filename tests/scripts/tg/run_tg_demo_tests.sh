@@ -15,6 +15,7 @@ run_tg_llama3_tests() {
     LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "repeat" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "long-context-batch32" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "long-context-32k" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "pcc-80L" --timeout 1000; fail+=$?;
 
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
