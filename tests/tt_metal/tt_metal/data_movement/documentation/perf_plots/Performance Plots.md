@@ -6,8 +6,9 @@ In all plots, "Sender" or "Writer" refers to outgoing data movement primitives w
 
 For each test case, two plots are given to provide meaning from both the Hardware and the Software perspectives. The "Transaction Size vs Duration" plot depicts how long data movement takes to complete for a specific combination of test parameters (i.e. number of transactions and transaction sizes). This may be useful for kernel developers to gauge the latency of their OPs. The "Transaction Size vs Bandwidth" plot depicts how much the NOC capacity is saturated by data movement kernels using different combination of test parameters. This may be useful to gauge the effective performance of different data movement scenarios.
 
-For steps to reproduce these plots, refer to our general [README](../../README.md)
-For more information on each test, refer to the README under each test primitive directory. E.g. [README](../../dram_unary/README.md) for DRAM tests
+For steps to reproduce these plots, refer to our general [README](../../README.md).
+
+For more information on each test, refer to the README under each test primitive directory, e.g. [README](../../dram_unary/README.md) for DRAM tests
 
 ## Wormhole_B0
 

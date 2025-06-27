@@ -56,7 +56,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     // Program
     Program program = CreateProgram();
 
-    assert(!test_config.is_multicast && !test_config.is_linked);
+    assert(test_config.is_multicast || (!test_config.is_multicast && !test_config.is_linked));
 
     // Parameters
     const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;

@@ -25,9 +25,9 @@ test_id_to_name = {
     3: "DRAM Directed Ideal",
     4: "One to One Packet Sizes",
     5: "One from One Packet Sizes",
-    6: "One to All 2x2 Packet Sizes",
-    7: "One to All 4x4 Packet Sizes",
-    8: "One to All 10x10 Packet Sizes",
+    6: "One to All Unicast 2x2 Packet Sizes",
+    7: "One to All Unicast 4x4 Packet Sizes",
+    8: "One to All Unicast 10x10 Packet Sizes",
     9: "One to All Multicast 2x2 Packet Sizes",
     10: "One to All Multicast 5x5 Packet Sizes",
     11: "One to All Multicast 11x10 Packet Sizes",
@@ -261,9 +261,7 @@ test_bounds = {
         # 16: {
         #     "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
         # },
-        30: { # One from All Directed Ideal
-            "riscv_1": {"latency": {"lower": 10000, "upper": 18000}, "bandwidth": 60}
-        },
+        30: {"riscv_1": {"latency": {"lower": 10000, "upper": 18000}, "bandwidth": 60}},  # One from All Directed Ideal
         50: {  # One to One Directed Ideal
             "riscv_0": {"latency": {"lower": 12000, "upper": 19000}, "bandwidth": 59},  # 17000
         },
