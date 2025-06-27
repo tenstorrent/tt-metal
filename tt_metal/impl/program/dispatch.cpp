@@ -43,6 +43,7 @@
 #include "hal_types.hpp"
 #include "kernel.hpp"
 #include "math.hpp"
+#include "mesh_device.hpp"
 #include "program_device_map.hpp"
 #include "tt-metalium/program.hpp"
 #include "runtime_args_data.hpp"
@@ -2419,9 +2420,6 @@ void reset_worker_dispatch_state_on_device(
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state) {
     auto num_sub_devices = device->num_sub_devices();
-    if (reset_launch_msg_state) {
-        uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
-    }
 
     tt::tt_metal::DeviceCommandCalculator calculator;
     if (reset_launch_msg_state) {
@@ -2535,6 +2533,62 @@ void set_go_signal_noc_data_on_dispatch(
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     manager.fetch_queue_reserve_back(cq_id);
     manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+}
+
+// Wait for number of workers to complete and then reset the counter on the device
+void reset_expected_num_workers_completed_on_device(
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::SubDeviceId sub_device_id,
+    uint32_t num_expected_workers,
+    uint8_t cq_id) {
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    bool distributed_dispatcher =
+        tt::tt_metal::MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
+    if (distributed_dispatcher) {
+        calculator.add_dispatch_wait();
+    }
+    calculator.add_dispatch_wait();
+
+    auto& manager = device->sysmem_manager();
+    const auto cmd_sequence_sizeB = calculator.write_offset_bytes();
+    void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
+    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    const auto populate_dispatch_wait_cmd = [&](DispatcherSelect dispatcher_type) {
+        command_sequence.add_dispatch_wait(
+            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
+            0,
+            tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
+            num_expected_workers,
+            dispatcher_type);
+    };
+
+    if (distributed_dispatcher) {
+        populate_dispatch_wait_cmd(DispatcherSelect::DISPATCH_SUBORDINATE);
+    }
+    populate_dispatch_wait_cmd(DispatcherSelect::DISPATCH_MASTER);
+
+    manager.cq_write(cmd_region, cmd_sequence_sizeB, manager.get_issue_queue_write_ptr(cq_id));
+    manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
+    manager.fetch_queue_reserve_back(cq_id);
+    manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+}
+
+ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
+    uint32_t num_workers, uint32_t num_additional_workers) {
+    uint32_t previous_expected_num_workers_completed = num_workers;
+    bool wrapped = false;
+
+    if (previous_expected_num_workers_completed > std::numeric_limits<uint32_t>::max() - num_additional_workers)
+        [[unlikely]] {
+        num_workers = 0;
+        previous_expected_num_workers_completed = 0;
+        wrapped = true;
+    }
+
+    num_workers += num_additional_workers;
+
+    return ExpectedNumWorkerUpdates{
+        .previous = previous_expected_num_workers_completed, .current = num_workers, .wrapped = wrapped};
 }
 
 template uint32_t program_base_addr_on_core<ProgramImpl, IDevice*>(ProgramImpl&, IDevice*, HalProgrammableCoreType);
