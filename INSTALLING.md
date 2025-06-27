@@ -241,7 +241,24 @@ source python_env/bin/activate
 - (optional) Software dependencies for profiling use:
   - Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
 
-- Continue to [You Are All Set!](#you-are-all-set)
+#### To verify your installation (for source or wheel installation only), try executing a programming example:
+
+- First, set the following environment variables:
+
+  - Run the appropriate command for the Tenstorrent card you have installed:
+
+  | Card             | Command                              |
+  |------------------|--------------------------------------|
+  | Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
+  | Blackhole        | ```export ARCH_NAME=blackhole```     |
+
+  - Run:
+  ```
+  export TT_METAL_HOME=$(pwd)
+  export PYTHONPATH=$(pwd)
+  ```
+
+- For programming examples to try, visit Tenstorrent's [TT-NN Basic Examples Page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [Simple Kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html)
 
 ---
 
@@ -256,27 +273,9 @@ All binaries support only Linux and distros with glibc 2.34 or newer.
   ```sh
   conda create -n metalium python=3.10 tt-metalium -c conda-forge
   ```
-
----
-
-### You are All Set!
-
-#### To verify your installation (for source or wheel installation only), try executing a programming example:
-
-- First, set the following environment variables:
-
-  ```
-  export TT_METAL_HOME=</path/to/your/tt-metal>
-  export PYTHONPATH="${TT_METAL_HOME}" # Same path
-  ```
-
-- Then, try running a programming example:
-  ```
-  python3 -m ttnn.examples.usage.run_op_on_device
-  ```
-
-- For more programming examples to try, visit Tenstorrent's [TT-NN Basic Examples Page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [Simple Kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html)
-
+  
+  - You are all set! See which models you can bring-up at the [TT-Metal GitHub repository](https://github.com/tenstorrent/tt-metal/tree/main?tab=readme-ov-file#llms) next.
+  
 ---
 
 ### Interested in Contributing?
