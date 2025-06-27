@@ -7,8 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -40,8 +38,8 @@ inline void calculate_unary_max_min(uint value) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_unary_max_int32(uint value) {
+template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_unary_max_min_int32(uint value) {
     int scalar = value;
     if (scalar < 0) {  // To convert from 2's complement to sign+magnitude
         scalar = -scalar;
@@ -60,11 +58,15 @@ inline void calculate_unary_max_int32(uint value) {
         // Copy value param to lreg2 to lreg1
         TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
 
-        // Swap and store maximum in lreg1 (sign + magnitude format)
+        // Swap and store maximum in lreg1, minimum in lreg0 (sign + magnitude format)
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
 
         // Store the result
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
+        if constexpr (IS_MAX_OP) {
+            TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
+        } else {
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
+        }
         dst_reg++;
     }
 }

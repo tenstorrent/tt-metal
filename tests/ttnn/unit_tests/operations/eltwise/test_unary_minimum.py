@@ -163,3 +163,103 @@ def test_unary_min_fp32(input_shapes, low, high, scalar, device):
     tt_result = ttnn.minimum(tt_in, scalar)
     comp_pass = compare_equal([tt_result], [golden])
     assert comp_pass
+
+
+@pytest.mark.parametrize("scalar", [-1, -2, -3, -4, -5, 3, 0, 1, 100, 10, 5, 2147483, -2147483, -16777216, 16777216])
+def test_unary_min_int32_test(scalar, device):
+    num_elements = torch.prod(torch.tensor(torch.Size([1, 1, 32, 32]))).item()
+    torch_input = torch.linspace(-10, 10, num_elements, dtype=torch.int32)
+    torch_input = torch_input[:num_elements].reshape(torch.Size([1, 1, 32, 32]))
+
+    golden_function = ttnn.get_golden_function(ttnn.minimum)
+    golden = golden_function(torch_input, torch.full(torch.Size([1, 1, 32, 32]), scalar), device=device)
+
+    tt_in = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_result = ttnn.minimum(tt_in, scalar)
+    comp_pass = compare_equal([tt_result], [golden])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 2, 64, 120])),
+        (torch.Size([1, 3, 320, 320])),
+        (torch.Size([1, 3, 1024, 1024])),
+    ),
+)
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        (-5, 5),
+        (-100, 100),
+        (-21474, 21474),
+        (-2147483600, 2147483600),
+        (-21474836, 21474836),
+        (-214748364, 214748364),
+        (-2147483647, 2147483647),
+        (-(2**31) + 1, (2**31) - 1),
+    ],
+)
+@pytest.mark.parametrize("scalar", [-1, -2, -3, -4, -5, 3, 0, 1, 100, 10, 5, -16777216, 16777216, -16777215, 16777215])
+def test_unary_min_int32(input_shapes, low, high, scalar, device):
+    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+    torch_input = torch.linspace(high, low, num_elements, dtype=torch.int32)
+    torch_input = torch_input[:num_elements].reshape(input_shapes)
+
+    golden_function = ttnn.get_golden_function(ttnn.minimum)
+    golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
+
+    tt_in = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_result = ttnn.minimum(tt_in, scalar)
+    comp_pass = compare_equal([tt_result], [golden])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 1, 32, 32])),),
+)
+@pytest.mark.parametrize(
+    "input_val, scalar",
+    [
+        (-1, 1),
+        (1, 0),
+        (0, 0),
+        (1, 1),
+        (11, 53),
+    ],
+)
+def test_unary_min_fill_val_int32(input_shapes, input_val, scalar, device):
+    torch_input = torch.ones(input_shapes, dtype=torch.int32) * input_val
+
+    golden_function = ttnn.get_golden_function(ttnn.minimum)
+    golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
+
+    tt_in = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_result = ttnn.minimum(tt_in, scalar)
+    result = ttnn.to_torch(tt_result)
+
+    comp_pass = compare_equal([tt_result], [golden])
+    assert comp_pass

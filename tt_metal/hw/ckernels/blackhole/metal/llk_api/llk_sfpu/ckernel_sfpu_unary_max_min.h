@@ -7,8 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -39,8 +37,8 @@ inline void calculate_unary_max_min(uint value) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_unary_max_int32(uint value) {
+template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_unary_max_min_int32(uint value) {
     // Load value param to lreg2 and cast 2's complement to sign + magnitude format
     _sfpu_load_imm32_(p_sfpu::LREG2, value);
     TTI_SFPCAST(p_sfpu::LREG2, p_sfpu::LREG3, 2);
@@ -56,12 +54,18 @@ inline void calculate_unary_max_int32(uint value) {
        // Copy value param to lreg1
        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
 
-       // Swap and store maximum in lreg1
+       // Swap and store maximum in lreg1, minimum in lreg0
        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
 
-       TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG3, 3);
-       TTI_SFPSETSGN(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
-       TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
+       if constexpr (IS_MAX_OP) {
+           TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG3, 3);
+           TTI_SFPSETSGN(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
+           TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
+       } else {
+           TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG3, 3);
+           TTI_SFPSETSGN(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);
+           TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
+       }
 
        dst_reg++;
    }
