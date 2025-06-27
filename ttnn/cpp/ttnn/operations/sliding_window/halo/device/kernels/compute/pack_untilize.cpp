@@ -23,6 +23,8 @@ void MAIN {
     constexpr bool use_pack_untilize = tiles_per_row <= MAX_PACK_UNTILIZE_WIDTH;
 
     if constexpr (use_pack_untilize) {
+        // Will be moved above the if-else statement in untilize cleanup PR: tt-metal#23774.
+        compute_kernel_hw_startup(src_cb_id, out_cb_id0);
         pack_untilize_init<tiles_per_row>(src_cb_id, out_cb_id0);
     } else {
         untilize_init(src_cb_id, out_cb_id0);
