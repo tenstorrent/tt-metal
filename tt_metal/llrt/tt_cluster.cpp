@@ -116,7 +116,8 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
 
     if (all_same_board) {
         if (board_type == BoardType::N300) {
-            if (cluster_desc->get_all_chips().size() == 8) {
+            const auto num_chips = cluster_desc->get_all_chips().size();
+            if (num_chips == 8) {
                 cluster_type = ClusterType::T3K;
                 // Basic check to determine if the cluster is a T3K cluster
                 // MMIO chips should have 3 connections to other chips, remote chips should have 2 connections to other
@@ -136,6 +137,20 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
                             cluster_type = ClusterType::N300;
                             break;
                         }
+                    }
+                }
+            } else if (num_chips == 4) {
+                cluster_type = ClusterType::N300_2x2;
+
+                // Expect every chip to have exactly two remote connections
+                for (const auto& [chip_id, connections] : cluster_desc->get_ethernet_connections()) {
+                    std::unordered_set<chip_id_t> remote_chips;
+                    for (const auto& [channel, remote_chip_and_channel] : connections) {
+                        remote_chips.insert(std::get<0>(remote_chip_and_channel));
+                    }
+                    if (remote_chips.size() != 2) {
+                        cluster_type = ClusterType::N300;
+                        break;
                     }
                 }
             } else {

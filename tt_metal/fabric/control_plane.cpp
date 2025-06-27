@@ -551,6 +551,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
         mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "n150_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "n300_2x2_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "multihost_t3k_mesh_graph_descriptor.yaml") {
         // Pick out the chip with the lowest ethernet coordinate (i.e. NW chip)
         const auto& chip_eth_coords =
