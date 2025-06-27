@@ -76,6 +76,7 @@ Sometimes you might need more control. For example you want to reuse same bank c
 ```c++
 using tensor_shape = tensor_accessor::ArrayStaticWrapper<10, 10>;
 using shard_shape = tensor_accessor::ArrayStaticWrapper<3, 3>;
+// Each number in the bank coordinates represent the coordinates of two banks (x0, y0, x1, y1) compressed into a single uint32_t
 using banks_coords = tensor_accessor::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
 auto dspec = tensor_accessor::make_dspec<2, 16, tensor_shape, shard_shape, banks_coords>();
 auto tensor_accessor = make_tensor_accessor_from_dspec(std::move(dspec), 0, 1024);
@@ -84,6 +85,7 @@ auto tensor_accessor = make_tensor_accessor_from_dspec(std::move(dspec), 0, 1024
 uint32_t tensor_shape[2] = {10, 10};
 uint32_t shard_shape[2] = {3, 3};
 using dyn = tensor_accessor::ArrayDynamicWrapper;
+// Each number in the bank coordinates represent the coordinates of two banks (x0, y0, x1, y1) compressed into a single uint32_t
 using banks_coords = tensor_accessor::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
 auto dspec = tensor_accessor::make_dspec<0, 16, dyn, dyn, banks_coords>(2, 0, tensor_shape, shard_shape, nullptr);
 auto tensor_accessor = tensor_accessor::make_tensor_accessor_from_dspec(std::move(dspec), 0, 1024);
@@ -121,7 +123,8 @@ noc_async_write_barrier();
 Distribution Spec Information
 
 ```c++
-// Access information about the tensor / shard / banks (Only available for sharded tensors)
+// Access information about the tensor / shard / banks (only available for sharded tensors)
+static_assert(args::is_sharded, "Dspec is only available for sharded tensors");
 const auto& dspec = tensor_accessor.dspec();
 
 auto rank = dspec.rank();
