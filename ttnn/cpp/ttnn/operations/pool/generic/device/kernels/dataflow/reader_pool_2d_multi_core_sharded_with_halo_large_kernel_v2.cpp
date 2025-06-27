@@ -7,9 +7,9 @@
 #include "dataflow_api.h"
 #include "reader_pool2d_sharded_common.hpp"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
-#if ENABLE_DEBUG_PRINT == 0
+#if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #endif
@@ -49,62 +49,89 @@ template <
 FORCE_INLINE void read_window_with_top_left_index(
     uint32_t ind, uint32_t in_l1_read_base_addr, uint32_t& out_l1_write_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
+    constexpr uint32_t read_bytes = wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;
 
-    // DPRINT << "ind: " << ind << ENDL();
-
+    // DPRINT << ENDL() << "---" << ENDL();
+    // DPRINT << "---" << ENDL();
+    // DPRINT << "---" << ENDL()<< ENDL();
+    // DPRINT << "ind: " << ind << ENDL() << ENDL();
+    uint32_t in_l1_write_addr_base = get_write_ptr(in_cb_id);
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
         const uint32_t read_bytes = !wide_reduction ? in_nbytes_c
                                     : c_i != in_nblocks_c - 1
                                         ? MAX_ELE_PER_REDUCTION
                                         : (in_c - c_i * MAX_ELE_PER_REDUCTION / BYTES_PER_ELEM) * BYTES_PER_ELEM;
+        // DPRINT << "c_i: " << c_i << ENDL();
         uint32_t processed_rows = 0;
-        for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
-            cb_reserve_back(in_cb_id, 1);
-            uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
-            for (uint32_t r = 0; r < max_rows_for_reduction; ++r) {
-                uint32_t h = processed_rows / window_w;
-                uint32_t w = processed_rows % window_w;
-
-                if (processed_rows < total_elems_to_reduce) {  // fill with data
-                    const uint32_t stick_offset = ind + w + h * in_w_padded;
-                    const uint32_t read_offset =
-                        in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);
-                    noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes);
-                } else if (is_avg_pool) {  // fill with padding
-                    fill_with_val(in_l1_write_addr, read_bytes / BYTES_PER_ELEM, bf16_init_value);
-                }
+        cb_reserve_back(in_cb_id, 1);
+        uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
+        // DPRINT << "in_l1_write_addr: " << in_l1_write_addr << ENDL();
+        uint32_t chunk = 0;
+        for (uint32_t h = 0; h < window_h; ++h) {
+            for (uint32_t w = 0; w < window_w; w++) {
+                const uint32_t stick_offset = ind + w + h * in_w_padded;
+                const uint32_t read_offset =
+                    in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);
+                noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes);
                 in_l1_write_addr += in_write_inc;
                 processed_rows++;
-            }
-            noc_async_read_barrier();
-            if (compute_sync_cb_id != sync_cb_id3) {
-                // tt::data_movement::common::print_bf16_pages(get_read_ptr(in_cb_id), in_write_inc / BYTES_PER_ELEM,
-                // 64); DPRINT << "--" << ENDL();
-            }
-            cb_push_back(in_cb_id, 1);
+                if ((processed_rows % max_rows_for_reduction) == 0) {
+                    noc_async_read_barrier();
+                    // if (compute_sync_cb_id == sync_cb_id3) {
+                    //     tt::data_movement::common::print_bf16_pages(in_l1_write_addr_base, in_write_inc / 2, 32);
+                    //     DPRINT << " -- " << ENDL();
+                    // }
+                    cb_push_back(in_cb_id, 1);
+                    cb_reserve_back(in_cb_id, 1);
+                    in_l1_write_addr = get_write_ptr(in_cb_id);
+                    // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
+                    // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
+                    // are guaranteed that the junk data remaining from chunk N-1 will fill the entire CB and
+                    // cannot contain values greater than the max value, and if we have N=1 chunks we already
+                    // initialized the entire CB with the init value, but for avg pool we need to fill the
+                    // entire CB with the init value since the junk data will contribute to the average.
+                    if constexpr (is_avg_pool) {
+                        if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
+                            clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
+                                get_noc_addr(in_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
+                        }
+                    }
 
-            // TODO clear interm CB for last pass for avg pool
-            if constexpr (is_avg_pool) {
-                uint32_t max_rows_interm_remainder = chunk % (max_rows_for_reduction - 1);
-                if (max_rows_interm_remainder == max_rows_for_reduction - 2) {
-                    cb_wait_front(compute_sync_cb_id, 2);
-                    fill_with_val(
-                        get_write_ptr(interm_cb_id) + TILE_WIDTH * in_cb_ntiles * 2,
-                        (TILE_HEIGHT - 1) * TILE_WIDTH * in_cb_ntiles,
-                        bf16_init_value);
-                    cb_pop_front(compute_sync_cb_id, 2);
+                    // TODO we only really need to clear the interm CB before the last reduction stage ie if
+                    // cur_reduction = (total_rows % 32) / 31 - 2
+                    if constexpr (is_avg_pool) {
+                        uint32_t max_rows_interm_remainder = chunk % (max_rows_for_reduction - 1);
+                        if (max_rows_interm_remainder == max_rows_for_reduction - 2) {
+                            cb_wait_front(compute_sync_cb_id, 2);
+                            fill_with_val(
+                                get_write_ptr(interm_cb_id) + TILE_WIDTH * in_cb_ntiles * 2,
+                                (TILE_HEIGHT - 1) * TILE_WIDTH * in_cb_ntiles,
+                                bf16_init_value);
+                            cb_pop_front(compute_sync_cb_id, 2);
+                        }
+                    }
+
+                    chunk++;
                 }
             }
+        }
+        if constexpr (remaining_elems) {
+            noc_async_read_barrier();
+            // if (compute_sync_cb_id == sync_cb_id3) {
+            //     tt::data_movement::common::print_bf16_pages(in_l1_write_addr_base, in_write_inc / 2, 32);
+            //     DPRINT << " -- " << ENDL();
+            // }
+            cb_push_back(in_cb_id, 1);
+            cb_reserve_back(in_cb_id, 1);
         }
 
         // wait for compute to finish final reduction
         cb_wait_front(compute_sync_cb_id, 2);
         // write output stick
-        if (compute_sync_cb_id != sync_cb_id3) {
-            // DPRINT << "INTERM: " << ENDL();
-            // tt::data_movement::common::print_bf16_pages(get_read_ptr(interm_cb_id), in_write_inc / BYTES_PER_ELEM,
-            // 32);
-        }
+        // if (compute_sync_cb_id == sync_cb_id3) {
+        //     DPRINT << "INTERM: " << ENDL();
+        //     tt::data_movement::common::print_bf16_pages(get_read_ptr(interm_cb_id), in_write_inc / 2, 32);
+        // }
         noc_async_read(get_noc_addr(get_read_ptr(interm_cb_id)), out_l1_write_addr, read_bytes);  // write the first row
         noc_async_read_barrier();
         // clear the interm buffer's first row
