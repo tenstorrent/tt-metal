@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -37,12 +37,12 @@ filterwarnings("ignore")
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
-        # True,  # Requires downloading pretrained weights from Google Drive
+        # False,
+        True,  # Requires downloading pretrained weights from Google Drive
     ],
     ids=[
-        "pretrained_weight_false",
-        # "pretrained_weight_true",
+        # "pretrained_weight_false",
+        "pretrained_weight_true",
     ],
 )
 @pytest.mark.parametrize(
@@ -68,6 +68,7 @@ def test_demo(device, model_location_generator, reset_seeds, demo_type, model_ty
         vgg_unet_trace_2cq.initialize_vgg_unet_trace_2cqs_inference(
             device,
             model_location_generator,
+            use_pretrained_weight=use_pretrained_weight,
         )
 
     if demo_type == "multi":

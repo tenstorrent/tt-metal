@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.vgg_unet.tests.vgg_unet_test_infra import create_test_infra
+from models.demos.segformer.runner.performant_runner_infra import create_test_infra
 
 try:
     pass
@@ -13,17 +13,19 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-class VggUnetTrace2CQ:
+class SegformerTrace2CQ:
     def __init__(self):
         ...
 
-    def initialize_vgg_unet_trace_2cqs_inference(
+    def initialize_segformer_trace_2cqs_inference(
         self,
         device,
         model_location_generator,
-        use_pretrained_weight=False,
     ):
-        self.test_infra = create_test_infra(device, model_location_generator, use_pretrained_weight)
+        self.test_infra = create_test_infra(
+            device,
+            model_location_generator,
+        )
         self.device = device
         self.tt_inputs_host, sharded_mem_config_DRAM, self.input_mem_config = self.test_infra.setup_dram_sharded_input(
             device
@@ -41,7 +43,7 @@ class VggUnetTrace2CQ:
         self.op_event = ttnn.record_event(device, 0)
         self.test_infra.run()
         self.test_infra.validate()
-        self.test_infra.output_tensor.deallocate(force=True)
+        self.test_infra.output_tensor.logits.deallocate(force=True)
 
         # Optimized run
         ttnn.wait_for_event(1, self.op_event)
@@ -60,7 +62,7 @@ class VggUnetTrace2CQ:
         ttnn.wait_for_event(0, self.write_event)
         self.test_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
         self.op_event = ttnn.record_event(device, 0)
-        self.test_infra.output_tensor.deallocate(force=True)
+        self.test_infra.output_tensor.logits.deallocate(force=True)
         trace_input_addr = self.test_infra.input_tensor.buffer_address()
         self.tid = ttnn.begin_trace_capture(device, cq_id=0)
         self.test_infra.run()
@@ -68,7 +70,7 @@ class VggUnetTrace2CQ:
         ttnn.end_trace_capture(device, self.tid, cq_id=0)
         assert trace_input_addr == self.input_tensor.buffer_address()
 
-    def execute_vgg_unet_trace_2cqs_inference(self, tt_inputs_host=None):
+    def execute_segformer_trace_2cqs_inference(self, tt_inputs_host=None):
         ttnn.wait_for_event(1, self.op_event)
 
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
@@ -78,9 +80,9 @@ class VggUnetTrace2CQ:
         self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
-        outputs = ttnn.from_device(self.test_infra.output_tensor, blocking=True)
+        outputs = ttnn.from_device(self.test_infra.output_tensor.logits, blocking=True)
 
         return outputs
 
-    def release_vgg_unet_trace_2cqs_inference(self):
+    def release_segformer_trace_2cqs_inference(self):
         ttnn.release_trace(self.device, self.tid)
