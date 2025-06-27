@@ -73,7 +73,6 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
         mst_logical_start_coord.y + test_config.mst_grid_size.y - 1);
 
     CoreRangeSet mst_logical_core_set({CoreRange(mst_logical_start_coord, mst_logical_end_coord)});
-    uint32_t num_masters = mst_logical_core_set.num_cores();
 
     // Subordinate
 
@@ -96,27 +95,7 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
 
     // Transaction Configurations
 
-    // Determine pages per transaction for the master and subordinate cores
-
     const size_t bytes_per_transaction = test_config.pages_reservable_per_transaction * test_config.bytes_per_page;
-    const size_t total_sub_size_bytes = bytes_per_transaction * num_subordinates;
-
-    const size_t pages_sent_per_transaction_per_master =
-        test_config.pages_reservable_per_transaction / (num_masters + 1);
-    // if (pages_sent_per_transaction_per_master == 0) {
-    //     log_warning(
-    //         tt::LogTest, "Pages sent per transaction per master is 0. Skipping the current set of configurations.");
-    //     return 1;
-    // }
-    const size_t bytes_sent_per_transaction_per_master =
-        pages_sent_per_transaction_per_master * test_config.bytes_per_page;
-    const size_t total_size_bytes_per_master =
-        bytes_sent_per_transaction_per_master * test_config.num_of_transactions_per_master;
-
-    const size_t pages_received_per_transaction = pages_sent_per_transaction_per_master * num_masters;
-    const size_t bytes_received_per_transaction = pages_received_per_transaction * test_config.bytes_per_page;
-    const size_t total_size_bytes_received =
-        bytes_received_per_transaction * test_config.num_of_transactions_per_master;
 
     // Obtain L1 Address for Storing Data
 
@@ -136,15 +115,12 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
         // 1 - 2: L1 Addresses
         (uint32_t)mst_l1_base_address,
         (uint32_t)sub_l1_base_address,
-        (uint32_t)total_size_bytes_per_master,  // subordinate L1 address offset
         // 3 - 4: Transaction parameters
         (uint32_t)test_config.num_of_transactions_per_master,  // num_of_transactions
         (uint32_t)bytes_per_transaction,                       // transaction_size_bytes
         //     5: Subordinate count
         (uint32_t)num_subordinates,  // num_subordinates
     };
-
-    // NOTE: BASE ADDRESS PER MASTER (THIS IS THE SUBORDINATE ADDRESS)
 
     // Create kernels
     auto sender_kernel = CreateKernel(
@@ -157,22 +133,9 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
             .compile_args = sender_compile_args});
 
     // Run-time Arguments for kernels
-
-    // Pre-fill sender_runtime_args with sub_worker_coordinates
     vector<uint32_t> sender_runtime_args = sub_worker_coordinates;
-
-    // Reserve space for the first element (master index)
-    sender_runtime_args.insert(sender_runtime_args.begin(), 0);  // Placeholder for the first element
-
-    uint32_t i = 0;  // Initialize the counter
     for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
-        // Update the first element (subordinate address offset)
-        sender_runtime_args[0] = i;
-
-        // Assign runtime arguments to the kernels
         SetRuntimeArgs(program, sender_kernel, mst_logical_core, sender_runtime_args);
-
-        ++i;  // Increment the counter
     }
 
     // Assign unique id
@@ -188,32 +151,13 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
         100.0f,
         bytes_per_transaction / bfloat16::SIZEOF,
         chrono::system_clock::now().time_since_epoch().count());
-    // packed_input.reserve(bytes_per_transaction / sizeof(uint32_t));
 
     vector<uint32_t> packed_golden = packed_input;
-    // packed_golden.reserve(bytes_per_transaction / sizeof(uint32_t));
 
     // Generate random input data for each master core
     for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
-        // packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        //     -100.0f,
-        //     100.0f,
-        //     bytes_per_transaction / bfloat16::SIZEOF,
-        //     chrono::system_clock::now().time_since_epoch().count());
-
-        /*packed_input = generate_increment_vector<uint32_t>(
-            1,  // Start at 1
-            total_size_bytes_per_master / sizeof(uint32_t),  // Number of elements
-            2.0f,  // Increment by 1
-            1.0f,  // Start value
-            1,     // Count (not relevant here since slide is false)
-            true  // Slide is false to ensure consistent increments
-        );*/
-
         detail::WriteToDeviceL1(device, mst_logical_core, mst_l1_base_address, packed_input);
         MetalContext::instance().get_cluster().l1_barrier(device->id());
-
-        // packed_golden.insert(packed_golden.end(), packed_input.begin(), packed_input.end());
     }
 
     // LAUNCH PROGRAM
@@ -316,7 +260,8 @@ void directed_ideal_test(
     /* Running the Test */
 
     uint32_t num_of_transactions_per_master = 1;
-    uint32_t pages_reservable_per_transaction = max_reservable_pages / num_of_transactions_per_master;
+    uint32_t pages_reservable_per_transaction =
+        max_reservable_pages / num_of_transactions_per_master / 2;  // Half for master and subordinate
 
     // Test config
     unit_tests::dm::all_to_all::AllToAllConfig test_config = {

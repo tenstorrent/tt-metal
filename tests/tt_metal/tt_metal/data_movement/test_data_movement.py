@@ -49,6 +49,8 @@ test_id_to_name = {
     21: "Conv Act with halo 3x3",
     22: "Conv Act with halo 3x3 Small",
     23: "Conv Halo Gather",
+    60: "All to All Packet Sizes",
+    70: "All from All Packet Sizes",
 }
 
 # Comments for each test explaining why we get the perf that we do
