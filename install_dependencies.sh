@@ -21,7 +21,7 @@ detect_os() {
         . /etc/os-release
         OS_ID="$ID"
         OS_VERSION="$VERSION_ID"
-        OS_CODENAME="${VERSION_CODENAME:-}"
+        OS_CODENAME="${UBUNTU_CODENAME:VERSION_CODENAME}"
         OS_ID_LIKE="$ID_LIKE"
     else
         echo "Error: /etc/os-release not found. Unsupported system."
