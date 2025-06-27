@@ -11,7 +11,7 @@
 #include "args_location.hpp"
 #include <cstring>
 
-namespace nd_sharding {
+namespace tensor_accessor {
 namespace detail {
 
 /**
@@ -377,4 +377,4 @@ auto make_dspec_from_args(const ArgsOffsets& args_offsets) {
 }
 
 }  // namespace detail
-}  // namespace nd_sharding
+}  // namespace tensor_accessor

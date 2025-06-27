@@ -12,7 +12,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include "ttnn/cpp/ttnn/operations/sharding_utilities.hpp"
+#include <ttnn/tensor/tensor_accessor_args.hpp>
 
 namespace accessor_benchmarks {
 
@@ -83,13 +83,15 @@ void benchmark_all_args_combinations_single_core(
     tt::tt_metal::detail::SetDeviceProfilerDir(res_path + "/" + params.test_name);
     tt::tt_metal::detail::FreshProfilerDeviceLog();
     for (uint8_t i = 0; i < 1 << 5; ++i) {
-        ArgsConfig args_loc_cnf(i);
-        if (args_loc_cnf.test(ArgConfig::RankCRTA) and
-            (!args_loc_cnf.test(ArgConfig::TensorShapeCRTA) or !args_loc_cnf.test(ArgConfig::ShardShapeCRTA))) {
+        tensor_accessor::ArgsConfig args_loc_cnf(i);
+        if (args_loc_cnf.test(tensor_accessor::ArgConfig::RankCRTA) and
+            (!args_loc_cnf.test(tensor_accessor::ArgConfig::TensorShapeCRTA) or
+             !args_loc_cnf.test(tensor_accessor::ArgConfig::ShardShapeCRTA))) {
             // If rank is runtime, tensor and shard shapes must also be runtime
             continue;
         }
-        if (args_loc_cnf.test(ArgConfig::NumBanksCRTA) and !args_loc_cnf.test(ArgConfig::BankCoordsCRTA)) {
+        if (args_loc_cnf.test(tensor_accessor::ArgConfig::NumBanksCRTA) and
+            !args_loc_cnf.test(tensor_accessor::ArgConfig::BankCoordsCRTA)) {
             // If number of banks is runtime, bank coordinates must also be runtime
             continue;
         }
@@ -105,8 +107,7 @@ void benchmark_all_args_combinations_single_core(
         constexpr CoreCoord grid = {0, 0};
 
         // Set up sharded accessor compile-time args for reader kernel
-        const auto sharded_accessor_args =
-            tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(*input_shard_view, args_loc_cnf);
+        const auto sharded_accessor_args = TensorAccessorArgs(*input_shard_view, args_loc_cnf);
 
         std::map<std::string, std::string> defines{{"ACCESSOR_CONFIG_NAME", crta_config_str}};
         // Create reader kernel
@@ -157,7 +158,7 @@ INSTANTIATE_TEST_SUITE_P(
     AccessorTests,
     AccessorBenchmarks,
     ::testing::Values(
-        // Sweep across shape ranks since ShardedAccessor calculations scale with rank
+        // Sweep across shape ranks since TensorAccessor calculations scale with rank
         // TODO: Other interesting parameters to try:
         // - Page size: Possible that compiler optimizes division for power of 2 page sizes
         // - Shape dim: Possible that compiler optimizes division or modulo for certain values

@@ -7,11 +7,13 @@
 #include <cstdint>
 #include <hostdevcommon/flags.hpp>
 
+namespace tensor_accessor {
+
 /**
  * @brief Encodes which arguments are compile-time and which are common runtime.
  */
 enum class ArgConfig : uint8_t {
-    Interleaved = 0,
+    None = 0,
     Sharded = 1 << 0,
     IsDram = 1 << 1,
     RankCRTA = 1 << 2,
@@ -25,3 +27,5 @@ enum class ArgConfig : uint8_t {
 using ArgsConfig = Flags<ArgConfig>;
 inline constexpr ArgsConfig operator|(ArgConfig a, ArgConfig b) noexcept { return ArgsConfig(a) | b; }
 inline constexpr ArgsConfig operator|(ArgConfig a, ArgsConfig b) noexcept { return ArgsConfig(a) | b; }
+
+}  // namespace tensor_accessor

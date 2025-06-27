@@ -7,14 +7,12 @@
 #include <cstddef>
 #include <cstdint>
 
-#include <hostdevcommon/sharded_accessor/arg_config.hpp>
+#include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "const.hpp"
 
-namespace nd_sharding {
-namespace detail {
-using std::size_t;
+namespace tensor_accessor::detail {
 
-template <size_t CTA_OFFSET, size_t CRTA_OFFSET = UNKNOWN>
+template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET = UNKNOWN>
 struct ArgsOffsets {
     static constexpr auto args_config =
         ArgsConfig(static_cast<ArgsConfig::Underlying>(get_compile_time_arg_val(CTA_OFFSET)));
@@ -145,5 +143,4 @@ public:
     }
 };
 
-}  // namespace detail
-}  // namespace nd_sharding
+}  // namespace tensor_accessor::detail

@@ -14,10 +14,10 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include "ttnn/cpp/ttnn/operations/sharding_utilities.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 
-namespace sharded_accessor_device_tests {
+namespace tensor_accessor_device_tests {
 
 using namespace ttnn;
 using namespace tt;
@@ -31,7 +31,7 @@ struct InputOutputBufferParams {
 
     std::optional<NdShardSpec> input_shard_spec;
     std::optional<NdShardSpec> output_shard_spec;
-    ArgsConfig crta_config;
+    tensor_accessor::ArgsConfig crta_config;
 };
 
 template <typename T>
@@ -71,16 +71,14 @@ void test_single_core_reshard(
                             .set_page_size(cb_in0_idx, aligned_page_size);
     auto cb_in0_id = CreateCircularBuffer(program, grid, c_in0_config);
 
-    const auto input_accessor =
-        tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(*input_buffer, params.crta_config);
-    const auto output_accessor =
-        tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(*output_buffer, params.crta_config);
+    const auto input_accessor_args = TensorAccessorArgs(*input_buffer, params.crta_config);
+    const auto output_accessor_args = TensorAccessorArgs(*output_buffer, params.crta_config);
 
-    std::vector<uint32_t> input_compile_time_args = input_accessor.compile_time_args;
+    std::vector<uint32_t> input_compile_time_args = input_accessor_args.compile_time_args;
     input_compile_time_args.push_back(cb_in0_idx);
     input_compile_time_args.push_back(aligned_page_size);
 
-    std::vector<uint32_t> output_compile_time_args = output_accessor.compile_time_args;
+    std::vector<uint32_t> output_compile_time_args = output_accessor_args.compile_time_args;
     output_compile_time_args.push_back(cb_in0_idx);
     output_compile_time_args.push_back(aligned_page_size);
 
@@ -104,12 +102,12 @@ void test_single_core_reshard(
             .compile_args = output_compile_time_args,
         });
 
-    std::vector<uint32_t> input_runtime_args = input_accessor.runtime_args;
+    std::vector<uint32_t> input_runtime_args = input_accessor_args.runtime_args;
     input_runtime_args.push_back(input_buffer->address());
     input_runtime_args.push_back(input_buffer->num_pages());
     SetCommonRuntimeArgs(program, reader_kernel_id, input_runtime_args);
 
-    std::vector<uint32_t> output_runtime_args = output_accessor.runtime_args;
+    std::vector<uint32_t> output_runtime_args = output_accessor_args.runtime_args;
     output_runtime_args.push_back(output_buffer->address());
     output_runtime_args.push_back(output_buffer->num_pages());
     SetCommonRuntimeArgs(program, writer_kernel_id, output_runtime_args);
@@ -122,9 +120,9 @@ void test_single_core_reshard(
     EXPECT_EQ(output_vec, src);
 }
 
-}  // namespace sharded_accessor_device_tests
+}  // namespace tensor_accessor_device_tests
 
-using namespace sharded_accessor_device_tests;
+using namespace tensor_accessor_device_tests;
 using namespace tt::tt_metal;
 
 class ShardedAccessorTestsOnDevice : public GenericMeshDeviceFixture,
@@ -244,13 +242,15 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
     for (const auto& base_param : base_params) {
         // All combinations of runtime/static arguments
         for (uint8_t i = 0; i < 1 << 5; ++i) {
-            ArgsConfig config(i);
-            if (config.test(ArgConfig::RankCRTA) and
-                (!config.test(ArgConfig::TensorShapeCRTA) or !config.test(ArgConfig::ShardShapeCRTA))) {
+            tensor_accessor::ArgsConfig config(i);
+            if (config.test(tensor_accessor::ArgConfig::RankCRTA) and
+                (!config.test(tensor_accessor::ArgConfig::TensorShapeCRTA) or
+                 !config.test(tensor_accessor::ArgConfig::ShardShapeCRTA))) {
                 // If rank is runtime, tensor and shard shapes must also be runtime
                 continue;
             }
-            if (config.test(ArgConfig::NumBanksCRTA) and !config.test(ArgConfig::BankCoordsCRTA)) {
+            if (config.test(tensor_accessor::ArgConfig::NumBanksCRTA) and
+                !config.test(tensor_accessor::ArgConfig::BankCoordsCRTA)) {
                 // If number of banks is runtime, bank coordinates must also be runtime
                 continue;
             }

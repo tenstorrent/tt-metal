@@ -10,7 +10,7 @@
 
 #include "helpers.hpp"
 
-namespace nd_sharding {
+namespace tensor_accessor {
 namespace detail {
 template <typename T, T... Elements>
 struct ArrayStaticWrapper {
@@ -90,4 +90,4 @@ struct ArrayWrapperTypeSelectorU32<false, StartIdx, Size> {
 };
 
 }  // namespace detail
-}  // namespace nd_sharding
+}  // namespace tensor_accessor

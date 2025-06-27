@@ -11,7 +11,6 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <hostdevcommon/sharded_accessor/arg_config.hpp>
 
 namespace tt::tt_metal {
 
@@ -89,17 +88,5 @@ ShardingConfig get_specs_for_sharding_partition(
     uint32_t window_w,
     uint32_t pad_h,
     uint32_t pad_w);
-
-namespace sharded_accessor_utils {
-
-struct ShardedAccessorArgs {
-    // The order of arguments: rank -> num_banks -> tensor_shape -> shard_shape -> bank_coords
-    // In addition compile_time_args[0] is reserved for the args_config
-    std::vector<uint32_t> compile_time_args;
-    std::vector<uint32_t> runtime_args;
-};
-ShardedAccessorArgs get_sharded_accessor_args(const Buffer& buffer, ArgsConfig args_config = ArgConfig::Interleaved);
-
-}  // namespace sharded_accessor_utils
 
 }  // namespace tt::tt_metal
