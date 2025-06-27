@@ -23,7 +23,7 @@ Resource link - [source](https://github.com/ultralytics/ultralytics/blob/main/ul
 
 ### Details
 
-- The entry point to the yolov8s is located at:`models/experimental/yolov8s/tt/ttnn_yolov8s.py`
+- The entry point to the yolov8s is located at:`models/demos/yolov8s/tt/ttnn_yolov8s.py`
 - Batch Size :1
 - Supported Input Resolution - (640,640) (Height,Width)
 
@@ -37,10 +37,25 @@ pytest --disable-warnings tests/ttnn/integration_tests/yolov8s/test_yolov8s.py::
 
 ### Performant Model with Trace+2CQ
 
-- end-2-end perf is 143 FPS
+- end-2-end perf is 161 FPS
 
 Use the following command to run the performant Model with Trace+2CQs:
 
 ```
-pytest --disable-warnings models/experimental/yolov8s/tests/test_e2e_performant.py
+pytest --disable-warnings models/demos/yolov8s/tests/test_e2e_performant.py
 ```
+
+### Demo with Trace+2CQ
+
+- Use the following command to run the demo with Trace+2CQs :
+```
+pytest models/demos/yolov8s/demo/demo.py
+```
+
+#### Note: The post-processing is performed using PyTorch.
+
+### Inputs
+The demo receives inputs from `models/demos/yolov8s/demo/images` dir by default. To test the model on different input data, it is recommended to add a new image file to this directory.
+
+### Outputs
+A runs folder will be created inside the `models/demos/yolov8s/demo/` directory. For reference, the model output will be stored in the torch_model directory, while the TTNN model output will be stored in the tt_model directory.
