@@ -10,16 +10,16 @@ from loguru import logger
 from ultralytics import YOLO
 
 import ttnn
-from models.experimental.yolov10.demo.demo_utils import (
+from models.experimental.yolov10x.demo.demo_utils import (
     LoadImages,
     load_coco_class_names,
     postprocess,
     preprocess,
     save_yolo_predictions_by_model,
 )
-from models.experimental.yolov10.reference.yolov10 import YOLOv10
+from models.experimental.yolov10x.reference.yolov10x import YOLOv10
 from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
-from models.experimental.yolov10.tt.performant_runner import YOLOv10PerformantRunner
+from models.experimental.yolov10x.runner.performant_runner import YOLOv10PerformantRunner
 
 
 @run_for_wormhole_b0()
@@ -29,7 +29,7 @@ from models.experimental.yolov10.tt.performant_runner import YOLOv10PerformantRu
 @pytest.mark.parametrize(
     "source",
     [
-        "models/experimental/yolov10/demo/images/dog.jpg",
+        "models/experimental/yolov10x/demo/images/dog.jpg",
     ],
 )
 @pytest.mark.parametrize(
@@ -68,7 +68,7 @@ def test_demo_ttnn(device, source, model_type, use_pretrained_weight):
             torch_model.eval()
             model = torch_model
             logger.info("Inferencing [Torch] Model")
-        save_dir = "models/experimental/yolov10/demo/runs"
+        save_dir = "models/experimental/yolov10x/demo/runs"
         dataset = LoadImages(path=source)
         model_save_dir = os.path.join(save_dir, model_type)
         os.makedirs(model_save_dir, exist_ok=True)
@@ -81,7 +81,7 @@ def test_demo_ttnn(device, source, model_type, use_pretrained_weight):
             results = postprocess(preds, im, im0s, batch, names)[0]
             save_yolo_predictions_by_model(results, save_dir, source, model_type)
     else:
-        save_dir = "models/experimental/yolov10/demo/runs"
+        save_dir = "models/experimental/yolov10x/demo/runs"
         dataset = LoadImages(path=source)
         model_save_dir = os.path.join(save_dir, model_type)
         os.makedirs(model_save_dir, exist_ok=True)
@@ -90,12 +90,13 @@ def test_demo_ttnn(device, source, model_type, use_pretrained_weight):
         for batch in dataset:
             paths, im0s, s = batch
             im = preprocess(im0s)
-            img = torch.permute(im, (0, 2, 3, 1))
+            img = im
             model = YOLOv10PerformantRunner(
                 device,
                 act_dtype=ttnn.bfloat8_b,
                 weight_dtype=ttnn.bfloat8_b,
                 torch_input_tensor=im,
+                use_pretrained_weight=use_pretrained_weight,
             )
             preds = model.run(img)
             preds = ttnn.to_torch(preds, dtype=torch.float32)
