@@ -56,9 +56,7 @@ static inline bool verify_single_core_cost(const std::vector<Tensor>& input_tens
     uint32_t output_cb_tile_count = Ktiles;
 
     auto device = input_tensors.at(0).device();
-    tt::DataFormat value_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).get_dtype());
-
+    tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
     tt::DataFormat index_cb_data_format = uint16_output ? tt::DataFormat::UInt16 : tt::DataFormat::UInt32;
 
     uint32_t value_tile_size = tile_size(value_cb_data_format);
@@ -133,10 +131,9 @@ std::vector<TensorSpec> TopK::compute_output_specs(
     bool uint16_output = (input_shape[this->dim] < 65536);
 
     auto values_spec =
-        TensorSpec(output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config));
+        TensorSpec(output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), output_mem_config));
     DataType index_dtype = uint16_output ? DataType::UINT16 : DataType::UINT32;
-    TensorSpec index_spec =
-        TensorSpec(output_shape, TensorLayout(index_dtype, PageConfig(Layout::TILE), output_mem_config));
+    auto index_spec = TensorSpec(output_shape, TensorLayout(index_dtype, PageConfig(Layout::TILE), output_mem_config));
 
     return {values_spec, index_spec};
 }
@@ -159,9 +156,9 @@ std::vector<Tensor> TopK::create_output_tensors(
 operation::ProgramWithCallbacks TopK::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    ttnn::Shape input_shape = input_tensors.at(0).get_padded_shape();
+    auto input_shape = input_tensors.at(0).padded_shape();
 
-    bool multicore_supported = (input_tensor.get_padded_shape()[dim] >= topk_utils::multi_core_min_width);
+    bool multicore_supported = (input_tensor.padded_shape()[dim] >= topk_utils::multi_core_min_width);
     bool uint16_output = (input_shape[this->dim] < 65536);
     multicore_supported &= uint16_output;    // for now multicore does not support uint32 output, so if uint16 is not
                                              // supported, we default to single core
@@ -175,18 +172,8 @@ operation::ProgramWithCallbacks TopK::create_program(
             this->k,
             this->sub_core_grids);
     }
-    if (!multicore_supported) {
-        return detail::topk_single_core_interleaved(
-            input_tensor,
-            this->k,
-            this->dim,
-            this->largest,
-            this->sorted,
-            uint16_output,
-            this->sub_core_grids,
-            output_tensors.at(0),
-            output_tensors.at(1));
-    } else {
+
+    if (multicore_supported) {
         return detail::topk_multicore_interleaved(
             input_tensor,
             this->k,
@@ -204,6 +191,7 @@ operation::ProgramWithCallbacks TopK::create_program(
         this->dim,
         this->largest,
         this->sorted,
+        uint16_output,
         this->sub_core_grids,
         output_tensors.at(0),
         output_tensors.at(1));
