@@ -74,19 +74,19 @@ auto tensor_accessor = make_tensor_accessor_from_args(args, bank_base_address, p
 Sometimes you might need more control. For example you want to reuse same bank coordinates between different accessors. In such case you can manually create DistributionSpec from rank, number of banks, tensor/shard shape and bank coordinates:
 
 ```c++
-using tensor_shape = tensor_accessor::detail::ArrayStaticWrapper<10, 10>;
-using shard_shape = tensor_accessor::detail::ArrayStaticWrapper<3, 3>;
-using banks_coords = tensor_accessor::detail::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
-auto dspec = tensor_accessor::detail::make_dspec<2, 16, tensor_shape, shard_shape, banks_coords>();
+using tensor_shape = tensor_accessor::ArrayStaticWrapper<10, 10>;
+using shard_shape = tensor_accessor::ArrayStaticWrapper<3, 3>;
+using banks_coords = tensor_accessor::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
+auto dspec = tensor_accessor::make_dspec<2, 16, tensor_shape, shard_shape, banks_coords>();
 auto tensor_accessor = make_tensor_accessor_from_dspec(std::move(dspec), 0, 1024);
 
 // You can also mix constexpr/runtime values:
 uint32_t tensor_shape[2] = {10, 10};
 uint32_t shard_shape[2] = {3, 3};
-using dyn = ensor_accessor::detail::ArrayDynamicWrapper;
-using banks_coords = ensor_accessor::detail::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
-auto dspec = ensor_accessor::detail::make_dspec<0, 16, dyn, dyn, banks_coords>(2, 0, tensor_shape, shard_shape, nullptr);
-auto tensor_accessor = ensor_accessor::detail::make_sharded_accessor_from_dspec(std::move(dspec), 0, 1024);
+using dyn = tensor_accessor::ArrayDynamicWrapper;
+using banks_coords = tensor_accessor::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
+auto dspec = tensor_accessor::make_dspec<0, 16, dyn, dyn, banks_coords>(2, 0, tensor_shape, shard_shape, nullptr);
+auto tensor_accessor = tensor_accessor::make_sharded_accessor_from_dspec(std::move(dspec), 0, 1024);
 
 ```
 

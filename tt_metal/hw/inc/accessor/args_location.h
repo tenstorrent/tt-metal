@@ -8,9 +8,9 @@
 #include <cstdint>
 
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
-#include "const.hpp"
+#include "const.h"
 
-namespace tensor_accessor::detail {
+namespace tensor_accessor {
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET = UNKNOWN>
 struct ArgsOffsets {
@@ -143,4 +143,4 @@ public:
     }
 };
 
-}  // namespace tensor_accessor::detail
+}  // namespace tensor_accessor
