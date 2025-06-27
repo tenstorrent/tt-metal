@@ -20,26 +20,14 @@ void gelu_derivative_init() {
     _init_gelu_derivative_<APPROXIMATION_MODE>();
 }
 
-template <int ITERATIONS>
-inline void calculate_gelu_appx() {
-    constexpr bool approximation_mode = true;
-    _calculate_gelu_<approximation_mode, ITERATIONS>(ITERATIONS);
-}
-
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_gelu() {
-    if constexpr (APPROXIMATION_MODE) {
-        calculate_gelu_appx<ITERATIONS>();
-    } else {
-        constexpr bool scaled = true;
-        // SFPU microcode
-        _calculate_gelu_accurate_(ITERATIONS);
-    }
+    _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_gelu_derivative() {
-    _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS);
+    _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
 }  // namespace sfpu
