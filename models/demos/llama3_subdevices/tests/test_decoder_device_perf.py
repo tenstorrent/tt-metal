@@ -503,6 +503,7 @@ def test_llama_TG_perf_device(
     print_dict(avg_kernel_duration_mid_layers_compilation, "avg_kernel_duration_mid_layers_compilation")
     print_dict(avg_kernel_duration_mid_layers_trace, "avg_kernel_duration_mid_layers_trace")
     print_dict(avg_dispatch_duration_mid_layers_trace, "avg_dispatch_duration_mid_layers_trace")
+    print_dict(avg_first_to_last_start_mid_layers_trace, "avg_first_to_last_start_mid_layers_trace")
 
     ## model tail ops
     print_dict(avg_kernel_duration_model_tail_compilation, "avg_kernel_duration_model_tail_compilation")
@@ -537,15 +538,15 @@ def test_llama_TG_perf_device(
 
             # Avg first to last
             avg_first_to_last_start = avg_first_to_last_start_mid_layers_trace[op_code_with_id]
-            avg_first_to_last_start = avg_first_to_last_start if avg_first_to_last_start is not None else 0
+            avg_first_to_last_start = avg_first_to_last_start if not math.isnan(avg_first_to_last_start) else 0
 
             # Min first to last
             min_first_to_last_start = min_first_to_last_start_mid_layers_trace[op_code_with_id]
-            min_first_to_last_start = min_first_to_last_start if min_first_to_last_start is not None else 0
+            min_first_to_last_start = min_first_to_last_start if not math.isnan(min_first_to_last_start) else 0
 
             # Max first to last
-            max_first_to_last_start = max_dispatch_duration_mid_layers_trace[op_code_with_id]
-            max_first_to_last_start = max_first_to_last_start if max_first_to_last_start is not None else 0
+            max_first_to_last_start = max_first_to_last_start_mid_layers_trace[op_code_with_id]
+            max_first_to_last_start = max_first_to_last_start if not math.isnan(max_first_to_last_start) else 0
 
             # average
             add_benchmark_measurement(
