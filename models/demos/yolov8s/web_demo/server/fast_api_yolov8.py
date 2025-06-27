@@ -12,9 +12,9 @@ from fastapi import FastAPI, File, UploadFile
 from PIL import Image
 
 import ttnn
-from models.demos.yolov8s.tests.yolov8s_e2e_performant import Yolov8sTrace2CQ
+from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
 from models.demos.yolov9c.demo.demo_utils import load_coco_class_names
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import postprocess
+from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
 
 app = FastAPI(
     title="YOLOv8s object detection",
@@ -59,19 +59,18 @@ async def startup():
             num_command_queues=2,
         )
         device.enable_program_cache()
-        model = Yolov8sTrace2CQ()
+        model = YOLOv8sPerformantRunner(device, 1)
     else:
         device_id = 0
         device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
         device.enable_program_cache()
-        model = Yolov8sTrace2CQ()
-    model.initialize_yolov8s_trace_2cqs_inference(device, 1)
+        model = YOLOv8sPerformantRunner(device, 1)
 
 
 @app.on_event("shutdown")
 async def shutdown():
     # model.release()
-    model.release_yolov8s_trace_2cqs_inference()
+    model.release()
 
 
 def process_output(output):
