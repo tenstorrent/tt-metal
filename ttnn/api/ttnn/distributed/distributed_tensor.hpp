@@ -190,6 +190,4 @@ Tensor create_distributed_tensor(
 // Aggregates a multi-device tensor into a host tensor according to the `composer`.
 Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer);
 
-// TODO: another high level API that returns a pair of logical data and shape.
-
 }  // namespace ttnn::distributed

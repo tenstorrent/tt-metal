@@ -4,6 +4,8 @@
 
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/storage.hpp"
+#include "tensor/tensor_impl.hpp"
+#include "tt-metalium/distributed_host_buffer.hpp"
 #include "tt-metalium/shape.hpp"
 #include "tt-metalium/mesh_coord.hpp"
 #include <algorithm>
@@ -17,6 +19,7 @@
 #include <xtensor/containers/xadapt.hpp>
 #include <xtensor/containers/xarray.hpp>
 #include <xtensor/core/xstrides.hpp>
+#include <xtensor/core/xtensor_forward.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
@@ -27,6 +30,49 @@ namespace {
 
 using ::tt::tt_metal::DistributedHostBuffer;
 using ::tt::tt_metal::distributed::MeshContainer;
+
+// Specifies how a tensor sharded over a specific shape will be distributed to a mesh device
+enum class DistributionMode {
+    // Tensor shards will be distributed in row-major order over a mesh device.
+    ROW_MAJOR,
+
+    // Shards will be mapped to a mesh device as is, preserving coordinates.
+    // This requires a submesh to fit within the mesh device.
+    SUBMESH,
+};
+
+// Returns a function that remaps a mesh coordinates from the mesh mapper shaper to the device shape, and vice versa.
+// `dst_range` must outlive the use of the returned function.
+auto get_remap_fn(DistributionMode distribution_mode, const MeshCoordinateRange* dst_range) {
+    return [distribution_mode, row_major_dst = dst_range->begin()](const MeshCoordinate& src_coord) mutable {
+        switch (distribution_mode) {
+            case DistributionMode::ROW_MAJOR: return *(row_major_dst++);
+            case DistributionMode::SUBMESH: return src_coord;
+        }
+        TT_THROW("Unreachable");
+    };
+}
+
+// Computes the distribution mode based on mesh shape configuration
+DistributionMode compute_distribution_mode(
+    const std::optional<MeshShape>& mesh_shape_override, const MeshShape& device_shape) {
+    if (!mesh_shape_override.has_value()) {
+        // Note that when no shape is supplied, row-major order is equivalent to submesh.
+        return DistributionMode::SUBMESH;
+    } else if (mesh_shape_override->dims() != device_shape.dims()) {
+        // Shapes have different dimensions, so a reshape will be required.
+        return DistributionMode::ROW_MAJOR;
+    } else {
+        // Check if `shape` fits within the mesh device. If it does, we can use submesh distribution. Otherwise,
+        // a reshape will be required, and shards will be distributed in row-major order over the mesh device.
+        for (size_t i = 0; i < mesh_shape_override->dims(); ++i) {
+            if ((*mesh_shape_override)[i] > device_shape[i]) {
+                return DistributionMode::ROW_MAJOR;
+            }
+        }
+        return DistributionMode::SUBMESH;
+    }
+}
 
 // Increments `indices` in-place given `limits`, to support row-major order iteration.
 bool increment_indices(const tt::stl::SmallVector<int>& limits, tt::stl::SmallVector<int>& indices) {
@@ -111,30 +157,6 @@ std::ostream& operator<<(std::ostream& os, const MeshComposerConfig& config) {
 
 class TensorToMesh::Impl {
 public:
-    // Specifies how a tensor sharded over a specific shape will be distributed to a mesh device, which potentially
-    // has a different shape.
-    enum class DistributionMode {
-        // Tensor shards will be distributed in row-major order over a mesh device.
-        ROW_MAJOR,
-
-        // Shards will be mapped to a mesh device as is, preserving coordinates.
-        // This requires a submesh to fit within the mesh device.
-        SUBMESH,
-    };
-
-    // Returns a function that remaps a mesh coordinate from the mesh mapper shape ("distribution_shape") to the
-    // device shape ("global_shape").
-    static auto get_remap_fn(DistributionMode distribution_mode, const MeshCoordinateRange* global_range) {
-        return [distribution_mode, global_range, row_major_dst = global_range->begin()](
-                   const MeshCoordinate& src_coord) mutable {
-            switch (distribution_mode) {
-                case DistributionMode::ROW_MAJOR: return *(row_major_dst++);
-                case DistributionMode::SUBMESH: return src_coord;
-            }
-            TT_THROW("Unreachable");
-        };
-    }
-
     Impl(
         const MeshDevice& mesh_device,
         DistributionMode distribution_mode,
@@ -228,8 +250,7 @@ public:
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
-        std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
-        auto input_xtensor = xt::adapt(span.data(), span.size(), xt::no_ownership(), shape_vec);
+        auto input_xtensor = experimental::xtensor::adapt(span, std::vector<size_t>(shape.cbegin(), shape.cend()));
 
         auto chunks = experimental::xtensor::chunk_ndim(input_xtensor, num_chunks_per_dim, tensor_dims);
         TT_FATAL(chunks.size() >= 1, "No chunks were produced");
@@ -345,42 +366,66 @@ private:
 
 class MeshToTensor::Impl {
 public:
-    Impl(const MeshShape& shape, const MeshComposerConfig& config) : shape_(shape), config_(config) {}
+    Impl(DistributionMode distribution_mode, const MeshShape& distribution_shape, const MeshComposerConfig& config) :
+        distribution_mode_(distribution_mode), distribution_shape_(distribution_shape), config_(config) {}
 
     template <typename T>
     std::pair<std::vector<T>, Shape> compose(const Tensor& tensor) const {
-        // TODO: avoid this, instead extract tensor shards from distributed host buffer.
-        const auto tensors = get_device_tensors(tensor.cpu());
+        const auto src_buffer =
+            std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.cpu().storage()).distributed_buffer();
 
-        tt::stl::SmallVector<int> num_chunks(shape_.cbegin(), shape_.cend());
-        if (shape_.dims() == 1) {
-            num_chunks[0] = tensors.size();
+        const auto dst_range = MeshCoordinateRange(distribution_shape_);
+        auto remap_fn = get_remap_fn(distribution_mode_, &dst_range);
+        auto dst_buffer = tt::tt_metal::DistributedHostBuffer::create(distribution_shape_);
+
+        for (const auto& device_coord : MeshCoordinateRange(src_buffer.shape())) {
+            auto shard_opt = src_buffer.get_shard(device_coord);
+            if (shard_opt.has_value()) {
+                dst_buffer.emplace_shard(remap_fn(device_coord), [&shard_opt]() { return *shard_opt; });
+            }
+        }
+
+        // Convert individual shards to logical data of the correct type `T`, if needed.
+        if (!tt::tt_metal::tensor_impl::logical_matches_physical(tensor.tensor_spec())) {
+            dst_buffer = dst_buffer.transform(
+                [&tensor](const tt::tt_metal::HostBuffer& shard) {
+                    return tt::tt_metal::HostBuffer(Tensor(shard, tensor.tensor_spec()).to_vector<T>());
+                },
+                tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+        }
+
+        // Convert shards into a linear buffer of xtensor views.
+        std::vector<experimental::xtensor::AdaptedView<const T>> xtensor_views;
+        xtensor_views.reserve(distribution_shape_.mesh_size());
+        std::vector<size_t> shard_shape(tensor.logical_shape().cbegin(), tensor.logical_shape().cend());
+        dst_buffer.apply([&xtensor_views, &shard_shape](const tt::tt_metal::HostBuffer& shard) {
+            xtensor_views.push_back(experimental::xtensor::adapt(shard.view_as<const T>(), shard_shape));
+        });
+
+        tt::stl::SmallVector<int> num_chunks;
+        if (config_.dims.size() == 1) {
+            num_chunks.push_back(xtensor_views.size());
         } else {
             TT_FATAL(
-                tensors.size() == shape_.mesh_size(),
+                xtensor_views.size() == distribution_shape_.mesh_size(),
                 "ND composition requires the number of tensors {} to match the mesh shape {}",
-                tensors.size(),
-                shape_);
+                xtensor_views.size(),
+                distribution_shape_);
+            for (size_t i = 0; i < distribution_shape_.dims(); ++i) {
+                num_chunks.push_back(distribution_shape_[i]);
+            }
         }
 
-        // TODO: use adapted type, avoid copying this when not needed.
-        std::vector<xt::xarray<T>> xtensors;
-        xtensors.reserve(tensors.size());
-        for (const auto& tensor : tensors) {
-            xtensors.push_back(ttnn::experimental::xtensor::to_xtensor<T>(tensor));
-        }
-
-        // TODO: don't copy into vector, when not needed.
-        auto xtensor = experimental::xtensor::concat_ndim(xtensors, num_chunks, config_.dims);
-        std::vector<T> data_vec(xtensor.begin(), xtensor.end());
-        return {data_vec, ttnn::experimental::xtensor::get_shape_from_xarray(xtensor)};
+        auto xtensor_adapter = experimental::xtensor::concat_ndim(xtensor_views, num_chunks, config_.dims);
+        return {
+            std::move(xtensor_adapter).data(), experimental::xtensor::get_shape_from_xarray(xtensor_adapter.expr())};
     }
 
     Tensor compose(const Tensor& tensor) const {
         auto dispatch_to_concrete = [this]<typename T>(const Tensor& tensor) {
             auto [data, shape] = compose<T>(tensor);
             TensorSpec spec(shape, tensor.tensor_spec().tensor_layout());
-            return Tensor::from_vector(data, spec);
+            return Tensor::from_vector(std::move(data), spec);
         };
 
         switch (tensor.dtype()) {
@@ -398,7 +443,8 @@ public:
     }
 
 private:
-    MeshShape shape_;
+    DistributionMode distribution_mode_;
+    MeshShape distribution_shape_;
     MeshComposerConfig config_;
 };
 
@@ -434,26 +480,6 @@ TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMappe
         distributed_shape,
         config);
 
-    // Select distribution mode.
-    const auto distribution_mode = [&]() {
-        if (!config.mesh_shape_override.has_value()) {
-            // When no shape is supplied, row-major order is equivalent to submesh.
-            return Impl::DistributionMode::SUBMESH;
-        } else if (config.mesh_shape_override->dims() != mesh_device.shape().dims()) {
-            // Shapes have different dimensions, so a reshape will be required.
-            return Impl::DistributionMode::ROW_MAJOR;
-        } else {
-            // Check if `shape` fits within the mesh device. If it does, we can use submesh distribution. Otherwise,
-            // a reshape will be required, and shards will be distributed in row-major order over the mesh device.
-            for (size_t i = 0; i < config.mesh_shape_override->dims(); ++i) {
-                if ((*config.mesh_shape_override)[i] > mesh_device.shape()[i]) {
-                    return Impl::DistributionMode::ROW_MAJOR;
-                }
-            }
-            return Impl::DistributionMode::SUBMESH;
-        }
-    }();
-
     // TODO: #24115 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used directly
     // in Tensor storage.
     const auto distributed_tensor_config = [&config, &distributed_shape]() -> tt::tt_metal::DistributedTensorConfig {
@@ -470,7 +496,11 @@ TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMappe
     }();
 
     return TensorToMesh(std::make_unique<TensorToMesh::Impl>(
-        mesh_device, distribution_mode, distributed_shape, config, distributed_tensor_config));
+        mesh_device,
+        compute_distribution_mode(config.mesh_shape_override, mesh_device.shape()),
+        distributed_shape,
+        config,
+        distributed_tensor_config));
 }
 
 MeshToTensor::MeshToTensor(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -493,7 +523,8 @@ MeshToTensor MeshToTensor::create(const MeshDevice& mesh_device, const MeshCompo
         distributed_shape,
         config);
 
-    return MeshToTensor(std::make_unique<Impl>(distributed_shape, config));
+    return MeshToTensor(std::make_unique<Impl>(
+        compute_distribution_mode(config.mesh_shape_override, mesh_device.shape()), distributed_shape, config));
 }
 
 std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device) {

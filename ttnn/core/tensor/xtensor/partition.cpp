@@ -38,14 +38,6 @@ tt::stl::SmallVector<int> normalize_dims(const tt::stl::SmallVector<int>& dims, 
     return normalized_dims;
 }
 
-// Helper to compute adapted types for explicit instantiations per data type `T`.
-template <typename T>
-auto compute_adapted_type() -> decltype(xt::adapt(
-    std::declval<T*>(), std::declval<size_t>(), xt::no_ownership(), std::declval<std::vector<size_t>>()));
-
-template <typename T>
-using AdaptedType = decltype(compute_adapted_type<T>());
-
 }  // namespace
 
 template <typename Expression>
@@ -126,19 +118,23 @@ StridedViews<Expression> chunk(const xt::xexpression<Expression>& expr, int num_
 }
 
 template <typename Expression>
-xt::xarray<typename Expression::value_type> concat_ndim(
+XtensorAdapter<typename Expression::value_type> concat_ndim(
     const std::vector<Expression>& expressions,
     const tt::stl::SmallVector<int>& num_chunks,
     const tt::stl::SmallVector<int>& dims) {
+    using DataType = typename Expression::value_type;
+
     TT_FATAL(num_chunks.size() == dims.size(), "num_chunks and dims must have the same size");
 
     if (expressions.empty()) {
-        return {};
+        return XtensorAdapter<DataType>(std::vector<DataType>(), {0});
     }
 
     if (num_chunks.empty()) {
         TT_FATAL(expressions.size() == 1, "When no dims specified, must have exactly one expression");
-        return expressions.front();
+        std::vector<DataType> data(expressions.front().begin(), expressions.front().end());
+        std::vector<size_t> shape_vec(expressions.front().shape().cbegin(), expressions.front().shape().cend());
+        return XtensorAdapter<DataType>(std::move(data), std::move(shape_vec));
     }
 
     const auto& first_expr = expressions.front();
@@ -165,14 +161,14 @@ xt::xarray<typename Expression::value_type> concat_ndim(
         expressions.size(),
         expected_total);
 
-    auto result_shape = expected_shape;
+    std::vector<size_t> result_shape(expected_shape.cbegin(), expected_shape.cend());
     for (size_t i = 0; i < dims.size(); ++i) {
         const int dim = normalized_dims[i];
         result_shape[dim] *= num_chunks[i];
     }
-
-    xt::xarray<typename Expression::value_type> result;
-    result.resize(result_shape);
+    const size_t result_volume =
+        std::accumulate(result_shape.begin(), result_shape.end(), 1, std::multiplies<size_t>());
+    XtensorAdapter<DataType> result(std::vector<DataType>(result_volume), std::move(result_shape));
 
     // Get the size of each piece along concatenation dimensions
     tt::stl::SmallVector<size_t> piece_sizes(dims.size());
@@ -192,7 +188,7 @@ xt::xarray<typename Expression::value_type> concat_ndim(
             indices[dim] = xt::range(offset, offset + piece_sizes[i]);
         }
 
-        xt::dynamic_view(result, indices) = expr;
+        xt::dynamic_view(result.expr(), indices) = expr;
 
         for (int i = static_cast<int>(dims.size()) - 1; i >= 0; --i) {
             if (++current_indices[i] < num_chunks[i]) {
@@ -206,7 +202,7 @@ xt::xarray<typename Expression::value_type> concat_ndim(
 }
 
 template <typename Expression>
-xt::xarray<typename Expression::value_type> concat(const std::vector<Expression>& v, int dim) {
+XtensorAdapter<typename Expression::value_type> concat(const std::vector<Expression>& v, int dim) {
     return concat_ndim<Expression>(v, {v.size()}, {dim});
 }
 
@@ -215,27 +211,27 @@ xt::xarray<typename Expression::value_type> concat(const std::vector<Expression>
     template StridedViews<xt::xarray<T>> chunk(const xt::xexpression<xt::xarray<T>>&, int, int);                     \
     template StridedViews<xt::xarray<T>> chunk_ndim(                                                                 \
         const xt::xexpression<xt::xarray<T>>&, const tt::stl::SmallVector<int>&, const tt::stl::SmallVector<int>&);  \
-    template StridedViews<AdaptedType<T>> chunk(const xt::xexpression<AdaptedType<T>>&, int, int);                   \
-    template StridedViews<AdaptedType<T>> chunk_ndim(                                                                \
-        const xt::xexpression<AdaptedType<T>>&, const tt::stl::SmallVector<int>&, const tt::stl::SmallVector<int>&); \
-    template StridedViews<AdaptedType<const T>> chunk(const xt::xexpression<AdaptedType<const T>>&, int, int);       \
-    template StridedViews<AdaptedType<const T>> chunk_ndim(                                                          \
-        const xt::xexpression<AdaptedType<const T>>&,                                                                \
+    template StridedViews<AdaptedView<T>> chunk(const xt::xexpression<AdaptedView<T>>&, int, int);                   \
+    template StridedViews<AdaptedView<T>> chunk_ndim(                                                                \
+        const xt::xexpression<AdaptedView<T>>&, const tt::stl::SmallVector<int>&, const tt::stl::SmallVector<int>&); \
+    template StridedViews<AdaptedView<const T>> chunk(const xt::xexpression<AdaptedView<const T>>&, int, int);       \
+    template StridedViews<AdaptedView<const T>> chunk_ndim(                                                          \
+        const xt::xexpression<AdaptedView<const T>>&,                                                                \
         const tt::stl::SmallVector<int>&,                                                                            \
         const tt::stl::SmallVector<int>&);                                                                           \
-    template xt::xarray<T> concat(const std::vector<xt::xarray<T>>& v, int dim);                                     \
-    template xt::xarray<T> concat_ndim(                                                                              \
+    template XtensorAdapter<T> concat(const std::vector<xt::xarray<T>>& v, int dim);                                 \
+    template XtensorAdapter<T> concat_ndim(                                                                          \
         const std::vector<xt::xarray<T>>& v,                                                                         \
         const tt::stl::SmallVector<int>& num_chunks,                                                                 \
         const tt::stl::SmallVector<int>& dims);                                                                      \
-    template xt::xarray<T> concat(const std::vector<AdaptedType<T>>& v, int dim);                                    \
-    template xt::xarray<T> concat_ndim(                                                                              \
-        const std::vector<AdaptedType<T>>& v,                                                                        \
+    template XtensorAdapter<T> concat(const std::vector<AdaptedView<T>>& v, int dim);                                \
+    template XtensorAdapter<T> concat_ndim(                                                                          \
+        const std::vector<AdaptedView<T>>& v,                                                                        \
         const tt::stl::SmallVector<int>& num_chunks,                                                                 \
         const tt::stl::SmallVector<int>& dims);                                                                      \
-    template xt::xarray<T> concat(const std::vector<AdaptedType<const T>>& v, int dim);                              \
-    template xt::xarray<T> concat_ndim(                                                                              \
-        const std::vector<AdaptedType<const T>>& v,                                                                  \
+    template XtensorAdapter<T> concat(const std::vector<AdaptedView<const T>>& v, int dim);                          \
+    template XtensorAdapter<T> concat_ndim(                                                                          \
+        const std::vector<AdaptedView<const T>>& v,                                                                  \
         const tt::stl::SmallVector<int>& num_chunks,                                                                 \
         const tt::stl::SmallVector<int>& dims);
 
