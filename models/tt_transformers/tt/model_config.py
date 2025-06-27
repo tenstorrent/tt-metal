@@ -427,30 +427,7 @@ class ModelArgs:
         self.arch_name = ttnn.get_arch_name()
         self.dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
 
-        if self.num_devices == 0:
-            self.device_name = "CPU"
-        else:
-            if is_blackhole():
-                dict_device_names = {
-                    1: "P100" if self.dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
-                    2: "P300",
-                    4: "P150x4",
-                }
-            elif is_wormhole_b0():
-                dict_device_names = {
-                    1: "N150",
-                    2: "N300",
-                    4: "N150x4",
-                    8: "T3K",
-                    32: "TG",
-                }
-            else:
-                raise ValueError(f"Unsupported architecture: {self.arch_name}")
-
-            if self.num_devices in dict_device_names:
-                self.device_name = dict_device_names[self.num_devices]
-            else:
-                raise ValueError(f"Unsupported number of devices: {self.num_devices} for {self.arch_name}")
+        self.device_name = determine_device_name(self.mesh_device)
 
         logger.info(f"Inferring device name: {self.device_name}")
         device = mesh_device if mesh_device is not None else None
@@ -2436,3 +2413,46 @@ def num_to_coregrid(x):
         return ttnn.CoreGrid(y=2, x=6)
     if x == 20:
         return ttnn.CoreGrid(y=4, x=5)
+
+
+def determine_device_name(mesh_device):
+    """
+    Determine device name based on number of devices and architecture.
+
+    Args:
+        mesh_device (MeshDevice): MeshDevice object
+
+    Returns:
+        str: Device name (e.g., "CPU", "N150", "P100", etc.)
+
+    Raises:
+        ValueError: If architecture or device count is unsupported
+    """
+    num_devices = mesh_device.get_num_devices() if mesh_device else 0
+    arch_name = ttnn.get_arch_name()
+    dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
+
+    if num_devices == 0:
+        return "CPU"
+
+    if is_blackhole():
+        dict_device_names = {
+            1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
+            2: "P300",
+            4: "P150x4",
+        }
+    elif is_wormhole_b0():
+        dict_device_names = {
+            1: "N150",
+            2: "N300",
+            4: "N150x4",
+            8: "T3K",
+            32: "TG",
+        }
+    else:
+        raise ValueError(f"Unsupported architecture: {arch_name}")
+
+    if num_devices in dict_device_names:
+        return dict_device_names[num_devices]
+    else:
+        raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")
