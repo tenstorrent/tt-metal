@@ -534,7 +534,19 @@ def test_llama_TG_perf_device(
                 max_kernel_duration = max_kernel_duration_mid_layers_compilation[op_code_with_id]
 
             avg_dispatch_duration = avg_dispatch_duration_mid_layers_trace[op_code_with_id]
+
+            # Avg first to last
             avg_first_to_last_start = avg_first_to_last_start_mid_layers_trace[op_code_with_id]
+            avg_first_to_last_start = avg_first_to_last_start if avg_first_to_last_start is not None else 0
+
+            # Min first to last
+            min_first_to_last_start = min_first_to_last_start_mid_layers_trace[op_code_with_id]
+            min_first_to_last_start = min_first_to_last_start if min_first_to_last_start is not None else 0
+
+            # Max first to last
+            max_first_to_last_start = max_dispatch_duration_mid_layers_trace[op_code_with_id]
+            max_first_to_last_start = max_first_to_last_start if max_first_to_last_start is not None else 0
+
             # average
             add_benchmark_measurement(
                 profiler,
@@ -590,7 +602,7 @@ def test_llama_TG_perf_device(
                 0,
                 step_name,
                 op_name + "-model-first_to_last-min",
-                min_first_to_last_start_mid_layers_trace[op_code_with_id],
+                min_first_to_last_start,
             )
 
             # max
@@ -619,7 +631,7 @@ def test_llama_TG_perf_device(
                 0,
                 step_name,
                 op_name + "-model-first_to_last-max",
-                max_first_to_last_start_mid_layers_trace[op_code_with_id],
+                max_first_to_last_start,
             )
 
             # Verify kernel duration is within tolerance
