@@ -297,11 +297,11 @@ int main(int argc, char** argv) {
                 YamlTestConfigSerializer::dump({built_test}, output_stream);
             }
 
+            log_info(tt::LogTest, "Compiling programs");
             test_context.compile_programs();
-            log_info(tt::LogTest, "Programs compiled");
 
+            log_info(tt::LogTest, "Launching programs");
             test_context.launch_programs();
-            log_info(tt::LogTest, "Programs launched");
 
             test_context.wait_for_prorgams();
             log_info(tt::LogTest, "Test {} Finished.", built_test.name);
