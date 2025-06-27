@@ -16,11 +16,10 @@ from models.tt_transformers.tt.load_checkpoints import (
     convert_rope_style_hf_to_meta,
     standardize_hf_keys,
 )
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [

@@ -439,6 +439,48 @@ run_t3000_unet_shallow_tests() {
   fi
 }
 
+run_t3000_qwen25_vl_unit_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  # install qwen25_vl requirements
+  pip install -r models/demos/qwen25_vl/reference/requirements.txt
+
+  # export PYTEST_ADDOPTS for concise pytest output
+  export PYTEST_ADDOPTS="--tb=short"
+
+  qwen25_vl_32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-32B-Instruct/
+  qwen25_vl_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-72B-Instruct/
+
+  for qwen_dir in "$qwen25_vl_32b" "$qwen25_vl_72b"; do
+    # test_mlp.py
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/tests/test_mlp.py --timeout 180 || fail=1
+    echo "LOG_METAL: Unit tests in test_mlp.py for $qwen_dir on T3K completed"
+    # test_rms_norm.py
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/tests/test_rms_norm.py --timeout 180 || fail=1
+    echo "LOG_METAL: Unit tests in test_rms_norm.py for $qwen_dir on T3K completed"
+    # test_vision_attention.py
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/tests/test_vision_attention.py --timeout 180 || fail=1
+    echo "LOG_METAL: Unit tests in test_vision_attention.py for $qwen_dir on T3K completed"
+    # test_vision_block.py
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/tests/test_vision_block.py --timeout 600 || fail=1
+    echo "LOG_METAL: Unit tests in test_vision_block.py for $qwen_dir on T3K completed"
+    # test_patch_merger.py
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/tests/test_patch_merger.py --timeout 180 || fail=1
+    echo "LOG_METAL: Unit tests in test_patch_merger.py for $qwen_dir on T3K completed"
+    # test_model.py
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/tests/test_model.py -k two_layers --timeout 180 || fail=1
+    echo "LOG_METAL: Unit tests in test_model.py for $qwen_dir on T3K completed"
+    # test_wrapped_model.py
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/tests/test_wrapped_model.py -k two_layers --timeout 180 || fail=1
+    echo "LOG_METAL: Unit tests in test_wrapped_model.py for $qwen_dir on T3K completed"
+  done
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
 
 run_t3000_tests() {
   # Run ttmetal tests

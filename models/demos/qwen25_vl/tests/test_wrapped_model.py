@@ -1,22 +1,19 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -43,8 +40,6 @@ def test_wrapped_vision_model_inference(
         0.99 if num_layers and num_layers <= 3 else 0.91
     )  # Llama 3 repo allows 0.91 for prefill, vision probably even less sensitive to pcc
     batch_size = 1  # For prefill we only support batch_size = 1
-
-    mesh_device.enable_async(True)
 
     # Example inputs for http://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg
     # pixel_values are produced by Qwen2_5_VLImageProcessor, these come from the above img

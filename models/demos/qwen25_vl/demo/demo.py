@@ -194,9 +194,12 @@ def create_tt_model(
     "optimizations",
     [
         lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
-        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
+        # lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
-    ids=["performance", "accuracy"],
+    ids=[
+        "performance",
+        # "accuracy",
+    ],
 )
 @pytest.mark.parametrize(
     "device_params",

@@ -12,11 +12,10 @@ import ttnn
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.qwen25_vl.tt.vision_mlp import MLP
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -40,8 +39,6 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 def test_mlp_inference(rows, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
     mode = "prefill"  # Vision processing is prefill only (generating token embeddings)
-
-    mesh_device.enable_async(True)
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=rows)
     reference_model = model_args.reference_mlp()
@@ -76,7 +73,11 @@ def test_mlp_inference(rows, batch_size, mesh_device, use_program_cache, reset_s
 
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device,
+            dims=(1, 3) if model_args.is_galaxy else (3, 1),
+            mesh_shape=model_args.cluster_shape,
+        ),
     )
 
     tt_output_torch = tt_output_torch[:, :1, :, :]
