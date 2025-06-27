@@ -37,6 +37,7 @@ MIN_TYPE = "min"
 MAX_TYPE = "max"
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
     [
@@ -247,21 +248,26 @@ def build_duration_per_instance_dict(input_dict, num_layers):
 def average_per_instance_dict(input_dict):
     averaged_dict = {}
     for op_code_with_id in input_dict:
-        averaged_dict[op_code_with_id] = sum(input_dict[op_code_with_id]) / len(input_dict[op_code_with_id])
+        input_dict_values = [v if v is not None else 0 for v in input_dict[op_code_with_id]]
+        averaged_dict[op_code_with_id] = (
+            sum(input_dict_values) / len(input_dict_values) if len(input_dict_values) > 0 else 0
+        )
     return averaged_dict
 
 
 def min_per_instance_dict(input_dict):
     min_dict = {}
     for op_code_with_id in input_dict:
-        min_dict[op_code_with_id] = min(input_dict[op_code_with_id])
+        input_dict_values = [v if v is not None else 0 for v in input_dict[op_code_with_id]]
+        min_dict[op_code_with_id] = min(input_dict[op_code_with_id]) if len(input_dict_values) > 0 else 0
     return min_dict
 
 
 def max_per_instance_dict(input_dict):
     max_dict = {}
     for op_code_with_id in input_dict:
-        max_dict[op_code_with_id] = max(input_dict[op_code_with_id])
+        input_dict_values = [v if v is not None else 0 for v in input_dict[op_code_with_id]]
+        max_dict[op_code_with_id] = max(input_dict[op_code_with_id]) if len(input_dict_values) > 0 else 0
     return max_dict
 
 
@@ -496,6 +502,7 @@ def test_llama_TG_perf_device(
     print_dict(avg_kernel_duration_mid_layers_compilation, "avg_kernel_duration_mid_layers_compilation")
     print_dict(avg_kernel_duration_mid_layers_trace, "avg_kernel_duration_mid_layers_trace")
     print_dict(avg_dispatch_duration_mid_layers_trace, "avg_dispatch_duration_mid_layers_trace")
+    print_dict(avg_first_to_last_start_mid_layers_trace, "avg_first_to_last_start_mid_layers_trace")
 
     ## model tail ops
     print_dict(avg_kernel_duration_model_tail_compilation, "avg_kernel_duration_model_tail_compilation")
@@ -527,7 +534,19 @@ def test_llama_TG_perf_device(
                 max_kernel_duration = max_kernel_duration_mid_layers_compilation[op_code_with_id]
 
             avg_dispatch_duration = avg_dispatch_duration_mid_layers_trace[op_code_with_id]
+
+            # Avg first to last
             avg_first_to_last_start = avg_first_to_last_start_mid_layers_trace[op_code_with_id]
+            avg_first_to_last_start = avg_first_to_last_start if not math.isnan(avg_first_to_last_start) else 0
+
+            # Min first to last
+            min_first_to_last_start = min_first_to_last_start_mid_layers_trace[op_code_with_id]
+            min_first_to_last_start = min_first_to_last_start if not math.isnan(min_first_to_last_start) else 0
+
+            # Max first to last
+            max_first_to_last_start = max_first_to_last_start_mid_layers_trace[op_code_with_id]
+            max_first_to_last_start = max_first_to_last_start if not math.isnan(max_first_to_last_start) else 0
+
             # average
             add_benchmark_measurement(
                 profiler,
@@ -583,7 +602,7 @@ def test_llama_TG_perf_device(
                 0,
                 step_name,
                 op_name + "-model-first_to_last-min",
-                min_first_to_last_start_mid_layers_trace[op_code_with_id],
+                min_first_to_last_start,
             )
 
             # max
@@ -612,7 +631,7 @@ def test_llama_TG_perf_device(
                 0,
                 step_name,
                 op_name + "-model-first_to_last-max",
-                max_first_to_last_start_mid_layers_trace[op_code_with_id],
+                max_first_to_last_start,
             )
 
             # Verify kernel duration is within tolerance
