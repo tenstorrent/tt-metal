@@ -228,7 +228,6 @@ def test_demo(
     optimizations,
     stop_at_eos,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     ci_only,
     reset_seeds,
