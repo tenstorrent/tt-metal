@@ -67,7 +67,7 @@ inline std::string get_soc_description_file(
         path.push_back('/');
     }
     path += "tt_metal/soc_descriptors/";
-    bool is_sim = target_device == tt::TargetDevice::Simulator;
+    bool is_sim = target_device == tt::TargetDevice::Simulator || getenv("TT_METAL_SILICON_WITH_SIMULATOR_SOC") != nullptr;
     const char* file = nullptr;
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: file = is_sim ? "wormhole_b0_versim.yaml" : "wormhole_b0_80_arch.yaml"; break;
