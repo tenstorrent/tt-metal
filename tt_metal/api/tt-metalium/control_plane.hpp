@@ -23,6 +23,21 @@ namespace tt::tt_fabric {
 
 class FabricContext;
 
+// This struct provides information for how a process binds to a particular
+// mesh and local mesh rank (HostRankId rename - #24178) in the mesh graph
+// descriptor.
+struct LocalMeshBinding {
+    MeshId mesh_id;
+    HostRankId host_rank;
+};
+
+// In multi-host context, APIs parameterized with MeshScope, can return
+// results for local mesh or global mesh.
+enum class MeshScope {
+    LOCAL,
+    GLOBAL,
+};
+
 class ControlPlane {
 public:
     explicit ControlPlane(const std::string& mesh_graph_desc_yaml_file);
@@ -47,7 +62,14 @@ public:
     chip_id_t get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
 
     std::vector<MeshId> get_user_physical_mesh_ids() const;
-    MeshShape get_physical_mesh_shape(MeshId mesh_id) const;
+
+    // Query for the MeshId and HostRankId of the local mesh; returns std::nullopt if binding is not set
+    std::optional<MeshId> get_local_mesh_id_binding() const;
+    std::optional<HostRankId> get_local_host_rank_id_binding() const;
+
+    // Queries that are MeshScope-aware (i.e. return results for local mesh or global mesh)
+    MeshShape get_physical_mesh_shape(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
+    MeshCoordinateRange get_coord_range(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
 
     // Return valid ethernet channels on the specificed routing plane
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
@@ -162,6 +184,9 @@ private:
     // Stores a table of all local intermesh links (board_id, chan_id) and the corresponding remote intermesh links
     IntermeshLinkTable intermesh_link_table_;
     std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
+
+    FabricNodeId get_fabric_node_id_from_mesh_coord(MeshId mesh_id, const MeshCoordinate& mesh_coord) const;
+
     // custom logic to order eth channels
     void order_ethernet_channels();
 
@@ -190,8 +215,7 @@ private:
     void validate_mesh_connections(MeshId mesh_id) const;
     void validate_mesh_connections() const;
 
-    std::vector<chip_id_t> get_mesh_physical_chip_ids(
-        std::uint32_t mesh_ns_size, std::uint32_t mesh_ew_size, chip_id_t nw_chip_physical_chip_id) const;
+    std::vector<chip_id_t> get_mesh_physical_chip_ids(MeshId mesh_id, chip_id_t nw_chip_physical_chip_id) const;
 
     std::pair<FabricNodeId, chan_id_t> get_connected_mesh_chip_chan_ids(
         FabricNodeId fabric_node_id, chan_id_t chan_id) const;
@@ -211,7 +235,12 @@ private:
     // Check if intermesh links are available by reading SPI ROM config from first chip
     bool is_intermesh_enabled() const;
 
+    // Initialize the local mesh binding from the environment variables
+    // Returns std::nullopt if not in multi-host context
+    std::optional<LocalMeshBinding> initialize_local_mesh_binding();
+
     std::unique_ptr<FabricContext> fabric_context_;
+    std::optional<LocalMeshBinding> local_mesh_binding_;
 };
 
 class GlobalControlPlane {
@@ -229,7 +258,7 @@ public:
 private:
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
     // Host rank to sub mesh shape
-    std::unordered_map<HostRankId, std::vector<MeshCoordinate>> host_rank_to_sub_mesh_shape_;
+    std::unordered_map<HostRankId, std::unordered_map<MeshId, MeshCoordinateRange>> host_rank_to_mesh_coord_ranges_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
 
     std::string mesh_graph_desc_file_;
