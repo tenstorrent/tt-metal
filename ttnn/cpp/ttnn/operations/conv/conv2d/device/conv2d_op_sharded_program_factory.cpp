@@ -283,7 +283,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     const uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
     const uint32_t num_blocks_out_h = act_matrix_height_ntiles / out_block_h_ntiles;
-    const uint32_t num_blocks_act_w = block_sharded ? 1 : filter_h;
+    const uint32_t num_blocks_act_w = /*block_sharded ? 1 :*/ filter_h;
     const uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
 
     // act block info
@@ -352,7 +352,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const uint32_t act_subblock_h_ntiles = out_subblock_h_ntiles;
     const uint32_t act_subblock_num_tiles = act_subblock_h_ntiles * act_block_w_ntiles;
 
-    const uint32_t in0_num_blocks_w = block_sharded ? conv_act_c_blocks : num_blocks_act_w;
+    const uint32_t in0_num_blocks_w = block_sharded ? conv_act_c_blocks * num_blocks_act_w : num_blocks_act_w;
 
     // weight
     const uint32_t weight_dram_addr = b.buffer()->address();
@@ -376,7 +376,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         output_height_num_tiles,
         act_matrix_height_ntiles);
 
-    const uint32_t window_outer = block_sharded ? 1 : num_blocks_act_w;
+    const uint32_t window_outer = /*block_sharded ? 1 :*/ num_blocks_act_w;
     const uint32_t window_inner = block_sharded ? filter_h : filter_h * filter_w / num_blocks_act_w;
     log_debug(tt::LogOp, "window_outer: {}, window_inner: {}", window_outer, window_inner);
 
@@ -877,7 +877,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
         get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
         get_cb_info_by_name(cb_info, Conv2dCb::TEMP_SUM).index,
-        partials_cb_uses_output};
+        partials_cb_uses_output,
+        conv_act_c_blocks};
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     const tt::tt_metal::NOC reader_noc =

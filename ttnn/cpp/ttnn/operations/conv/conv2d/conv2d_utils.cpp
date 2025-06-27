@@ -148,6 +148,14 @@ ParallelConfig determine_parallel_config(
     uint32_t effective_tile_height = is_shard_height_tile_multiple ? tt::constants::TILE_HEIGHT : 1;
     uint32_t effective_tile_width = tt::constants::TILE_WIDTH;
     uint32_t out_nhw_ntiles = tt::div_up(batch_size * output_height * output_width, effective_tile_height);
+    log_debug(
+        tt::LogOp,
+        "Conv2d: out_nhw_ntiles: {}, batch_size: {}, output_height: {}, output_width: {}, effective_tile_height {}",
+        out_nhw_ntiles,
+        batch_size,
+        output_height,
+        output_width,
+        effective_tile_height);
     uint32_t input_channles_ntiles = tt::div_up(input_channels, effective_tile_width);
     uint32_t out_channels_ntiles = tt::div_up(output_channels, effective_tile_width);
     // In case non native activation block height is used, we need to ensure that the amount
@@ -180,6 +188,12 @@ ParallelConfig determine_parallel_config(
         uint32_t cores_y = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_c : num_cores_nhw;
         CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
         grid = CoreRangeSet({core_range});
+        log_debug(
+            tt::LogOp,
+            "Conv2d: Block Sharded Layout with cores_x: {}, cores_y: {}, out_nhw_ntiles: {}",
+            cores_x,
+            cores_y,
+            out_nhw_ntiles);
     } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         uint32_t num_cores_c = enable_channels_padding
                                    ? find_closest_largest_divisor_with_num_padding(input_channles_ntiles, max_num_cores)
@@ -356,6 +370,15 @@ static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
             break;
         }
     }
+    log_debug(
+        LogOp,
+        "Determined subblock size: {}x{} for block size {}x{}, split_reader_enabled: {}, fp32_accum: {}",
+        subblock_h,
+        subblock_w,
+        block_height,
+        block_width,
+        split_reader_enabled,
+        fp32_accum);
     TT_FATAL(
         subblock_h > 0 && subblock_w > 0,
         "Could not find valid subblock size for block size {}x{}, split_reader_enabled: {}, fp32_accum: {}",
@@ -410,14 +433,16 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     auto grid_size = parallel_config.grid.bounding_box().grid_size();
     uint32_t act_c_num_blocks = get_num_cores_channels_from_parallel_config(parallel_config);
     TT_ASSERT(padded_in_channels % act_c_num_blocks == 0);
-    uint32_t act_block_w =
-        parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED
-            ? round_up(padded_in_channels * window_w, 32)
-            : round_up((padded_in_channels / act_c_num_blocks) * window_h * window_w, tt::constants::TILE_WIDTH);
-    if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
+    uint32_t act_block_w = 0;
+    if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
+        act_block_w = round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
+    } else if (parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
+        act_block_w = round_up(padded_in_channels / act_c_num_blocks * window_w, tt::constants::TILE_WIDTH);
+    } else if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
         TT_ASSERT(padded_in_channels % (32 * parallel_config.grid.num_cores() * act_block_w_div) == 0);
         act_block_w = (padded_in_channels * window_h * window_w) / (parallel_config.grid.num_cores() * act_block_w_div);
     }
+
     TT_ASSERT(act_block_w % 32 == 0);
     uint32_t act_block_w_ntiles = act_block_w / 32;
     uint32_t out_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height_ntile;

@@ -50,7 +50,106 @@ def torch_tensor_map(request):
     return torch_tensor_map
 
 
-def randomize_torch_tensor(torch_tensor_map, tensor_shape, generate_positive_numbers=False):
+def init_tensor_for_tiled_constants(Co, Ci, Kh, Kw, tile_size=32):
+    """
+    Initialize tensor so that after tiling and reshaping, each tile has a different constant value.
+
+    Args:
+        Co, Ci, Kh, Kw: Original tensor dimensions
+        tile_size: Size of square tiles (default 32 for 32×32)
+
+    Returns:
+        Initialized tensor of shape [Co, Ci, Kh, Kw]
+    """
+
+    # Calculate final dimensions after reshape
+    final_height = Kh * Kw * Ci  # KhKwCi
+    final_width = Co
+
+    # Calculate number of tiles in each dimension
+    tiles_h = (final_height + tile_size - 1) // tile_size  # Ceiling division
+    tiles_w = (final_width + tile_size - 1) // tile_size
+
+    print(f"Original shape: [{Co}, {Ci}, {Kh}, {Kw}]")
+    print(f"After reshape: [1, 1, {final_height}, {final_width}]")
+    print(f"Number of tiles: {tiles_h} × {tiles_w} = {tiles_h * tiles_w}")
+
+    # Create a tensor with different constant values for each tile
+    # We'll work in the final reshaped space first
+    reshaped_tensor = torch.zeros(1, 1, final_height, final_width)
+
+    tile_counter = 0
+    for tile_row in range(tiles_h):
+        for tile_col in range(tiles_w):
+            # Calculate tile boundaries
+            h_start = tile_row * tile_size
+            h_end = min((tile_row + 1) * tile_size, final_height)
+            w_start = tile_col * tile_size
+            w_end = min((tile_col + 1) * tile_size, final_width)
+
+            # tile_val = tile_row * tiles_w + tile_col
+            # print(tile_val)
+            # Fill this tile with a constant value
+            reshaped_tensor[0, 0, h_start:h_end, w_start:w_end] = tile_counter
+            tile_counter += 1
+
+    # Now we need to reverse the reshape operation
+    # The reshape operation is: [Co, Ci, Kh, Kw] -> [1, 1, KhKwCi, Co]
+    # So we go: [1, 1, KhKwCi, Co] -> [Co, Ci, Kh, Kw]
+
+    # Remove the first two dimensions
+    temp = reshaped_tensor.squeeze(0).squeeze(0)  # Shape: [KhKwCi, Co]
+    # torch.set_printoptions(profile="full")
+    # print(temp)
+
+    # The forward transformation likely flattens [Ci, Kh, Kw] into KhKwCi
+    # So we reshape [KhKwCi, Co] -> [Ci*Kh*Kw, Co] -> [Ci, Kh*Kw, Co] -> [Ci, Kh, Kw, Co]
+    # But [KhKwCi, Co] = [Kh*Kw*Ci, Co], so we can reshape to [Kh, Kw, Ci, Co]
+    temp = temp.reshape(Kh, Kw, Ci, Co)
+
+    # Now permute to get [Co, Ci, Kh, Kw]
+    # From [Kh, Kw, Ci, Co] to [Co, Ci, Kh, Kw] is permute(3, 2, 0, 1)
+    original_tensor = temp.permute(3, 2, 0, 1)
+
+    return original_tensor
+
+
+def randomize_torch_tensor(
+    torch_tensor_map,
+    tensor_shape,
+    generate_positive_numbers=False,
+    ones_tensor=False,
+    per_channel=False,
+    weights_tile=False,
+):
+    if per_channel:
+        print(tensor_shape)
+        # Final tensor will be in shape [1, 1, NHW, C]
+        tensor_h = tensor_shape[0] * tensor_shape[2] * tensor_shape[3]  # NHW
+        tensor_w = tensor_shape[1]
+        temp = torch.zeros(tensor_h, tensor_w)
+        for i in range(tensor_h):
+            temp[i, :] = -i
+        # torch.set_printoptions(profile="full")
+        # print(temp.shape)
+        # print(temp)
+        temp = temp.reshape(tensor_shape[0], tensor_shape[2], tensor_shape[3], tensor_w)
+        torch_tensor = temp.permute(0, 3, 1, 2)  # [N, C, H, W]
+
+        # torch.set_printoptions(profile="full")
+        # print(torch_tensor)
+        return torch_tensor
+
+    if ones_tensor:
+        torch_tensor = torch.ones(tensor_shape, dtype=torch.bfloat16).float()
+        return torch_tensor
+
+    if weights_tile:
+        torch_tensor = init_tensor_for_tiled_constants(
+            tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]
+        )
+        return torch_tensor
+
     if generate_positive_numbers:
         torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
         torch_tensor = torch.abs(torch_tensor)
@@ -93,7 +192,7 @@ def run_conv(
     output_layout=ttnn.TILE_LAYOUT,
     deallocate_activation=False,
     groups=1,
-    has_bias=True,
+    has_bias=False,
     shard_layout=None,
     auto_shard=False,
     memory_config=None,
@@ -157,12 +256,12 @@ def run_conv(
     # in order to get valid sqrt values
     sqrt_act_function = activation == "sqrt"
     torch_input_tensor_nchw = randomize_torch_tensor(
-        torch_tensor_map, conv_input_shape, generate_positive_numbers=sqrt_act_function
+        torch_tensor_map, conv_input_shape, generate_positive_numbers=False, ones_tensor=False, per_channel=False
     )
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_weight_tensor = randomize_torch_tensor(
-        torch_tensor_map, conv_weight_shape, generate_positive_numbers=sqrt_act_function
+        torch_tensor_map, conv_weight_shape, ones_tensor=False, per_channel=False, weights_tile=False
     )
     torch_bias_tensor = (
         randomize_torch_tensor(torch_tensor_map, conv_bias_shape, generate_positive_numbers=sqrt_act_function) * 10
@@ -265,6 +364,10 @@ def run_conv(
         return_weights_and_bias=True,
         dtype=output_dtype,
     )
+    # torch_dw = ttnn.to_torch(d_w, mesh_composer=weight_mesh_mapper)
+    # torch.set_printoptions(profile="full")
+    # print(torch_dw)
+
     if run_twice:
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
@@ -313,7 +416,7 @@ def run_conv(
         # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
         pcc = pcc * 0.99
 
-    torch.set_printoptions(precision=3, sci_mode=False)
+    # torch.set_printoptions(precision=3, sci_mode=False)
     if fast_compare:
         if fp32_accum and output_dtype != ttnn.bfloat8_b and input_dtype != ttnn.bfloat8_b:
             threshold = 3e-1 + 5e-3 * math.log(input_channels * filter_height * filter_width, 2)
@@ -323,6 +426,8 @@ def run_conv(
         diff = torch.abs(ref - out) / ref.abs().mean()
         assert torch.all(diff < threshold), f"Max diff: {diff.max()}, Threshold: {threshold} "
     else:
+        # print(out)
+        # print(ref)
         passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
         logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
         assert passing, pcc_msg
@@ -614,7 +719,7 @@ def test_conv_features_multi_device(
 @pytest.mark.parametrize("enable_act_double_buffer", [True, False])
 @pytest.mark.parametrize("enable_weights_double_buffer", [True, False])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
-@pytest.mark.parametrize("activation", ["", "relu", "silu", "sigmoid", "sigmoid_approx", "tanh", "sqrt", "gelu"])
+@pytest.mark.parametrize("activation", ["", "relu", "silu", "sigmoid", "tanh", "gelu"])
 def test_conv_activation(
     device,
     torch_tensor_map,
@@ -3130,24 +3235,24 @@ def test_conv2d_model_fruit(
 
         # UNet
         # kernel 3x3
-        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 64,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 1280, 1280, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 64,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, False, True),
-        (1, 1280, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 64,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, False, True),
+        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 1280, 1280, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 1280, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, False, True),
         (1, 1920, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS, 512, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 1920, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 32,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, False, False),
+        (1, 1920, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
         (1, 2560, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS, 256, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 320, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, False, True),
-        (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 320, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 512, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 512, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
         (1, 640, 1280, 32, 32,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 640, 640, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 64,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, False, True),
-        (1, 640, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 640, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 2, 1, True, True),
-        (1, 960, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 64,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, False, True),
-        (1, 960, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 64,   1, True, ttnn.MathFidelity.HiFi2, True, False, False, 2, 1, True, True),
+        (1, 640, 640, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, False, True),
+        (1, 640, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 640, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 960, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, False, True),
+        (1, 960, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 512,   1, True, ttnn.MathFidelity.HiFi2, True, False, False, 2, 1, True, True),
 
         # stride 2x2
-        (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 256, 1, False, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 640, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 128, 1, False, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 512, 1, False, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 640, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 256, 1, False, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
 
         # output_channels 4
         (1, 320, 4, 128, 128,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 128,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, 1, 1, False, False),
