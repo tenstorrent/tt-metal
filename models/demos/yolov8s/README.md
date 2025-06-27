@@ -26,6 +26,7 @@ Resource link - [source](https://github.com/ultralytics/ultralytics/blob/main/ul
 - The entry point to the yolov8s is located at:`models/demos/yolov8s/tt/ttnn_yolov8s.py`
 - Batch Size :1
 - Supported Input Resolution - (640,640) (Height,Width)
+- Dataset used for evaluation - **coco-2017**
 
 ### How to Run:
 

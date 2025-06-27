@@ -54,6 +54,6 @@ pytest --disable-warnings models/demos/yolov8s_world/demo/demo.py
 Use the following command to run the performant evaluation with Trace+2CQs:
 
 ```
-pytest models/experimental/yolo_evaluation/yolo_common_evaluation.py::test_yolov8s_world[res0-device_params0-tt_model]
+pytest models/experimental/yolo_eval/evaluate.py::test_yolov8s_world[res0-device_params0-tt_model]
 ```
 Note: The model is evaluated with 500 samples.
