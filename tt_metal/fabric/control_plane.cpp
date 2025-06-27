@@ -1368,14 +1368,18 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
             sizeof(tensix_routing_l1_info_t),
         "ControlPlane: Tensix routing table size mismatch");
     const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
-    const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
+    const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_desc.get_cores(CoreType::TENSIX, CoordSystem::PHYSICAL);
     // Write to all Tensix cores
     // TODO: "mcast" to all tensix cores
     for (const auto& tensix_core : tensix_cores) {
+        auto virtual_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
+                physical_chip_id, CoreCoord(tensix_core.x, tensix_core.y));
+
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             (void*)&tensix_routing_info,
             sizeof(tensix_routing_l1_info_t),
-            tt_cxy_pair(physical_chip_id, tensix_core),
+            tt_cxy_pair(physical_chip_id, virtual_core),
             tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
                 tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_TABLE));
     }
