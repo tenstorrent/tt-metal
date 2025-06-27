@@ -1,6 +1,6 @@
 # New model bring-up in TT-NN
 
-**Authors**: Dalar Vartanians, Ashai Reddy
+**Authors**: Dalar Vartanians, Ashai Reddy \
 **Correspondence**: `dvartanians@tenstorrent.com`, `arginuga@tenstorrent.com`
 
 
