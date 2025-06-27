@@ -3,7 +3,7 @@ name: "Galaxy unit tests"
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 * * 2" # Runs every Tuesday at 12am UTC
+    - cron: "0 0 * * 6" # Runs every Saturday at 12am UTC
 
 jobs:
   build-artifact:
