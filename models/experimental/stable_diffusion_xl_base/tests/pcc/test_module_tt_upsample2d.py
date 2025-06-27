@@ -54,7 +54,6 @@ def test_upsample2d(device, input_shape, conv_weights_dtype, up_block_id, stride
     )
 
     ttnn_output_tensor, output_shape = tt_upsample.forward(ttnn_input_tensor)
-    model_config.clear_weight_preprocess()
 
     output_tensor = from_channel_last_ttnn(
         ttnn_output_tensor, [input_shape[0], output_shape[1], output_shape[2], output_shape[0]]

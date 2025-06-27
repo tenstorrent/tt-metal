@@ -28,8 +28,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_128_NO_ADB_HS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -43,8 +41,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
 
         # BLOCK SHARDED
@@ -60,8 +56,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=32,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_64_NO_ADB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -75,8 +69,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_64_NO_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -91,8 +83,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_64_NO_ADB_WDB_MOVE_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -107,8 +97,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_64_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -123,8 +111,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
 
         self.conv_configs["ABH_64_NO_ADB_BS_BF16"] = ttnn.Conv2dConfig(
@@ -139,8 +125,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
 
         self.conv_configs["ABH_128_ADB_BS"] = ttnn.Conv2dConfig(
@@ -155,8 +139,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_128_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -171,8 +153,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_128_NO_ADB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -186,8 +166,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_128_NO_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -202,8 +180,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_128_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -218,8 +194,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_128_NO_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -234,8 +208,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_256_NO_ADB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -249,8 +221,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_256_NO_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -265,8 +235,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_256_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -281,8 +249,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
 
         # WIDTH SHARDED
@@ -299,8 +265,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_512_NO_ADB_WS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -315,8 +279,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=512,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
 
         # DEFAULT CONF
@@ -331,8 +293,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=0,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
 
         # DRAM CONF
@@ -347,8 +307,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_128_NO_ADB_DRAM"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -361,8 +319,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_512_NO_ADB_DRAM"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -375,8 +331,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=512,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["DEFAULT_DRAM"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -389,8 +343,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=0,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
         self.conv_configs["ABH_256_NO_ADB_HS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -404,8 +356,6 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
-            preprocess_weights_on_device=False,
-            always_preprocess_weights=False,
         )
 
         self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_4096"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -702,12 +652,6 @@ class ModelOptimisations:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-
-    def clear_weight_preprocess(self):
-        if not self.prepared_weights:
-            for config_name in self.conv_configs:
-                self.conv_configs[config_name].always_preprocess_weights = False
-            self.prepared_weights = True
 
     def get_matmul_config(self, matmul_path):
         if matmul_path is None:
