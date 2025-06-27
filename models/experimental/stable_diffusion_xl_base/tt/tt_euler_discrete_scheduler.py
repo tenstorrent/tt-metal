@@ -81,6 +81,8 @@ class TtEulerDiscreteScheduler(nn.Module):
 
     def set_step_index(self, step_index: int):
         self.step_index = step_index
+
+        # Note: For each iteration we copy over 4 tensors to locations expected by trace
         self.update_device_sigmas()
         self.update_device_timestep()
         self.update_device_norm_factor()
@@ -231,6 +233,8 @@ class TtEulerDiscreteScheduler(nn.Module):
         current timestep. Scales the denoising model input by `(sigma**2 + 1) ** 0.5` to match the Euler algorithm.
         """
         # timestep is not used in this implementation, step_index is already initialized at set_timesteps()
+        # Note: Don't use inplace op here since UNet deallocates its input
+        #       Permanent input is required for tracing
         sample = ttnn.div(sample, self.tt_norm_factor)
 
         self.is_scale_input_called = True
@@ -282,6 +286,7 @@ class TtEulerDiscreteScheduler(nn.Module):
 
         # 2. Convert to an ODE derivative
         rec = ttnn.reciprocal(self.tt_sigma_step)
+
         model_output = ttnn.mul_(model_output, self.tt_sigma_step)
         model_output = ttnn.mul_(model_output, rec)
 
@@ -293,7 +298,9 @@ class TtEulerDiscreteScheduler(nn.Module):
         # Cast sample back to model compatible dtype
         # prev_sample = prev_sample.to(model_output.dtype)
 
+        # Note: Host code is done separately because of tracing
         # upon completion increase step index by one
         # self.step_index += 1
 
+        # Note: We return None for pred_original_sample since it is never used
         return (prev_sample, None)

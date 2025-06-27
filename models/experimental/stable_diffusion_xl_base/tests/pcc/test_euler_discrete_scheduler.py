@@ -94,17 +94,12 @@ def test_euler_discrete_scheduler(device, input_shape, num_inference_steps, is_c
             noise_pred = torch.randn(input_shape, dtype=torch.float32)  # this comes from unet
             tt_noise_pred = ttnn.from_torch(noise_pred, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device=device)
 
-            ref_prev_sample, ref_pred_original_sample = scheduler.step(
+            ref_prev_sample, _ = scheduler.step(
                 noise_pred, scheduler.timesteps[i], ref_scaled_latent, return_dict=False
             )
-            tt_prev_sample, tt_pred_original_sample = tt_scheduler.step(
-                tt_noise_pred, None, tt_scaled_latent, return_dict=False
-            )
+            tt_prev_sample, _ = tt_scheduler.step(tt_noise_pred, None, tt_scaled_latent, return_dict=False)
             if i < (len(scheduler.timesteps) - 1):
                 tt_scheduler.inc_step_index()
             torch_prev_sample = ttnn.from_device(tt_prev_sample).to_torch()
-            # torch_pred_original_sample = ttnn.from_device(tt_pred_original_sample).to_torch()
             passed, msg = assert_with_pcc(ref_prev_sample, torch_prev_sample, 0.999)
             logger.debug(f"{i}: prev_sample pcc passed: {msg}")
-            # passed, msg = assert_with_pcc(ref_pred_original_sample, torch_pred_original_sample, 0.999)
-            # logger.debug(f"{i}: pred_original_sample pcc passed: {msg}")

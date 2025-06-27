@@ -16,7 +16,7 @@ import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 
 SDXL_L1_SMALL_SIZE = 47000
-SDXL_TRACE_REGION_SIZE = 25933824
+SDXL_TRACE_REGION_SIZE = 31968256
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
 
 
@@ -123,11 +123,16 @@ def run_tt_image_gen(
     input_shape,
     vae,  # can be host vae or tt vae
     batch_size,
+    output_device=None,
+    output_shape=None,
     tid=None,
+    tid_vae=None,
     capture_trace=False,
 ):
-    assert not (capture_trace and len(tt_timesteps) > 1), "Trace should capture only 1 iteration"
+    assert not (capture_trace and len(tt_timesteps) != 1), "Trace should capture only 1 iteration"
+    profiler.start("image_gen")
     profiler.start("denoising_loop")
+
     for i, t in tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
         unet_outputs = []
         if tid is None or capture_trace:
@@ -165,21 +170,38 @@ def run_tt_image_gen(
         if i < (len(tt_timesteps) - 1):
             tt_scheduler.inc_step_index()
 
+    if tid_vae is None:
+        ttnn.synchronize_device(ttnn_device)
+
+    profiler.end("denoising_loop")
     # reset scheduler
     tt_scheduler.set_step_index(0)
 
-    ttnn.synchronize_device(ttnn_device)
-    profiler.end("denoising_loop")
-
     vae_on_device = isinstance(vae, TtAutoencoderKL)
+
     profiler.start("vae_decode")
     if vae_on_device:
-        tt_latents = ttnn.div(tt_latents, scaling_factor)
+        if tid_vae is None or capture_trace:
+            tid_vae = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
+            tt_latents = ttnn.div(tt_latents, scaling_factor)
 
-        logger.info("Running TT VAE")
-        imgs = vae.forward(tt_latents, input_shape)
-        ttnn.deallocate(tt_latents)
+            logger.info("Running TT VAE")
+            output_tensor, [C, H, W] = vae.forward(tt_latents, input_shape)
+            ttnn.deallocate(tt_latents)
+
+            if capture_trace:
+                ttnn.end_trace_capture(ttnn_device, tid_vae, cq_id=0)
+            output_device = output_tensor
+            output_shape = [input_shape[0], C, H, W]
+        else:
+            ttnn.execute_trace(ttnn_device, tid_vae, cq_id=0, blocking=False)
+
         ttnn.synchronize_device(ttnn_device)
+        output_tensor = ttnn.to_torch(output_device, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0)).float()
+
+        B, C, H, W = output_shape
+        output_tensor = output_tensor.reshape(batch_size * B, H, W, C)
+        imgs = torch.permute(output_tensor, (0, 3, 1, 2))
     else:
         latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))
         B, C, H, W = input_shape
@@ -198,8 +220,9 @@ def run_tt_image_gen(
         del latents
         gc.collect()
     profiler.end("vae_decode")
+    profiler.end("image_gen")
 
-    return imgs, tid
+    return imgs, tid, output_device, output_shape, tid_vae
 
 
 def prepare_input_tensors(host_tensors, device_tensors):
