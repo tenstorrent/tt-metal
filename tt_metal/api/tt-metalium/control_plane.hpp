@@ -182,7 +182,9 @@ private:
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
     void initialize_dynamic_routing_plane_counts(
-        const IntraMeshConnectivity& intra_mesh_connectivity, tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
+        const IntraMeshConnectivity& intra_mesh_connectivity,
+        tt_metal::FabricConfig fabric_config,
+        tt_metal::FabricReliabilityMode reliability_mode);
     void trim_ethernet_channels_not_mapped_to_live_routing_planes();
 
     void validate_mesh_connections(MeshId mesh_id) const;
@@ -197,7 +199,8 @@ private:
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
 
-    void write_routing_tables_to_chip(MeshId mesh_id, chip_id_t chip_id) const;
+    void write_routing_tables_to_eth_cores(MeshId mesh_id, chip_id_t chip_id) const;
+    void write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
 
     // Populate the local intermesh link to remote intermesh link table
     void generate_local_intermesh_link_table();
