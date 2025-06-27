@@ -26,7 +26,6 @@ def run_ag_with_trace(
     input_tensor,
     dim,
     persistent_output_tensor,
-    persistent_intermediate_buffer,
     num_links,
     cluster_axis,
     output_mem_config,
@@ -44,7 +43,6 @@ def run_ag_with_trace(
         input_tensor,
         dim=dim,
         cluster_axis=cluster_axis,
-        persistent_intermediate_buffer=persistent_intermediate_buffer,
         multi_device_global_semaphore=ccl_semaphore_handles[NUM_BUFFERS - 1],
         persistent_output_buffer=persistent_output_tensor,
         num_links=num_links,
@@ -65,7 +63,6 @@ def run_ag_with_trace(
                 input_tensor,
                 dim=dim,
                 cluster_axis=cluster_axis,
-                persistent_intermediate_buffer=persistent_intermediate_buffer,
                 multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS],
                 persistent_output_buffer=persistent_output_tensor,
                 num_links=num_links,
@@ -191,16 +188,6 @@ def run_all_gather_on_TG(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    ttnn_persistent_intermediate_tensor = ttnn.from_torch(
-        torch.zeros(padded_shape(per_chip_output_shape, tile, num_devices, num_links, input_dtype)),
-        tile=ttnn.Tile(tile),
-        dtype=input_dtype,
-        device=mesh_device,
-        layout=layout,
-        memory_config=output_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
     sub_device_stall_group = []
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -222,14 +209,12 @@ def run_all_gather_on_TG(
         for _ in range(NUM_BUFFERS)
     ]
     try:
-        # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
         if trace_mode:
             ttnn_tensor_out = run_ag_with_trace(
                 input_tensor=ttnn_tensor,
                 dim=dim,
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
-                persistent_intermediate_buffer=ttnn_persistent_intermediate_tensor,
                 persistent_output_tensor=ttnn_persistent_output_tensor,
                 num_links=num_links,
                 output_mem_config=output_mem_config,
@@ -250,7 +235,6 @@ def run_all_gather_on_TG(
                     dim=dim,
                     cluster_axis=cluster_axis,
                     # mesh_device=mesh_device,
-                    persistent_intermediate_buffer=ttnn_persistent_intermediate_tensor,
                     persistent_output_buffer=ttnn_persistent_output_tensor,
                     multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS],
                     num_links=num_links,
@@ -282,8 +266,6 @@ def run_all_gather_on_TG(
             persistent_tensor.buffer_address() == output_tensor.buffer_address()
         ), "Persistent tensor address mismatch"
 
-    # Repeat the input tensor to represent the fact that the full concatenated input tensor lives across every
-    # device in the line
     repeat_factor = [1] * len(output_golden.shape)
     repeat_factor[dim] = num_devices
     output_golden[:, :, :, :] = full_input_tensor_unfractured.repeat(repeat_factor)
@@ -408,7 +390,6 @@ def run_reduce_scatter_on_TG(
     warmup_iters: int = 0,
     cluster_axis: int = 0,
     trace_mode=False,
-    # New all-gather-async and persistent fabric params
 ):
     per_reduce_scatter_output_shape = list(per_chip_input_shape)
     per_reduce_scatter_output_shape[dim] *= num_devices
@@ -593,27 +574,17 @@ def run_reduce_scatter_on_TG(
     assert passed, f"FAILED: {output}"
 
 
-# Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("seq_len", [128, 4096, 8192], ids=["128_seq", "4k_seq", "8k_seq"])
 @pytest.mark.parametrize(
-    "num_devices, num_links, per_chip_output_shape, dim, layout, input_dtype, cluster_axis, replication_factor",
+    "num_devices, num_links, width, dim, layout, input_dtype, cluster_axis, replication_factor",
     [
-        # 128 seq len
-        (8, 4, [1, 1, 128, 256 * 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0, 4),
-        (4, 4, [1, 1, 128, 320 * 4], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
-        (4, 4, [1, 1, 128, 896 * 4], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
-        (4, 2, [1, 1, 128, 32 * 4], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 8),
-        # 4k seq len
-        (8, 4, [1, 1, 4096, 256 * 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0, 4),
-        (4, 4, [1, 1, 4096, 320 * 4], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
-        (4, 4, [1, 1, 4096, 896 * 4], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
-        (4, 4, [1, 1, 4096, 32 * 4], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 8),
-        # 8k seq len
-        (8, 4, [1, 1, 8192, 256 * 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0, 4),
-        (4, 4, [1, 1, 8192, 320 * 4], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
-        (4, 4, [1, 1, 8192, 896 * 4], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
-        (4, 4, [1, 1, 8192, 32 * 4], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 8),
+        (8, 4, 256, 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0, 4),
+        (4, 4, 320, 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
+        (4, 4, 896, 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
+        (4, 4, 32, 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 8),
     ],
+    ids=["sh-256w", "sh-320w", "sh-896w", "sh-32w"],
 )
 @pytest.mark.parametrize(
     "buffer_type",
@@ -631,9 +602,10 @@ def run_reduce_scatter_on_TG(
 def test_all_gather_TG(
     mesh_device,
     num_devices,
-    per_chip_output_shape,
-    dim,
     num_links,
+    seq_len,
+    width,
+    dim,
     input_dtype,
     layout,
     buffer_type,
@@ -644,6 +616,8 @@ def test_all_gather_TG(
     warmup_iters,
     trace_mode,
 ):
+    per_chip_output_shape = [1, 1, seq_len, width * num_devices]
+
     run_all_gather_on_TG(
         mesh_device,
         num_devices,
@@ -663,24 +637,16 @@ def test_all_gather_TG(
     )
 
 
-# Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("seq_len", [128, 4096, 8192], ids=["128_seq", "4k_seq", "8k_seq"])
 @pytest.mark.parametrize(
-    "num_devices, num_links, rs_input_shape, dim, layout, input_dtype, cluster_axis, replication_factor",
+    "num_devices, num_links, width, dim, layout, input_dtype, cluster_axis, replication_factor",
     [
-        # 128 seq len
-        (8, 4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0, 4),
-        (4, 2, [1, 1, 128, 1280], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
-        (4, 4, [1, 1, 128, 3584], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
-        # 4k seq len
-        (8, 4, [1, 1, 4096, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0, 4),
-        (4, 4, [1, 1, 4096, 1280], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
-        (4, 4, [1, 1, 4096, 3584], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
-        # 8k seq len
-        (8, 4, [1, 1, 8192, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0, 4),
-        (4, 4, [1, 1, 8192, 1280], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
-        (4, 4, [1, 1, 8192, 3584], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
+        (8, 4, 2048, 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0, 4),
+        (4, 4, 1280, 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
+        (4, 4, 3584, 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1, 8),
     ],
+    ids=["sh-2048w", "sh-1280w", "sh-3584w"],
 )
 @pytest.mark.parametrize(
     "buffer_type",
@@ -698,9 +664,10 @@ def test_all_gather_TG(
 def test_reduce_scatter_TG(
     mesh_device,
     num_devices,
-    rs_input_shape,
-    dim,
     num_links,
+    seq_len,
+    width,
+    dim,
     input_dtype,
     layout,
     buffer_type,
@@ -711,6 +678,8 @@ def test_reduce_scatter_TG(
     warmup_iters,
     trace_mode,
 ):
+    rs_input_shape = [1, 1, seq_len, width]
+
     run_reduce_scatter_on_TG(
         mesh_device,
         num_devices,
