@@ -50,10 +50,8 @@ static std::tuple<tt::tt_fabric::NocSendType, bool> get_noc_send_type(const std:
     } else if (message_noc_type == "noc_fused_unicast_write_no_flush_atomic_inc") {
         noc_send_type = tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC;
         flush = false;
-#ifdef ARCH_WORMHOLE
     } else if (message_noc_type == "noc_unicast_scatter_write") {
         noc_send_type = tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE;
-#endif
     } else {
         TT_THROW("Invalid message type: {}", message_noc_type.c_str());
     }

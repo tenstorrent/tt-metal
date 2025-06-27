@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "accessor/sharded_accessor.h"
+#include "accessor/tensor_accessor.h"
 
 void kernel_main() {
     constexpr uint32_t base_idx_cta = 0;
     constexpr uint32_t base_idx_crta = 0;
 
-    auto args = nd_sharding::make_args<base_idx_cta, base_idx_crta>();
-    auto sharded_accessor = nd_sharding::make_sharded_accessor_from_args(args, 0, 1024);
+    auto args = make_tensor_accessor_args<base_idx_cta, base_idx_crta>();
+    auto tensor_accessor = make_tensor_accessor_from_args(args, 0, 1024);
     /* Benchmark get_noc_addr for both accessors
      * - get_noc_addr is a good proxy for page lookup logic
      * - Use volatile to prevent compiler from optimizing away the calls
@@ -24,10 +24,10 @@ void kernel_main() {
      */
     constexpr size_t loop_count = 125;
     for (size_t i = 0; i < loop_count; ++i) {
-        auto page_id = i % sharded_accessor.dspec().tensor_volume();
+        auto page_id = i % tensor_accessor.dspec().tensor_volume();
         {
             DeviceZoneScopedN(ACCESSOR_CONFIG_NAME);
-            volatile auto _ = sharded_accessor.get_noc_addr(i);
+            volatile auto _ = tensor_accessor.get_noc_addr(i);
         }
     }
 }

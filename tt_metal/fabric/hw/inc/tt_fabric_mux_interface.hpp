@@ -26,7 +26,8 @@ WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_fabr
     size_t fabric_mux_buffer_index_address,
     uint32_t local_flow_control_address,
     uint32_t local_teardown_address,
-    uint32_t local_buffer_index_address) {
+    uint32_t local_buffer_index_address,
+    uint32_t direction = 0) {
     auto get_mux_channel_stream_id_from_channel_id = [](uint8_t fabric_mux_channel_id) -> uint32_t {
         return fabric_mux_channel_id;
     };
@@ -35,8 +36,8 @@ WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_fabr
 
     auto mux_channel_credits_stream_id = get_mux_channel_stream_id_from_channel_id(fabric_mux_channel_id);
     return WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>(
-        true, /* ignored, connected_to_persistent_fabric */
-        0,    /* ignored, direction */
+        true,      /* ignored, connected_to_persistent_fabric */
+        direction, /* ignored, direction */
         fabric_mux_x,
         fabric_mux_y,
         fabric_mux_channel_base_address,
