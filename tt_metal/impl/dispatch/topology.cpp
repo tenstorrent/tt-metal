@@ -1372,7 +1372,6 @@ void build_tt_fabric_program(
 
     if (is_TG && device->is_mmio_capable()) {
         auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
-        chan_id_t previous_chan_id = -1;
         for (const auto& [eth_chan, eth_direction] : router_chans_and_direction) {
             // remote_fabric_node_id is only used to determine the handshake master, no functional impact
             // for now treat the mmio chips as the handshake master
@@ -1387,13 +1386,9 @@ void build_tt_fabric_program(
                 false, /* build_in_worker_connection_mode */
                 false, /* is_dateline */
                 eth_direction);
+            // Both links used by dispatch on TG Gateway (mmio device)
+            configure_edm_builder_for_dispatch(edm_builder);
             edm_builders.insert({eth_chan, edm_builder});
-            previous_chan_id = eth_chan;
-        }
-
-        // Last link may be used by dispatch
-        if (previous_chan_id != chan_id_t{-1}) {
-            configure_edm_builder_for_dispatch(edm_builders.at(previous_chan_id));
         }
 
         return;
@@ -1470,7 +1465,6 @@ void build_tt_fabric_program(
                            fabric_edm_type == tt::tt_fabric::FabricEriscDatamoverType::Dateline;
 
         const auto& curr_edm_config = fabric_context.get_fabric_router_config(fabric_edm_type, fabric_edm_axis);
-        chan_id_t previous_chan_id = -1;
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
@@ -1484,12 +1478,12 @@ void build_tt_fabric_program(
                 is_dateline,
                 control_plane.routing_direction_to_eth_direction(direction));
             edm_builders.insert({eth_chan, edm_builder});
-            previous_chan_id = eth_chan;
         }
 
         // Last link may be used by dispatch
-        if (previous_chan_id != chan_id_t{-1}) {
-            configure_edm_builder_for_dispatch(edm_builders.at(previous_chan_id));
+        if (!active_fabric_eth_channels[direction].empty()) {
+            const auto dispatch_eth_chan = active_fabric_eth_channels[direction].back();
+            configure_edm_builder_for_dispatch(edm_builders.at(dispatch_eth_chan));
         }
     }
 
