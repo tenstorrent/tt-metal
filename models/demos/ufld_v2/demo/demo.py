@@ -13,7 +13,7 @@ from loguru import logger
 from models.demos.ufld_v2.demo import model_config as cfg
 from models.demos.ufld_v2.demo.demo_utils import LaneEval, run_test_tusimple
 from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
-from models.demos.ufld_v2.tests.ufld_v2_e2e_performant import UFLDPerformantRunner
+from models.demos.ufld_v2.runner.performant_runner import UFLDPerformantRunner
 
 
 @pytest.mark.parametrize(
@@ -66,6 +66,8 @@ def test_ufld_v2_demo(batch_size, input_channels, height, width, device, use_pre
         row_anchor=cfg.row_anchor,
         col_anchor=cfg.col_anchor,
         device=None,
+        is_overlay=True,
+        n_images=1,
     )
     run_test_tusimple(
         UFLDPerformantRunner,
@@ -80,6 +82,8 @@ def test_ufld_v2_demo(batch_size, input_channels, height, width, device, use_pre
         row_anchor=cfg.row_anchor,
         col_anchor=cfg.col_anchor,
         device=device,
+        is_overlay=True,
+        n_images=1,
     )
 
     gt_file_path = os.path.join(cfg.data_root, "ground_truth_labels" + ".json")

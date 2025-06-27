@@ -7,7 +7,7 @@ import time
 import pytest
 from loguru import logger
 
-from models.demos.ufld_v2.tests.ufld_v2_e2e_performant import UFLDPerformantRunner
+from models.demos.ufld_v2.runner.performant_runner import UFLDPerformantRunner
 from models.utility_functions import run_for_wormhole_b0
 
 
@@ -32,7 +32,7 @@ def test_run_ufldv2_trace_2cqs_inference(
     inference_time_iter = []
     for _ in range(10):
         t0 = time.time()
-        _ = performant_runner._execute_ufldv2_trace_2cqs_inference()
+        _ = performant_runner.run()
         t1 = time.time()
         inference_time_iter.append(t1 - t0)
     performant_runner.release()
