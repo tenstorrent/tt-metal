@@ -40,6 +40,7 @@ class RotarySetup(LightweightModule):
         else:
             self.batch_size_per_device_group = self.batch_size
         self.core_grid = device.compute_with_storage_grid_size()
+        self.datatype = datatype
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
         cos_matrix, sin_matrix = compute_gather_cos_sin(
@@ -51,20 +52,7 @@ class RotarySetup(LightweightModule):
             position_ids=torch.arange(max_seq_len),
         )
 
-        self.cos_matrix = ttnn.from_torch(
-            cos_matrix,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
-        )
-        self.sin_matrix = ttnn.from_torch(
-            sin_matrix,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
-        )
+        self.set_cos_sin(cos_matrix, sin_matrix)
 
         self.batch_grid = (
             ttnn.CoreGrid(y=4, x=8)
@@ -112,6 +100,22 @@ class RotarySetup(LightweightModule):
             dtype=datatype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+        )
+
+    def set_cos_sin(self, cos_matrix, sin_matrix):
+        self.cos_matrix = ttnn.from_torch(
+            cos_matrix,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=self.datatype,
+            mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
+        )
+        self.sin_matrix = ttnn.from_torch(
+            sin_matrix,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=self.datatype,
+            mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
         )
 
     def get_both_trans_mats(self):

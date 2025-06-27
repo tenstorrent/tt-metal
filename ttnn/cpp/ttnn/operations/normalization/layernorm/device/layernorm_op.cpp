@@ -57,7 +57,12 @@ void LayerNorm::validate(
             TT_FATAL(
                 (gamma.value().padded_shape()[-1] == TILE_WIDTH &&
                  gamma.value().physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
-                "Error");
+                "Error with gamma.value().padded_shape(): {}, TILE_WIDTH: {}, gamma.value().physical_volume(): {}, "
+                "a.padded_shape(): {}",
+                gamma.value().padded_shape(),
+                TILE_WIDTH,
+                gamma.value().volume(),
+                a.padded_shape());
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Error");

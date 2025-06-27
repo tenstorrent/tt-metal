@@ -98,6 +98,30 @@ run_t3000_qwen25_tests() {
   fi
 }
 
+run_t3000_qwen25_vl_tests() {
+  fail=0
+
+  # install qwen25_vl requirements
+  pip install -r models/demos/qwen25_vl/reference/requirements.txt
+
+  # export PYTEST_ADDOPTS for concise pytest output
+  export PYTEST_ADDOPTS="--tb=short"
+
+  # Qwen2.5-VL-32B
+  qwen25_vl_32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-32B-Instruct/
+  # Qwen2.5-VL-72B
+  qwen25_vl_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-72B-Instruct/
+
+  for qwen_dir in "$qwen25_vl_32b" "$qwen25_vl_72b"; do
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
+    echo "LOG_METAL: Tests for $qwen_dir on T3K completed"
+  done
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_qwen3_tests() {
   # Record the start time
   fail=0

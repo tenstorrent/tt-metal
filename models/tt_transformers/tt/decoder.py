@@ -4,7 +4,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.tt_transformers.tt.attention import Attention
+from models.tt_transformers.tt.attention import Attention as DefaultAttention
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
@@ -22,6 +22,7 @@ class TransformerBlock(LightweightModule):
         transformation_mats,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        attention_class=None,
     ):
         super().__init__()
 
@@ -41,7 +42,9 @@ class TransformerBlock(LightweightModule):
 
         self.layer_num = layer_num
 
-        self.attention = Attention(
+        ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
+
+        self.attention = ActualAttentionClass(
             mesh_device=mesh_device,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -130,6 +133,7 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
+        ttnn.deallocate(attn_in)
         # Here x and attn_out are both fractured across devices
         h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
         ttnn.deallocate(attn_out)
@@ -142,6 +146,7 @@ class TransformerBlock(LightweightModule):
             ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in, mode)
+        ttnn.deallocate(ff_in)
         # ff_out and h are both fractured across devices
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
@@ -154,4 +159,6 @@ class TransformerBlock(LightweightModule):
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
         )
+        ttnn.deallocate(h)
+        ttnn.deallocate(ff_out)
         return out  # fractured across devices
