@@ -411,7 +411,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         kernel_h,
         kernel_w,
         pad_w,
-        in_nbytes_c,
+        in_aligned_nbytes_c,
         in_w,
         input_shape[3] / num_shards_c,
         params.split_reader,  // enable split reader
