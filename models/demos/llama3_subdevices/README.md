@@ -65,7 +65,7 @@ export FAKE_DEVICE=TG
 ### To run the Llama 3 demo:
 
 ```
-pytest -n auto models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
+pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
 ```
 
 #### Demo Decode Arguments
@@ -87,7 +87,7 @@ pytest -n auto models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
 ### To run the text demo:
 
 ```
-pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "repeat"
+pytest models/demos/llama3_subdevices/demo/text_demo.py -k "repeat2"
 ```
 
 #### Text Demo Arguments
