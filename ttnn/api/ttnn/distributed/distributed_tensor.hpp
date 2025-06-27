@@ -145,7 +145,7 @@ public:
     // Composes multi-device tensor into a single tensor.
     Tensor compose(const Tensor& tensor) const;
 
-    // Overload that returns a pair of logical data composed from multi-device tensor and its shape.
+    // Overload that returns a pair of logical data composed of a multi-device tensor and its shape.
     template <typename T>
     std::pair<std::vector<T>, Shape> compose(const Tensor& tensor) const;
 
