@@ -1,7 +1,7 @@
 # New model bring-up in TT-NN
 
-**Authors**: Dalar Vartanians\
-**Correspondence**: `dvartanians@tenstorrent.com`
+**Authors**: Dalar Vartanians, Ashai Reddy  
+**Correspondence**: `dvartanians@tenstorrent.com`, `arginuga@tenstorrent.com`
 
 
 - [New Model Bringup in TTNN](#new-model-bringup-in-ttnn)
@@ -110,10 +110,10 @@ The diagram below illustrates the corresponding Downsample1 module:
 
 ### 4.2 Visualizer
 
-- Install ttnn-visualiser from the following the wheel file
+- Install ttnn-visualiser from PyPI
 
    ```
-   python3 -m pip install ttnn_visualizer-0.15.0-py3-none-any.whl
+   python3 -m pip install ttnn_visualizer
    ```
 
  - To start the visualizer, run in terminal:
