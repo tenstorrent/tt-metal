@@ -46,24 +46,6 @@ enum eth_chan_directions {
     COUNT = 4,
 };*/
 
-inline eth_chan_directions get_direction(
-    uint32_t src_chip_id, uint32_t dest_chip_id, uint32_t mesh_cols, uint32_t mesh_rows) {
-    // if along the same row, we go east or west
-    eth_chan_directions direction = eth_chan_directions::COUNT;
-    if (src_chip_id / mesh_cols == dest_chip_id / mesh_cols) {
-        direction = src_chip_id < dest_chip_id ? eth_chan_directions::EAST : eth_chan_directions::WEST;
-    }
-    // if along the same column, we go north or south
-    else if (src_chip_id % mesh_cols == dest_chip_id % mesh_cols) {
-        direction = src_chip_id > dest_chip_id ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
-    }
-    // if not along the same row or column, we go north or south; north if dest_chip_id is smaller than src_chip_id
-    else {
-        direction = src_chip_id > dest_chip_id ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
-    }
-    return direction;
-}
-
 // Insert helper that handles the local-device metadata path
 inline void dispatch_metadata_local_device(
     uint32_t token_indices_address,
@@ -90,7 +72,7 @@ inline void dispatch_metadata_remote_device(
     uint64_t global_noc_semaphore_address,
     volatile PACKET_HEADER_TYPE* metadata_packet_header,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections) {
-    uint32_t route = static_cast<uint32_t>(get_direction(src_chip_id, dest_chip_id, mesh_cols, mesh_rows));
+    uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
     fabric_set_unicast_route(
@@ -136,7 +118,7 @@ inline void dispatch_input_remote_device(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* token_unicast_packet_header) {
     // Clear the header buffer region.
-    uint32_t route = static_cast<uint32_t>(get_direction(src_chip_id, dest_chip_id, mesh_cols, mesh_rows));
+    uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
     fabric_set_unicast_route(
