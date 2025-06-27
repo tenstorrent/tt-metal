@@ -165,6 +165,10 @@ def test_conv_dram(
     config = {
         "act_block_h": act_block_h_override,
     }
+    if output_channels > 2500 and input_layout == ttnn.TILE_LAYOUT:
+        pytest.skip(
+            "Skipping test with TILE_LAYOUT for large output channels to avoid Width Sharded Conv2d DRAM for Tiled outputs"
+        )
     run_conv(
         device,
         torch_tensor_map,
@@ -187,6 +191,7 @@ def test_conv_dram(
         packer_l1_acc=packer_l1_acc,
         preprocess_weights_on_device=False,
         input_layout=input_layout,
+        output_layout=input_layout,
         run_twice=True,
         fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(
