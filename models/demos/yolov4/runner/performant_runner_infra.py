@@ -33,16 +33,23 @@ class YOLOv4PerformanceRunnerInfra:
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
+        self.num_devices = device.get_num_devices()
+        self.inputs_mesh_mapper, self.weights_mesh_mapper, self.output_mesh_composer = self.get_mesh_mappers(device)
 
         self.torch_model = load_torch_model(self.model_location_generator)
 
-        input_shape = (1, *resolution, 3)
-
+        input_shape = (batch_size * self.num_devices, *resolution, 3)
+        torch_input_shape = (batch_size, *resolution, 3)
         torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-        self.input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+        torch_input_tensor_params = torch.randn(torch_input_shape, dtype=torch.float32)
+        self.input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper)
         self.torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
+        self.torch_input_tensor_params = torch_input_tensor_params.permute(0, 3, 1, 2)
 
-        parameters = create_yolov4_model_parameters(self.torch_model, self.torch_input_tensor, resolution, device)
+        parameters = create_yolov4_model_parameters(
+            self.torch_model, self.torch_input_tensor_params, resolution, device
+        )
+
         self.ttnn_yolov4_model = TtYOLOv4(parameters, device)
 
         self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
@@ -51,6 +58,17 @@ class YOLOv4PerformanceRunnerInfra:
 
     def run(self):
         self.output_tensor = self.ttnn_yolov4_model(self.input_tensor)
+
+    def get_mesh_mappers(self, device):
+        if device.get_num_devices() != 1:
+            inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+            weights_mesh_mapper = None  # ttnn.ReplicateTensorToMesh(device) causes unnecessary replication/takes more time on the first pass
+            output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+        else:
+            inputs_mesh_mapper = None
+            weights_mesh_mapper = None
+            output_mesh_composer = None
+        return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
 
     def _setup_l1_sharded_input(self, device, torch_input_tensor=None):
         if is_wormhole_b0():
@@ -66,11 +84,13 @@ class YOLOv4PerformanceRunnerInfra:
         if c == 3:
             c = 16
         input_mem_config = ttnn.create_sharded_memory_config(
-            [n, c, h, w],
+            [n // self.num_devices, c, h, w],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_inputs_host = ttnn.from_torch(
+            torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.inputs_mesh_mapper
+        )
 
         return tt_inputs_host, input_mem_config
 
@@ -95,7 +115,9 @@ class YOLOv4PerformanceRunnerInfra:
 
     def validate(self, output_tensor=None):
         output_tensor = self.output_tensor if output_tensor is None else output_tensor
-        result_boxes, result_confs = get_model_result(output_tensor, self.resolution)
+        result_boxes, result_confs = get_model_result(
+            ttnn_output_tensor=output_tensor, resolution=self.resolution, mesh_composer=self.output_mesh_composer
+        )
 
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.ref_boxes, result_boxes, pcc=YOLOV4_BOXES_PCC)
         logger.info(

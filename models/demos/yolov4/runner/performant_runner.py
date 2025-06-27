@@ -94,8 +94,9 @@ class YOLOv4PerformantRunner:
         ttnn.synchronize_device(self.device)
 
         ttnn_output_tensor = self.runner_infra.output_tensor
-
-        return get_model_result(ttnn_output_tensor, self.resolution)
+        return get_model_result(
+            ttnn_output_tensor, self.resolution, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)
+        )
 
     def _validate(self, input_tensor, result_output_tensor):
         result_boxes, result_confs = result_output_tensor

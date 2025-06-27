@@ -10,15 +10,17 @@ from models.demos.yolov4.reference import yolov4
 from models.demos.yolov4.reference.resblock import ResBlock
 
 
-def custom_preprocessor(model, name):
+def custom_preprocessor(model, name, mesh_mapper=None):
     parameters = {}
 
     # Helper function to process Conv2d + BatchNorm2d pairs
     def process_conv_bn_pair(conv_layer, bn_layer, base_name):
         parameters[base_name] = {}
         conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(conv_layer, bn_layer)
-        parameters[base_name]["weight"] = ttnn.from_torch(conv_weight)
-        parameters[base_name]["bias"] = ttnn.from_torch(torch.reshape(conv_bias, (1, 1, 1, -1)))
+        parameters[base_name]["weight"] = ttnn.from_torch(conv_weight, mesh_mapper=mesh_mapper)
+        parameters[base_name]["bias"] = ttnn.from_torch(
+            torch.reshape(conv_bias, (1, 1, 1, -1)), mesh_mapper=mesh_mapper
+        )
 
     def process_conv_param(conv_layer, base_name):
         parameters[base_name] = {}
@@ -30,8 +32,8 @@ def custom_preprocessor(model, name):
         if conv_bias.shape[-1] == 255:
             conv_bias = torch.nn.functional.pad(conv_bias, (0, 1, 0, 0, 0, 0, 0, 0))
 
-        parameters[base_name]["weight"] = ttnn.from_torch(conv_weight)
-        parameters[base_name]["bias"] = ttnn.from_torch(conv_bias)
+        parameters[base_name]["weight"] = ttnn.from_torch(conv_weight, mesh_mapper=mesh_mapper)
+        parameters[base_name]["bias"] = ttnn.from_torch(conv_bias, mesh_mapper=mesh_mapper)
 
     # Recursive function to process all layers
     def process_layers(layers, prefix=""):
@@ -70,9 +72,11 @@ def custom_preprocessor(model, name):
                 base_name = f"{inner_idx}"
                 parameters[prefix][str(outer_idx)][base_name] = {}
                 conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(conv_layer, bn_layer)
-                parameters[prefix][str(outer_idx)][base_name]["weight"] = ttnn.from_torch(conv_weight)
+                parameters[prefix][str(outer_idx)][base_name]["weight"] = ttnn.from_torch(
+                    conv_weight, mesh_mapper=mesh_mapper
+                )
                 parameters[prefix][str(outer_idx)][base_name]["bias"] = ttnn.from_torch(
-                    torch.reshape(conv_bias, (1, 1, 1, -1))
+                    torch.reshape(conv_bias, (1, 1, 1, -1)), mesh_mapper=mesh_mapper
                 )
 
     # Process the model
@@ -611,10 +615,26 @@ def create_head_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tenso
     return parameters
 
 
+def get_mesh_mappers(device):
+    if device.get_num_devices() != 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = (
+            None  # ttnn.ReplicateTensorToMesh(device) causes unnecessary replication/takes more time on the first pass
+        )
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
+
+
 def create_yolov4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
+
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
 
@@ -639,3 +659,10 @@ def create_yolov4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Ten
     _create_head_model_parameters(parameters.conv_args.head, resolution)
 
     return parameters
+
+
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    return custom_mesh_preprocessor
