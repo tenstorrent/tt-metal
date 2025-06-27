@@ -84,14 +84,14 @@ void benchmark_all_args_combinations_single_core(
     tt::tt_metal::detail::FreshProfilerDeviceLog();
     for (uint8_t i = 0; i < 1 << 5; ++i) {
         tensor_accessor::ArgsConfig args_loc_cnf(i);
-        if (args_loc_cnf.test(tensor_accessor::ArgConfig::RankCRTA) and
-            (!args_loc_cnf.test(tensor_accessor::ArgConfig::TensorShapeCRTA) or
-             !args_loc_cnf.test(tensor_accessor::ArgConfig::ShardShapeCRTA))) {
+        if (args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeRank) and
+            (!args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeTensorShape) or
+             !args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeShardShape))) {
             // If rank is runtime, tensor and shard shapes must also be runtime
             continue;
         }
-        if (args_loc_cnf.test(tensor_accessor::ArgConfig::NumBanksCRTA) and
-            !args_loc_cnf.test(tensor_accessor::ArgConfig::BankCoordsCRTA)) {
+        if (args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeNumBanks) and
+            !args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeBankCoords)) {
             // If number of banks is runtime, bank coordinates must also be runtime
             continue;
         }

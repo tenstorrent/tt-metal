@@ -13,8 +13,8 @@ Parameters may consist of rank, number of banks, tensor shape, shard shape, bank
 ```c++
 const auto accessor_args = TensorAccessorArgs(buffer);
 // You can choose which parts are compile-time vs runtime
-// Options include: CTA (all compile-time), RankCRTA, NumBanksCRTA, TensorShapeCRTA, ShardShapeCRTA, BankCoordsCRTA
-const auto accessor_args = TensorAccessorArgs(buffer, tensor_accessor::ArgConfig::NumBanksCRTA | tensor_accessor::ArgConfig::BankCoordsCRTA); // Number of banks and bank coordinates passed through crta, rest - cta
+// Options include: None (all compile-time), RuntimeRank, RuntimeNumBanks, RuntimeTensorShape, RuntimeShardShape, RuntimeBankCoords
+const auto accessor_args = TensorAccessorArgs(buffer, tensor_accessor::ArgConfig::RuntimeNumBanks | tensor_accessor::ArgConfig::RuntimeBankCoords);
 
 // Setting up device kernel with these arguments
 KernelHandle kernel_id = CreateKernel(
@@ -32,41 +32,41 @@ SetCommonRuntimeArgs(program, kernel_id, accessor_args.runtime_args);
 ```
 
 ### Configuration Options
-You can configure which parts of the accessor arguments are passed through CRTA or CTA:
+You can configure which parts of the accessor arguments are passed through runtime or compile-time arguments:
 
-- ArgConfig::CTA: All arguments passed through cta
-- ArgConfig::RankCRTA
-- ArgConfig::NumBanksCRTA
-- ArgConfig::TensorShapeCRTA
-- ArgConfig::ShardShapeCRTA
-- ArgConfig::BankCoordsCRTA
-- ArgConfig::CRTA: All arguments passed through crta
+- ArgConfig::None: All arguments passed through compile-time arguments
+- ArgConfig::RuntimeRank
+- ArgConfig::RuntimeNumBanks
+- ArgConfig::RuntimeTensorShape
+- ArgConfig::RuntimeShardShape
+- ArgConfig::RuntimeBankCoords
+- ArgConfig::Runtime: All arguments passed through runtime arguments
 
 These flags can be combined with bitwise OR (|) to specify multiple runtime parameters.
 
-There is one important limitation: In case size of container (rank/num_banks) is crta, then values of containers (tensor_shape/shard_shape/bank_coords) must also be crta. The reason is that all CTA indecies must be constexpr expressions, and it's impossible to calculate offset for shapes without knowing their sizes.
+There is one important limitation: In case size of container (rank/num_banks) is runtime argument, then values of containers (tensor_shape/shard_shape/bank_coords) must also be runtime arguments. The reason is that all compile-time indecies must be constexpr expressions, and it's impossible to calculate offset for shapes without knowing their sizes.
 
 ## Device-Side Usage
 **Creating an Accessor**
 
-- From CTA/CRTA
+- From compile-time/runtime arguments
 
 ```c++
 
-// Base offsets of cta and crta arguments
+// Base offsets of compile-time and common runtime arguments
 constexpr uint32_t base_idx_cta = 0;
 constexpr uint32_t base_idx_crta = 1;
 
-// This object keeps track of the location of arguments for the sharded accessor
+// This object keeps track of the location of arguments for the tensor accessor
 auto args = make_tensor_accessor_args<base_idx_cta, base_idx_crta>();
-// crta base index can be a runtime variable too:
+// runtime base index can be a runtime variable too:
 auto args = make_tensor_accessor_args<base_idx_cta>(base_idx_crta);
 
 constexpr uint32_t new_base_idx_cta = base_idx_cta + args.compile_time_args_skip();
 // new_base_idx_crta might be constexpr if rank and number of banks are static
 uint32_t new_base_idx_crta = base_idx_crta + args.runtime_args_skip();
 
-// Create a ShardedAccessor with runtime page size
+// Create a TensorAccessor with runtime page size
 auto tensor_accessor = make_tensor_accessor_from_args(args, bank_base_address, page_size);
 ```
 
@@ -86,7 +86,7 @@ uint32_t shard_shape[2] = {3, 3};
 using dyn = tensor_accessor::ArrayDynamicWrapper;
 using banks_coords = tensor_accessor::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
 auto dspec = tensor_accessor::make_dspec<0, 16, dyn, dyn, banks_coords>(2, 0, tensor_shape, shard_shape, nullptr);
-auto tensor_accessor = tensor_accessor::make_sharded_accessor_from_dspec(std::move(dspec), 0, 1024);
+auto tensor_accessor = tensor_accessor::make_tensor_accessor_from_dspec(std::move(dspec), 0, 1024);
 
 ```
 
@@ -140,7 +140,7 @@ const auto& shard_strides = dspec.shard_strides();
 const auto& packed_xy_coords = dspec.packed_xy_coords();
 ```
 
-Note: In case containers size is CTA, then shapes, strides, coords are `std::array<uint32_t, rank/num_banks>`, otherwide `Span<uint32_t>`
+Note: In case containers size is compile-time, then shapes, strides, coords are `std::array<uint32_t, rank/num_banks>`, otherwide `Span<uint32_t>`
 
 
 ## Performance Considerations

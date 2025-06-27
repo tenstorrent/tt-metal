@@ -10,18 +10,20 @@
 namespace tensor_accessor {
 
 /**
- * @brief Encodes which arguments are compile-time and which are common runtime.
+ * @brief Encodes a fundamental configuration of a tensor accessor, which must be available at compile time.
+ * Specifies whether the tensor is sharded, stored in DRAM, and which arguments should be passed as compile-time vs
+ * runtime arguments.
  */
 enum class ArgConfig : uint8_t {
     None = 0,
     Sharded = 1 << 0,
     IsDram = 1 << 1,
-    RankCRTA = 1 << 2,
-    NumBanksCRTA = 1 << 3,
-    TensorShapeCRTA = 1 << 4,
-    ShardShapeCRTA = 1 << 5,
-    BankCoordsCRTA = 1 << 6,
-    CRTA = RankCRTA | NumBanksCRTA | TensorShapeCRTA | ShardShapeCRTA | BankCoordsCRTA
+    RuntimeRank = 1 << 2,
+    RuntimeNumBanks = 1 << 3,
+    RuntimeTensorShape = 1 << 4,
+    RuntimeShardShape = 1 << 5,
+    RuntimeBankCoords = 1 << 6,
+    Runtime = RuntimeRank | RuntimeNumBanks | RuntimeTensorShape | RuntimeShardShape | RuntimeBankCoords
 };
 
 using ArgsConfig = Flags<ArgConfig>;

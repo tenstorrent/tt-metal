@@ -243,14 +243,14 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
         // All combinations of runtime/static arguments
         for (uint8_t i = 0; i < 1 << 5; ++i) {
             tensor_accessor::ArgsConfig config(i);
-            if (config.test(tensor_accessor::ArgConfig::RankCRTA) and
-                (!config.test(tensor_accessor::ArgConfig::TensorShapeCRTA) or
-                 !config.test(tensor_accessor::ArgConfig::ShardShapeCRTA))) {
+            if (config.test(tensor_accessor::ArgConfig::RuntimeRank) and
+                (!config.test(tensor_accessor::ArgConfig::RuntimeTensorShape) or
+                 !config.test(tensor_accessor::ArgConfig::RuntimeShardShape))) {
                 // If rank is runtime, tensor and shard shapes must also be runtime
                 continue;
             }
-            if (config.test(tensor_accessor::ArgConfig::NumBanksCRTA) and
-                !config.test(tensor_accessor::ArgConfig::BankCoordsCRTA)) {
+            if (config.test(tensor_accessor::ArgConfig::RuntimeNumBanks) and
+                !config.test(tensor_accessor::ArgConfig::RuntimeBankCoords)) {
                 // If number of banks is runtime, bank coordinates must also be runtime
                 continue;
             }

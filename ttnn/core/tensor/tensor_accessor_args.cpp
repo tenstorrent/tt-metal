@@ -20,11 +20,11 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> prepare_sharded_args(
     const auto& shard_shape = buffer_distribution_spec.get_shard_shape_in_pages();
     const auto& bank_coords = buffer_distribution_spec.get_cores();
 
-    auto rank_rt = args_config.test(tensor_accessor::ArgConfig::RankCRTA);
-    auto num_banks_rt = args_config.test(tensor_accessor::ArgConfig::NumBanksCRTA);
-    auto tensor_shape_rt = args_config.test(tensor_accessor::ArgConfig::TensorShapeCRTA);
-    auto shard_shape_rt = args_config.test(tensor_accessor::ArgConfig::ShardShapeCRTA);
-    auto bank_coords_rt = args_config.test(tensor_accessor::ArgConfig::BankCoordsCRTA);
+    auto rank_rt = args_config.test(tensor_accessor::ArgConfig::RuntimeRank);
+    auto num_banks_rt = args_config.test(tensor_accessor::ArgConfig::RuntimeNumBanks);
+    auto tensor_shape_rt = args_config.test(tensor_accessor::ArgConfig::RuntimeTensorShape);
+    auto shard_shape_rt = args_config.test(tensor_accessor::ArgConfig::RuntimeShardShape);
+    auto bank_coords_rt = args_config.test(tensor_accessor::ArgConfig::RuntimeBankCoords);
 
     size_t rank = tensor_shape.size();
     size_t n_banks = bank_coords.size();

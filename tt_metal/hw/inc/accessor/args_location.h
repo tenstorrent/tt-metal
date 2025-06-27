@@ -19,11 +19,11 @@ struct ArgsOffsets {
 
     static constexpr bool is_sharded = args_config.test(ArgConfig::Sharded);
     static constexpr bool is_dram = args_config.test(ArgConfig::IsDram);
-    static constexpr bool rank_is_crta = args_config.test(ArgConfig::RankCRTA);
-    static constexpr bool num_banks_is_crta = args_config.test(ArgConfig::NumBanksCRTA);
-    static constexpr bool tensor_shape_is_crta = args_config.test(ArgConfig::TensorShapeCRTA);
-    static constexpr bool shard_shape_is_crta = args_config.test(ArgConfig::ShardShapeCRTA);
-    static constexpr bool bank_coords_is_crta = args_config.test(ArgConfig::BankCoordsCRTA);
+    static constexpr bool rank_is_crta = args_config.test(ArgConfig::RuntimeRank);
+    static constexpr bool num_banks_is_crta = args_config.test(ArgConfig::RuntimeNumBanks);
+    static constexpr bool tensor_shape_is_crta = args_config.test(ArgConfig::RuntimeTensorShape);
+    static constexpr bool shard_shape_is_crta = args_config.test(ArgConfig::RuntimeShardShape);
+    static constexpr bool bank_coords_is_crta = args_config.test(ArgConfig::RuntimeBankCoords);
 
     // Impossible to have runtime rank without runtime tensor and shard shapes since then impossible to calculate CTA
     // offsets in compile time
