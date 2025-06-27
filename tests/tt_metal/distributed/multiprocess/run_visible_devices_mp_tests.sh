@@ -22,7 +22,7 @@ for config in "${DEVICE_CONFIGS[@]}"; do
     if [ $? -eq 0 ]; then
         echo "✓ [distributed tests] Test passed for configuration: $config"
     else
-        echo "✗ Test failed for configuration: $config"
+        echo "✗ [distributed tests] Test failed for configuration: $config"
         ALL_PASSED=false
     fi
 done
