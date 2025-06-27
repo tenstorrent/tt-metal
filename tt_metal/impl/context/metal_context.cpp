@@ -363,6 +363,9 @@ void MetalContext::set_default_control_plane_mesh_graph() {
 }
 
 void MetalContext::teardown_fabric_config() {
+    if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
+        rtoptions_.set_erisc_iram_enabled(false);
+    }
     this->cluster_->configure_ethernet_cores_for_fabric_routers(tt_metal::FabricConfig::DISABLED);
     this->get_control_plane().clear_fabric_context();
 }
@@ -395,6 +398,8 @@ void MetalContext::set_fabric_config(
         return;
     }
 
+    rtoptions_.set_erisc_iram_enabled(true);
+
     if (num_routing_planes.has_value() && num_routing_planes.value() < this->num_fabric_active_routing_planes_) {
         log_warning(
             tt::LogMetal,
@@ -422,6 +427,8 @@ void MetalContext::initialize_fabric_config() {
     if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED) {
         return;
     }
+
+    log_info(tt::LogMetal, "Initializing fabric config. Setting erisc_iram_enabled to true");
 
     this->cluster_->configure_ethernet_cores_for_fabric_routers(
         this->fabric_config_, this->num_fabric_active_routing_planes_);
