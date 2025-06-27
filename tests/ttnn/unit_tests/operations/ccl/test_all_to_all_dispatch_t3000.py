@@ -525,7 +525,7 @@ def run_all_to_all_dispatch_test(
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
-@pytest.mark.parametrize("hidden_size", [7000])
+@pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
@@ -604,7 +604,7 @@ def test_all_to_all_dispatch_no_trace(
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
-@pytest.mark.parametrize("hidden_size", [7000])
+@pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
@@ -674,7 +674,7 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
     batch = 8 * mesh_shape[1]
     experts = 8 * devices
     select_experts_k = 8
-    hidden_size = 7000
+    hidden_size = 7168
     dtype = ttnn.bfloat16
     input_tokens, expert_indices, expert_mapping, sparse_output_token_tensor, metadata_tensor = gen_tensors(
         batch,
