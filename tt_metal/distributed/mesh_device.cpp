@@ -565,10 +565,6 @@ void MeshDevice::load_sub_device_manager(SubDeviceManagerId sub_device_manager_i
 }
 void MeshDevice::clear_loaded_sub_device_manager() { sub_device_manager_tracker_->clear_loaded_sub_device_manager(); }
 
-std::tuple<SubDeviceManagerId, SubDeviceId> MeshDevice::create_sub_device_manager_with_fabric(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    return sub_device_manager_tracker_->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
-}
 CoreCoord MeshDevice::dram_grid_size() const {
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->dram_grid_size(); });
