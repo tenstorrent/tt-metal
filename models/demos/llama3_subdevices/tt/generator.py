@@ -485,7 +485,7 @@ class Generator:
         return trace_tok_rm
 
     def read_decode_output(self, tt_logits, unpadded_batch, is_tokens=True):
-        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1)
+        logits = self.model.process_output_decode(tt_logits)
         return logits
 
     def chat_completion(
