@@ -748,10 +748,4 @@ Tensor _normalize_global(const Tensor& y, const std::optional<MemoryConfig>& out
     return _make_global_from_hw_impl(_normalize, y, output_mem_config);
 }
 
-Tensor _frac(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor trunc_res = ttnn::trunc(input);
-    Tensor result = ttnn::subtract(input, trunc_res, std::nullopt, output_mem_config);
-    return result;
-}
-
 }  // namespace ttnn::operations::unary

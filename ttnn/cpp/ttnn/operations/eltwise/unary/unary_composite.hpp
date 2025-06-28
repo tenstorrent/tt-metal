@@ -250,8 +250,5 @@ constexpr auto rpow = ttnn::register_operation<
 constexpr auto normalize_global = ttnn::register_operation<
     "ttnn::normalize_global",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_GLOBAL>>();
-constexpr auto frac = ttnn::register_operation<
-    "ttnn::frac",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::FRAC>>();
 
 }  // namespace ttnn

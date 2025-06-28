@@ -95,6 +95,7 @@ enum SfpuType {
     right_shift,
     floor,
     trunc,
+    frac,
     left_shift,
     remainder,
     fmod,

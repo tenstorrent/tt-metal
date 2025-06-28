@@ -1724,6 +1724,12 @@ void py_module(py::module& module) {
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
         module,
+        ttnn::frac,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|frac|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation(
+        module,
         ttnn::eqz,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc",
         "",
@@ -2151,12 +2157,6 @@ void py_module(py::module& module) {
         R"doc(4)doc",
         "",
         R"doc(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16))doc");
-    bind_unary_composite(
-        module,
-        ttnn::frac,
-        R"doc(Performs frac function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     bind_unary_composite_floats_with_default(
         module, ttnn::hardswish, "scale", "Scale value", 1.0f / 6.0f, "shift", "Shift value", 0.5f);
