@@ -387,7 +387,7 @@ def run_reduce_scatter_test(
         assert eq, f"{first_failed_tensor_index} FAILED: {output_results}"
 
 
-@pytest.mark.skipif(is_RING_6U, reason="This test is only for 6U devices")
+@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -441,7 +441,7 @@ def test_rs_create_heads_6u_trace(mesh_device, trace_mode, dtype, use_program_ca
     )
 
 
-@pytest.mark.skipif(not is_RING_6U, reason="This test is only for TG devices")
+@pytest.mark.skipif(is_RING_6U, reason="This test is only for TG devices")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -495,7 +495,7 @@ def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype):
     )
 
 
-@pytest.mark.skipif(not is_RING_6U, reason="This test is only for TG devices")
+@pytest.mark.skipif(is_RING_6U, reason="This test is only for TG devices")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
