@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace nd_sharding {
+namespace tensor_accessor {
 namespace detail {
 template <template <uint32_t...> class Wrapper, size_t BASE_IDX, size_t... Is>
 constexpr auto make_struct_from_sequence_wrapper(std::index_sequence<Is...>)
@@ -70,4 +70,4 @@ struct Span {
 };
 
 }  // namespace detail
-}  // namespace nd_sharding
+}  // namespace tensor_accessor
