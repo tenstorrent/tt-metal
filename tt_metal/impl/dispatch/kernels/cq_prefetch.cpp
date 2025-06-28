@@ -1232,7 +1232,7 @@ uint32_t process_exec_buf_cmd(
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
-uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_ptr) {
+uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_ptr) {
     // This ensures that a previous cmd using the ringbuffer have completed.
     noc_async_writes_flushed();
 
@@ -1259,21 +1259,62 @@ uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream_
     const bool is_dram = true;
     InterleavedPow2AddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .log_base_2_of_page_size = log2_page_size};
 
-    uint32_t scratch_read_addr = ringbuffer_wp;
     uint32_t page_id = start_page;
-    while (length >= page_size) {
-        uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-        noc_async_read(noc_addr, scratch_read_addr, page_size);
-        scratch_read_addr += page_size;
+    uint32_t remaining_length = length;
+    uint32_t cache_write_addr = ringbuffer_wp;
+
+    // Step 1: Read the first page into cache before the loop
+    uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
+    // although kernels in dram are page aligned, cache is more tightly packed with dram alignment
+    uint32_t chunk_size = (remaining_length > page_size) ? page_size : remaining_length;
+    noc_async_read(noc_addr, cache_write_addr, chunk_size);
+
+    page_id++;
+    remaining_length -= chunk_size;
+    uint32_t cache_read_addr = cache_write_addr;
+
+    // Step 2: Pipeline loop - write current page to dispatcher while reading next page from DRAM
+    while (remaining_length >= page_size) {
+        // Increment cache write address for next page
+        cache_write_addr += page_size;
+
+        noc_async_read_barrier();  // wait for previous read to complete
+        // Issue next page read from DRAM into cache (overlap with dispatcher write)
+        noc_addr = addr_gen.get_noc_addr(page_id);
+        noc_async_read(noc_addr, cache_write_addr, page_size);
+
+        // Start write from current cache location to dispatcher
+        uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, cache_read_addr, page_size);
+        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
+
         page_id++;
-        length -= page_size;
-    }
-    if (length > 0) {
-        uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-        noc_async_read(noc_addr, scratch_read_addr, length);
-        scratch_read_addr += length;
+        remaining_length -= page_size;
+        cache_read_addr = cache_write_addr;
     }
 
+    // Step 3: Handle reading any remaining partial page
+    if (remaining_length > 0) {
+        cache_write_addr += page_size;
+        noc_async_read_barrier();
+        noc_addr = addr_gen.get_noc_addr(page_id);
+        noc_async_read(noc_addr, cache_write_addr, remaining_length);
+
+        uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, cache_read_addr, page_size);
+        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
+    }
+
+    // Step 4: Write the final page read above to dispatcher
+    noc_async_read_barrier();
+    uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, cache_write_addr, remaining_length);
+    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
+
+    // Final dispatcher sync
+    downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
+
+    // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
+    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(1);
+
+    // Update cache write pointer
     ringbuffer_wp += wp_update_offset;
 
     // The consumer will perform a read barrier.

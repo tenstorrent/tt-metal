@@ -1980,6 +1980,7 @@ void update_program_dispatch_commands(
         if (is_cached) {
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
                 .add_prefetch_set_ringbuffer_offset(cache_offset);
+            cached_program_command_sequence.skip_binary_relay_for_cache_miss = false;
         } else {
             TT_FATAL(
                 program_sizeB <= max_program_sizeB,
@@ -1995,6 +1996,9 @@ void update_program_dispatch_commands(
                     .wp_offset_update = max_program_sizeB,
                     .base_addr = cached_program_command_sequence.kernel_bins_base_addr,
                     .length = program_sizeB});
+            // Skip binary relay commands for cache misses since paged_to_ringbuffer now handles both cache load and
+            // relay
+            cached_program_command_sequence.skip_binary_relay_for_cache_miss = true;
         }
         TT_ASSERT(
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command.size_bytes() ==
@@ -2150,6 +2154,7 @@ void update_traced_program_dispatch_commands(
         if (is_cached) {
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
                 .add_prefetch_set_ringbuffer_offset(cache_offset);
+            cached_program_command_sequence.skip_binary_relay_for_cache_miss = false;
         } else {
             TT_FATAL(
                 program_sizeB <= max_program_sizeB,
@@ -2165,6 +2170,9 @@ void update_traced_program_dispatch_commands(
                     .wp_offset_update = max_program_sizeB,
                     .base_addr = cached_program_command_sequence.kernel_bins_base_addr,
                     .length = program_sizeB});
+            // Skip binary relay commands for cache misses since paged_to_ringbuffer now handles both cache load and
+            // relay
+            cached_program_command_sequence.skip_binary_relay_for_cache_miss = true;
         }
         TT_ASSERT(
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command.size_bytes() ==
@@ -2299,9 +2307,12 @@ void write_program_command_sequence(
                 program_command_sequence.program_binary_setup_prefetcher_cache_command.data(),
                 program_command_sequence.program_binary_setup_prefetcher_cache_command.size_bytes());
         }
-        write_data_to_cq(
-            program_command_sequence.program_binary_command_sequence.data(),
-            program_command_sequence.program_binary_command_sequence.size_bytes());
+        // Skip binary relay commands for cache misses since paged_to_ringbuffer now handles both operations
+        if (!program_command_sequence.skip_binary_relay_for_cache_miss) {
+            write_data_to_cq(
+                program_command_sequence.program_binary_command_sequence.data(),
+                program_command_sequence.program_binary_command_sequence.size_bytes());
+        }
     }
 
     // Write the launch message

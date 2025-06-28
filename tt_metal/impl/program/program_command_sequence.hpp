@@ -53,6 +53,7 @@ struct ProgramCommandSequence {
     CQDispatchGoSignalMcastCmd* mcast_go_signal_cmd_ptr;
 
     bool prefetcher_cache_used = false;
+    bool skip_binary_relay_for_cache_miss = false;
     uint32_t kernel_bins_sizeB = 0;
     uint32_t kernel_bins_base_addr = 0;
 
@@ -65,14 +66,19 @@ struct ProgramCommandSequence {
     }
 
     uint32_t get_one_shot_fetch_size(bool stall_first, bool stall_before_program, bool send_binary) const {
+        uint32_t binary_command_size = 0;
+        if (send_binary) {
+            binary_command_size += program_binary_setup_prefetcher_cache_command.size_bytes();
+            // Skip binary relay commands for cache misses since paged_to_ringbuffer now handles both operations
+            if (!skip_binary_relay_for_cache_miss) {
+                binary_command_size += program_binary_command_sequence.size_bytes();
+            }
+        }
         uint32_t one_shot_fetch_size =
             ((stall_before_program || stall_first) ? stall_command_sequences[current_stall_seq_idx].size_bytes() : 0) +
             preamble_command_sequence.size_bytes() + program_config_buffer_command_sequence.size_bytes() +
-            get_rt_args_size() +
-            (send_binary ? program_binary_command_sequence.size_bytes() +
-                               program_binary_setup_prefetcher_cache_command.size_bytes()
-                         : 0) +
-            launch_msg_command_sequence.size_bytes() + go_msg_command_sequence.size_bytes();
+            get_rt_args_size() + binary_command_size + launch_msg_command_sequence.size_bytes() +
+            go_msg_command_sequence.size_bytes();
         return one_shot_fetch_size;
     }
 };
