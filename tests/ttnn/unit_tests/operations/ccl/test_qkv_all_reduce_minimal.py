@@ -336,7 +336,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
 
 
 # Test 1: test_all_reduce_create_qkv_heads_fuse
-@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U TG devices")
+@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_iters, warmup_iters", [[1, 0]])
 @pytest.mark.parametrize("trace_mode", [False])
@@ -412,7 +412,7 @@ def test_all_reduce_qkv_heads_fuse(
 
 
 # Test 2: test_all_reduce_create_qkv_heads_fuse_perf
-@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U TG devices")
+@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_iters, warmup_iters", [[30, 10]])
 @pytest.mark.parametrize("trace_mode", [True])
@@ -488,7 +488,7 @@ def test_all_reduce_qkv_heads_fuse_perf(
 
 
 # Test 2: test_all_reduce_create_qkv_heads_fuse_perf
-@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U TG devices")
+@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_iters, warmup_iters", [[30, 10]])
 @pytest.mark.parametrize("trace_mode", [True])
