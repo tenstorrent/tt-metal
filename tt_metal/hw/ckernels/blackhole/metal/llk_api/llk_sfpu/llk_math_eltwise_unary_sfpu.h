@@ -1,5 +1,5 @@
 #pragma once
-#include "sfpu_macros.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 
