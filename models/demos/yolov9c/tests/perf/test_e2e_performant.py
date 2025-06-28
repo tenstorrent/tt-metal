@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -28,14 +28,21 @@ from models.utility_functions import run_for_wormhole_b0
         (640, 640),
     ],
 )
+@pytest.mark.parametrize(
+    "model_task",
+    [
+        "segment",  # To run the test for instance segmentation
+        # "detect",  # Uncomment to run the test for Object Detection
+    ],
+)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 def test_e2e_performant(
     device,
-    use_program_cache,
     batch_size,
     act_dtype,
     weight_dtype,
+    model_task,
     model_location_generator,
     resolution,
 ):
@@ -44,6 +51,7 @@ def test_e2e_performant(
         batch_size,
         act_dtype,
         weight_dtype,
+        model_task=model_task,
         resolution=resolution,
         model_location_generator=None,
     )

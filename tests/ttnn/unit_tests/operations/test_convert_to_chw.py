@@ -112,7 +112,7 @@ def test_convert_to_chw_padded(device, C, HW, core_grid, padded_sharded_dim, inp
 
 @skip_for_grayskull()
 @skip_for_blackhole()
-def test_convert_to_chw_with_program_cache(device, use_program_cache):
+def test_convert_to_chw_with_program_cache(device):
     C, HW, core_grid = 2, 256, ttnn.CoreGrid(x=2, y=1)
 
     C_padded, HW_padded, padded_sharded_dim = 4, 96, 64

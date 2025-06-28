@@ -26,8 +26,10 @@ class ControlPlaneFixture : public ::testing::Test {
                    "Control plane test suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
                GTEST_SKIP();
            }
+           // reserve max available planes
+           uint8_t num_routing_planes = std::numeric_limits<uint8_t>::max();
            tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
-               tt::tt_metal::FabricConfig::FABRIC_2D);
+               tt::tt_metal::FabricConfig::FABRIC_2D, num_routing_planes);
        }
 
        void TearDown() override {
@@ -44,7 +46,7 @@ public:
     bool slow_dispatch_;
 
     const std::vector<tt::tt_metal::IDevice*>& get_devices() const { return devices_; }
-    void SetUpDevices(tt_metal::FabricConfig fabric_config) {
+    void SetUpDevices(tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt) {
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
             log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
@@ -58,7 +60,8 @@ public:
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
-        tt::tt_metal::detail::InitializeFabricConfig(fabric_config);
+        tt::tt_metal::detail::SetFabricConfig(
+            fabric_config, tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, num_routing_planes);
         devices_map_ = tt::tt_metal::detail::CreateDevices(ids);
         for (auto& [id, device] : devices_map_) {
             devices_.push_back(device);
@@ -87,7 +90,7 @@ public:
 
     void TearDown() override {
         tt::tt_metal::detail::CloseDevices(devices_map_);
-        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
     }
 };
 
@@ -138,7 +141,10 @@ struct McastRoutingInfo {
 };
 
 void RunTestUnicastRaw(
-    BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E);
+    BaseFabricFixture* fixture,
+    uint32_t num_hops = 1,
+    RoutingDirection direction = RoutingDirection::E,
+    bool enable_fabric_tracing = false);
 
 void RunTestUnicastConnAPI(
     BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E);
@@ -151,6 +157,13 @@ void RunTestMCastConnAPI(
     uint32_t fwd_hops = 1,
     RoutingDirection bwd_dir = RoutingDirection::E,
     uint32_t bwd_hops = 1);
+
+void RunTestChipMCast1D(
+    BaseFabricFixture* fixture,
+    RoutingDirection dir,
+    uint32_t start_distance,
+    uint32_t range,
+    bool enable_fabric_tracing = false);
 
 void RunTestLineMcast(
     BaseFabricFixture* fixture, RoutingDirection unicast_dir, const std::vector<McastRoutingInfo>& mcast_routing_info);

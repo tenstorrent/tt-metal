@@ -21,13 +21,13 @@ namespace tt::tt_metal {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_initialization_is_important()) { \
         TT_THROW(__VA_ARGS__); \
     } else { \
-        log_warning(tt::LogMetalTrace, __VA_ARGS__); \
+        log_warning(tt::LogInspector, __VA_ARGS__); \
         return; \
     }
 
 #define TT_INSPECTOR_LOG(...) \
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_warn_on_write_exceptions()) { \
-        log_warning(tt::LogMetalTrace, __VA_ARGS__); \
+        log_warning(tt::LogInspector, __VA_ARGS__); \
     }
 
 namespace tt::tt_metal::inspector {
@@ -56,6 +56,7 @@ private:
     time_point start_time;
     std::ofstream programs_ostream;
     std::ofstream kernels_ostream;
+    bool initialized;
 
     int64_t convert_timestamp(const time_point& tp) const {
         return std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch()).count();

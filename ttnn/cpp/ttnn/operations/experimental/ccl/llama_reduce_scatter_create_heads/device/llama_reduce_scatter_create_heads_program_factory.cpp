@@ -10,11 +10,11 @@
 #include <tt-metalium/device_pool.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
 
@@ -337,13 +337,13 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     const auto dim = operation_attributes.dim;
     uint32_t rank = input_shape.size();
     auto& q_output_tensor = tensor_return_value[0];
     auto& k_output_tensor = tensor_return_value[1];
     auto& v_output_tensor = tensor_return_value[2];
-    auto input_tensor_width = input_tensor.get_logical_shape()[-1];
+    auto input_tensor_width = input_tensor.logical_shape()[-1];
     auto input_shard_spec = input_tensor.shard_spec().value();
     auto q_output_shard_spec = q_output_tensor.shard_spec().value();
     auto k_output_shard_spec = k_output_tensor.shard_spec().value();
@@ -403,7 +403,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         v_num_cores);
 
     auto packet_buffer = tensor_args.intermediate_packet_buffer.buffer();
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_block_size = input_sticks_per_device * input_shard_width * input_tensor.element_size();
     uint32_t input_page_size = input_shard_width * input_tensor.element_size();
@@ -424,8 +424,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     tt::tt_metal::Program program{};
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    size_t packet_size_bytes = input_tensor.get_dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size)
-                                                                              : fabric_max_packet_size;
+    size_t packet_size_bytes =
+        input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
     uint32_t num_blocks_per_packet = packet_size_bytes / input_block_size;
     uint32_t per_worker_num_blocks = (ncores_input + num_links - 1) / num_links;
 
@@ -479,7 +479,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     constexpr uint32_t buffering_factor = 2;
     // Allocate space for the client interface
     static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig packet_header_cb_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
@@ -668,7 +668,9 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         all_cores_grid,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+            .noc = operation_attributes.use_noc1_only ? NOC::NOC_1 : NOC::RISCV_1_default,
+            .noc_mode = (operation_attributes.use_noc1_only) ? tt_metal::NOC_MODE::DM_DYNAMIC_NOC
+                                                             : tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
@@ -703,7 +705,9 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         all_cores_grid,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+            .noc = operation_attributes.use_noc1_only ? NOC::NOC_1 : NOC::RISCV_0_default,
+            .noc_mode = (operation_attributes.use_noc1_only) ? tt_metal::NOC_MODE::DM_DYNAMIC_NOC
+                                                             : tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = writer_compile_time_args,
             .defines = writer_defines});
 
@@ -756,10 +760,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     bool forward_fabric_connection = false, backward_fabric_connection = false;
     if (operation_attributes.topology == ttnn::ccl::Topology::Linear) {
         LineTopology line_topology(ring_size, ring_index);
-        forward_fabric_connection =
-            !(line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD));
-        backward_fabric_connection =
-            !(line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD));
+        forward_fabric_connection = !(line_topology.is_first_device_in_line(ttnn::ccl::LineDirection::BACKWARD));
+        backward_fabric_connection = !(line_topology.is_last_device_in_line(ttnn::ccl::LineDirection::BACKWARD));
     } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
         forward_fabric_connection = true;
         backward_fabric_connection = true;
@@ -797,14 +799,32 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
             writer_runtime_args.push_back(forward_fabric_connection);
             if (forward_fabric_connection) {
+                const auto target_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+                const auto forward_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device->id(), forward_device.value()->id(), link_idx, program, core, writer_runtime_args);
+                    target_device_fabric_node_id,
+                    forward_device_fabric_node_id,
+                    link_idx,
+                    program,
+                    core,
+                    writer_runtime_args);
             }
 
             writer_runtime_args.push_back(backward_fabric_connection);
             if (backward_fabric_connection) {
+                const auto target_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+                const auto backward_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device->id(), backward_device.value()->id(), link_idx, program, core, writer_runtime_args);
+                    target_device_fabric_node_id,
+                    backward_device_fabric_node_id,
+                    link_idx,
+                    program,
+                    core,
+                    writer_runtime_args);
             }
 
             link_idx++;

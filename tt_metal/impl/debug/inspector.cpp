@@ -14,7 +14,11 @@
 namespace tt::tt_metal {
 
 static inspector::Data* get_inspector_data() {
-    return tt::tt_metal::MetalContext::instance().get_inspector_data();
+    auto* data = tt::tt_metal::MetalContext::instance().get_inspector_data();
+    if (!data) {
+        throw std::runtime_error("Inspector data is not initialized.");
+    }
+    return data;
 }
 
 bool Inspector::is_enabled() {
@@ -22,6 +26,10 @@ bool Inspector::is_enabled() {
 }
 
 std::unique_ptr<inspector::Data> Inspector::initialize() {
+    if (!is_enabled()) {
+        // Inspector is not enabled, skipping initialization.
+        return nullptr;
+    }
     try {
         auto* data = new inspector::Data();
 

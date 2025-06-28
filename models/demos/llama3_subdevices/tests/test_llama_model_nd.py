@@ -6,7 +6,10 @@ import pytest
 from loguru import logger
 import ttnn
 import os
-from models.demos.llama3_subdevices.tt.llama_common import HostEmbedding, PagedAttentionConfig, PagedAttention
+from models.demos.llama3_subdevices.tt.llama_common import (
+    HostEmbedding,
+    PagedAttentionConfig,
+)
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.sampling import TTSampling
@@ -37,7 +40,9 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 )
 @pytest.mark.parametrize(
     "sampling_params",
-    [{"top_k": 1, "top_p": 0.00, "seed": 42}],
+    [
+        {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},
+    ],
 )
 @pytest.mark.parametrize(
     "page_params",
@@ -85,7 +90,6 @@ def test_llama_model_inference(
     page_params,
     optimizations,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):
@@ -93,6 +97,18 @@ def test_llama_model_inference(
     mode_accuracy = optimizations == LlamaOptimizations.accuracy
     instruct = True
     dummy_weights = True
+
+    top_k = sampling_params["top_k"]
+    if isinstance(top_k, int):
+        top_k = [top_k] * batch_size
+    top_p = sampling_params["top_p"]
+    if isinstance(top_p, float):
+        top_p = [top_p] * batch_size
+    temperature = sampling_params["temperature"]
+    if isinstance(temperature, float):
+        temperature = [temperature] * batch_size
+    seed = sampling_params["seed"]
+
     model_args = TtModelArgs(
         mesh_device,
         instruct=instruct,
@@ -121,20 +137,30 @@ def test_llama_model_inference(
 
     # Prepare page table for paged attention
     if paged_attention:
-        mesh_mapper = ttnn.ShardTensor2dMesh(
-            mesh_device,
-            dims=(None, None),
-            mesh_shape=model_args.cluster_shape,
-        )
-
-        paged_attn = PagedAttention(page_params, model_args)
-
-        page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper, per_device_group=True)
-
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
         )
+        # Implied shuffling of blocks
+        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        # Page table which maps virtual blocks to physical
+        reverse_permutation = torch.argsort(permutation)
+        page_table = reverse_permutation.reshape(
+            model_args.batch_size_per_device_group,
+            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
+        )
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
+        )
+
     # Load TTNN model
     tt_model = TtTransformer(
         args=model_args,
@@ -147,7 +173,7 @@ def test_llama_model_inference(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        sampling_params=sampling_params,
+        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     logger.info("Model and caches loaded.")
@@ -195,7 +221,7 @@ def test_llama_model_inference(
                 page_table=page_table_tt,
             )
             # Sampling
-            tt_out_tok = tt_sampling(tt_out[0])
+            tt_out_tok = tt_sampling(tt_out[0], top_k, top_p, seed)
 
             tt_out_tok_device0 = ttnn.get_device_tensors(tt_out_tok)[0]
             tt_out_tok_cpu = tt_out_tok_device0.cpu(blocking=True, cq_id=0)

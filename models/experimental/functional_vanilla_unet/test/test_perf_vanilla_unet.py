@@ -129,6 +129,8 @@ def get_expected_times(name):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True, ids=["0"])
 def test_vanilla_unet(device, reset_seeds):
     torch.manual_seed(0)
+    # https://github.com/tenstorrent/tt-metal/issues/23281
+    device.disable_and_clear_program_cache()
 
     weights_path = "models/experimental/functional_vanilla_unet/unet.pt"
     if not os.path.exists(weights_path):
@@ -228,7 +230,7 @@ def test_vanilla_unet(device, reset_seeds):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 68.5],
+        [1, 73],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

@@ -9,6 +9,9 @@ import ttnn
 import json
 import pandas as pd
 from collections import defaultdict
+from models.demos.llama3_subdevices.tt.llama_common import (
+    PagedAttentionConfig,
+)
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf
 from tt_metal.tools.profiler.process_model_log import (
@@ -21,7 +24,8 @@ from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 DECODER_OP_START_INDEX = 4
-DECODER_OP_END_INDEX = -21
+DECODER_OP_END_INDEX = -23
+NUM_OPS_IN_SAMPLING = 13
 
 DECODER_PREFIX = "model"
 MODEL_TAIL_PREFIX = "model_tail"
@@ -33,11 +37,12 @@ MIN_TYPE = "min"
 MAX_TYPE = "max"
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
     [
         (  # 10 layers for devive perf measurements
-            "random",
+            "instruct",
             10,
             "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
@@ -47,7 +52,7 @@ MAX_TYPE = "max"
             1,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos
         ),
@@ -95,7 +100,6 @@ def test_llama_demo(
     sampling_params,
     optimizations,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     reset_seeds,
     stress_test,
@@ -108,6 +112,14 @@ def test_llama_demo(
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
+    if paged_attention:
+        paged_attention_config = PagedAttentionConfig(
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks"],
+        )
+    else:
+        paged_attention_config = None
+
     return run_llama3_demo(
         user_input=input_prompts,
         mesh_device=mesh_device,
@@ -115,7 +127,7 @@ def test_llama_demo(
         batch_size=batch_size,
         num_batches=repeat_batches,
         paged_attention=paged_attention,
-        page_params=page_params,
+        paged_attention_config=paged_attention_config,
         max_generated_tokens=max_generated_tokens,
         optimizations=optimizations,
         sampling_params=sampling_params,
@@ -175,7 +187,7 @@ def merge_device_rows(df):
         if not blocks:
             break
 
-        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" in op_name:
+        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" or "Matmul_RS" in op_name:
             # For collective ops, take the average duration over all rows within a block
             device_kernel_durations = [
                 d["DEVICE KERNEL DURATION [ns]"]
@@ -236,21 +248,26 @@ def build_duration_per_instance_dict(input_dict, num_layers):
 def average_per_instance_dict(input_dict):
     averaged_dict = {}
     for op_code_with_id in input_dict:
-        averaged_dict[op_code_with_id] = sum(input_dict[op_code_with_id]) / len(input_dict[op_code_with_id])
+        input_dict_values = [v if v is not None else 0 for v in input_dict[op_code_with_id]]
+        averaged_dict[op_code_with_id] = (
+            sum(input_dict_values) / len(input_dict_values) if len(input_dict_values) > 0 else 0
+        )
     return averaged_dict
 
 
 def min_per_instance_dict(input_dict):
     min_dict = {}
     for op_code_with_id in input_dict:
-        min_dict[op_code_with_id] = min(input_dict[op_code_with_id])
+        input_dict_values = [v if v is not None else 0 for v in input_dict[op_code_with_id]]
+        min_dict[op_code_with_id] = min(input_dict[op_code_with_id]) if len(input_dict_values) > 0 else 0
     return min_dict
 
 
 def max_per_instance_dict(input_dict):
     max_dict = {}
     for op_code_with_id in input_dict:
-        max_dict[op_code_with_id] = max(input_dict[op_code_with_id])
+        input_dict_values = [v if v is not None else 0 for v in input_dict[op_code_with_id]]
+        max_dict[op_code_with_id] = max(input_dict[op_code_with_id]) if len(input_dict_values) > 0 else 0
     return max_dict
 
 
@@ -263,7 +280,7 @@ def print_dict(input_dict, dict_name):
 
 
 def is_collective_op(op_code):
-    return any(x in op_code for x in ("AllGather", "ReduceScatter", "AllReduce"))
+    return any(x in op_code for x in ("AllGather", "ReduceScatter", "AllReduce", "Matmul_RS"))
 
 
 def process_measurements(df, num_layers):
@@ -398,8 +415,11 @@ def test_llama_TG_perf_device(
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
     # Excluding compile run and capture trace entries
-    df_model_compilation = df[: int(len(df) / 3)]
-    df_model_trace = df[int(len(df) / 3 * 2) :]
+    len_without_second_sampling_compile_run = (
+        len(df) - NUM_OPS_IN_SAMPLING
+    )  # Need to subtract 1x sampling due to second compile run for sampling needed to get random sampling
+    df_model_compilation = df[: int(len_without_second_sampling_compile_run / 3)]
+    df_model_trace = df[int(len_without_second_sampling_compile_run / 3 * 2) + NUM_OPS_IN_SAMPLING :]
 
     # Excluding model embeddings and lmhead+sampling ops
     df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
@@ -482,6 +502,7 @@ def test_llama_TG_perf_device(
     print_dict(avg_kernel_duration_mid_layers_compilation, "avg_kernel_duration_mid_layers_compilation")
     print_dict(avg_kernel_duration_mid_layers_trace, "avg_kernel_duration_mid_layers_trace")
     print_dict(avg_dispatch_duration_mid_layers_trace, "avg_dispatch_duration_mid_layers_trace")
+    print_dict(avg_first_to_last_start_mid_layers_trace, "avg_first_to_last_start_mid_layers_trace")
 
     ## model tail ops
     print_dict(avg_kernel_duration_model_tail_compilation, "avg_kernel_duration_model_tail_compilation")
@@ -513,7 +534,19 @@ def test_llama_TG_perf_device(
                 max_kernel_duration = max_kernel_duration_mid_layers_compilation[op_code_with_id]
 
             avg_dispatch_duration = avg_dispatch_duration_mid_layers_trace[op_code_with_id]
+
+            # Avg first to last
             avg_first_to_last_start = avg_first_to_last_start_mid_layers_trace[op_code_with_id]
+            avg_first_to_last_start = avg_first_to_last_start if not math.isnan(avg_first_to_last_start) else 0
+
+            # Min first to last
+            min_first_to_last_start = min_first_to_last_start_mid_layers_trace[op_code_with_id]
+            min_first_to_last_start = min_first_to_last_start if not math.isnan(min_first_to_last_start) else 0
+
+            # Max first to last
+            max_first_to_last_start = max_first_to_last_start_mid_layers_trace[op_code_with_id]
+            max_first_to_last_start = max_first_to_last_start if not math.isnan(max_first_to_last_start) else 0
+
             # average
             add_benchmark_measurement(
                 profiler,
@@ -569,7 +602,7 @@ def test_llama_TG_perf_device(
                 0,
                 step_name,
                 op_name + "-model-first_to_last-min",
-                min_first_to_last_start_mid_layers_trace[op_code_with_id],
+                min_first_to_last_start,
             )
 
             # max
@@ -598,7 +631,7 @@ def test_llama_TG_perf_device(
                 0,
                 step_name,
                 op_name + "-model-first_to_last-max",
-                max_first_to_last_start_mid_layers_trace[op_code_with_id],
+                max_first_to_last_start,
             )
 
             # Verify kernel duration is within tolerance
@@ -783,18 +816,17 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
-    # Exclude compilaton and capture trace runs
-    df_model = df[int(len(df) / 3 * 2) :]
+    # Excluding compile run and capture trace entries
+    len_without_second_sampling_compile_run = (
+        len(df) - NUM_OPS_IN_SAMPLING
+    )  # Need to subtract 1x sampling due to second compile run for sampling needed to get random sampling
+    df_model = df[int(len_without_second_sampling_compile_run / 3 * 2) + NUM_OPS_IN_SAMPLING :]
 
     df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     assert len(df_layers) % num_layers == 0
     df_layers = df_layers[int(len(df_layers) / num_layers) :]  # Exclude first layer
 
     df_model_tail = df_model[DECODER_OP_END_INDEX:]
-
-    all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
-        orient="records"
-    )
 
     (
         _,

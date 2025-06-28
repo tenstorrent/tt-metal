@@ -7,8 +7,7 @@
 #include "dataflow_api.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "tests/ttnn/unit_tests/gtests/ccl/kernels/test_kernels.common.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_utils.hpp"
+#include "ttnn/operations/ccl/common/kernels/ccl_send_utils.hpp"
 
 struct unicast_mode {
     uint8_t distance;
@@ -203,9 +202,5 @@ void kernel_main() {
 
     noc_semaphore_wait(last_message_semaphore_address, 1);
 
-    bool closed_fabric_connection = terminate_fabric_endpoints_farthest_to_nearest(sender, a_packet_header_addr, arg_idx);
-
-    if (!closed_fabric_connection) {
-        sender.close();
-    }
+    sender.close();
 }

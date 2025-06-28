@@ -202,7 +202,7 @@ inline void llk_unpack_tilizeA_B(
         tile_index_a,
         tile_index_b,
         block_ct_dim,
-        num_faces,
+        num_faces
     );
 
     WAYPOINT("UPTD");

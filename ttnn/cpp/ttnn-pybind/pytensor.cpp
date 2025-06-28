@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -26,11 +27,11 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -42,10 +43,8 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::tensor {
-
-using tt::tt_metal::CoreCoord;
-
-namespace detail {
+namespace CMAKE_UNIQUE_NAMESPACE {
+namespace {
 
 #ifdef DEBUG
 
@@ -77,115 +76,97 @@ void log_external_operation(const operation::ExternalOperation& operation, const
 template <typename T>
 Tensor create_typed_tt_tensor_from_py_data(
     std::size_t py_data_ptr,
-    const TensorSpec& tensor_spec,
+    const Shape& py_data_shape,
+    const TensorLayout& tensor_layout,
     MeshDevice* device,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
-    const bool force_disable_borrow,
+    const tt::tt_metal::MemoryPin& pydata_pin,
     ttnn::QueueId cq_id,
-    float pad_value) {
+    float pad_value,
+    const distributed::TensorToMesh* mesh_mapper) {
     TT_FATAL(
-        !tensor_spec.memory_config().is_sharded() || tensor_spec.memory_config().shard_spec().has_value() ||
-            tensor_spec.memory_config().nd_shard_spec().has_value(),
+        !tensor_layout.get_memory_config().is_sharded() || tensor_layout.get_memory_config().shard_spec().has_value() ||
+            tensor_layout.get_memory_config().nd_shard_spec().has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
-    const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
-                                   tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
-                                   tensor_spec.data_type() == convert_to_data_type<T>();
+    tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_data_ptr), py_data_shape.volume());
 
-    tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_data_ptr), tensor_spec.logical_shape().volume());
-    if (pydata_borrowable && !force_disable_borrow) {
-        auto output = Tensor::from_borrowed_data(
+    // Shard pydata across mesh and apply `tensor_layout` at each shard.
+    // Shapes of multi device shards will be derived automatically.
+    if (mesh_mapper != nullptr) {
+        return ttnn::distributed::create_distributed_tensor(
             pydata_span,
-            tensor_spec.logical_shape(),
-            on_creation_callback,
-            on_destruction_callback,
-            tensor_spec.tile());
+            py_data_shape,
+            pydata_pin,
+            tensor_layout,
+            *mesh_mapper,
+            device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
+            cq_id,
+            static_cast<T>(pad_value));
+    }
+
+    // Otherwise, create a single tt tensor from the pydata.
+    const TensorSpec tensor_spec(py_data_shape, tensor_layout);
+    if (const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
+                                       tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
+                                       tensor_spec.data_type() == convert_to_data_type<T>();
+        pydata_borrowable) {
+        auto output =
+            Tensor::from_borrowed_data(pydata_span, tensor_spec.logical_shape(), pydata_pin, tensor_spec.tile());
         if (device != nullptr) {
             output = output.to_device(device, tensor_spec.memory_config(), cq_id);
         }
         return output;
     } else {
         return Tensor::from_span(
-            tt::stl::Span<const T>(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
+            tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
     }
 }
 
 Tensor create_tt_tensor_from_py_data(
     std::size_t py_data_ptr,
-    const TensorSpec& tensor_spec,
+    const Shape& py_data_shape,
+    const TensorLayout& tensor_layout,
     MeshDevice* device,
-    const bool force_disable_borrow,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    const tt::tt_metal::MemoryPin& pydata_pin,
     ttnn::QueueId cq_id,
-    float pad_value) {
+    float pad_value,
+    const distributed::TensorToMesh* mesh_mapper) {
     auto create_concrete = [&]<typename T>() {
         return create_typed_tt_tensor_from_py_data<T>(
-            py_data_ptr,
-            tensor_spec,
-            device,
-            on_creation_callback,
-            on_destruction_callback,
-            force_disable_borrow,
-            cq_id,
-            pad_value);
+            py_data_ptr, py_data_shape, tensor_layout, device, pydata_pin, cq_id, pad_value, mesh_mapper);
     };
-    switch (tensor_spec.data_type()) {
+    switch (tensor_layout.get_data_type()) {
         case DataType::UINT8: return create_concrete.operator()<uint8_t>();
         case DataType::UINT16: return create_concrete.operator()<uint16_t>();
         case DataType::INT32: return create_concrete.operator()<int32_t>();
         case DataType::UINT32: return create_concrete.operator()<uint32_t>();
         case DataType::FLOAT32: return create_concrete.operator()<float>();
-        // TODO: This is not supported for numpy
         case DataType::BFLOAT16: return create_concrete.operator()<bfloat16>();
-
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
             return create_concrete.operator()<float>();
         }
         case DataType::INVALID: {
-            TT_THROW("Unsupported DataType: {}", tensor_spec.data_type());
+            TT_THROW("Unsupported DataType: {}", tensor_layout.get_data_type());
         }
     }
 
-    TT_THROW("Unsupported DataType: {}", tensor_spec.data_type());
+    TT_THROW("Unsupported DataType: {}", tensor_layout.get_data_type());
 }
 
-Tensor convert_python_tensor_to_tt_tensor(
-    const py::handle& py_tensor,
-    std::optional<DataType> optional_data_type,
-    std::optional<Layout> optional_layout,
-    const std::optional<Tile>& optional_tile,
-    const MemoryConfig& memory_config,
-    MeshDevice* device,
-    ttnn::QueueId cq_id,
-    float pad_value,
-    const bool force_disable_borrow = false) {
-    GraphTracker::instance().track_function_start(
-        "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
-        py_tensor,
-        optional_data_type,
-        optional_layout,
-        optional_tile,
-        memory_config,
-        device,
-        cq_id,
-        pad_value,
-        force_disable_borrow);
-    py::object torch = py::module_::import("torch");
-    py::object np = py::module_::import("numpy");
-
-    auto py_dtype = py_tensor.attr("dtype");
-    auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
-
-    DataType data_type;
-
+// Preprocess the python tensor, optionally performing dtype conversion.
+struct PreprocessedPyTensor {
+    DataType data_type = DataType::INVALID;
     py::object contiguous_py_tensor;
-    size_t num_elements = 0;
-    size_t py_data_ptr = 0;
-    if (py::isinstance(py_tensor, torch.attr("Tensor"))) {
-        contiguous_py_tensor = py_tensor.attr("contiguous")();
+    std::size_t num_elements = 0;
+    std::size_t py_data_ptr = 0;
+};
+
+PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<DataType> optional_data_type) {
+    const auto py_dtype = py_tensor.attr("dtype");
+    if (py::object torch = py::module_::import("torch"); py::isinstance(py_tensor, torch.attr("Tensor"))) {
+        py::object contiguous_py_tensor = py_tensor.attr("contiguous")();
+        DataType data_type = DataType::INVALID;
 
         // Override the data type if there is a user-provided one
         // Otherwise, figure it out from torch dtype
@@ -198,12 +179,10 @@ Tensor convert_python_tensor_to_tt_tensor(
         } else if (py_dtype.equal(torch.attr("bfloat16"))) {
             data_type = DataType::BFLOAT16;
         } else if (py_dtype.equal(torch.attr("int64"))) {
-            // TODO: add DataType::INT64?
             data_type = DataType::UINT32;
         } else if (py_dtype.equal(torch.attr("int32"))) {
             data_type = DataType::INT32;
         } else if (py_dtype.equal(torch.attr("int16"))) {
-            // TODO: add DataType::INT16?
             data_type = DataType::UINT16;
         } else if (py_dtype.equal(torch.attr("uint8"))) {
             data_type = DataType::UINT8;
@@ -246,12 +225,15 @@ Tensor convert_python_tensor_to_tt_tensor(
             }
         }
 
-        num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("numel")());
-        py_data_ptr = py::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")());
-    } else if (py::isinstance(py_tensor, np.attr("ndarray"))) {
-        TT_FATAL(!force_disable_borrow, "Disabling borrowed buffers for numpy tensors is untested!");
-
-        contiguous_py_tensor = np.attr("ascontiguousarray")(py_tensor);
+        return PreprocessedPyTensor{
+            .data_type = data_type,
+            .contiguous_py_tensor = contiguous_py_tensor,
+            .num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("numel")()),
+            .py_data_ptr = py::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")()),
+        };
+    } else if (py::object np = py::module_::import("numpy"); py::isinstance(py_tensor, np.attr("ndarray"))) {
+        py::object contiguous_py_tensor = np.attr("ascontiguousarray")(py_tensor);
+        DataType data_type = DataType::INVALID;
 
         // Override the data type if there is a user-provided one
         // Otherwise, figure it out from numpy dtype
@@ -305,24 +287,54 @@ Tensor convert_python_tensor_to_tt_tensor(
             }
         }
 
-        num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("size"));
-        py_data_ptr = py::cast<std::size_t>(py::cast<py::tuple>(
-            py::cast<py::dict>(contiguous_py_tensor.attr("__array_interface__"))[py::str("data")])[0]);
+        return PreprocessedPyTensor{
+            .data_type = data_type,
+            .contiguous_py_tensor = contiguous_py_tensor,
+            .num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("size")),
+            .py_data_ptr = py::cast<std::size_t>(py::cast<py::tuple>(
+                py::cast<py::dict>(contiguous_py_tensor.attr("__array_interface__"))[py::str("data")])[0]),
+        };
     } else {
         TT_THROW("The argument must be of type torch.Tensor or numpy.ndarray!");
     }
+}
 
-    // TODO: Remove check of num_elements from python against volume of ttnn::Shape
+Tensor convert_python_tensor_to_tt_tensor(
+    const py::handle& py_tensor,
+    std::optional<DataType> optional_data_type,
+    std::optional<Layout> optional_layout,
+    const std::optional<Tile>& optional_tile,
+    const MemoryConfig& memory_config,
+    MeshDevice* device,
+    ttnn::QueueId cq_id,
+    float pad_value,
+    const distributed::TensorToMesh* mesh_mapper) {
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
+        py_tensor,
+        optional_data_type,
+        optional_layout,
+        optional_tile,
+        memory_config,
+        device,
+        cq_id,
+        pad_value,
+        mesh_mapper);
+
+    auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
+    const auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
+
     TT_FATAL(
-        num_elements == shape.volume(),
+        preprocessed_py_tensor.num_elements == shape.volume(),
         "Number of elements from python tensor {} must match volume of shape {}!",
-        num_elements,
+        preprocessed_py_tensor.num_elements,
         shape.volume());
 
     const Layout layout = [&]() {
         // Block float types require tile layout.
         // Choose tile by default and disallow overriding to anything else.
-        if (data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
+        if (preprocessed_py_tensor.data_type == DataType::BFLOAT8_B ||
+            preprocessed_py_tensor.data_type == DataType::BFLOAT4_B) {
             TT_FATAL(
                 !optional_layout.has_value() or *optional_layout == Layout::TILE,
                 "Tile layout is required for tensor of type bfloat8_b or bfloat4_b; got {}.",
@@ -333,56 +345,22 @@ Tensor convert_python_tensor_to_tt_tensor(
         }
     }();
 
-    auto tensor_spec = TensorSpec(shape, TensorLayout(data_type, PageConfig(layout, optional_tile), memory_config));
-    auto on_creation_callback = [tensor = contiguous_py_tensor] { tensor.inc_ref(); };
-    auto on_destruction_callback = [tensor = contiguous_py_tensor] { tensor.dec_ref(); };
+    // Important: `py::object` copying and destruction must be done while holding GIL, which pybind ensures for a thread
+    // that calls the C++ APIs. We wrap `py::object` in `MemoryPin` so that multi-threaded C++ code only increments /
+    // decrements the reference count on the memory pin; the last decrement to the pin should be triggered from the
+    // pybind caller thread, which will correctly decrement the `py::object` reference count while hodling GIL.
+    tt::tt_metal::MemoryPin pydata_pin(std::make_shared<py::object>(preprocessed_py_tensor.contiguous_py_tensor));
+
     auto output = create_tt_tensor_from_py_data(
-        py_data_ptr,
-        tensor_spec,
+        preprocessed_py_tensor.py_data_ptr,
+        shape,
+        TensorLayout(preprocessed_py_tensor.data_type, PageConfig(layout, optional_tile), memory_config),
         device,
-        force_disable_borrow,
-        on_creation_callback,
-        on_destruction_callback,
+        pydata_pin,
         cq_id,
-        pad_value);
-
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
-}
-
-Tensor convert_python_tensors_to_tt_tensors(
-    py::list tensor_shards,
-    std::optional<DataType> data_type,
-    std::optional<Layout> optional_layout,
-    const std::optional<Tile>& optional_tile,
-    const MemoryConfig& memory_config,
-    ttnn::QueueId cq_id,
-    float pad_value,
-    const std::unordered_map<std::string, std::string>& strategy) {
-    GraphTracker::instance().track_function_start(
-        "tt::tt_metal::detail::convert_python_tensors_to_tt_tensors",
-        tensor_shards,
-        data_type,
-        optional_layout,
-        optional_tile,
-        memory_config,
         pad_value,
-        strategy);
-    std::vector<Tensor> tt_shards;
-    for (const auto& shard : tensor_shards) {
-        tt_shards.push_back(detail::convert_python_tensor_to_tt_tensor(
-            shard,
-            data_type,
-            optional_layout,
-            optional_tile,
-            memory_config,
-            /*device=*/nullptr,
-            cq_id,
-            pad_value,
-            /*force_disable_borrow=*/true));
-    }
-    auto output = distributed::aggregate_as_tensor(tt_shards, get_distributed_tensor_config(strategy));
+        mesh_mapper);
+
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -406,16 +384,12 @@ HostBuffer create_row_major_host_buffer(
     }
 
     // No modifications needed; direclty return buffer
-    if (tensor_spec.layout() == Layout::ROW_MAJOR and tensor_spec.logical_2d_shape() == tensor_spec.physical_shape()) {
+    if (tensor_impl::logical_matches_physical(tensor_spec)) {
         return host_buffer;
     }
 
-    // TODO: Switch to use span in decode_tensor_data and avoid data copy here
-    auto typed_view = host_buffer::get_as<T>(host_buffer);
-    std::vector<T> physical_data(typed_view.begin(), typed_view.end());
-
-    // See implementation for documentation
-    auto logical_data = tensor_impl::decode_tensor_data(std::move(physical_data), tensor_spec);
+    auto typed_view = host_buffer::get_as<const T>(host_buffer);
+    auto logical_data = tensor_impl::decode_tensor_data(typed_view, tensor_spec);
 
     return HostBuffer(std::move(logical_data));
 }
@@ -423,7 +397,7 @@ HostBuffer create_row_major_host_buffer(
 HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padded_output) {
     TT_ASSERT(is_cpu_tensor(tt_tensor) || is_multi_device_host_tensor(tt_tensor), "Tensor must be on host for padding");
 
-    const auto& tensor_spec = tt_tensor.get_tensor_spec();
+    const auto& tensor_spec = tt_tensor.tensor_spec();
     auto convert_to_logical = [&tensor_spec, padded_output](const HostBuffer& buffer) {
         const auto tt_dtype = tensor_spec.data_type();
         switch (tt_dtype) {
@@ -468,16 +442,21 @@ HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padde
         tt::stl::overloaded{
             [](const HostStorage& storage) { return storage.buffer; },
             [](const MultiDeviceHostStorage& storage) {
-                TT_FATAL(storage.num_buffers() == 1, "Can't get a single buffer from multi device host storage");
-                return storage.get_buffer(0);
+                std::vector<HostBuffer> buffers;
+                storage.distributed_buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+                TT_FATAL(
+                    buffers.size() == 1,
+                    "Can't get a single buffer from multi device host storage of size: {}",
+                    buffers.size());
+                return buffers.front();
             },
             [&tt_tensor](auto&&) -> HostBuffer {
                 TT_THROW(
                     "Tensor with {} cannot be converted to torch",
-                    tt::stl::get_active_type_name_in_variant(tt_tensor.get_storage()));
+                    tt::stl::get_active_type_name_in_variant(tt_tensor.storage()));
             },
         },
-        tt_tensor.get_storage()));
+        tt_tensor.storage()));
 }
 
 py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool padded_output = false) {
@@ -492,7 +471,7 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool
     auto frombuffer = torch.attr("frombuffer");
 
     py::object torch_dtype = [&]() {
-        switch (tt_tensor.get_tensor_spec().data_type()) {
+        switch (tt_tensor.tensor_spec().data_type()) {
             case DataType::UINT8: return torch.attr("uint8");
             case DataType::UINT16: return torch.attr("int16");
             case DataType::INT32: return torch.attr("int32");
@@ -506,11 +485,11 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool
         TT_THROW("Unreachable");
     }();
 
-    auto logical_shape = tt_tensor.get_logical_shape();
+    auto logical_shape = tt_tensor.logical_shape();
     auto view = logical_shape.view();
     std::vector<uint32_t> torch_shape(view.begin(), view.end());
     auto tensor = [&]() {
-        if (tt_tensor.volume() == 0) {
+        if (tt_tensor.physical_volume() == 0) {
             auto pytorch_empty = torch.attr("empty");
             return pytorch_empty(torch_shape, py::arg("dtype") = torch_dtype);
         }
@@ -518,7 +497,7 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool
     }();
 
     if (padded_output) {
-        auto shape = tt_tensor.get_padded_shape();
+        const auto& shape = tt_tensor.padded_shape();
         torch_shape = std::vector<std::uint32_t>(shape.cbegin(), shape.cend());
     }
     tensor = tensor.attr("reshape")(torch_shape);
@@ -537,7 +516,7 @@ py::object convert_tt_tensor_to_numpy_tensor(const Tensor& tt_tensor) {
     auto frombuffer = np.attr("frombuffer");
 
     py::object np_dtype = [&]() {
-        switch (tt_tensor.get_tensor_spec().data_type()) {
+        switch (tt_tensor.tensor_spec().data_type()) {
             case DataType::UINT8: return np.attr("ubyte");
             case DataType::UINT16: return np.attr("int16");
             case DataType::INT32: return np.attr("int32");
@@ -551,7 +530,7 @@ py::object convert_tt_tensor_to_numpy_tensor(const Tensor& tt_tensor) {
         TT_THROW("Unreachable");
     }();
 
-    auto logical_shape = tt_tensor.get_logical_shape();
+    auto logical_shape = tt_tensor.logical_shape();
     auto view = logical_shape.view();
     std::vector<uint32_t> np_shape(view.begin(), view.end());
     auto tensor = frombuffer(buffer, py::arg("dtype") = np_dtype);
@@ -613,7 +592,8 @@ auto parse_external_operation(
     return std::make_tuple(operation, input_tensors);
 }
 
-}  // namespace detail
+}  // namespace
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 
 void pytensor_module_types(py::module& m_tensor) {
     // Tensor constructors that accept device and .to_device() function use keep alive call policy to communicate that
@@ -663,9 +643,9 @@ void pytensor_module(py::module& m_tensor) {
                 std::function([function, function_name](const py::args& args, const py::kwargs& kwargs) {
                     ZoneScopedN("TT_DNN_FALLBACK_OP");
                     auto [operation, input_tensors] =
-                        detail::parse_external_operation(function, args, kwargs, function_name);
+                        CMAKE_UNIQUE_NAMESPACE::parse_external_operation(function, args, kwargs, function_name);
                     GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
-                    detail::log_external_operation(operation, input_tensors);
+                    CMAKE_UNIQUE_NAMESPACE::log_external_operation(operation, input_tensors);
                     auto output = function(*args, **kwargs);
                     TracyOpTTNNExternal(
                         operation, input_tensors, ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
@@ -860,7 +840,7 @@ void pytensor_module(py::module& m_tensor) {
 
                     py_tensor = torch.randn((1, 1, 32, 32))
                     tt_device = ttnn.CreateDevice(0)
-                    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.SINGLE_BANK)
+                    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED)
                     // ...
                     ttnn.Tensor(
                         py_tensor.reshape(-1).tolist(),
@@ -872,69 +852,6 @@ void pytensor_module(py::module& m_tensor) {
                     )
             )doc")
         .def(
-            py::init<>([](const py::object& tensor,
-                          std::optional<DataType> data_type,
-                          const std::unordered_map<std::string, std::string>& strategy,
-                          const std::optional<Tile>& optional_tile,
-                          std::optional<Layout> optional_layout,
-                          const std::optional<MemoryConfig>& optional_memory_config,
-                          std::optional<float> pad_value) {
-                if (py::isinstance<py::list>(tensor)) {
-                    return detail::convert_python_tensors_to_tt_tensors(
-                        tensor,
-                        data_type,
-                        optional_layout,
-                        optional_tile,
-                        optional_memory_config.value_or(MemoryConfig{}),
-                        ttnn::DefaultQueueId,
-                        pad_value.value_or(0.0f),
-                        strategy);
-                }
-                return detail::convert_python_tensor_to_tt_tensor(
-                    tensor,
-                    data_type,
-                    optional_layout,
-                    optional_tile,
-                    optional_memory_config.value_or(MemoryConfig{}),
-                    /*device=*/nullptr,
-                    ttnn::DefaultQueueId,
-                    pad_value.value_or(0.0f));
-            }),
-            py::arg("tensor"),
-            py::arg("data_type") = std::nullopt,
-            py::arg("strategy") = std::unordered_map<std::string, std::string>(),
-            py::arg("tile") = std::nullopt,
-            py::arg("layout") = std::nullopt,
-            py::arg("mem_config") = std::nullopt,
-            py::arg("pad_value") = std::nullopt,
-            py::return_value_policy::move,
-            R"doc(
-                +--------------+--------------------------------+
-                | Argument     | Description                    |
-                +==============+================================+
-                | tensor       | Pytorch or Numpy Tensor        |
-                +--------------+--------------------------------+
-                | data_type    | TT Tensor data type (optional) |
-                +--------------+--------------------------------+
-                | strategy     | TT Strategy (optional)         |
-                +--------------+--------------------------------+
-                | tile         | TT Tile Spec (optional)        |
-                +--------------+--------------------------------+
-                | layout       | TT Layout (optional)           |
-                +--------------+--------------------------------+
-                | mem_config   | TT Memory Config (optional)    |
-                +--------------+--------------------------------+
-                | pad_value    | Padding value (optional)       |
-                +--------------+--------------------------------+
-
-                Example of creating a TT Tensor that uses torch.Tensor's storage as its own storage:
-
-                .. code-block:: python
-
-                    py_tensor = torch.randn((1, 1, 32, 32))
-                    ttnn.Tensor(py_tensor)
-            )doc")
-        .def(
             py::init<>([](const py::object& python_tensor,
                           std::optional<DataType> data_type,
                           std::optional<MeshDevice*> device,
@@ -942,25 +859,28 @@ void pytensor_module(py::module& m_tensor) {
                           const std::optional<MemoryConfig>& mem_config,
                           const std::optional<Tile>& tile,
                           ttnn::QueueId cq_id,
-                          std::optional<float> pad_value) {
-                return detail::convert_python_tensor_to_tt_tensor(
+                          std::optional<float> pad_value,
+                          const distributed::TensorToMesh* mesh_mapper) {
+                return CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
                     python_tensor,
                     data_type,
-                    layout.value_or(Layout::ROW_MAJOR),
+                    layout,
                     tile,
                     mem_config.value_or(MemoryConfig{}),
                     device.value_or(nullptr),
                     cq_id,
-                    pad_value.value_or(0.0f));
+                    pad_value.value_or(0.0f),
+                    mesh_mapper);
             }),
             py::arg("tensor"),
             py::arg("data_type") = std::nullopt,
             py::arg("device") = std::nullopt,
-            py::arg("layout").noconvert() = Layout::ROW_MAJOR,
+            py::arg("layout").noconvert() = std::nullopt,
             py::arg("mem_config").noconvert() = std::nullopt,
             py::arg("tile").noconvert() = std::nullopt,
             py::arg("cq_id") = ttnn::DefaultQueueId,
             py::arg("pad_value") = std::nullopt,
+            py::arg("mesh_mapper") = nullptr,
             py::return_value_policy::move,
             R"doc(
                 +--------------+--------------------------------+
@@ -982,6 +902,8 @@ void pytensor_module(py::module& m_tensor) {
                 +--------------+--------------------------------+
                 | pad_value    | Padding value (optional)       |
                 +--------------+--------------------------------+
+                | mesh_mapper  | TT-NN Mesh Mapper (optional)    |
+                +--------------+--------------------------------+
 
                 Example of creating a TT Tensor from numpy tensor:
 
@@ -991,12 +913,12 @@ void pytensor_module(py::module& m_tensor) {
                     py_tensor = np.zeros((1, 1, 32, 32))
                     ttnn.Tensor(py_tensor, ttnn.bfloat16, device, ttnn.TILE_LAYOUT)
             )doc")
-        .def_property_readonly("spec", [](const Tensor& self) { return self.get_tensor_spec(); })
-        .def_property_readonly("shape", [](const Tensor& self) { return self.get_logical_shape(); })
-        .def_property_readonly("padded_shape", [](const Tensor& self) { return self.get_padded_shape(); })
-        .def_property_readonly("dtype", [](const Tensor& self) { return self.get_dtype(); })
-        .def_property_readonly("layout", [](const Tensor& self) { return self.get_layout(); })
-        .def_property_readonly("tile", [](const Tensor& self) { return self.get_tensor_spec().tile(); })
+        .def_property_readonly("spec", [](const Tensor& self) { return self.tensor_spec(); })
+        .def_property_readonly("shape", [](const Tensor& self) { return self.logical_shape(); })
+        .def_property_readonly("padded_shape", [](const Tensor& self) { return self.padded_shape(); })
+        .def_property_readonly("dtype", [](const Tensor& self) { return self.dtype(); })
+        .def_property_readonly("layout", [](const Tensor& self) { return self.layout(); })
+        .def_property_readonly("tile", [](const Tensor& self) { return self.tensor_spec().tile(); })
         .def(
             "deallocate",
             [](Tensor& self, bool force) { return self.deallocate(force); },
@@ -1120,9 +1042,8 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "to",
-            py::overload_cast<Layout, IDevice*>(&Tensor::to_layout, py::const_),
+            py::overload_cast<Layout>(&Tensor::to_layout, py::const_),
             py::arg("target_layout").noconvert(),
-            py::arg("worker") = nullptr,
             R"doc(
             Convert TT Tensor to provided memory layout. Available layouts conversions are:
 
@@ -1134,37 +1055,10 @@ void pytensor_module(py::module& m_tensor) {
             +===========+=================================================+============================+================================+==========+
             | arg0      | Target memory layout                            | ttnn.Layout                | ROW_MAJOR, TILE                | Yes      |
             +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
-            | arg1      | Worker thread performing layout conversion      | ttnn.Device                | Thread tied to TT accelerator  | No       |
-            |           | (optional)                                      |                            | device                         |          |
-            +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
 
             .. code-block:: python
 
-                tt_tensor = tt_tensor.to(ttnn.Layout.TILE, worker)
-        )doc")
-        .def(
-            "to",
-            py::overload_cast<Layout, MeshDevice*>(&Tensor::to_layout, py::const_),
-            py::arg("target_layout").noconvert(),
-            py::arg("mesh_device") = nullptr,
-            R"doc(
-            Convert TT Tensor to provided memory layout. Available layouts conversions are:
-
-            * ROW_MAJOR to TILE
-            * TILE to ROW_MAJOR
-
-            +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
-            | Argument  | Description                                     | Data type                  | Valid range                    | Required |
-            +===========+=================================================+============================+================================+==========+
-            | arg0      | Target memory layout                            | ttnn.Layout                | ROW_MAJOR, TILE                | Yes      |
-            +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
-            | arg1      | Worker thread performing layout conversion      | ttnn.Device                | Thread tied to TT accelerator  | No       |
-            |           | (optional)                                      |                            | device                         |          |
-            +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
-
-            .. code-block:: python
-
-                tt_tensor = tt_tensor.to(ttnn.Layout.TILE, mesh_device)
+                tt_tensor = tt_tensor.to(ttnn.Layout.TILE)
         )doc")
         .def(
             "pad",
@@ -1449,19 +1343,18 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             // TODO: Rename to physical_volume
             "volume",
-            [](const Tensor& self) { return self.volume(); },
+            [](const Tensor& self) { return self.physical_volume(); },
             R"doc(
             Get the volume of the tensor.
 
             .. code-block:: python
 
-                volume = tt_tensor.volume()
+                volume = tt_tensor.physical_volume()
 
         )doc")
         .def(
-            // TODO: Rename to volume
             "logical_volume",
-            [](const Tensor& self) { return self.get_logical_volume(); },
+            [](const Tensor& self) { return self.logical_volume(); },
             R"doc(
             Get the logical volume of the tensor.
 
@@ -1505,7 +1398,9 @@ void pytensor_module(py::module& m_tensor) {
             py::return_value_policy::reference)
         .def(
             "to_torch_with_padded_shape",
-            [](const Tensor& self) -> py::object { return detail::convert_tt_tensor_to_torch_tensor(self, true); },
+            [](const Tensor& self) -> py::object {
+                return CMAKE_UNIQUE_NAMESPACE::convert_tt_tensor_to_torch_tensor(self, true);
+            },
             R"doc(
             Convert tensor to torch tensor using legacy padded shape.
             WARNING: Will be deprecated soon!
@@ -1519,7 +1414,9 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "to_torch",
-            [](const Tensor& self) -> py::object { return detail::convert_tt_tensor_to_torch_tensor(self); },
+            [](const Tensor& self) -> py::object {
+                return CMAKE_UNIQUE_NAMESPACE::convert_tt_tensor_to_torch_tensor(self);
+            },
             R"doc(
             Convert tensor to torch tensor.
 
@@ -1532,7 +1429,9 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "to_numpy",
-            [](const Tensor& self) -> py::object { return detail::convert_tt_tensor_to_numpy_tensor(self); },
+            [](const Tensor& self) -> py::object {
+                return CMAKE_UNIQUE_NAMESPACE::convert_tt_tensor_to_numpy_tensor(self);
+            },
             R"doc(
             Convert tensor to numpy tensor.
 
@@ -1552,10 +1451,10 @@ void pytensor_module(py::module& m_tensor) {
                         [&](auto&&) -> HostBuffer {
                             TT_THROW(
                                 "{} doesn't support buffer method",
-                                tt::stl::get_active_type_name_in_variant(self.get_storage()));
+                                tt::stl::get_active_type_name_in_variant(self.storage()));
                         },
                     },
-                    self.get_storage());
+                    self.storage());
             },
             R"doc(
             Get the underlying buffer.
@@ -1579,10 +1478,10 @@ void pytensor_module(py::module& m_tensor) {
                         [&](auto&&) -> uint32_t {
                             TT_THROW(
                                 "{} doesn't support buffer_address method",
-                                tt::stl::get_active_type_name_in_variant(self.get_storage()));
+                                tt::stl::get_active_type_name_in_variant(self.storage()));
                         },
                     },
-                    self.get_storage());
+                    self.storage());
             },
             R"doc(
             Get the address of the underlying buffer.
@@ -1595,16 +1494,16 @@ void pytensor_module(py::module& m_tensor) {
 
         )doc")
         .def(
-            "get_layout", [](const Tensor& self) { return self.get_layout(); }, R"doc(
+            "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(
             Get memory layout of TT Tensor.
 
             .. code-block:: python
 
-                layout = tt_tensor.get_layout()
+                layout = tt_tensor.layout()
 
         )doc")
         .def(
-            "get_tile", [](const Tensor& self) { return self.get_tensor_spec().tile(); }, R"doc(
+            "get_tile", [](const Tensor& self) { return self.tensor_spec().tile(); }, R"doc(
             Get tile dims of TT Tensor.
 
             .. code-block:: python
@@ -1640,12 +1539,12 @@ void pytensor_module(py::module& m_tensor) {
 
         )doc")
         .def(
-            "get_dtype", [](const Tensor& self) { return self.get_dtype(); }, R"doc(
+            "get_dtype", [](const Tensor& self) { return self.dtype(); }, R"doc(
             Get dtype of TT Tensor.
 
             .. code-block:: python
 
-                dtype = tt_tensor.get_dtype()
+                dtype = tt_tensor.dtype()
         )doc")
         .def(
             "reshape",

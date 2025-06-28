@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,6 @@ from models.demos.ufld_v2.tests.ufld_v2_performant import (
 def test_run_ufld_v2_inference(
     device,
     device_batch_size,
-    use_program_cache,
 ):
     run_ufld_v2_inference(
         device,
@@ -29,7 +28,6 @@ def test_run_ufld_v2_inference(
 def test_run_ufld_v2_trace_inference(
     device,
     device_batch_size,
-    use_program_cache,
 ):
     run_ufld_v2_trace_inference(
         device,
@@ -44,7 +42,6 @@ def test_run_ufld_v2_trace_inference(
 def test_run_ufld_v2_trace_2cq_inference(
     device,
     device_batch_size,
-    use_program_cache,
 ):
     ufld_v2_trace_2cqs_inference(
         device=device,

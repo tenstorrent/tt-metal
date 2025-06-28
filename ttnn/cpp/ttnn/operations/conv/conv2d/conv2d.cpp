@@ -13,7 +13,7 @@
 #include "tt-metalium/assert.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
-#include "tt-metalium/small_vector.hpp"
+#include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -194,11 +194,7 @@ Result conv2d_DRAM(
     TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(conv_config.dtype != tt::tt_metal::DataType::BFLOAT8_B, "Conv DRAM currently doesn't support BFLOAT8_B");
-    TT_FATAL(
-        input_tensor_on_device.dtype() == tt_metal::DataType::BFLOAT16, "Input Tensor to Conv DRAM should be BFLOAT16");
-    TT_FATAL(
-        input_tensor_on_device.layout() == tt_metal::Layout::ROW_MAJOR,
-        "Input Tensor to Conv DRAM should be in Row Major Layout");
+
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
@@ -295,7 +291,7 @@ Result conv2d_DRAM(
                 out_channels,
                 output_slice_height,
                 output_slice_width,
-                weight_tensor.get_logical_shape()[3],
+                weight_tensor.logical_shape()[3],
                 input_slice_height,
                 input_slice_width,
                 compute_grid_size,
@@ -379,6 +375,14 @@ Result conv2d_DRAM(
         if (sliced_output_tensor.layout() != Layout::ROW_MAJOR) {
             sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
         }
+        if (sliced_output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+            // slice_write expects the output tensor to be correctly shaped when its in interleaved memory layout.
+            sliced_output_tensor = ttnn::reshape(
+                sliced_output_tensor,
+                ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
+                ttnn::Shape(
+                    {batch_size, output_slice_height, output_slice_width, sliced_output_tensor.get_padded_shape()[3]}));
+        }
         ttnn::experimental::slice_write(
             queue_id,
             sliced_output_tensor,
@@ -394,8 +398,8 @@ Result conv2d_DRAM(
     if (conv_config.deallocate_activation) {
         input_tensor_on_device.deallocate(true);
     }
-    const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.get_logical_shape());
-    const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.get_padded_shape());
+    const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
+    const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
 
     dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
 
@@ -425,7 +429,7 @@ Result conv2d_L1(
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     auto input_tensor = input_tensor_;
-    auto weight_tensor = weight_tensor_;
+    const auto& weight_tensor = weight_tensor_;
     std::optional<ttnn::Tensor> bias_tensor = bias_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     // Store the original stride size for weight folding
@@ -434,6 +438,10 @@ Result conv2d_L1(
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
         input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, false);
+        if (conv_config.deallocate_activation) {
+            Tensor input_tensor_pre_folded = input_tensor_;
+            input_tensor_pre_folded.deallocate(true);
+        }
 
         // Update the input tensor parameters to the folding result
         input_height = folding_result.input_height;
@@ -574,9 +582,8 @@ Result conv2d_L1(
             if (input_tensor_post_tm.layout() == Layout::TILE) {
                 // Reshape is used as a workaround to an issue in to_layout mentioned here :
                 // https://github.com/tenstorrent/tt-metal/issues/16330
-                input_tensor_post_tm = ttnn::reshape(input_tensor_post_tm, input_tensor_post_tm.get_padded_shape());
-                input_tensor_post_tm =
-                    ttnn::to_layout(input_tensor_post_tm, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
+                input_tensor_post_tm = ttnn::reshape(input_tensor_post_tm, input_tensor_post_tm.padded_shape());
+                input_tensor_post_tm = ttnn::to_layout(input_tensor_post_tm, Layout::ROW_MAJOR);
             }
         } else {
             Tensor halo_output = ttnn::halo(
@@ -636,8 +643,13 @@ Result conv2d_L1(
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         if (input_tensor_post_tm.layout() != Layout::TILE) {
-            input_tensor_post_tm =
-                ttnn::to_layout(input_tensor_post_tm, Layout::TILE, std::nullopt, std::nullopt, device);
+            Tensor input_tensor_post_tm_tilized =
+                ttnn::to_layout(input_tensor_post_tm, Layout::TILE);
+            if (conv_config.deallocate_activation) {
+                input_tensor_post_tm.deallocate(/*force*/ true);
+                input_tensor_post_tm_tilized = ttnn::move(input_tensor_post_tm_tilized);
+            }
+            input_tensor_post_tm = input_tensor_post_tm_tilized;
         }
 
         // run conv as matmul
@@ -672,6 +684,9 @@ Result conv2d_L1(
             activation,
             compute_config);
 
+        if (conv_config.deallocate_activation) {
+            input_tensor_post_tm.deallocate(/*force*/ true);
+        }
         if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }

@@ -163,7 +163,7 @@ private:
 
 inline ProgramHashToOpName program_hash_to_opname_{};
 
-static void start_tracy_zone(const string& source, const string& functName, uint32_t lineNum, uint32_t color = 0) {
+inline void start_tracy_zone(const string& source, const string& functName, uint32_t lineNum, uint32_t color = 0) {
 #if defined(TRACY_ENABLE)
     auto tracySrcLoc =
         ___tracy_alloc_srcloc(lineNum, source.c_str(), source.length(), functName.c_str(), functName.length());
@@ -176,7 +176,7 @@ static void start_tracy_zone(const string& source, const string& functName, uint
 #endif
 }
 
-static bool stop_tracy_zone(const string& name = "", uint32_t color = 0) {
+inline bool stop_tracy_zone(const string& name = "", uint32_t color = 0) {
     bool callStackWasEmpty = true;
 #if defined(TRACY_ENABLE)
     if (!call_stack.empty()) {
@@ -195,11 +195,11 @@ static bool stop_tracy_zone(const string& name = "", uint32_t color = 0) {
     return callStackWasEmpty;
 }
 
-static void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) {
+inline void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) {
     TracyMessageC(source.c_str(), source.size(), color);
 }
 
-static void tracy_frame() { FrameMark; }
+inline void tracy_frame() { FrameMark; }
 
 #if defined(TRACY_ENABLE)
 static inline json get_kernels_json(chip_id_t device_id, const Program& program) {
@@ -252,7 +252,7 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
                     if (kernelSizes["ncrisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
                         kernelSizes["ncrisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
                     }
-                } else if (kernel->processor() == RISCV::ERISC) {
+                } else if (kernel->processor() == RISCV::ERISC or kernel->processor() == RISCV::ERISC1) {
                     if (kernelSizes["erisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
                         kernelSizes["erisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
                     }
@@ -280,13 +280,13 @@ static inline json get_tensor_json(const Tensor& tensor) {
         ret["storage_type"] = fmt::format("{}", magic_enum::enum_name(tensor.storage_type()));
     }
 
-    auto tensor_shape = tensor.get_padded_shape();
+    auto tensor_shape = tensor.padded_shape();
     ret["shape"]["W"] = tensor_shape.rank() >= 4 ? tensor_shape[-4] : 1;
     ret["shape"]["Z"] = tensor_shape.rank() >= 3 ? tensor_shape[-3] : 1;
     ret["shape"]["Y"] = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
     ret["shape"]["X"] = tensor_shape[-1];
-    ret["layout"] = fmt::format("{}", magic_enum::enum_name(tensor.get_layout()));
-    ret["dtype"] = fmt::format("{}", magic_enum::enum_name(tensor.get_dtype()));
+    ret["layout"] = fmt::format("{}", magic_enum::enum_name(tensor.layout()));
+    ret["dtype"] = fmt::format("{}", magic_enum::enum_name(tensor.dtype()));
 
     return ret;
 }

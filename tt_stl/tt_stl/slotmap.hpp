@@ -26,7 +26,7 @@
 #include <utility>
 #include <vector>
 
-namespace tt::stl {
+namespace ttsl {
 
 template <typename T, size_t INDEX_BITS>
 struct Key {
@@ -65,12 +65,12 @@ public:
     T index() const { return value >> VERSION_BITS; }
     T version() const { return value & VERSION_MASK; }
 
-    bool operator<=>(const Key& other) const = default;
+    friend auto operator<=>(Key, Key) = default;
 };
 
-#define MAKE_SLOTMAP_KEY(NAME, T, N)     \
-    struct NAME : ::tt::stl::Key<T, N> { \
-        using Key::Key;                  \
+#define MAKE_SLOTMAP_KEY(NAME, T, N)  \
+    struct NAME : ::ttsl::Key<T, N> { \
+        using Key::Key;               \
     };
 
 template <typename KeyT, typename T>
@@ -380,4 +380,10 @@ private:
     }
 };
 
-}  // namespace tt::stl
+}  // namespace ttsl
+
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt

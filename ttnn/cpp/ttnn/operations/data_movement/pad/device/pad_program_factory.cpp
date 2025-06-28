@@ -30,7 +30,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
 
     auto output_shape = output_padded_shape;
 
-    uint32_t unpadded_row_size_nbytes = a.get_padded_shape()[3] * a.element_size();
+    uint32_t unpadded_row_size_nbytes = a.padded_shape()[3] * a.element_size();
     uint32_t padded_row_size_nbytes = output_shape[3] * a.element_size();  // Assuming output is same datatype as input
     TT_ASSERT(
         unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
@@ -59,7 +59,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     uint32_t cb_npages = 16;  // multibuffering
     uint32_t cb_pagesize =
         tt::round_up(padded_row_size_nbytes, std::max(src0_buffer->alignment(), tt::constants::TILE_WIDTH));
-    tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);
     auto cb = tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
@@ -79,7 +79,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
         (std::uint32_t)src_log2_stick_size,
         (std::uint32_t)dst_stick_size_is_power_of_two,
         (std::uint32_t)dst_log2_stick_size};
-    std::vector<uint32_t> writer_ct_args = reader_ct_args;
+    const std::vector<uint32_t>& writer_ct_args = reader_ct_args;
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     bfloat16 bfloat_zero = bfloat16(0.0f);
@@ -101,13 +101,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     {
         log_debug(tt::LogOp, "src0_buffer_addr: {}", src0_buffer->address());
         log_debug(tt::LogOp, "dst_buffer_addr: {}", dst_buffer->address());
-        log_debug(tt::LogOp, "a.shape[0]: {}", a.get_padded_shape()[0]);
+        log_debug(tt::LogOp, "a.shape[0]: {}", a.padded_shape()[0]);
         log_debug(tt::LogOp, "out.shape[0]: {}", output_shape[0]);
-        log_debug(tt::LogOp, "a.shape[1]: {}", a.get_padded_shape()[1]);
+        log_debug(tt::LogOp, "a.shape[1]: {}", a.padded_shape()[1]);
         log_debug(tt::LogOp, "out.shape[1]: {}", output_shape[1]);
-        log_debug(tt::LogOp, "a.shape[2]: {}", a.get_padded_shape()[2]);
+        log_debug(tt::LogOp, "a.shape[2]: {}", a.padded_shape()[2]);
         log_debug(tt::LogOp, "out.shape[2]: {}", output_shape[2]);
-        log_debug(tt::LogOp, "s.shape[3]: {}", a.get_padded_shape()[3]);
+        log_debug(tt::LogOp, "s.shape[3]: {}", a.padded_shape()[3]);
         log_debug(tt::LogOp, "out.shape[3]: {}", output_shape[3]);
         log_debug(tt::LogOp, "unpadded_row_size_nbytes: {}", unpadded_row_size_nbytes);
         log_debug(tt::LogOp, "padded_row_size_nbytes: {}", padded_row_size_nbytes);
@@ -123,13 +123,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     const std::array reader_rt_args = {
         src0_buffer->address(),
         dst_buffer->address(),
-        a.get_padded_shape()[0],
+        a.padded_shape()[0],
         output_shape[0],
-        a.get_padded_shape()[1],
+        a.padded_shape()[1],
         output_shape[1],
-        a.get_padded_shape()[2],
+        a.padded_shape()[2],
         output_shape[2],
-        a.get_padded_shape()[3],
+        a.padded_shape()[3],
         output_shape[3],
         unpadded_row_size_nbytes,
         padded_row_size_nbytes,
@@ -143,11 +143,11 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
         std::uint32_t{0},
         std::uint32_t{0},
         output_shape[2],
-        a.get_padded_shape()[2],
+        a.padded_shape()[2],
         unpadded_row_size_nbytes,
         padded_row_size_nbytes,
         std::uint32_t{0},
-        output.get_padded_shape()[0]};
+        output.padded_shape()[0]};
     const auto& writer_rt_args = reader_rt_args;
     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, cores, reader_rt_args);
     tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, cores, writer_rt_args);
@@ -196,7 +196,7 @@ operation::ProgramWithCallbacks pad_tile(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     log_debug(tt::LogOp, "pad_tile");
@@ -223,20 +223,20 @@ operation::ProgramWithCallbacks pad_tile(
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
-    uint32_t num_unpadded_Xt = a.get_padded_shape()[3] / TILE_WIDTH;
+    uint32_t num_unpadded_Xt = a.padded_shape()[3] / TILE_WIDTH;
     uint32_t num_total_Xt = output_shape[3] / TILE_WIDTH;
     uint32_t num_padded_Xt = num_total_Xt - num_unpadded_Xt;
-    uint32_t num_unpadded_Yt = a.get_padded_shape()[2] / TILE_HEIGHT;
+    uint32_t num_unpadded_Yt = a.padded_shape()[2] / TILE_HEIGHT;
     uint32_t num_total_Yt = output_shape[2] / TILE_HEIGHT;
     uint32_t num_padded_Yt = (num_total_Yt - num_unpadded_Yt) * num_total_Xt;
-    uint32_t num_unpadded_Z = a.get_padded_shape()[1];
+    uint32_t num_unpadded_Z = a.padded_shape()[1];
     uint32_t num_total_Z = output_shape[1];
     uint32_t num_padded_Zt = (num_total_Z - num_unpadded_Z) * num_total_Yt * num_total_Xt;
-    uint32_t num_unpadded_W = a.get_padded_shape()[0];
+    uint32_t num_unpadded_W = a.padded_shape()[0];
     uint32_t num_total_W = output_shape[0];
     uint32_t num_padded_Wt = (num_total_W - num_unpadded_W) * num_total_Z * num_total_Yt * num_total_Xt;
 
-    uint32_t num_unpadded_tiles = a.volume() / TILE_HW;
+    uint32_t num_unpadded_tiles = a.physical_volume() / TILE_HW;
 
     const std::array reader_kernel_args = {
         src0_buffer->address(),
@@ -456,7 +456,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
 
     auto output_shape = output_padded_shape;
 
-    uint32_t unpadded_row_size_nbytes = a.get_padded_shape()[3] * a.element_size();
+    uint32_t unpadded_row_size_nbytes = a.padded_shape()[3] * a.element_size();
     uint32_t padded_row_size_nbytes = output_shape[3] * a.element_size();  // Assuming output is same datatype as input
     TT_ASSERT(
         unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
@@ -511,7 +511,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     uint32_t cb_page_alignment = std::max(tt::constants::TILE_WIDTH, src0_buffer->alignment());
     uint32_t cb_pagesize =
         static_cast<uint32_t>(std::ceil((float)dst_nbytes_per_core_w / cb_page_alignment)) * cb_page_alignment;
-    tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
@@ -559,13 +559,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
         log_debug(tt::LogOp, "ntiles_per_core_w: {}", ntiles_per_core_w);
         log_debug(tt::LogOp, "src0_buffer_addr: {}", src0_buffer->address());
         log_debug(tt::LogOp, "dst_buffer_addr: {}", dst_buffer->address());
-        log_debug(tt::LogOp, "a.shape[0]: {}", a.get_padded_shape()[0]);
+        log_debug(tt::LogOp, "a.shape[0]: {}", a.padded_shape()[0]);
         log_debug(tt::LogOp, "out.shape[0]: {}", output_shape[0]);
-        log_debug(tt::LogOp, "a.shape[1]: {}", a.get_padded_shape()[1]);
+        log_debug(tt::LogOp, "a.shape[1]: {}", a.padded_shape()[1]);
         log_debug(tt::LogOp, "out.shape[1]: {}", output_shape[1]);
-        log_debug(tt::LogOp, "a.shape[2]: {}", a.get_padded_shape()[2]);
+        log_debug(tt::LogOp, "a.shape[2]: {}", a.padded_shape()[2]);
         log_debug(tt::LogOp, "out.shape[2]: {}", output_shape[2]);
-        log_debug(tt::LogOp, "s.shape[3]: {}", a.get_padded_shape()[3]);
+        log_debug(tt::LogOp, "s.shape[3]: {}", a.padded_shape()[3]);
         log_debug(tt::LogOp, "out.shape[3]: {}", output_shape[3]);
         log_debug(tt::LogOp, "unpadded_row_size_nbytes: {}", unpadded_row_size_nbytes);
         log_debug(tt::LogOp, "padded_row_size_nbytes: {}", padded_row_size_nbytes);
@@ -588,7 +588,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     int32_t rem_nbatch =
         nbatch;  // per core h, there are ncores_per_batch_h cores, ie each batch ncores_h = ncores_per_batch_h
     for (int32_t b = 0; b < nbatch; ++b) {
-        int32_t rem_src_nsticks = a.get_padded_shape()[2];
+        int32_t rem_src_nsticks = a.padded_shape()[2];
         for (uint32_t j = 0; j < ncores_per_batch_h; ++j) {
             uint32_t num_local_unpadded_nsticks = local_nsticks;
             if (rem_src_nsticks - local_nsticks >= 0) {
@@ -618,13 +618,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
                 const std::array reader_rt_args = {
                     src0_buffer->address(),
                     dst_buffer->address(),
-                    a.get_padded_shape()[0],
+                    a.padded_shape()[0],
                     output_shape[0],
-                    a.get_padded_shape()[1],
+                    a.padded_shape()[1],
                     output_shape[1],
-                    a.get_padded_shape()[2],
+                    a.padded_shape()[2],
                     output_shape[2],
-                    a.get_padded_shape()[3],
+                    a.padded_shape()[3],
                     output_shape[3],
                     curr_stick_size_nbytes,
                     (uint32_t)dst_nbytes_per_core_w,
@@ -696,7 +696,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
 }
 
 uint32_t get_num_stick_per_barrier(const Tensor& input_tensor) {
-    uint32_t W = input_tensor.get_padded_shape()[3];
+    uint32_t W = input_tensor.padded_shape()[3];
     uint32_t W_bytes = W * input_tensor.element_size();
     uint32_t num_stick_per_barrier = 0;
     for (uint32_t cur_bytes = 0; cur_bytes < max_read_size; cur_bytes += W_bytes) {
@@ -718,8 +718,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     uint32_t num_w_sticks_per_core_group_2) {
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_padded_shape();
-    auto output_shape = output_tensor.get_padded_shape();
+    auto input_shape = input_tensor.padded_shape();
+    auto output_shape = output_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     uint32_t W_bytes = W * input_tensor.element_size();
@@ -802,8 +802,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     const float pad_value) {
     Program program{};
 
-    auto output_shape = output_padded_shape;
-    const auto& a_shape = a.get_logical_shape();
+    const auto& a_shape = a.logical_shape();
     uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
     uint32_t NCH = H * C * N;
     uint32_t W_padded = output_padded_shape[3], H_padded = output_padded_shape[2], C_padded = output_padded_shape[1],
@@ -820,7 +819,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     uint32_t stick_size_padded_DRAM_aligned = tt::align(stick_size_padded, hal::get_dram_alignment());
     uint32_t row_major_min_bytes = 16;
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     IDevice* device = a.device();
 
@@ -952,7 +951,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
-            auto src_tensor = input_tensors.at(0);
+            const auto& src_tensor = input_tensors.at(0);
 
             auto dst_tensor = output_tensors.at(0);
 
@@ -961,7 +960,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
 
             uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-            auto output_tensor_shape = dst_tensor.get_logical_shape();
+            auto output_tensor_shape = dst_tensor.logical_shape();
             uint32_t W_padded = output_tensor_shape[3], H_padded = output_tensor_shape[2],
                      C_padded = output_tensor_shape[1], N_padded = output_tensor_shape[0];
             uint32_t NCH_padded = H_padded * C_padded * N_padded;
@@ -989,9 +988,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
             for (uint32_t i = 0; i < num_cores_total; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-                { SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first); }
+                {
+                    SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
+                }
 
-                { SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second); }
+                {
+                    SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
+                }
             }
         };
 
@@ -1038,8 +1041,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_padded_shape();
-    auto output_shape = output_tensor.get_padded_shape();
+    auto input_shape = input_tensor.padded_shape();
+    auto output_shape = output_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     uint32_t W_bytes = W * input_tensor.element_size();
@@ -1185,8 +1188,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     const float pad_value) {
     Program program{};
 
-    auto output_shape = output_padded_shape;
-    const auto& a_shape = a.get_logical_shape();
+    const auto& a_shape = a.logical_shape();
     uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
     uint32_t num_unpadded_sticks = H * C * N;
     uint32_t W_padded = output_padded_shape[3], H_padded = output_padded_shape[2], C_padded = output_padded_shape[1],
@@ -1215,8 +1217,8 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
         stick_size_unpadded == stick_size_padded,
         "sharded pad does not support pad on last dim currently as that will cause perf degradation");
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     IDevice* device = a.device();
 
@@ -1392,7 +1394,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_shard_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig input_shard_cb_config =
         tt::tt_metal::CircularBufferConfig(
@@ -1401,7 +1403,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
             .set_globally_allocated_address(*input_tensor.buffer());
     auto input_shard_cb = tt::tt_metal::CreateCircularBuffer(program, total_cores, input_shard_cb_config);
 
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_shard_cb_index = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig output_shard_cb_config =
         tt::tt_metal::CircularBufferConfig(
@@ -1411,7 +1413,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     auto output_shard_cb = tt::tt_metal::CreateCircularBuffer(program, total_cores, output_shard_cb_config);
 
     // construct const buffer with the pad_value
-    tt::DataFormat pad_val_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat pad_val_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t pad_val_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig cb_pad_val_config =
         tt::tt_metal::CircularBufferConfig(padded_stick_bytes, {{pad_val_cb_index, pad_val_cb_data_format}})
@@ -1421,10 +1423,10 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     uint32_t W_padding_front_bytes = input_tensor_start[-3] * input_tensor.element_size();
 
     uint32_t padding_value_as_u32;
-    if (input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16) {
+    if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {
         uint16_t bfloat_pad_value_bits = bfloat16(pad_value).to_uint16();
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
-    } else if (input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32) {
+    } else if (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) {
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&pad_value);
     } else {
         TT_THROW("ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");

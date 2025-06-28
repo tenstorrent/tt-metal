@@ -19,7 +19,8 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     const uint32_t hidden_size,
     MathFidelity math_fidelity,
     CoreCoord compute_with_storage_grid_size) {
-    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
 
     tt::tt_metal::IDevice* device = a.device();
 
@@ -29,10 +30,10 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     tt::tt_metal::Buffer* out_buffer = output.buffer();
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
     tt::DataFormat interm_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     uint32_t in0_single_tile_size = tt::tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt::tt_metal::detail::TileSize(in1_data_format);

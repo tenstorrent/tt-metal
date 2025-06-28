@@ -5,8 +5,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/core/tensor/nd_sharding_utils.hpp"
-
 #include "ttnn_test_fixtures.hpp"
 
 namespace {
@@ -38,13 +36,46 @@ struct NDShardingOpCompatParams {
     Shape shard_shape;
     CoreCoord grid_size;
 };
-struct PrepareShardedDataParams {
+struct NDShardingBufferSizeParams {
     Shape shape;
     Shape shard_shape;
-    uint32_t num_cores;
-
-    std::vector<uint8_t> expected_data;
+    CoreCoord grid_size;
+    size_t expected_buffer_size = 0;
+    size_t expected_num_pages = 0;
+    size_t expected_num_dev_pages = 0;
+    size_t expected_aligned_size_per_bank = 0;
 };
+struct NDShardingCoreInfoParams {
+    Shape shape_in_pages;
+    Shape shard_shape_in_pages;
+    CoreCoord grid_size;
+
+    size_t expected_max_num_shards_per_core = 0;
+    std::vector<size_t> expected_num_shards_per_core;
+    std::vector<CoreCoord> expected_cores_with_data;
+    BufferDistributionSpec::CoreGroup expected_core_group_1;
+    BufferDistributionSpec::CoreGroup expected_core_group_2;
+};
+struct NDShardingSqueezeRankParams {
+    Shape tensor_shape_pages;
+    Shape shard_shape_pages;
+    Shape expected_tensor_shape_pages;
+    Shape expected_shard_shape_pages;
+};
+
+TensorSpec get_nd_sharding_tensor_spec(
+    const NDShardingParams& params, BufferType buffer_type, ShardOrientation orientation, IDevice* device) {
+    CoreRangeSet cores;
+    if (buffer_type == BufferType::L1) {
+        cores = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
+    } else {
+        auto dram_grid_size = device->dram_grid_size();
+        cores = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{dram_grid_size.x - 1, dram_grid_size.y - 1}));
+    }
+    MemoryConfig memory_config{buffer_type, NdShardSpec{params.shard_shape, cores, orientation}};
+    TensorLayout tensor_layout(DataType::UINT16, PageConfig(params.layout), memory_config);
+    return TensorSpec(params.shape, tensor_layout);
+}
 }  // namespace
 
 class NDShardingTests
@@ -53,17 +84,7 @@ class NDShardingTests
 
 TEST_P(NDShardingTests, LoopbackTest) {
     const auto& [params, buffer_type, orientation] = GetParam();
-
-    CoreRangeSet cores;
-    if (buffer_type == BufferType::L1) {
-        cores = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
-    } else {
-        auto dram_grid_size = device_->dram_grid_size();
-        cores = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{dram_grid_size.x - 1, dram_grid_size.y - 1}));
-    }
-    MemoryConfig memory_config{buffer_type, NdShardSpec{params.shard_shape, cores, orientation}};
-    TensorLayout tensor_layout(DataType::UINT16, PageConfig(params.layout), memory_config);
-    TensorSpec tensor_spec(params.shape, tensor_layout);
+    auto tensor_spec = get_nd_sharding_tensor_spec(params, buffer_type, orientation, device_);
 
     size_t volume = params.shape.volume();
     std::vector<uint16_t> data(volume);
@@ -72,11 +93,61 @@ TEST_P(NDShardingTests, LoopbackTest) {
     }
 
     auto tensor = Tensor::from_vector(data, tensor_spec, device_);
+    EXPECT_TRUE(tensor.buffer()->buffer_distribution_spec().has_value());
     auto readback_data = tensor.to_vector<uint16_t>();
 
     for (size_t i = 0; i < volume; i++) {
-        ASSERT_EQ(data[i], readback_data[i]);
+        EXPECT_EQ(data[i], readback_data[i]);
     }
+}
+
+TEST_P(NDShardingTests, RegionWriteReadTest) {
+    const auto& [params, buffer_type, orientation] = GetParam();
+    auto tensor_spec = get_nd_sharding_tensor_spec(params, buffer_type, orientation, device_);
+
+    size_t volume = params.shape.volume();
+    std::vector<uint16_t> data(volume);
+    for (size_t i = 0; i < data.size(); i++) {
+        data[i] = static_cast<uint16_t>(i);
+    }
+    auto data_tensor = Tensor::from_vector(data, tensor_spec);
+    auto tensor_data_span = host_buffer::get_as<uint16_t>(data_tensor);
+    auto tensor_data = std::vector<uint16_t>(tensor_data_span.begin(), tensor_data_span.end());
+
+    std::vector<uint16_t> empty_data(volume);
+    auto tensor = Tensor::from_vector(empty_data, tensor_spec, device_);
+
+    auto& storage = std::get<DeviceStorage>(tensor.storage());
+    auto buffer = storage.get_buffer();
+    auto page_size = buffer->page_size();
+    auto device = buffer->device();
+
+    size_t region_size = buffer->page_size();
+    while (buffer->size() % (region_size * 2) == 0) {
+        region_size *= 2;
+    }
+
+    std::vector<uint16_t> partial_readback_data(tensor_data.size());
+    std::vector<uint16_t> full_readback_data(tensor_data.size());
+
+    for (size_t region = 0; region < buffer->size() / region_size; region++) {
+        size_t region_offset = region * region_size;
+        auto buffer_view = buffer->view(BufferRegion{region_offset, region_size});
+        EnqueueWriteBuffer(
+            device->command_queue(),
+            buffer_view,
+            reinterpret_cast<const std::byte*>(tensor_data.data()) + region_offset,
+            true);
+        EnqueueReadBuffer(
+            device->command_queue(),
+            buffer_view,
+            reinterpret_cast<std::byte*>(partial_readback_data.data()) + region_offset,
+            true);
+    }
+    EXPECT_EQ(tensor_data, partial_readback_data);
+
+    EnqueueReadBuffer(device->command_queue(), *buffer, full_readback_data.data(), true);
+    EXPECT_EQ(tensor_data, full_readback_data);
 }
 
 class LegacyToNdShardingTests : public ::testing::TestWithParam<LegacyToNdShardingParams> {};
@@ -158,34 +229,124 @@ TEST_P(NdShardingOpCompatTests, TestAdd) {
     }
 }
 
-class PrepareNdShardedDataTests : public ::testing::TestWithParam<PrepareShardedDataParams> {};
+class NDShardingPerfTests : public ttnn::TTNNFixtureWithDevice {};
 
-TEST_P(PrepareNdShardedDataTests, PrepareNdShardedData) {
+TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
+
+    Shape tensor_shape{16, 1024, 1024};
+    Shape shard_shape_nd_batch{16, 160, 160};
+    Shape shard_shape_nd_small{1, 64, 64};
+    Shape2D shard_shape_2d{2368, 160};
+
+    size_t volume = tensor_shape.volume();
+    std::vector<uint16_t> data(volume);
+    for (size_t i = 0; i < volume; i++) {
+        data[i] = static_cast<uint16_t>(i);
+    }
+
+    auto measure_to_device_time_ns = [&](const TensorSpec& tensor_spec) -> double {
+        auto tensor = Tensor::from_vector(data, tensor_spec);
+
+        auto start = std::chrono::high_resolution_clock::now();
+        auto device_tensor = tensor.to_device(device_, tensor_spec.memory_config());
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
+        return duration.count();
+    };
+
+    double batch_nd_sharding_time_ns = [&]() {
+        MemoryConfig memory_config{BufferType::L1, NdShardSpec{shard_shape_nd_batch, cores}};
+        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
+        TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        return measure_to_device_time_ns(tensor_spec);
+    }();
+
+    double small_shards_nd_sharding_time_ns = [&]() {
+        MemoryConfig memory_config{BufferType::L1, NdShardSpec{shard_shape_nd_small, cores}};
+        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
+        TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        return measure_to_device_time_ns(tensor_spec);
+    }();
+
+    double block_2d_sharding_time_ns = [&]() {
+        MemoryConfig memory_config{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, ShardSpec{cores, shard_shape_2d}};
+        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
+        TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        return measure_to_device_time_ns(tensor_spec);
+    }();
+
+    log_info(tt::LogTest, "Batch ND sharding time: {} ns", batch_nd_sharding_time_ns);
+    log_info(tt::LogTest, "Small shards ND sharding time: {} ns", small_shards_nd_sharding_time_ns);
+    log_info(tt::LogTest, "Block 2D sharding time: {} ns", block_2d_sharding_time_ns);
+
+    EXPECT_TRUE(batch_nd_sharding_time_ns < block_2d_sharding_time_ns * 6);
+    EXPECT_TRUE(small_shards_nd_sharding_time_ns < block_2d_sharding_time_ns * 6);
+}
+
+class NDShardingBufferSizeTests : public ttnn::TTNNFixtureWithDevice,
+                                  public ::testing::WithParamInterface<NDShardingBufferSizeParams> {};
+
+TEST_P(NDShardingBufferSizeTests, TestBufferSize) {
     const auto& params = GetParam();
 
-    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{0, params.num_cores - 1}));
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{params.grid_size.x - 1, params.grid_size.y - 1}));
     NdShardSpec nd_shard_spec{params.shard_shape, cores, ShardOrientation::ROW_MAJOR};
     MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
-    TensorLayout tensor_layout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), memory_config);
+    TensorLayout tensor_layout(DataType::UINT8, PageConfig(Layout::TILE), memory_config);
     TensorSpec tensor_spec(params.shape, tensor_layout);
 
-    std::vector<uint8_t> data(params.shape.volume());
-    for (size_t i = 0; i < data.size(); i++) {
-        data[i] = static_cast<uint8_t>(i);
-    }
-    auto tensor = Tensor::from_vector(data, tensor_spec);
-    auto tensor_data = std::get<HostStorage>(tensor.get_storage()).buffer.view_as<uint8_t>();
+    size_t volume = params.shape.volume();
+    std::vector<uint8_t> data(volume);
+    auto tensor = Tensor::from_vector(data, tensor_spec, device_);
 
-    auto sharded_data = pack_nd_sharded_data<uint8_t>(tensor_data, tensor_spec);
-    EXPECT_EQ(sharded_data.size(), params.expected_data.size());
-    for (size_t i = 0; i < sharded_data.size(); i++) {
-        EXPECT_EQ(sharded_data[i], static_cast<std::byte>(params.expected_data[i]));
+    auto buffer = tensor.buffer();
+    EXPECT_EQ(buffer->size(), params.expected_buffer_size);
+    EXPECT_EQ(buffer->num_pages(), params.expected_num_pages);
+    EXPECT_EQ(buffer->num_dev_pages(), params.expected_num_dev_pages);
+    EXPECT_EQ(buffer->aligned_size_per_bank(), params.expected_aligned_size_per_bank);
+}
+
+class NDShardingCoreInfoTests : public ::testing::TestWithParam<NDShardingCoreInfoParams> {};
+
+TEST_P(NDShardingCoreInfoTests, TestCoreInfo) {
+    const auto& params = GetParam();
+
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{params.grid_size.x - 1, params.grid_size.y - 1}));
+    BufferDistributionSpec dspec(
+        params.shape_in_pages, params.shard_shape_in_pages, cores, ShardOrientation::ROW_MAJOR);
+
+    EXPECT_EQ(dspec.max_num_shards_per_core(), params.expected_max_num_shards_per_core);
+    EXPECT_EQ(dspec.num_cores(), params.grid_size.x * params.grid_size.y);
+    EXPECT_EQ(dspec.num_cores(), params.expected_num_shards_per_core.size());
+    for (size_t i = 0; i < dspec.num_cores(); i++) {
+        EXPECT_EQ(dspec.num_shards_per_core(i), params.expected_num_shards_per_core[i]);
     }
 
-    auto unpacked_data = unpack_nd_sharded_data<std::byte>(sharded_data, tensor_spec);
-    EXPECT_EQ(unpacked_data.size(), tensor_data.size());
-    for (size_t i = 0; i < unpacked_data.size(); i++) {
-        EXPECT_EQ(unpacked_data[i], static_cast<std::byte>(tensor_data[i]));
+    EXPECT_EQ(dspec.get_cores_with_data(), params.expected_cores_with_data);
+
+    auto [core_group_1, core_group_2] = dspec.get_core_groups_by_num_shards();
+    EXPECT_EQ(core_group_1.num_shards, params.expected_core_group_1.num_shards);
+    EXPECT_EQ(core_group_1.cores, params.expected_core_group_1.cores);
+    EXPECT_EQ(core_group_2.num_shards, params.expected_core_group_2.num_shards);
+    EXPECT_EQ(core_group_2.cores, params.expected_core_group_2.cores);
+}
+
+class NDShardingSqueezeRankTests : public ::testing::TestWithParam<NDShardingSqueezeRankParams> {};
+
+TEST_P(NDShardingSqueezeRankTests, TestSqueezeRank) {
+    const auto& params = GetParam();
+
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
+    BufferDistributionSpec dspec(
+        params.tensor_shape_pages, params.shard_shape_pages, cores, ShardOrientation::ROW_MAJOR);
+    EXPECT_EQ(dspec.get_tensor_shape_in_pages(), params.expected_tensor_shape_pages);
+    EXPECT_EQ(dspec.get_shard_shape_in_pages(), params.expected_shard_shape_pages);
+
+    if (params.tensor_shape_pages.rank() == params.shard_shape_pages.rank()) {
+        auto expected_page_mapping =
+            detail::compute_page_mapping(params.tensor_shape_pages, params.shard_shape_pages, dspec.get_cores());
+        EXPECT_EQ(dspec.compute_page_mapping().core_host_page_indices, expected_page_mapping.core_host_page_indices);
     }
 }
 
@@ -371,7 +532,7 @@ INSTANTIATE_TEST_SUITE_P(
             .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
             .shard_shape_2d = Shape2D{32, 32},
             .layout = Layout::TILE,
-            .shard_shape_nd = Shape({1, 32, 32}),
+            .shard_shape_nd = Shape({32, 32}),
             .grid_size = CoreCoord{2, 4},
         },
         LegacyToNdShardingParams{
@@ -379,7 +540,7 @@ INSTANTIATE_TEST_SUITE_P(
             .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
             .shard_shape_2d = Shape2D{32 * 2, 32},
             .layout = Layout::TILE,
-            .shard_shape_nd = Shape({1, 32 * 2, 32}),
+            .shard_shape_nd = Shape({32 * 2, 32}),
             .grid_size = CoreCoord{2, 2},
         },
         LegacyToNdShardingParams{
@@ -387,14 +548,15 @@ INSTANTIATE_TEST_SUITE_P(
             .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
             .shard_shape_2d = Shape2D{32 * 3, 32},
             .layout = Layout::TILE,
-            .shard_shape_nd = std::nullopt,  // Can't convert, because sharding across higher dimensions
+            .shard_shape_nd = Shape({32 * 3, 32}),
+            .grid_size = CoreCoord{2, 2},
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 4, 4}),
             .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
             .shard_shape_2d = Shape2D{2, 2},
             .layout = Layout::ROW_MAJOR,
-            .shard_shape_nd = Shape({1, 2, 2}),
+            .shard_shape_nd = Shape({2, 2}),
             .grid_size = CoreCoord{2, 4},
         },
         LegacyToNdShardingParams{
@@ -426,56 +588,56 @@ INSTANTIATE_TEST_SUITE_P(
             .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
             .shard_shape_2d = Shape2D{32, 32 * 2},
             .layout = Layout::TILE,
-            .shard_shape_nd = Shape({1, 32, 32 * 2}),
+            .shard_shape_nd = Shape({32, 32 * 2}),
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 32 * 2, 32 * 2}),
             .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
             .shard_shape_2d = Shape2D{32 * 3, 32 * 2},
             .layout = Layout::TILE,
-            .shard_shape_nd = std::nullopt,  // Can't convert, because sharding across higher dimensions
+            .shard_shape_nd = Shape({32 * 3, 32 * 2}),
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 3, 4}),
             .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
             .shard_shape_2d = Shape2D{3, 4},
             .layout = Layout::ROW_MAJOR,
-            .shard_shape_nd = Shape({1, 3, 4}),
+            .shard_shape_nd = Shape({3, 4}),
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 3, 4}),
             .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
             .shard_shape_2d = Shape2D{4, 4},
             .layout = Layout::ROW_MAJOR,
-            .shard_shape_nd = std::nullopt,  // Can't convert, because sharding across higher dimensions
+            .shard_shape_nd = Shape({4, 4}),
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 32 * 2, 32 * 2}),
             .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
             .shard_shape_2d = Shape2D{32 * 4, 32},
             .layout = Layout::TILE,
-            .shard_shape_nd = Shape({2, 32 * 2, 32}),
+            .shard_shape_nd = Shape({32 * 4, 32}),
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 32 * 2, 32 * 2}),
             .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
             .shard_shape_2d = Shape2D{32 * 4, 32 * 3},
             .layout = Layout::TILE,
-            .shard_shape_nd = Shape({2, 32 * 2, 32 * 3}),
+            .shard_shape_nd = Shape({32 * 4, 32 * 3}),
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 3, 4}),
             .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
             .shard_shape_2d = Shape2D{6, 4},
             .layout = Layout::ROW_MAJOR,
-            .shard_shape_nd = Shape({2, 3, 4}),
+            .shard_shape_nd = Shape({6, 4}),
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 3, 4}),
             .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
             .shard_shape_2d = Shape2D{6, 5},
             .layout = Layout::ROW_MAJOR,
-            .shard_shape_nd = Shape({2, 3, 5}),
+            .shard_shape_nd = Shape({6, 5}),
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 32 * 2, 32 * 2}),
@@ -490,20 +652,6 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_2d = std::nullopt,
             .layout = Layout::ROW_MAJOR,
             .shard_shape_nd = std::nullopt,
-        },
-        LegacyToNdShardingParams{
-            .shape = Shape({2, 32 * 2, 32 * 2}),
-            .memory_layout = TensorMemoryLayout::SINGLE_BANK,
-            .shard_shape_2d = Shape2D{32 * 4, 32 * 2},
-            .layout = Layout::TILE,
-            .shard_shape_nd = Shape({2, 32 * 2, 32 * 2}),
-        },
-        LegacyToNdShardingParams{
-            .shape = Shape({2, 3, 4}),
-            .memory_layout = TensorMemoryLayout::SINGLE_BANK,
-            .shard_shape_2d = Shape2D{6, 4},
-            .layout = Layout::ROW_MAJOR,
-            .shard_shape_nd = Shape({2, 3, 4}),
         }));
 
 INSTANTIATE_TEST_SUITE_P(
@@ -742,108 +890,244 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TensorShardingTests,
-    PrepareNdShardedDataTests,
+    NDShardingBufferSizeTests,
     ::testing::Values(
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({2, 2, 2}),
-            .num_cores = 1,
-            .expected_data = {0, 1, 2, 3, 4, 5, 6, 7},
+        NDShardingBufferSizeParams{
+            .shape = Shape({4, 4, 32 * 2, 32 * 2}),
+            .shard_shape = Shape({1, 1, 32, 32}),
+            .grid_size = CoreCoord{4, 4},
+            .expected_buffer_size = 64 * 32 * 32,
+            .expected_num_pages = 64,
+            .expected_num_dev_pages = 64,
+            .expected_aligned_size_per_bank = 4 * 32 * 32,
         },
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({2, 2, 2}),
-            .num_cores = 2,
-            .expected_data = {0, 1, 2, 3, 4, 5, 6, 7, 0, 0, 0, 0, 0, 0, 0, 0},
+        NDShardingBufferSizeParams{
+            .shape = Shape({4, 7, 32 * 2, 32 * 2}),
+            .shard_shape = Shape({2, 2, 32, 32}),
+            .grid_size = CoreCoord{1, 3},
+            .expected_buffer_size = 112 * 32 * 32,
+            .expected_num_pages = 112,
+            .expected_num_dev_pages = 3 * 11 * 4,
+            .expected_aligned_size_per_bank = 11 * 4 * 32 * 32,
+        }));
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorShardingTests,
+    NDShardingCoreInfoTests,
+    ::testing::Values(
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({2, 2, 2}),
+            .shard_shape_in_pages = Shape({1, 1, 1}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 2,
+            .expected_num_shards_per_core = {2, 2, 2, 2},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}},
+            .expected_core_group_1 = {2, {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}}},
+            .expected_core_group_2 = {},
         },
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({1, 2, 2}),
-            .num_cores = 2,
-            .expected_data = {0, 1, 2, 3, 4, 5, 6, 7},
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({3, 3, 3}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 2,
+            .expected_num_shards_per_core = {2, 2, 2, 2},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}},
+            .expected_core_group_1 = {2, {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}}},
+            .expected_core_group_2 = {},
         },
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({2, 1, 2}),
-            .num_cores = 2,
-            .expected_data = {0, 1, 4, 5, 2, 3, 6, 7},
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({0, 0, 0}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 0,
+            .expected_num_shards_per_core = {0, 0, 0, 0},
+            .expected_cores_with_data = {},
+            .expected_core_group_1 = {},
+            .expected_core_group_2 = {},
         },
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({2, 2, 1}),
-            .num_cores = 2,
-            .expected_data = {0, 2, 4, 6, 1, 3, 5, 7},
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({2, 2, 2}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 1,
+            .expected_num_shards_per_core = {1, 0, 0, 0},
+            .expected_cores_with_data = {CoreCoord{0, 0}},
+            .expected_core_group_1 = {1, {CoreCoord{0, 0}}},
+            .expected_core_group_2 = {},
         },
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({2, 1, 1}),
-            .num_cores = 2,
-            .expected_data = {0, 4, 2, 6, 1, 5, 3, 7},
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({2, 2, 4}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 1,
+            .expected_num_shards_per_core = {1, 1, 0, 0},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}},
+            .expected_core_group_1 = {1, {CoreCoord{0, 0}, CoreCoord{1, 0}}},
+            .expected_core_group_2 = {},
         },
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({2, 1, 1}),
-            .num_cores = 3,
-            .expected_data = {0, 4, 3, 7, 1, 5, 0, 0, 2, 6, 0, 0},
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({2, 6, 2}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 1,
+            .expected_num_shards_per_core = {1, 1, 1, 0},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}},
+            .expected_core_group_1 = {1, {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}}},
+            .expected_core_group_2 = {},
         },
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({1, 2, 1}),
-            .num_cores = 2,
-            .expected_data = {0, 2, 4, 6, 1, 3, 5, 7},
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({8, 2, 2}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 1,
+            .expected_num_shards_per_core = {1, 1, 1, 1},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}},
+            .expected_core_group_1 = {1, {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}}},
+            .expected_core_group_2 = {},
         },
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({1, 2, 1}),
-            .num_cores = 3,
-            .expected_data = {0, 2, 5, 7, 1, 3, 0, 0, 4, 6, 0, 0},
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({1, 1, 33}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 5,
+            .expected_num_shards_per_core = {5, 4, 4, 4},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}},
+            .expected_core_group_1 = {5, {CoreCoord{0, 0}}},
+            .expected_core_group_2 = {4, {CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}}},
         },
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({1, 1, 2}),
-            .num_cores = 2,
-            .expected_data = {0, 1, 4, 5, 2, 3, 6, 7},
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({1, 35, 1}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 5,
+            .expected_num_shards_per_core = {5, 5, 4, 4},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}},
+            .expected_core_group_1 = {5, {CoreCoord{0, 0}, CoreCoord{1, 0}}},
+            .expected_core_group_2 = {4, {CoreCoord{0, 1}, CoreCoord{1, 1}}},
         },
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({1, 1, 2}),
-            .num_cores = 3,
-            .expected_data = {0, 1, 6, 7, 2, 3, 0, 0, 4, 5, 0, 0},
+        NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({37, 1, 1}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 5,
+            .expected_num_shards_per_core = {5, 5, 5, 4},
+            .expected_cores_with_data = {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}, CoreCoord{1, 1}},
+            .expected_core_group_1 = {5, {CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{0, 1}}},
+            .expected_core_group_2 = {4, {CoreCoord{1, 1}}},
+        }));
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorShardingTests,
+    NDShardingSqueezeRankTests,
+    ::testing::Values(
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({5}),
+            .shard_shape_pages = Shape({3}),
+            // Nothing to minimize
+            .expected_tensor_shape_pages = Shape({5}),
+            .expected_shard_shape_pages = Shape({3}),
         },
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({1, 1, 1}),
-            .num_cores = 2,
-            .expected_data = {0, 2, 4, 6, 1, 3, 5, 7},
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({3, 6}),
+            .shard_shape_pages = Shape({2, 2}),
+            // Nothing to minimize
+            .expected_tensor_shape_pages = Shape({3, 6}),
+            .expected_shard_shape_pages = Shape({2, 2}),
         },
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({1, 1, 1}),
-            .num_cores = 3,
-            .expected_data = {0, 3, 6, 1, 4, 7, 2, 5, 0},
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({1, 3, 6}),
+            .shard_shape_pages = Shape({2, 2}),
+            // Leading tensor dimension higher than shard dimension must be folded
+            .expected_tensor_shape_pages = Shape({3, 6}),
+            .expected_shard_shape_pages = Shape({2, 2}),
         },
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({1, 1, 1}),
-            .num_cores = 4,
-            .expected_data = {0, 4, 1, 5, 2, 6, 3, 7},
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({5, 3, 6}),
+            .shard_shape_pages = Shape({2, 2}),
+            // Leading tensor dimension higher than shard dimension must be folded
+            .expected_tensor_shape_pages = Shape({15, 6}),
+            .expected_shard_shape_pages = Shape({2, 2}),
         },
-        PrepareShardedDataParams{
-            .shape = Shape({2, 2, 2}),
-            .shard_shape = Shape({1, 1, 1}),
-            .num_cores = 5,
-            .expected_data = {0, 5, 1, 6, 2, 7, 3, 0, 4, 0},
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({1, 3, 6}),
+            .shard_shape_pages = Shape({1, 2, 2}),
+            // Folding leading 1s in both shapes
+            .expected_tensor_shape_pages = Shape({3, 6}),
+            .expected_shard_shape_pages = Shape({2, 2}),
         },
-        PrepareShardedDataParams{
-            .shape = Shape({3, 3, 3}),
-            .shard_shape = Shape({2, 2, 2}),
-            .num_cores = 8,
-            .expected_data = {/* core 0 */ 0,  1,  3,  4,  9,  10, 12, 13,
-                              /* core 1 */ 2,  0,  5,  0,  11, 0,  14, 0,
-                              /* core 2 */ 6,  7,  0,  0,  15, 16, 0,  0,
-                              /* core 3 */ 8,  0,  0,  0,  17, 0,  0,  0,
-                              /* core 4 */ 18, 19, 21, 22, 0,  0,  0,  0,
-                              /* core 5 */ 20, 0,  23, 0,  0,  0,  0,  0,
-                              /* core 6 */ 24, 25, 0,  0,  0,  0,  0,  0,
-                              /* core 7 */ 26, 0,  0,  0,  0,  0,  0,  0},
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({1, 1, 3, 6}),
+            .shard_shape_pages = Shape({1, 1, 2, 2}),
+            // Folding leading 1s in both shapes
+            .expected_tensor_shape_pages = Shape({3, 6}),
+            .expected_shard_shape_pages = Shape({2, 2}),
+        },
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({2, 3, 6}),
+            .shard_shape_pages = Shape({1, 2, 2}),
+            // Can't fold dim 0, because it would cause different paddings in dim 1
+            .expected_tensor_shape_pages = Shape({2, 3, 6}),
+            .expected_shard_shape_pages = Shape({1, 2, 2}),
+        },
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({2, 3, 6}),
+            .shard_shape_pages = Shape({2, 2, 2}),
+            // Can't fold dim 0, because it would cause different paddings in dim 1
+            .expected_tensor_shape_pages = Shape({2, 3, 6}),
+            .expected_shard_shape_pages = Shape({2, 2, 2}),
+        },
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({4, 3, 6}),
+            .shard_shape_pages = Shape({2, 2, 2}),
+            // True ND sharding, nothing to fold
+            .expected_tensor_shape_pages = Shape({4, 3, 6}),
+            .expected_shard_shape_pages = Shape({2, 2, 2}),
+        },
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({4, 4, 6}),
+            .shard_shape_pages = Shape({1, 3, 2}),
+            // Can't fold dim 0, because it would cause different paddings in dim 1
+            .expected_tensor_shape_pages = Shape({4, 4, 6}),
+            .expected_shard_shape_pages = Shape({1, 3, 2}),
+        },
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({4, 4, 6}),
+            .shard_shape_pages = Shape({1, 2, 2}),
+            // No padding in dim 1, so we can fold dim 0
+            .expected_tensor_shape_pages = Shape({16, 6}),
+            .expected_shard_shape_pages = Shape({2, 2}),
+        },
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({4, 4, 6}),
+            .shard_shape_pages = Shape({2, 2, 2}),
+            // True ND sharding, nothing to fold
+            .expected_tensor_shape_pages = Shape({4, 4, 6}),
+            .expected_shard_shape_pages = Shape({2, 2, 2}),
+        },
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({4, 4, 5, 5, 4, 6}),
+            .shard_shape_pages = Shape({4, 3, 5, 5, 2, 2}),
+            // Folding identical dimensions in tensor and shard shapes into the leading dimension
+            .expected_tensor_shape_pages = Shape({4, 100, 4, 6}),
+            .expected_shard_shape_pages = Shape({4, 75, 2, 2}),
+        },
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({4, 4, 5, 5, 4, 6}),
+            .shard_shape_pages = Shape({4, 3, 1, 1, 2, 2}),
+            // Folding 1 shard dimensions into the following dimension, because it doesn't have a padding
+            .expected_tensor_shape_pages = Shape({4, 4, 100, 6}),
+            .expected_shard_shape_pages = Shape({4, 3, 2, 2}),
+        },
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({4, 4, 5, 5, 4, 6}),
+            .shard_shape_pages = Shape({4, 3, 1, 1, 3, 2}),
+            // Folding 1 shard dimensions, but not into the following dimension, because it has a padding
+            .expected_tensor_shape_pages = Shape({4, 4, 25, 4, 6}),
+            .expected_shard_shape_pages = Shape({4, 3, 1, 3, 2}),
+        },
+        NDShardingSqueezeRankParams{
+            .tensor_shape_pages = Shape({4, 4, 5, 5, 4, 6}),
+            .shard_shape_pages = Shape({4, 4, 1, 1, 3, 2}),
+            .expected_tensor_shape_pages = Shape({16, 25, 4, 6}),
+            .expected_shard_shape_pages = Shape({16, 1, 3, 2}),
         }));

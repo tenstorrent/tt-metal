@@ -71,7 +71,7 @@ enum class FabricMuxChannelType : uint8_t { FULL_SIZE_CHANNEL = 0, HEADER_ONLY_C
 */
 
 inline size_t get_max_buffer_size_bytes_full_size_channel() {
-    return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
+    return tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
 }
 
 struct FabricMuxConfig {
@@ -103,19 +103,22 @@ struct FabricMuxConfig {
             num_buffers_header_only_channel == 0 ? default_num_buffers : num_buffers_header_only_channel),
         buffer_size_bytes_full_size_channel(buffer_size_bytes_full_size_channel) {
         size_t max_buffer_size_bytes_full_size_channel = get_max_buffer_size_bytes_full_size_channel();
-        if (buffer_size_bytes_full_size_channel > max_buffer_size_bytes_full_size_channel) {
-            TT_THROW(
-                "Buffer size bytes for full size channel should be less than or equal to: {}, got: {}",
-                max_buffer_size_bytes_full_size_channel,
-                buffer_size_bytes_full_size_channel);
-        }
+        TT_FATAL(
+            buffer_size_bytes_full_size_channel <= max_buffer_size_bytes_full_size_channel,
+            "Buffer size bytes for full size channel should be less than or equal to: {}, but got: {}",
+            max_buffer_size_bytes_full_size_channel,
+            buffer_size_bytes_full_size_channel);
 
-        noc_aligned_address_size_bytes =
+        this->noc_aligned_address_size_bytes =
             tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+
         auto num_total_channels = num_full_size_channels + num_header_only_channels;
 
+        this->buffer_size_bytes_header_only_channel = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+
         this->full_size_channel_size_bytes = num_buffers_full_size_channel * buffer_size_bytes_full_size_channel;
-        this->header_only_channel_size_bytes = num_buffers_header_only_channel * sizeof(tt::tt_fabric::PacketHeader);
+        this->header_only_channel_size_bytes =
+            num_buffers_header_only_channel * this->buffer_size_bytes_header_only_channel;
 
         this->memory_map_start_address = base_l1_address;
 
@@ -154,7 +157,7 @@ struct FabricMuxConfig {
         if (channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL) {
             return this->buffer_size_bytes_full_size_channel;
         } else if (channel_type == FabricMuxChannelType::HEADER_ONLY_CHANNEL) {
-            return sizeof(tt::tt_fabric::PacketHeader);
+            return this->buffer_size_bytes_header_only_channel;
         } else {
             TT_THROW("Unexpected channel type: {}", channel_type);
         }
@@ -281,6 +284,8 @@ private:
     }
 
     uint8_t noc_aligned_address_size_bytes = 0;
+
+    size_t buffer_size_bytes_header_only_channel = 0;
 
     size_t full_size_channel_size_bytes = 0;
     size_t header_only_channel_size_bytes = 0;

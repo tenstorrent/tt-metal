@@ -16,11 +16,13 @@ target_sources(
         FILES
             tt_stl/aligned_allocator.hpp
             tt_stl/any_range.hpp
+            tt_stl/cleanup.hpp
             tt_stl/concepts.hpp
             tt_stl/indestructible.hpp
             tt_stl/overloaded.hpp
             tt_stl/reflection.hpp
             tt_stl/slotmap.hpp
+            tt_stl/small_vector.hpp
             tt_stl/span.hpp
             tt_stl/strong_type.hpp
             tt_stl/type_name.hpp
@@ -37,6 +39,7 @@ target_link_libraries(
         magic_enum::magic_enum
         nlohmann_json::nlohmann_json
         span
+        small_vector
         fmt::fmt-header-only
         tt-logger::tt-logger
 )

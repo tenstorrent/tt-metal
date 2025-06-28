@@ -53,12 +53,7 @@ public:
      * Expected that *buffer_index_ptr is initialized outside of this object
      */
     EthChannelBuffer(
-        size_t channel_base_address,
-        size_t buffer_size_bytes,
-        size_t header_size_bytes,
-        size_t eth_transaction_ack_word_addr,  // Assume for receiver channel, this address points to a chunk of memory
-                                               // that can fit 2 eth_channel_syncs cfor ack
-        uint8_t channel_id) :
+        size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes, uint8_t channel_id) :
         buffer_size_in_bytes(buffer_size_bytes),
         max_eth_payload_size_in_bytes(buffer_size_in_bytes),
         channel_id(channel_id) {
@@ -134,7 +129,6 @@ struct EthChannelBufferTuple {
         const size_t channel_base_address[],
         const size_t buffer_size_bytes,
         const size_t header_size_bytes,
-        const size_t eth_transaction_ack_word_addr,
         const size_t channel_base_id) {
         size_t idx = 0;
 
@@ -144,7 +138,6 @@ struct EthChannelBufferTuple {
                       channel_base_address[idx],
                       buffer_size_bytes,
                       header_size_bytes,
-                      eth_transaction_ack_word_addr,
                       static_cast<uint8_t>(channel_base_id + idx)),
                   ++idx),
                  ...);
@@ -223,7 +216,7 @@ struct EdmChannelWorkerInterface {
     }
 
     FORCE_INLINE void notify_worker_of_read_counter_update() {
-        noc_inline_dw_write<false, true>(
+        noc_inline_dw_write<true, true>(
             this->cached_worker_semaphore_address,
             local_read_counter.counter,
             0xf,
@@ -242,6 +235,7 @@ struct EdmChannelWorkerInterface {
     //
     template <bool posted = false>
     FORCE_INLINE void teardown_worker_connection() const {
+        invalidate_l1_cache();
         const auto& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x,
@@ -257,6 +251,7 @@ struct EdmChannelWorkerInterface {
     }
 
     FORCE_INLINE void cache_producer_noc_addr() {
+        invalidate_l1_cache();
         const auto& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
@@ -264,9 +259,11 @@ struct EdmChannelWorkerInterface {
     }
 
     [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
+        invalidate_l1_cache();
         return *connection_live_semaphore == tt::tt_fabric::EdmToEdmSender<0>::close_connection_request_value;
     }
     [[nodiscard]] FORCE_INLINE bool connection_is_live() const {
+        invalidate_l1_cache();
         return *connection_live_semaphore == tt::tt_fabric::EdmToEdmSender<0>::open_connection_value;
     }
 

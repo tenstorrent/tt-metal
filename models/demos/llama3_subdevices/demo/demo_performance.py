@@ -12,7 +12,9 @@ import pytest
 
 is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
-from models.demos.llama3_subdevices.tt.llama_common import PagedAttentionConfig, PagedAttention
+from models.demos.llama3_subdevices.tt.llama_common import (
+    PagedAttentionConfig,
+)
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
@@ -32,7 +34,7 @@ def run_llama3_decode_performance(
     batch_size,
     num_batches,
     paged_attention,
-    page_params,
+    paged_attention_config,
     benchmark_token_range,
     warmup_iters,
     inner_iters,
@@ -98,8 +100,8 @@ def run_llama3_decode_performance(
     tt_device_name = model_args.device_name  # ["N150", "N300", "T3K", "TG"]
 
     if llama_model_name == "3.1-70B":
-        assert tt_device_name in ["TG"], "Llama3.1-70B is only supported on TG"
-        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama3.1-70B"
+        assert tt_device_name in ["TG"], "Llama-3.1-70B is only supported on TG"
+        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama-3.1-70B"
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
@@ -109,23 +111,22 @@ def run_llama3_decode_performance(
     page_table_tt = None
 
     if paged_attention:
-        paged_attn = PagedAttention(page_params, model_args)
-
-        mesh_mapper = ttnn.ShardTensor2dMesh(
-            mesh_device,
-            dims=(None, -2) if batch_size > 1 else (None, None),
-            mesh_shape=model_args.cluster_shape,
+        # Implied shuffling of blocks
+        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        # Page table which maps virtual blocks to physical
+        reverse_permutation = torch.argsort(permutation)
+        page_table = reverse_permutation.reshape(
+            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+        )
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         )
 
-        page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper)
-
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
-        logger.info("Page table tensor done")
-
-    # Load TTNN Llama3.1 model
+    # Load TTNN Llama-3.1 model
     logger.info("Loading weights to device...")
     profiler.start("loading_weights_to_device")
     tt_model = TtTransformer(
@@ -163,6 +164,22 @@ def run_llama3_decode_performance(
     user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
     logger.info("Starting decode...")
+
+    # Shard the page table for TG decode
+    if paged_attention and model_args.is_galaxy and batch_size > 1:
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, -2) if batch_size > 1 else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
+        )
+
+        logger.info("Page table tensor done")
 
     # Initial positions
     decoding_pos = [bench_start] * batch_size
@@ -441,7 +458,6 @@ def test_llama_decode_performance(
     weights,
     layers,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     reset_seeds,
 ):
@@ -452,6 +468,14 @@ def test_llama_decode_performance(
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
+    if paged_attention:
+        paged_attention_config = PagedAttentionConfig(
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks"],
+        )
+    else:
+        paged_attention_config = None
+
     return run_llama3_decode_performance(
         user_input=input_prompts,
         mesh_device=mesh_device,
@@ -459,7 +483,7 @@ def test_llama_decode_performance(
         batch_size=batch_size,
         num_batches=repeat_batches,
         paged_attention=paged_attention,
-        page_params=page_params,
+        paged_attention_config=paged_attention_config,
         benchmark_token_range=benchmark_token_range,
         warmup_iters=warmup_iters,
         inner_iters=inner_iters,

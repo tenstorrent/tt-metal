@@ -16,7 +16,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 
 #include <sstream>
 #include <type_traits>
@@ -211,7 +211,7 @@ static void emit_sharded_tensor_kernel_rt_args(IDevice* d, Tensor const& tensor,
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }
 
-static bool shard_grid_is_transposed(Tensor const& t) {
+inline bool shard_grid_is_transposed(const Tensor& t) {
     TT_FATAL(
         t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
             t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
@@ -358,9 +358,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
     log_trace(tt::LogOp, "max_buffer_per_chunk: {}", max_buffer_per_chunk);
     log_trace(tt::LogOp, "max_pages_per_chunk: {}", max_pages_per_chunk);
-    bool rm = input_tensor.get_layout() == Layout::ROW_MAJOR;
-    bool width = input_tensor.get_padded_shape().rank() - 1 == dim;
-    tt::DataFormat df = datatype_to_dataformat_converter(input_tensor.get_dtype());
+    bool rm = input_tensor.layout() == Layout::ROW_MAJOR;
+    bool width = input_tensor.padded_shape().rank() - 1 == dim;
+    tt::DataFormat df = datatype_to_dataformat_converter(input_tensor.dtype());
 
     std::map<string, string> worker_defines;
     if (rm) {

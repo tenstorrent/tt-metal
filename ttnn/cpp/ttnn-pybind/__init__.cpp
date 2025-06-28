@@ -58,7 +58,6 @@
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_pybind.hpp"
 #include "ttnn/operations/normalization/normalization_pybind.hpp"
-#include "ttnn/operations/pool/downsample/downsample_pybind.hpp"
 #include "ttnn/operations/pool/generic/generic_pools_pybind.hpp"
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool_pybind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
@@ -67,6 +66,7 @@
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/uniform/uniform_pybind.hpp"
+#include "ttnn/operations/rand/rand_pybind.hpp"
 
 namespace ttnn::operations {
 
@@ -147,7 +147,6 @@ void py_module(py::module& module) {
     pool::py_module(m_pool);
     avgpool::py_module(m_pool);
     upsample::py_module(m_pool);
-    downsample::py_bind_downsample(m_pool);
 
     auto m_normalization = module.def_submodule("normalization", "normalization operations");
     normalization::py_module(m_normalization);
@@ -187,6 +186,9 @@ void py_module(py::module& module) {
 
     auto m_generic = module.def_submodule("generic", "ttnn generic operation interface");
     generic::bind_generic_operation(m_generic);
+
+    auto m_rand = module.def_submodule("rand", "ttnn rand operation");
+    rand::bind_rand_operation(m_rand);
 }
 }  // namespace ttnn::operations
 

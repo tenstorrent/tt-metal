@@ -5,6 +5,7 @@
 #include "generic_pools.hpp"
 
 #include <optional>
+#include "tt-metalium/constants.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -13,10 +14,14 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
+#include <limits>
 
 namespace ttnn {
 namespace operations::pool {
 
+// Generic invoke function for both max and avg pool operations. Most of the arguments are shared excpet for the
+// dilation which is set to (1,1) for avg pool and count_include_pad and divisor_override which have no effect on
+// maxpool.
 static Tensor pool2d_invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
@@ -30,6 +35,7 @@ static Tensor pool2d_invoke(
     std::array<uint32_t, 2> padding,
     std::optional<std::array<uint32_t, 2>> dilation = std::nullopt,
     bool ceil_mode = false,
+    bool count_include_pad = true,
     std::optional<int32_t> divisor_override = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
@@ -68,23 +74,33 @@ static Tensor pool2d_invoke(
                     (applied_shard_scheme.value() == TensorMemoryLayout::BLOCK_SHARDED),
                 "Only height, width, or block sharding strategies are supported.");
             shard_layout = applied_shard_scheme.value();
+            parallel_config = conv::determine_parallel_config(
+                shard_layout,
+                batch_size,
+                channels,
+                output_shape[1],
+                output_shape[2],
+                channels,
+                input_tensor.device()->compute_with_storage_grid_size(),
+                ShardOrientation::ROW_MAJOR,
+                false,
+                false,
+                false,
+                0);
+        } else {  // auto-sharding
+            std::optional<sliding_window::ParallelConfig> sw_parallel_config =
+                pool::determine_pool_config_for_auto_shard(input_tensor, sliding_window_config, channels, pool_type);
+            TT_FATAL(
+                sw_parallel_config.has_value(),
+                "autosharding could not determine valid shard scheme, please check tensor dimensions");
+            parallel_config = sw_parallel_config.value();
         }
-        parallel_config = conv::determine_parallel_config(
-            shard_layout,
-            batch_size,
-            channels,
-            output_shape[1],
-            output_shape[2],
-            channels,
-            input_tensor.device()->compute_with_storage_grid_size(),
-            ShardOrientation::ROW_MAJOR,
-            false,
-            false,
-            false);
+
+        // tt::log_debug(tt::LogOp, "auto sharding spec: {}", parallel_config.shard_scheme);
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
         auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(
-            input_tensor_sharded.get_padded_shape(), parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
+            input_tensor_sharded.padded_shape(), parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
         input_tensor_sharded = ttnn::to_memory_config(
             input_tensor_sharded, sharded_mem_config, std::nullopt);  // this converts interleaved to sharded
         out_memory_config = input_tensor_sharded.memory_config();
@@ -125,7 +141,6 @@ static Tensor pool2d_invoke(
         output_shard_width_padded);
     out_memory_config = out_memory_config.with_shard_spec(tt::tt_metal::ShardSpec{
         shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR});
-
     sliding_window_config = sliding_window::SlidingWindowConfig{
         .batch_size = batch_size,
         .input_hw = {input_h, input_w},
@@ -153,6 +168,9 @@ static Tensor pool2d_invoke(
         is_out_tiled,
         in_place_halo);
 
+    const uint32_t pre_allocate_size =
+        haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+
     auto output_tensor = ttnn::prim::pool2d(
         queue_id,
         haloed_tensor,
@@ -160,7 +178,9 @@ static Tensor pool2d_invoke(
         pool_type,
         DataType::BFLOAT16,  // input_tensor.dtype(), // currently only bfp16 output is supported
         out_memory_config,
-        divisor_override);
+        count_include_pad,
+        divisor_override,
+        pre_allocate_size);
 
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {
         output_tensor = ttnn::to_memory_config(output_tensor, memory_config.value(), std::nullopt);
@@ -197,6 +217,7 @@ Tensor MaxPool2DOp::invoke(
         padding,
         dilation,
         ceil_mode,
+        true,          // count_include_pad
         std::nullopt,  // divisor_override
         memory_config,
         applied_shard_scheme,
@@ -214,6 +235,7 @@ Tensor AvgPool2DOp::invoke(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> padding,
     bool ceil_mode,
+    bool count_include_pad,
     std::optional<int32_t> divisor_override,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
@@ -229,8 +251,9 @@ Tensor AvgPool2DOp::invoke(
         kernel_size,
         stride,
         padding,
-        std::nullopt, // dilation
+        std::nullopt,  // dilation
         ceil_mode,
+        count_include_pad,
         divisor_override,
         memory_config,
         applied_shard_scheme,

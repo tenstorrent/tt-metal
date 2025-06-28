@@ -32,7 +32,7 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size, op_name="
         results[f"MAX {d_col}"] = -float("inf")
 
     for _ in range(num_iterations):
-        run_device_profiler(command, subdir)
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
         r = post_process_ops_log(subdir, duration_cols, op_name=op_name, has_signposts=has_signposts)
         for d_col in duration_cols:
             results[f"AVG {d_col}"] += r[d_col]
@@ -115,7 +115,7 @@ def run_device_perf_detailed(command, subdir, cols, op_name="", has_signposts=Fa
         results[f"MAX {d_col}"] = -float("inf")
         results[f"STD {d_col}"] = 0
 
-    run_device_profiler(command, subdir)
+    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
     r = post_process_ops_log_detailed(
         subdir, duration_cols, op_name=op_name, has_signposts=has_signposts, detailed=True, warmup_iters=warmup_iters
     )

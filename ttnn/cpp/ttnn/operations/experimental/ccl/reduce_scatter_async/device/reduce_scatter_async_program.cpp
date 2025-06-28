@@ -15,21 +15,21 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
+#include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
 
 // For reduction op
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt_stl/overloaded.hpp>
 
@@ -107,10 +107,10 @@ enum fabric_lifetime_mode {
 enum LineDirection { FORWARD, BACKWARD };
 static_assert(
     static_cast<size_t>(LineDirection::FORWARD) ==
-    static_cast<size_t>(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD));
+    static_cast<size_t>(ttnn::ccl::LineDirection::FORWARD));
 static_assert(
     static_cast<size_t>(LineDirection::BACKWARD) ==
-    static_cast<size_t>(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD));
+    static_cast<size_t>(ttnn::ccl::LineDirection::BACKWARD));
 
 constexpr LineDirection relay_to_final_output_dir = LineDirection::FORWARD;
 // TODO: promote to header
@@ -663,9 +663,9 @@ static ReduceScatterKernelHandles build_line_reduce_scatter_worker_ct(
 }
 
 static size_t get_page_size(const Tensor& tensor) {
-    if (tensor.get_layout() == Layout::TILE) {
-        auto dtype = tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
-        return tensor.get_tensor_spec().tile().get_tile_size(dtype);
+    if (tensor.layout() == Layout::TILE) {
+        auto dtype = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+        return tensor.tensor_spec().tile().get_tile_size(dtype);
     } else {
         return tensor.buffer()->page_size();
     }
@@ -1209,7 +1209,6 @@ static void populate_partial_reduce_rt_args(
     std::unordered_map<CoreCoord, ttnn::ccl::tensor_address_runtime_args_overrider>& reader_rt_args_overrider_map,
     std::unordered_map<CoreCoord, ttnn::ccl::tensor_address_runtime_args_overrider>& writer_rt_args_overrider_map) {
     using namespace ttnn::ccl::worker_detail;
-    using Direction = ttnn::ccl::EdmLineFabricOpInterface::Direction;
 
     auto const& all_tensors = builder_config.all_tensors.get();
     auto const& kernel_ids = builder_config.kernel_ids.get();
@@ -1526,7 +1525,6 @@ static void create_end_of_line_worker_runtime_args(
     std::unordered_map<CoreCoord, ttnn::ccl::tensor_address_runtime_args_overrider>& writer_rt_args_overrider_map) {
     using namespace ttnn::ccl::worker_detail;
     using namespace ttnn::ccl::cmd;
-    using Direction = ttnn::ccl::EdmLineFabricOpInterface::Direction;
     Program& program = builder_config.program.get();
     IDevice* device = builder_config.device;
     ProgramTensorsBundle const& all_tensors = builder_config.all_tensors.get();
@@ -2252,7 +2250,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     auto const cb_handles = create_worker_circular_buffers(
         program,
         worker_cores.all_worker_cores,
-        tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype()),
+        tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()),
         math_in0_cb,
         math_in1_cb,
         math_out_cb,
@@ -2471,34 +2469,15 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     const uint32_t line_size,
     const uint32_t line_index,
     ttnn::ccl::Topology topology,
-    std::optional<size_t> num_links_preferred,
+    size_t num_links,
     const tt::tt_metal::GlobalSemaphore& from_remote_sem,
     const tt::tt_metal::GlobalSemaphore& to_remote_sem,
     const std::optional<SubDeviceId>& sub_device_id) {
     auto program = tt::tt_metal::Program();
 
-    bool persistent_fabric = true;
-
     fabric_lifetime_mode fabric_mode = fabric_lifetime_mode::PERSISTENT;
-    // Link Counting Scheme: By default use all the links between the current device
-    // and its neighbors. If a user specifies a value through num_links_preferred, use
-    // that instead (and cap at the maximum number of physical links).
-    const size_t max_num_links = num_links_preferred.value_or(std::numeric_limits<std::size_t>::max());
-    std::optional<size_t> num_links = std::nullopt;
-    std::array<std::pair<tt::tt_metal::IDevice*, std::optional<tt::tt_metal::IDevice*>>, 2> device_pairs = {
-        std::pair<tt::tt_metal::IDevice*, std::optional<tt::tt_metal::IDevice*>>{target_device, forward_device},
-        std::pair<tt::tt_metal::IDevice*, std::optional<tt::tt_metal::IDevice*>>{target_device, backward_device}};
 
-    for (const auto& pair : device_pairs) {
-        if (!num_links.has_value()) {
-            if (pair.second.has_value()) {
-                auto remote_chip_id = pair.second.value()->id();
-                num_links = std::min(target_device->get_ethernet_sockets(remote_chip_id).size(), max_num_links);
-            }
-        }
-    }
-
-    TT_FATAL(num_links.has_value(), "No links were found between the current device and its neighbors.");
+    TT_FATAL(num_links > 0, "No links were specified for Reduce scatter op.");
     TT_FATAL(fabric_mode == fabric_lifetime_mode::PERSISTENT, "Reduce scatter doesn't support transient fabric mode");
     return reduce_scatter_async_on_instantiated_edm_fabric(
         program,
@@ -2517,7 +2496,7 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
         line_size,
         line_index,
         dim,
-        num_links.value(),
+        num_links,
         ttnn::ccl::Topology::Linear,
         fabric_mode,
         from_remote_sem,

@@ -3,27 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "view.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
-    auto layout = tensor.get_layout();
-    auto tensor_shape = tensor.get_logical_shape();
+    auto layout = tensor.layout();
+    auto tensor_shape = tensor.logical_shape();
     // First Case, No reshape Required
     if (tensor_shape == shape) {
         return tensor;
     }
 
-    const uint32_t tile_first_dim = tensor.get_tensor_spec().tile().get_width();
-    const uint32_t tile_second_dim = tensor.get_tensor_spec().tile().get_height();
+    const uint32_t tile_first_dim = tensor.tensor_spec().tile().get_width();
+    const uint32_t tile_second_dim = tensor.tensor_spec().tile().get_height();
     const uint32_t shape_second_last_dim = shape.rank() >= 2 ? shape[-2] : 1;
     const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
     // Validate the operation
     TT_FATAL(
-        shape.volume() == tensor.get_logical_volume(),
+        shape.volume() == tensor.logical_volume(),
         "Invalid view, logical volumes are changing from {} to {}",
-        tensor.get_logical_volume(),
+        tensor.logical_volume(),
         shape.volume());
     TT_FATAL(
         ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE),
@@ -35,7 +35,7 @@ ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape
         tensor_shape[-1],
         shape[-1]);
     TT_FATAL(
-        (tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) ||              // Its row major
+        (tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) ||                  // Its row major
             (tensor_shape_second_last_dim == shape_second_last_dim) ||  // Second last dimension is the same
             ((shape_second_last_dim % tile_second_dim == 0) && (tensor_shape_second_last_dim % tile_second_dim == 0)),
         "Invalid second last dims for TILED reshape, from {} to {}, use reshape instead\n",

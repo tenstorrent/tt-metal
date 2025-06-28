@@ -32,7 +32,7 @@ public:
     Device () = delete;
     Device(
         chip_id_t device_id,
-        const uint8_t num_hw_cqs,
+        uint8_t num_hw_cqs,
         std::size_t l1_small_size,
         std::size_t trace_region_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
@@ -121,14 +121,10 @@ public:
     CommandQueue& command_queue(size_t cq_id = 0) override;
 
     // Metal trace device capture mode
-    void begin_trace(const uint8_t cq_id, const uint32_t tid) override;
-    void end_trace(const uint8_t cq_id, const uint32_t tid) override;
-    void replay_trace(
-        const uint8_t cq_id,
-        const uint32_t tid,
-        const bool block_on_device,
-        const bool block_on_worker_thread) override;
-    void release_trace(const uint32_t tid) override;
+    void begin_trace(uint8_t cq_id, uint32_t tid) override;
+    void end_trace(uint8_t cq_id, uint32_t tid) override;
+    void replay_trace(uint8_t cq_id, uint32_t tid, bool block_on_device, bool block_on_worker_thread) override;
+    void release_trace(uint32_t tid) override;
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
     void set_trace_buffers_size(uint32_t size) override { trace_buffers_size_ = size; }
@@ -141,17 +137,17 @@ public:
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
     bool initialize(
-        const uint8_t num_hw_cqs,
+        uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
-    void reset_cores() override;
-    void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
 
+    bool compile_fabric() override;
+    void configure_fabric() override;
     void init_fabric() override;
     // Puts device into reset
     bool close() override;
@@ -159,6 +155,7 @@ public:
     // Program cache interface. Synchronize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     void enable_program_cache() override;
+    void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override { return program_cache_; }
     std::size_t num_program_cache_entries() override;
@@ -182,9 +179,6 @@ public:
     void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
-    // TODO #15944: Temporary api until migration to actual fabric is complete
-    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
 
     bool is_mmio_capable() const override;
     // TODO #20966: Remove these APIs
@@ -194,14 +188,11 @@ public:
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
-    void initialize_cluster();
     std::unique_ptr<Allocator> initialize_allocator(
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_unreserved_start,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
-    void initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord virtual_core);
-    void initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord virtual_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
 
     void initialize_default_sub_device_state(
         size_t l1_small_size,
@@ -211,10 +202,6 @@ private:
 
     void compile_command_queue_programs();
     void configure_command_queue_programs();
-    void clear_l1_state();
-    void clear_dram_state();
-    void clear_launch_messages_on_eth_cores();
-    void generate_device_bank_to_noc_tables();
 
     void mark_allocations_unsafe();
     void mark_allocations_safe();

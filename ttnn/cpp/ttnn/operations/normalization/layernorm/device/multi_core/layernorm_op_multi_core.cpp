@@ -27,7 +27,6 @@ inline bool is_dram(const Tensor& input_tensor) {
 inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
-inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
@@ -96,18 +95,18 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     const uint32_t no_weights_max_size = 120;
     const uint32_t with_weights_max_size = 60;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
-    const auto shape = a.get_padded_shape();
+    const auto& shape = a.padded_shape();
     uint32_t W = shape[-1], H = shape[-2];
     uint32_t HW = H * W;
-    uint32_t NC = a.volume() / HW;
+    uint32_t NC = a.physical_volume() / HW;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
-    const auto& a_dtype = a.get_dtype();
+    const auto& a_dtype = a.dtype();
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
 
-    uint32_t num_tensor_tiles = a.volume() / TILE_HW;
+    uint32_t num_tensor_tiles = a.physical_volume() / TILE_HW;
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -124,14 +123,14 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     uint32_t block_size = fp32_dest_acc_en ? find_max_divisor(Wt, 4) : find_max_divisor(Wt, 8);
 
-    tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat gamma_cb_data_format =
-        gamma.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().get_dtype())
-                          : tt::DataFormat::Float16_b;
+    tt::DataFormat gamma_cb_data_format = gamma.has_value()
+                                              ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
+                                              : tt::DataFormat::Float16_b;
     tt::DataFormat beta_cb_data_format = beta.has_value()
-                                             ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().get_dtype())
+                                             ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
                                              : tt::DataFormat::Float16_b;
     uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
@@ -152,7 +151,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
     uint32_t inb_single_tile_size = 0;
     if (b) {
-        inb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().get_dtype());
+        inb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().dtype());
         inb_single_tile_size = tt::tt_metal::detail::TileSize(inb_data_format);
     }
 
@@ -161,16 +160,16 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
 
-    uint32_t num_tiles = a.volume() / TILE_HW;
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().volume() / TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().volume() / TILE_HW : 0;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
+    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
 
     // For bert, tensor is packed as RM with width 32
-    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        num_gamma_tiles = gamma.has_value() ? gamma.value().volume() / TILE_WIDTH : 0;
+    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
     }
-    if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
-        num_beta_tiles = beta.has_value() ? beta.value().volume() / TILE_WIDTH : 0;
+    if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
+        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -181,8 +180,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     // TODO(AP): can also add support for block_size=7 -> 63, 28
     uint32_t WtB = tt::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size
     bool large_tensor_needed = false;
-    auto use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or
-                                (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
+    auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
+                                (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
     uint32_t in0_t = WtB;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
     uint32_t in1_t = block_size * 2;  // buffer for fused pre-add b tensor
     uint32_t out0_t = block_size * 2;
@@ -283,8 +282,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                                                       (std::uint32_t)is_dram(beta),
                                                       (std::uint32_t)block_size};
 
-    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().get_padded_shape()[-1] * gamma.value().element_size();
+    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+        auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         if (gamma_stick_size_is_power_of_two) {
@@ -294,8 +293,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         } else {
             reader_compile_time_args.push_back(gamma_stick_size);
         }
-    } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().get_padded_shape()[-1] * beta.value().element_size();
+    } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
+        auto beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         reader_compile_time_args.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
         if (beta_stick_size_is_power_of_two) {
@@ -314,7 +313,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                                                       (std::uint32_t)is_dram(output),
                                                       (std::uint32_t)block_size};
 
-    bool tile_dtype_is_bfloat16 = a.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
+    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     std::map<string, string> reader_defines;
     std::map<string, string> compute_defines;
     if (b) {
@@ -497,9 +496,9 @@ operation::ProgramWithCallbacks layernorm_multi_core(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto src_a_dram_buffer = input_tensors.at(0).buffer();
-            const auto src_b_tensor = optional_input_tensors.at(0);
-            const auto gamma_tensor = optional_input_tensors.at(1);
-            const auto beta_tensor = optional_input_tensors.at(2);
+            const auto& src_b_tensor = optional_input_tensors.at(0);
+            const auto& gamma_tensor = optional_input_tensors.at(1);
+            const auto& beta_tensor = optional_input_tensors.at(2);
             const auto dst_dram_buffer = output_tensors.at(0).buffer();
 
             auto src_b_dram_buffer = src_b_tensor.has_value() ? src_b_tensor.value().buffer() : nullptr;
@@ -562,7 +561,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     IDevice* device = a.device();
 
     // convert data format
-    tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -593,13 +592,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         }
     }
 
-    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat gamma_cb_data_format =
-        gamma.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().get_dtype())
-                          : tt::DataFormat::Float16_b;
+    tt::DataFormat gamma_cb_data_format = gamma.has_value()
+                                              ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
+                                              : tt::DataFormat::Float16_b;
     tt::DataFormat beta_cb_data_format = beta.has_value()
-                                             ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().get_dtype())
+                                             ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
                                              : tt::DataFormat::Float16_b;
     // tile sizes
     uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
@@ -619,8 +618,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     // tensor shape
-    const auto shape = a.get_padded_shape();
-    uint32_t M = a.volume() / shape[-1];
+    const auto& shape = a.padded_shape();
+    uint32_t M = a.physical_volume() / shape[-1];
     uint32_t K = shape[-1];
     uint32_t Mt = M / TILE_WIDTH;
     uint32_t Kt = K / TILE_WIDTH;
@@ -693,9 +692,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     // num tiles for a, gamma, beta
-    uint32_t num_tiles = a.volume() / TILE_HW;
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().volume() / TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().volume() / TILE_HW : 0;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
+    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -718,7 +717,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t post_all_gather_stats_block_tiles = 1;
     uint32_t num_distributed_devices = 1;
     if (is_post_all_gather && stats.has_value()) {
-        post_all_gather_stats_block_tiles = stats.value().get_padded_shape()[-1] / TILE_WIDTH;
+        post_all_gather_stats_block_tiles = stats.value().padded_shape()[-1] / TILE_WIDTH;
         num_distributed_devices = post_all_gather_stats_block_tiles / pre_all_gather_stats_block_tiles;
     }
 
@@ -1138,8 +1137,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)is_dram(beta),
         (std::uint32_t)block_wt};
 
-    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().get_padded_shape()[-1] * gamma.value().element_size();
+    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+        auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         writer_mcast_receiver_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
@@ -1152,8 +1151,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             writer_mcast_sender_compile_time_args.push_back(gamma_stick_size);
             writer_mcast_receiver_compile_time_args.push_back(gamma_stick_size);
         }
-    } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().get_padded_shape()[-1] * beta.value().element_size();
+    } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
+        auto beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
         writer_mcast_receiver_compile_time_args.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
@@ -1192,8 +1191,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     writer_mcast_receiver_compile_time_args.push_back(block_ht);  // height in tiles
 
     // writer kernel
-    bool use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or
-                                (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
+    bool use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
+                                (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
     std::string writer_kernel;
     if (is_pre_all_gather) {
         writer_kernel =
@@ -1831,10 +1830,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto src_buffer_a = input_tensors.at(0).buffer();
-            const auto b_tensor = optional_input_tensors.at(0);
-            const auto gamma_tensor = optional_input_tensors.at(1);
-            const auto beta_tensor = optional_input_tensors.at(2);
-            const auto stats_tensor = optional_input_tensors.at(3);
+            const auto& b_tensor = optional_input_tensors.at(0);
+            const auto& gamma_tensor = optional_input_tensors.at(1);
+            const auto& beta_tensor = optional_input_tensors.at(2);
+            const auto& stats_tensor = optional_input_tensors.at(3);
             const auto dst_buffer = output_tensors.at(0).buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);

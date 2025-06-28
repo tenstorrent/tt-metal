@@ -102,7 +102,14 @@
 #define MEM_NOC_COUNTER_L1_SIZE 5 * 2 * 2 * MEM_NOC_COUNTER_SIZE
 #define MEM_NOC_COUNTER_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
 
-#define MEM_MAP_END (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
+// Tensix routing table for fabric networking
+#define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
+#define MEM_TENSIX_ROUTING_TABLE_SIZE 2064
+#if (MEM_TENSIX_ROUTING_TABLE_BASE % 16 != 0) || (MEM_TENSIX_ROUTING_TABLE_SIZE % 16 != 0)
+#error "Tensix routing table base and size must be 16-byte aligned"
+#endif
+
+#define MEM_MAP_END (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_TENSIX_ROUTING_TABLE_SIZE)
 
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"
@@ -157,6 +164,12 @@
 // Common Misc
 #define MEM_RETRAIN_COUNT_ADDR 0x7CC10
 #define MEM_RETRAIN_FORCE_ADDR 0x1EFC
+// These values are taken from WH, These may need to be updated when BH needs to support
+// intermesh routing.
+#define MEM_ETH_LINK_REMOTE_INFO_ADDR 0x1EC0
+#define MEM_INTERMESH_ETH_LINK_CONFIG_ADDR 0x104C
+#define MEM_INTERMESH_ETH_LINK_STATUS_ADDR 0x1104
+
 #define MEM_SYSENG_ETH_RESULTS_BASE_ADDR 0x7CC00
 #define MEM_SYSENG_ETH_MAILBOX_BASE_ADDR 0x7D000
 

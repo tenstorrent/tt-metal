@@ -17,11 +17,11 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     tt::tt_metal::Program program{};
 
     const tt::DataFormat input_tensor_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
     const tt::DataFormat value_tensor_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(0).get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(0).dtype());
     const tt::DataFormat index_tensor_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(1).get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(1).dtype());
 
     const uint32_t input_tensor_tile_size = tile_size(input_tensor_cb_data_format);
     const uint32_t value_tensor_tile_size = tile_size(value_tensor_cb_data_format);
@@ -35,10 +35,10 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     const bool value_tensor_is_dram = value_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     const bool index_tensor_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    const uint32_t num_input_tiles = tensor_args.input_tensor.volume() / tt::constants::TILE_HW;
-    const uint32_t num_value_tiles = output_tensors.at(0).volume() / tt::constants::TILE_HW;
+    const uint32_t num_input_tiles = tensor_args.input_tensor.physical_volume() / tt::constants::TILE_HW;
+    const uint32_t num_value_tiles = output_tensors.at(0).physical_volume() / tt::constants::TILE_HW;
 
-    const auto input_shape = tensor_args.input_tensor.get_padded_shape();
+    const auto input_shape = tensor_args.input_tensor.padded_shape();
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tt::constants::TILE_HEIGHT;
     const uint32_t Wt = input_shape[3] / tt::constants::TILE_WIDTH;
 
@@ -145,6 +145,13 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     auto cb_index_tensor_output =
         tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_output_cb_config);
 
+    constexpr uint32_t synchronization_cb_index = tt::CBIndex::c_6;
+    constexpr uint32_t synchronization_cb_size = tt::constants::TILE_HW * sizeof(uint8_t);
+    const tt::tt_metal::CircularBufferConfig synchronization_cb_config =
+        tt::tt_metal::CircularBufferConfig(synchronization_cb_size, {{synchronization_cb_index, tt::DataFormat::UInt8}})
+            .set_page_size(synchronization_cb_index, synchronization_cb_size);
+    auto cb_synchronization = tt::tt_metal::CreateCircularBuffer(program, core_range, synchronization_cb_config);
+
     // Kernels
     const std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_index,
@@ -199,8 +206,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
         Wt,
         static_cast<uint32_t>(attributes.descending),
         static_cast<uint32_t>(attributes.stable),
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y};
+        synchronization_cb_index};
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
@@ -253,7 +259,7 @@ void SortProgramFactorySingleRowSingleCore::override_runtime_arguments(
     auto value_tensor_buffer = output_tensors.at(0).buffer();
     auto index_tensor_buffer = output_tensors.at(1).buffer();
 
-    const auto input_shape = tensor_args.input_tensor.get_padded_shape();
+    const auto input_shape = tensor_args.input_tensor.padded_shape();
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tt::constants::TILE_HEIGHT;
     const uint32_t total_number_of_cores =
         cached_program.shared_variables.storage_grid_size.x * cached_program.shared_variables.storage_grid_size.y;
@@ -293,11 +299,11 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     tt::tt_metal::Program program{};
 
     const tt::DataFormat input_tensor_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
     const tt::DataFormat value_tensor_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(0).get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(0).dtype());
     const tt::DataFormat index_tensor_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(1).get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(1).dtype());
 
     const uint32_t input_tensor_tile_size = tile_size(input_tensor_cb_data_format);
     const uint32_t value_tensor_tile_size = tile_size(value_tensor_cb_data_format);
@@ -314,7 +320,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
 
-    const auto input_shape = tensor_args.input_tensor.get_padded_shape();
+    const auto input_shape = tensor_args.input_tensor.padded_shape();
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
     const uint32_t Wt = input_shape[3] / tile_width;
 

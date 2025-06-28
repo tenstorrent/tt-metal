@@ -437,6 +437,9 @@ void PrintTensixRegisterData(ostringstream* stream, int setwidth, uint32_t datum
             *stream << setw(setwidth) << (datum & 0xffff) << " ";
             *stream << setw(setwidth) << (datum >> 16) << " ";
             break;
+        case static_cast<std::uint8_t>(tt::DataFormat::Int32):
+            *stream << setw(setwidth) << static_cast<int32_t>(datum) << " ";
+            break;
         default: *stream << "Unknown data format " << data_format << " "; break;
     }
 }
@@ -755,6 +758,8 @@ void DebugPrintServerContext::DetachDevice(chip_id_t device_id) {
     std::vector<chip_id_t> chip_ids = rtoptions.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
     if (!rtoptions.get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint)) {
         if (std::find(chip_ids.begin(), chip_ids.end(), device_id) == chip_ids.end()) {
+            // If a chip is present that is not enabled now, still need to remove it
+            device_to_core_range_.erase(device_id);
             return;
         }
     }
@@ -1334,6 +1339,7 @@ void DprintServerAttach(chip_id_t device_id) {
     // If no server is running, create one
     if (!DprintServerIsRunning()) {
         DebugPrintServerContext* ctx = new DebugPrintServerContext();
+        tt::tt_metal::MetalContext::instance().rtoptions().set_disable_dma_ops(true);
     }
 
     // Add this device to the server
@@ -1348,6 +1354,7 @@ void DprintServerDetach(chip_id_t device_id) {
         if (DebugPrintServerContext::inst->GetNumAttachedDevices() == 0) {
             delete DebugPrintServerContext::inst;
             DebugPrintServerContext::inst = nullptr;
+            tt::tt_metal::MetalContext::instance().rtoptions().set_disable_dma_ops(false);
         }
     }
 }

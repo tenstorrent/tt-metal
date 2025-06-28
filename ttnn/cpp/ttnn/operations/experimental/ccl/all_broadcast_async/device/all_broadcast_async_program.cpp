@@ -18,13 +18,13 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
+#include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 #include <sstream>
 #include <type_traits>
 #include <ranges>
@@ -53,7 +53,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     tt::tt_metal::Program program{};
 
     auto mesh_device = input_tensor.mesh_device();
-    const bool enable_persistent_fabric_mode = true;
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
@@ -82,7 +81,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, mesh_device, sub_device_id);
+        choose_worker_cores(num_links, num_workers_per_link, mesh_device, sub_device_id);
 
     // Info for RM tensors
     uint32_t row_size = input_tensor.get_logical_shape()[-1] * input_tensor.element_size();
@@ -120,7 +119,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
@@ -259,13 +258,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
 
         writer_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
+            const auto sender_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+            const auto forward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }
         writer_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
+            const auto sender_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+            const auto backward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }

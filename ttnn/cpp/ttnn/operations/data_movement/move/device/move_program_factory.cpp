@@ -5,9 +5,9 @@
 #include <math.h>
 
 #include <tt-metalium/work_split.hpp>
-#include "cpp/ttnn/operations/data_movement/move/device/move_device_operation.hpp"
+#include "ttnn/operations/data_movement/move/device/move_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
-#include "cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
+#include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -67,13 +67,14 @@ std::vector<CoreRange> get_multicast_regions(
 operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input, Tensor& output) {
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
 
-    bool tilized = input.get_layout() == Layout::TILE;
+    bool tilized = input.layout() == Layout::TILE;
 
     uint32_t page_size = input.buffer()->page_size();
 
-    uint32_t num_pages = tilized ? output.volume() / TILE_HW : output.volume() / output.get_padded_shape()[-1];
+    uint32_t num_pages =
+        tilized ? output.physical_volume() / TILE_HW : output.physical_volume() / output.padded_shape()[-1];
     tt::tt_metal::IDevice* device = output.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -209,16 +210,16 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
 operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Tensor& output) {
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     auto shard_spec = input.shard_spec().value();
     auto shard_shape = shard_spec.shape;
     auto shard_grid = shard_spec.grid;
-    auto input_shape = input.get_logical_shape();
-    auto input_dtype = input.get_dtype();
-    auto input_layout = input.get_layout();
+    const auto& input_shape = input.logical_shape();
+    auto input_dtype = input.dtype();
+    auto input_layout = input.layout();
     TT_FATAL(
-        input_layout == output.get_layout() && input_dtype == output.get_dtype() &&
-            shard_shape == output.shard_spec().value().shape && input_shape == output.get_logical_shape(),
+        input_layout == output.layout() && input_dtype == output.dtype() &&
+            shard_shape == output.shard_spec().value().shape && input_shape == output.logical_shape(),
         "Error");
     const uint32_t src_cb_sharded = tt::CBIndex::c_0;
     const uint32_t dst_cb_sharded = tt::CBIndex::c_1;

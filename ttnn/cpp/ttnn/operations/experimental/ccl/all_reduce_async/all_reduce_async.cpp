@@ -4,7 +4,7 @@
 
 #include "all_reduce_async.hpp"
 
-#include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "device/all_reduce_async_op.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -47,7 +47,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     uint32_t dim =
-        find_scatter_dim(input_tensor.get_padded_shape(), ttnn::ccl::get_active_physical_devices(input_tensor).size());
+        find_scatter_dim(input_tensor.padded_shape(), ttnn::ccl::get_active_physical_devices(input_tensor).size());
     ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter(
         input_tensor,
         dim,
@@ -79,7 +79,7 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
-    uint32_t dim = find_scatter_dim(input_tensors.at(0).get_padded_shape(), input_tensors.size());
+    uint32_t dim = find_scatter_dim(input_tensors.at(0).padded_shape(), input_tensors.size());
     auto scattered_tensors = ttnn::operations::experimental::ccl::reduce_scatter(
         input_tensors,
         dim,
@@ -113,10 +113,10 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     std::vector<IDevice*> devices =
         (cluster_axis == 0) ? mesh_view.get_devices_on_column(0) : mesh_view.get_devices_on_row(0);
-    uint32_t dim = find_scatter_dim(input_tensor.get_padded_shape(), devices.size());
+    uint32_t dim = find_scatter_dim(input_tensor.padded_shape(), devices.size());
     ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter(
         input_tensor,
         dim,
@@ -156,10 +156,10 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     std::vector<IDevice*> devices =
         (cluster_axis == 0) ? mesh_view.get_devices_on_column(0) : mesh_view.get_devices_on_row(0);
-    uint32_t dim = find_scatter_dim(input_tensors.at(0).get_padded_shape(), devices.size());
+    uint32_t dim = find_scatter_dim(input_tensors.at(0).padded_shape(), devices.size());
     auto scattered_tensors = ttnn::operations::experimental::ccl::reduce_scatter(
         input_tensors,
         dim,
@@ -196,7 +196,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
+    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
+    bool use_noc1_only) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     return ttnn::operations::experimental::ccl::all_reduce_async(
         input_tensor,
@@ -208,7 +209,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         dtype,
         out_memory_config,
         num_preferred_links,
-        worker_subdevice_id_opt);
+        worker_subdevice_id_opt,
+        use_noc1_only);
 }
 
 std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
@@ -221,7 +223,8 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
+    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
+    bool use_noc1_only) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
     return ttnn::operations::experimental::ccl::all_reduce_async(
         input_tensors,
@@ -233,7 +236,8 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
         dtype,
         out_memory_config,
         num_preferred_links,
-        worker_subdevice_id_opt);
+        worker_subdevice_id_opt,
+        use_noc1_only);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

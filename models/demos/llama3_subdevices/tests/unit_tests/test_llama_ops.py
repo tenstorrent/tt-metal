@@ -4,10 +4,10 @@
 import ttnn
 import torch
 import pytest
-
 from models.utility_functions import comp_pcc
 
 from models.utility_functions import skip_for_blackhole
+from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import FF1_CRS_RS_OUT
 from tests.ttnn.unit_tests.operations.test_distributed_layernorm_sharded import (
     create_input_and_weight_tensors,
     create_tt_tensors,
@@ -28,6 +28,9 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_l
     run_test_rotary_embedding_llama,
     run_test_row_major_rotary_embedding_llama,
 )
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_eltwise_binary import run_elt_binary_mul_with_sub_devices
+
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import run_embeddings_tests
 
 
 @pytest.mark.parametrize(
@@ -52,7 +55,6 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_l
 )
 def test_llama_tg_LayerNorm(
     device,
-    use_program_cache,
     input_width,
     num_devices,
     is_rmsnorm,
@@ -172,7 +174,7 @@ def test_llama_tg_LayerNorm(
 )
 @pytest.mark.parametrize("q_layout", [ttnn.TILE_LAYOUT], ids=["tile"])
 def test_llama_tg_ScaledDotProductAttentionDecode(
-    device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids, q_layout
+    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids, q_layout
 ):
     run_test_sdpa_decode_paged_attention_single_iter(
         device,
@@ -195,6 +197,52 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
         q_layout=q_layout,
     )
     assert device.num_program_cache_entries() == 1
+
+
+## Op Tests for BinaryMult + SiLU
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("seq_len", [32])
+@pytest.mark.parametrize("dim", [512])
+@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("pcc", [0.9995])
+def test_llama_tg_BinaryDeviceOperation(device, batch_size, seq_len, dim, num_heads, dtype, pcc):
+    in_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            FF1_CRS_RS_OUT,
+            [32, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    out_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            FF1_CRS_RS_OUT,
+            [32, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    run_elt_binary_mul_with_sub_devices(
+        batch_size,
+        num_heads,
+        seq_len,
+        dim,
+        dtype,
+        in_mem_config,
+        out_mem_config,
+        device,
+        None,
+        None,
+        pcc,
+    )
 
 
 @pytest.mark.models_device_performance_bare_metal
@@ -228,7 +276,7 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
 )
 @pytest.mark.parametrize("q_layout", [ttnn.ROW_MAJOR_LAYOUT], ids=["row_major"])
 def test_llama_tg_ScaledDotProductAttentionDecodeRMQ(
-    device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids, q_layout
+    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids, q_layout
 ):
     run_test_sdpa_decode_paged_attention_single_iter(
         device,
@@ -281,7 +329,6 @@ def test_llama_tg_NLPCreateHeadsDecodeDeviceOperation(
     n_local_kv_heads,
     head_dim,
     overlap_coregrid,
-    use_program_cache,
     sub_core_grids,
 ):
     batch_offset_tensor = torch.tensor([batch_offset], dtype=torch.int32)
@@ -327,7 +374,6 @@ def test_llama_tg_NLPConcatHeadsDecodeDeviceOperation(
     head_dim,
     batch_size,
     sub_core_grids,
-    use_program_cache,
 ):
     torch.manual_seed(0)
 
@@ -355,7 +401,6 @@ def test_llama_tg_PagedUpdateCacheDeviceOperation(
     num_heads,
     input_dtype,
     cache_dtype,
-    use_program_cache,
     pcc,
 ):
     run_test_paged_fused_update_cache_decode(
@@ -394,7 +439,6 @@ def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
     num_heads,
     input_dtype,
     cache_dtype,
-    use_program_cache,
     pcc,
 ):
     for _ in range(2):
@@ -461,8 +505,56 @@ def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
     datatype,
     pcc,
     mesh_device,
-    use_program_cache,
 ):
     run_test_row_major_rotary_embedding_llama(
         mesh_device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True
+    )
+
+
+@pytest.mark.parametrize("batch_size", (1,))
+@pytest.mark.parametrize("num_embeddings", (128256,))
+@pytest.mark.parametrize("embedding_dim", (2048,))
+@pytest.mark.parametrize("num_rows", (32,))
+@pytest.mark.parametrize("dtype", (ttnn.bfloat16,))
+@pytest.mark.parametrize("in0_mem_config", (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),))
+@pytest.mark.parametrize("tilized", (True,))
+@pytest.mark.parametrize(
+    "core_grid_ln, grid_offset",
+    [((8, 2), ttnn.CoreCoord(1, 0))],
+)
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+def test_llama_tg_Embeddings(
+    batch_size,
+    num_embeddings,
+    embedding_dim,
+    num_rows,
+    dtype,
+    in0_mem_config,
+    tilized,
+    core_grid_ln,
+    grid_offset,
+    device,
+):
+    core_range = ttnn.CoreRange(
+        grid_offset,
+        ttnn.CoreCoord(grid_offset.x + core_grid_ln[1] - 1, grid_offset.y + core_grid_ln[0] - 1),
+    )
+    num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+    out_mem_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, embedding_dim // num_cores_ln),
+        core_grid=ttnn.CoreRangeSet({core_range}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    run_embeddings_tests(
+        batch_size,
+        num_embeddings,
+        embedding_dim,
+        num_rows,
+        dtype,
+        in0_mem_config,
+        out_mem_config,
+        device,
+        tilized,
     )

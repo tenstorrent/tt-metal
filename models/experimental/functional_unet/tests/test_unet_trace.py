@@ -76,7 +76,6 @@ def test_unet_trace_2cq(
     groups: int,
     iterations: int,
     device,
-    use_program_cache,
     reset_seeds,
 ):
     torch_input, ttnn_input = create_unet_input_tensors(batch, groups, channel_order="first", pad=False, fold=True)
@@ -188,7 +187,6 @@ def test_unet_trace_2cq_multi_device(
     groups: int,
     iterations: int,
     mesh_device,
-    use_program_cache,
     reset_seeds,
 ):
     if not is_n300_with_eth_dispatch_cores(mesh_device) and not is_t3k_with_eth_dispatch_cores(mesh_device):

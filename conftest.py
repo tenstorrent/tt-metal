@@ -313,7 +313,6 @@ def device(request, device_params):
 
     yield device
 
-    ttnn.DumpDeviceProfiler(device)
     ttnn.close_device(device)
 
 
@@ -330,9 +329,6 @@ def pcie_devices(request, device_params):
     devices = ttnn.CreateDevices(device_ids, **updated_device_params)
 
     yield [devices[i] for i in range(num_devices)]
-
-    for device in devices.values():
-        ttnn.DumpDeviceProfiler(device)
 
     ttnn.CloseDevices(devices)
 
@@ -351,9 +347,6 @@ def all_devices(request, device_params):
 
     yield [devices[i] for i in range(num_devices)]
 
-    for device in devices.values():
-        ttnn.DumpDeviceProfiler(device)
-
     ttnn.CloseDevices(devices)
 
 
@@ -364,7 +357,7 @@ def reset_fabric(fabric_config):
     import ttnn
 
     if fabric_config:
-        ttnn.initialize_fabric_config(ttnn.FabricConfig.DISABLED)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 # Set fabric config to passed in value
@@ -375,7 +368,7 @@ def set_fabric(fabric_config):
 
     # If fabric_config is not None, set it to fabric_config
     if fabric_config:
-        ttnn.initialize_fabric_config(fabric_config)
+        ttnn.set_fabric_config(fabric_config)
 
 
 @pytest.fixture(scope="function")
@@ -420,13 +413,15 @@ def mesh_device(request, silicon_arch_name, device_params):
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    reliability_mode = updated_device_params.pop("reliability_mode", None)
     set_fabric(fabric_config)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    ttnn.DumpDeviceProfiler(mesh_device)
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -457,8 +452,6 @@ def t3k_single_board_mesh_device(request, silicon_arch_name, silicon_arch_wormho
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    ttnn.DumpDeviceProfiler(mesh_device)
-
     ttnn.close_mesh_device(mesh_device)
     del mesh_device
 
@@ -480,6 +473,7 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    reliability_mode = updated_device_params.pop("reliability_mode", None)
     set_fabric(fabric_config)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(2, 2),
@@ -491,7 +485,8 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    ttnn.DumpDeviceProfiler(mesh_device)
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -507,6 +502,7 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    reliability_mode = updated_device_params.pop("reliability_mode", None)
     set_fabric(fabric_config)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 2),
@@ -516,7 +512,8 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    ttnn.DumpDeviceProfiler(mesh_device)
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -533,6 +530,7 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    reliability_mode = updated_device_params.pop("reliability_mode", None)
     set_fabric(fabric_config)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 8),
@@ -542,7 +540,8 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    ttnn.DumpDeviceProfiler(mesh_device)
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -594,18 +593,6 @@ def get_devices(request):
     else:
         devices = []
     return devices
-
-
-@pytest.fixture(scope="function")
-def use_program_cache(request):
-    devices = get_devices(request)
-    if not devices:
-        logger.warning("No device fixture found to apply program cache to: PROGRAM CACHE DISABLED")
-    for dev in devices:
-        dev.enable_program_cache()
-    yield
-    for dev in devices:
-        dev.disable_and_clear_program_cache()
 
 
 @pytest.fixture(scope="function")
@@ -683,6 +670,29 @@ def pytest_addoption(parser):
         default=None,
         help="Check determinism every nth iteration",
     )
+    parser.addoption(
+        "--grid-size",
+        action="store",
+        default=None,
+        help="Size of chip grid for the test to run on. Grid size is defined by nubmer of cores in row x number of cores in column, e.g., 8x8",
+    )
+
+
+@pytest.fixture
+def grid_size(request):
+    """
+    Fixture to set the chip grid size for the test to run on.
+    If --grid-size is provided, it returns a tuple of integers (rows, columns).
+    If not provided, it defaults to None.
+    """
+    grid_size_str = request.config.getoption("--grid-size")
+    if grid_size_str:
+        try:
+            rows, cols = map(int, grid_size_str.split("x"))
+            return (rows, cols)
+        except ValueError:
+            raise ValueError(f"Invalid grid size format: {grid_size_str}. Use format 'rows x cols'.")
+    return None
 
 
 # Indicates the iteration interval at which determinism is verified for the op output

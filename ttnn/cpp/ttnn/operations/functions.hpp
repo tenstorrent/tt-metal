@@ -241,7 +241,7 @@ static Tensor fill_first_val_into_tensor(
     const Layout layout,
     IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{}) {
-    auto physical_volume = input_tensor.volume();
+    auto physical_volume = input_tensor.physical_volume();
     auto output_buffer = std::vector<T>(physical_volume);
     auto input_cpu_tensor = input_tensor.cpu();
     tt::stl::Span<const T> host_buffer = tt::tt_metal::host_buffer::get_as<T>(input_cpu_tensor);
@@ -252,13 +252,13 @@ static Tensor fill_first_val_into_tensor(
     auto output = Tensor(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
-                          input_tensor.get_logical_shape(),
+                          input_tensor.logical_shape(),
                           TensorLayout::fromPaddedShape(
                               data_type,
                               PageConfig(Layout::ROW_MAJOR),
                               MemoryConfig{},
-                              input_tensor.get_logical_shape(),
-                              input_tensor.get_padded_shape())))
+                              input_tensor.logical_shape(),
+                              input_tensor.padded_shape())))
                       .to_layout(layout);
     if (device != nullptr) {
         output = output.to_device(device, output_mem_config);
@@ -392,9 +392,9 @@ static Tensor manual_insertion(
     const Layout layout = Layout::ROW_MAJOR,
     IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{}) {
-    TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR);
+    TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
     TT_ASSERT(
-        padded_shape[0] * padded_shape[1] * padded_shape[2] * padded_shape[3] == input_tensor.volume(),
+        padded_shape[0] * padded_shape[1] * padded_shape[2] * padded_shape[3] == input_tensor.physical_volume(),
         "Required shape volume must match old shape volume");
     auto input_cpu_tensor = input_tensor.cpu();
     auto output = Tensor(
@@ -438,13 +438,21 @@ namespace random {
 
 inline auto RANDOM_GENERATOR = std::mt19937(0);
 
-static void seed(std::size_t seed) { RANDOM_GENERATOR = std::mt19937(seed); }
+// the effect of instantiating a template uniform_int_distribution is undefined
+// unless IntType satisfy the following concept according to 26.6.2.1 General requirements [rand.req.genl]
+template <typename T>
+concept IntType =
+    std::is_same_v<T, short> || std::is_same_v<T, int> || std::is_same_v<T, long> || std::is_same_v<T, long long> ||
+    std::is_same_v<T, unsigned short> || std::is_same_v<T, unsigned int> || std::is_same_v<T, unsigned long> ||
+    std::is_same_v<T, unsigned long long>;
+
+inline void seed(std::size_t seed) { RANDOM_GENERATOR = std::mt19937(seed); }
 
 template <typename T>
 static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layout = Layout::ROW_MAJOR) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
 
-    TensorSpec spec(shape, TensorLayout(data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+    TensorSpec spec(shape, TensorLayout(data_type, PageConfig(layout), MemoryConfig{}));
     auto output_buffer = std::vector<T>(spec.padded_shape().volume());
 
     if constexpr (std::is_same_v<T, uint32_t>) {
@@ -465,10 +473,10 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
         }
     }
 
-    return Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec).to_layout(layout);
+    return Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);
 }
 
-static Tensor random(
+inline Tensor random(
     const ttnn::Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR) {
     switch (data_type) {
         case DataType::UINT8: return uniform(uint8_t(0), uint8_t(1), shape, layout);
@@ -483,7 +491,7 @@ static Tensor random(
 }  // namespace random
 
 namespace detail {
-static bool nearly_equal(float a, float b, float epsilon = 1e-5f, float abs_threshold = 1e-5f) {
+inline bool nearly_equal(float a, float b, float epsilon = 1e-5f, float abs_threshold = 1e-5f) {
     auto diff = std::abs(a - b);
     auto norm = std::min((std::abs(a) + std::abs(b)), std::numeric_limits<float>::max());
     auto result = diff < std::max(abs_threshold, epsilon * norm);
@@ -501,11 +509,11 @@ static bool nearly_equal(::bfloat16 a, ::bfloat16 b, Args... args) {
 
 template <typename DataType, typename... Args>
 static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args... args) {
-    if (tensor_a.get_padded_shape() != tensor_b.get_padded_shape()) {
+    if (tensor_a.padded_shape() != tensor_b.padded_shape()) {
         return false;
     }
 
-    if (tensor_a.get_dtype() != tensor_b.get_dtype()) {
+    if (tensor_a.dtype() != tensor_b.dtype()) {
         return false;
     }
 

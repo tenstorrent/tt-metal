@@ -11,6 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
@@ -20,8 +21,8 @@ from models.utility_functions import torch_random
     ],
 )
 @pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_downblock2d(device, temb_shape, input_shape, use_program_cache, reset_seeds, conv_weights_dtype):
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
+def test_downblock2d(device, temb_shape, input_shape, reset_seeds, conv_weights_dtype):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )

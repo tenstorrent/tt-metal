@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
+#include "ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax {
@@ -21,13 +21,13 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     // split work
-    auto shape = input.get_padded_shape();
+    auto shape = input.padded_shape();
     auto H = shape[-2];
     auto W = shape[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
 
-    auto num = input.volume() / H / W;
+    auto num = input.physical_volume() / H / W;
     uint32_t num_cols_tiles = num * Wt;
     uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
@@ -42,7 +42,7 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
     Program program = Program();
 
     // create circular buffers
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     CreateCircularBuffer(
@@ -125,7 +125,7 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
         }
 
         float scaler = 1.0f;
-        uint32_t mask_h = input.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT;
+        uint32_t mask_h = input.logical_shape()[-2] % tt::constants::TILE_HEIGHT;
         if (mask_h == 0) {
             mask_h = tt::constants::TILE_HEIGHT;
         }

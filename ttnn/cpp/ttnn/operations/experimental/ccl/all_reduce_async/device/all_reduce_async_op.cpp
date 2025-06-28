@@ -16,8 +16,8 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& buffer_tensor = input_tensors[1];
-    const auto& layout = input_tensors[0].get_layout();
-    const auto& dtype = input_tensors[0].get_dtype();
+    const auto& layout = input_tensors[0].layout();
+    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
     TT_FATAL(
@@ -67,7 +67,7 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.get_logical_shape();
+    const auto& shape = input_tensor.logical_shape();
     tt::tt_metal::TensorLayout output_tensor_layout =
         tt::tt_metal::TensorLayout(this->dtype, input_tensor.tensor_spec().page_config(), this->output_mem_config);
 
@@ -115,7 +115,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
         }
     }
 
-    auto input_tensor_shape = input_tensors[0].get_padded_shape();
+    auto input_tensor_shape = input_tensors[0].padded_shape();
     auto input_tensor_buffer_layout = input_tensors[0].buffer()->buffer_layout();
     auto input_tensor_page_layout = input_tensors[0].layout();
 
@@ -152,13 +152,14 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
         device_index,
         this->topology,
         this->semaphore,
-        this->sub_device_id);
+        this->sub_device_id,
+        this->use_noc1_only);
 }
 
 tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
-    auto input_shape = input_tensors[0].get_padded_shape();
-    auto input_memory_layout = input_tensors[0].get_layout();
-    auto input_dtype = input_tensors[0].get_dtype();
+    auto input_shape = input_tensors[0].padded_shape();
+    auto input_memory_layout = input_tensors[0].layout();
+    auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
     auto output_dtype = this->dtype;
     return tt::tt_metal::operation::hash_operation<AllReduceAsync>(
@@ -188,7 +189,8 @@ Tensor all_reduce_async_impl(
     const std::optional<DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_noc1_only) {
     const auto mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");
@@ -198,11 +200,12 @@ Tensor all_reduce_async_impl(
                ttnn::AllReduceAsync{
                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
                    num_devices,
-                   dtype.value_or(input_tensor.get_dtype()),
+                   dtype.value_or(input_tensor.dtype()),
                    memory_config.value_or(input_tensor.memory_config()),
                    topology,
                    multi_device_global_semaphore,
                    subdevice_id,
+                   use_noc1_only,
                    cluster_axis,
                    &mesh_device},
                {input_tensor, buffer_tensor})
@@ -220,7 +223,8 @@ Tensor all_reduce_async(
     const std::optional<DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_noc1_only) {
     return all_reduce_async_impl(
         input_tensor,
         buffer_tensor,
@@ -231,7 +235,8 @@ Tensor all_reduce_async(
         dtype,
         memory_config,
         num_preferred_links,
-        subdevice_id);
+        subdevice_id,
+        use_noc1_only);
 }
 
 std::vector<Tensor> all_reduce_async(
@@ -244,7 +249,8 @@ std::vector<Tensor> all_reduce_async(
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_noc1_only) {
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (size_t i = 0; i < input_tensors.size(); ++i) {
@@ -258,7 +264,8 @@ std::vector<Tensor> all_reduce_async(
             dtype,
             memory_config,
             num_preferred_links,
-            subdevice_id));
+            subdevice_id,
+            use_noc1_only));
     }
     return output_tensors;
 }
@@ -268,33 +275,28 @@ std::vector<Tensor> all_reduce_async(
 }  // namespace operations
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
-    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, const CoreRangeSet& available_cores) {
+    size_t num_links, size_t num_workers_per_link, const CoreRangeSet& available_cores) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
-    if (persistent_fabric_mode) {
-        const size_t num_workers_preferred = num_workers_per_link * num_links;
-        if (available_cores.num_cores() < num_workers_preferred) {
-            log_warning(
-                tt::LogOp,
-                "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
-                "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
-                "performance loss.",
-                num_workers_preferred,
-                num_workers_per_link,
-                num_links,
-                available_cores.num_cores());
-        }
-        for (const auto& cr : available_cores.ranges()) {
-            auto start = cr.start_coord;
-            auto end = cr.end_coord;
-            for (size_t y = start.y; y <= end.y; y++) {
-                for (size_t x = start.x; x <= end.x; x++) {
-                    sender_worker_core_range =
-                        sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
-                    if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-                        break;
-                    }
-                }
+    const size_t num_workers_preferred = num_workers_per_link * num_links;
+    if (available_cores.num_cores() < num_workers_preferred) {
+        log_warning(
+            tt::LogOp,
+            "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
+            "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
+            "performance loss.",
+            num_workers_preferred,
+            num_workers_per_link,
+            num_links,
+            available_cores.num_cores());
+    }
+    for (const auto& cr : available_cores.ranges()) {
+        auto start = cr.start_coord;
+        auto end = cr.end_coord;
+        for (size_t y = start.y; y <= end.y; y++) {
+            for (size_t x = start.x; x <= end.x; x++) {
+                sender_worker_core_range =
+                    sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
                 if (sender_worker_core_range.num_cores() == num_workers_preferred) {
                     break;
                 }
@@ -303,9 +305,9 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
                 break;
             }
         }
-    } else {
-        sender_worker_core_range =
-            CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_workers_per_link - 1, num_links - 1)));
+        if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+            break;
+        }
     }
     return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
 }

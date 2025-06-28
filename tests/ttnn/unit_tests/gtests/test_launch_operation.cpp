@@ -34,6 +34,7 @@ Tensor make_tensor_with_num_shards(const TensorSpec& tensor_spec, int num_device
 
     auto host_tensor = Tensor::from_vector(std::vector<float>(tensor_spec.logical_shape().volume()), tensor_spec);
     std::vector<Tensor> host_tensors;
+    host_tensors.reserve(num_device_shards);
     for (int i = 0; i < num_device_shards; ++i) {
         host_tensors.push_back(host_tensor);
     }
@@ -274,7 +275,6 @@ TEST_F(LaunchOperationT3000Test, LaunchOpFilterTensorShards) {
 }
 
 TEST_F(LaunchOperationT3000Test, CachingHeterogeneousDispatch) {
-    mesh_device_->enable_program_cache();
     EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 0);
 
     const TensorSpec tensor_spec = TensorSpec(

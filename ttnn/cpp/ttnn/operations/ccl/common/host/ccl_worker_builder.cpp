@@ -6,18 +6,17 @@
 #include <iterator>
 
 #include "hostdevcommon/kernel_structs.h"
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include <tt-metalium/fabric.hpp>
 #include "tt-metalium/kernel_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/erisc_datamover_builder.hpp>
 
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/host_api.hpp>
 
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 #include <tt_stl/overloaded.hpp>
 
 #include <optional>
@@ -1296,12 +1295,16 @@ void generate_multi_input_command_stream_kernel_rt_args(
     rt_args.push_back(forward_device.has_value() and forward_device.value());
     auto worker_core = corerange_to_cores(worker_core_range).at(0);
     if (forward_device.has_value() and forward_device.value()) {
-        tt::tt_fabric::append_fabric_connection_rt_args(device->id(), forward_device.value()->id(), link, program, {worker_core}, rt_args);
+        const auto device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+        const auto forward_device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        tt::tt_fabric::append_fabric_connection_rt_args(device_fabric_node_id, forward_device_fabric_node_id, link, program, {worker_core}, rt_args);
     }
 
     rt_args.push_back(backward_device.has_value() and backward_device.value());
     if (backward_device.has_value() and backward_device.value()) {
-        tt::tt_fabric::append_fabric_connection_rt_args(device->id(), backward_device.value()->id(), link, program, {worker_core}, rt_args);
+        const auto device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+        const auto backward_device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        tt::tt_fabric::append_fabric_connection_rt_args(device_fabric_node_id, backward_device_fabric_node_id, link, program, {worker_core}, rt_args);
     }
 
     for (size_t i = 0; i < num_command_streams; i++) {
@@ -1561,12 +1564,12 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
 
     // If we are on device zero, we send n-1 chunks in ascending order
     auto& input_tensor = this->op_config.get_input_tensor(0);
-    TT_ASSERT(input_tensor.get_padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
+    TT_ASSERT(input_tensor.padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
     ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {
-        input_tensor.get_padded_shape()[0],
-        input_tensor.get_padded_shape()[1],
-        input_tensor.get_padded_shape()[2],
-        input_tensor.get_padded_shape()[3]};
+        input_tensor.padded_shape()[0],
+        input_tensor.padded_shape()[1],
+        input_tensor.padded_shape()[2],
+        input_tensor.padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(input_tensor.buffer()->address()),
@@ -1640,12 +1643,12 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
 
     // If we are on device zero, we send n-1 chunks in ascending order
     auto& output_tensor = this->op_config.get_output_tensor(0);
-    TT_ASSERT(output_tensor.get_padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
+    TT_ASSERT(output_tensor.padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
     ttnn::ccl::Shape4D<uint32_t> output_tensor_shape = {
-        output_tensor.get_padded_shape()[0],
-        output_tensor.get_padded_shape()[1],
-        output_tensor.get_padded_shape()[2],
-        output_tensor.get_padded_shape()[3]};
+        output_tensor.padded_shape()[0],
+        output_tensor.padded_shape()[1],
+        output_tensor.padded_shape()[2],
+        output_tensor.padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(output_tensor.buffer()->address()),
@@ -1795,7 +1798,7 @@ bool can_command_stream_be_lowered_to_noc_commands(const Tensor& tensor) {
     static constexpr size_t args_per_noc_command = 4;
     static constexpr size_t max_noc_commands = 256;
     size_t page_num_elements =
-        tensor.layout() == Layout::TILE ? tensor.get_tensor_spec().tile().get_tile_hw(): tensor.padded_shape()[-1];
+        tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile().get_tile_hw(): tensor.padded_shape()[-1];
     size_t num_tensor_pages = tensor.padded_shape().volume() / page_num_elements;
 
     // Interleaved tensors are currently not iterable on host so we can't resolve the page locations

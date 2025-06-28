@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/ostream.h>
 #include <cstdint>
 #include <random>
 #include <tt-metalium/host_api.hpp>
@@ -20,7 +21,9 @@
 // 7. Clean up the device. Exit
 
 using namespace tt::tt_metal;
-
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
 int main() {
     // Fast Dispatch = support for async operations. We need it for most applications.
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
@@ -50,7 +53,7 @@ int main() {
         // {0, 0} and uses the default NoC.
         KernelHandle dram_copy_kernel_id = CreateKernel(
             program,
-            "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
+            OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
@@ -143,14 +146,12 @@ int main() {
         }
 
     } catch (const std::exception& e) {
-        log_error(tt::LogTest, "Test failed with exception!");
-        log_error(tt::LogTest, "{}", e.what());
-
+        fmt::print(stderr, "Test failed with exception! what: {}\n", e.what());
         throw;
     }
 
     if (pass) {
-        log_info(tt::LogTest, "Test Passed");
+        fmt::print("Test Passed\n");
     } else {
         TT_THROW("Test Failed");
     }

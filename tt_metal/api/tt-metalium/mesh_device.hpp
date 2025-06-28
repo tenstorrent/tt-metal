@@ -30,7 +30,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
-#include <tt-metalium/small_vector.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <umd/device/types/arch.h>
 
@@ -49,6 +49,9 @@ struct ProgramCache;
 }  // namespace tt_metal
 }  // namespace tt
 
+namespace tt::tt_fabric {
+class FabricNodeId;
+}
 namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
@@ -187,16 +190,12 @@ public:
     CommandQueue& command_queue(size_t cq_id = 0) override;
 
     // Trace APIs
-    void begin_trace(const uint8_t cq_id, const uint32_t tid) override;
-    void end_trace(const uint8_t cq_id, const uint32_t tid) override;
+    void begin_trace(uint8_t cq_id, uint32_t tid) override;
+    void end_trace(uint8_t cq_id, uint32_t tid) override;
 
     // TODO: `block_on_worker_thread` can be removed once we remove multi-threaded async dispatch
-    void replay_trace(
-        const uint8_t cq_id,
-        const uint32_t tid,
-        const bool block_on_device,
-        const bool block_on_worker_thread) override;
-    void release_trace(const uint32_t tid) override;
+    void replay_trace(uint8_t cq_id, uint32_t tid, bool block_on_device, bool block_on_worker_thread) override;
+    void release_trace(uint32_t tid) override;
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
@@ -216,19 +215,20 @@ public:
 
     // Initialization APIs
     bool initialize(
-        const uint8_t num_hw_cqs,
+        uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
-    void reset_cores() override;
-    void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
+    bool compile_fabric() override;
+    void configure_fabric() override;
     void init_fabric() override;
     bool close() override;
     void enable_program_cache() override;
+    void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override;
     std::size_t num_program_cache_entries() override;
@@ -249,9 +249,6 @@ public:
     void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
-    // TODO #16526: Temporary api until migration to actual fabric is complete
-    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     bool is_mmio_capable() const override;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 
@@ -262,6 +259,7 @@ public:
     std::vector<IDevice*> get_devices() const;
     IDevice* get_device(chip_id_t physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
+    tt_fabric::FabricNodeId get_device_fabric_node_id(const MeshCoordinate& coord) const;
 
     DeviceIds get_device_ids() const;
 

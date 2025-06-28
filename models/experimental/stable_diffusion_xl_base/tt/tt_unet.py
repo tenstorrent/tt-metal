@@ -166,17 +166,14 @@ class TtUNet2DConditionModel(nn.Module):
             self.device, norm_weights_out.shape[0], self.norm_groups, self.norm_core_grid.y
         )
 
-    def forward(self, sample, input_shape, timestep, encoder_hidden_states, added_cond_kwargs):
+    def forward(self, sample, input_shape, timestep, encoder_hidden_states, time_ids, text_embeds):
         B, C, H, W = input_shape
 
         temb = self.time_proj.forward(timestep)
         temb = self.time_embedding.forward(temb)
 
-        text_embeds = added_cond_kwargs.get("text_embeds")
-        time_ids = added_cond_kwargs.get("time_ids")
         temb_add = self.add_time_proj.forward(time_ids)
         temb_add = ttnn.to_layout(temb_add, ttnn.ROW_MAJOR_LAYOUT)
-        text_embeds = ttnn.to_layout(text_embeds, ttnn.ROW_MAJOR_LAYOUT)
         temb_add = ttnn.reshape(temb_add, (text_embeds.shape[0], -1))
         temb_add = ttnn.concat([text_embeds, temb_add], -1)
         temb_add = ttnn.to_layout(temb_add, ttnn.TILE_LAYOUT)
@@ -212,6 +209,8 @@ class TtUNet2DConditionModel(nn.Module):
         residuals = (sample,)
 
         temb = ttnn.typecast(temb, dtype=ttnn.bfloat16)
+
+        ttnn.DumpDeviceProfiler(self.device)
         for i, down_block in enumerate(self.down_blocks):
             if i == 0:
                 sample, [C, H, W], block_residuals = down_block.forward(sample, [B, C, H, W], temb=temb)
@@ -221,10 +220,12 @@ class TtUNet2DConditionModel(nn.Module):
                 )
 
             residuals += block_residuals
+        ttnn.DumpDeviceProfiler(self.device)
 
         sample, [C, H, W] = self.mid_block.forward(
             sample, [B, C, H, W], temb=temb, encoder_hidden_states=encoder_hidden_states
         )
+        ttnn.DumpDeviceProfiler(self.device)
 
         encoder_hidden_states = ttnn.to_memory_config(encoder_hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         for i, up_block in enumerate(self.up_blocks):
@@ -246,6 +247,8 @@ class TtUNet2DConditionModel(nn.Module):
                     temb=temb,
                     encoder_hidden_states=encoder_hidden_states,
                 )
+
+        ttnn.DumpDeviceProfiler(self.device)
 
         sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
 

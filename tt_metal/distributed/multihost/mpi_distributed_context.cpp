@@ -182,7 +182,10 @@ void MPIContext::create(int argc, char** argv) {
 }
 
 const ContextPtr& MPIContext::get_current_world() {
-    TT_FATAL(current_world_, "MPIContext::get_current_world() called before MPIContext::create()");
+    if (!current_world_) {
+        // Default initialization of MPIContext if not already initialized
+        MPIContext::create(0, nullptr);
+    }
     return current_world_;
 }
 
@@ -191,6 +194,12 @@ void MPIContext::set_current_world(const ContextPtr& ctx) {
         ctx != nullptr && std::dynamic_pointer_cast<MPIContext>(ctx) != nullptr,
         "MPIContext::set_current_world: context is not a MPIContext or a nullptr");
     MPIContext::current_world_ = ctx;
+}
+
+bool MPIContext::is_initialized() {
+    int is_mpi_initialized;
+    MPI_CHECK(MPI_Initialized(&is_mpi_initialized));
+    return is_mpi_initialized != 0;
 }
 
 MPIContext::MPIContext(MPI_Comm comm) : comm_(comm) {
@@ -474,8 +483,7 @@ void MPIContext::abort(int error_code) const { MPI_Abort(comm_, error_code); }
 void MPIContext::revoke_and_shrink() {
 #if (!OMPI_HAS_ULFM)
     TT_THROW("revoke_and_shrink() requires MPI ULFM support which is not available in this build");
-#endif
-
+#else
     int rc = MPIX_Comm_revoke(comm_);
     if (rc != MPI_SUCCESS && rc != MPI_ERR_REVOKED) {  // another rank may have revoked first
         abort(rc);
@@ -506,17 +514,19 @@ void MPIContext::revoke_and_shrink() {
     this->group_ = new_group;
     this->rank_ = new_rank;
     this->size_ = new_size;
+#endif
 }
 
 bool MPIContext::is_revoked() {
 #if (!OMPI_HAS_ULFM)
     TT_THROW("is_revoked() requires MPI ULFM support which is not available in this build");
-#endif
+#else
     int flag = 0;
     // MPI_Comm_test_inter is safe to call even if the communicator is revoked
     // don't need to check error code
     MPI_Comm_test_inter(comm_, &flag);
     return flag != 0;
+#endif
 }
 
 MPIContext::~MPIContext() {

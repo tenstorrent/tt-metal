@@ -6,11 +6,9 @@
 
 #include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
-#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <map>
-#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -22,14 +20,11 @@
 #include <vector>
 
 #include "buffer.hpp"
-#include "mesh_buffer.hpp"
 #include "program.hpp"
 #include "common/TracyTTDeviceData.hpp"
 #include "core_coord.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "profiler_optional_metadata.hpp"
-#include "profiler_paths.hpp"
-#include "profiler_state.hpp"
 #include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
 #include "tracy/TracyTTDevice.hpp"
@@ -41,11 +36,6 @@ class IDevice;
 class Program;
 }  // namespace tt_metal
 }  // namespace tt
-
-using std::chrono::duration;
-using std::chrono::duration_cast;
-using std::chrono::nanoseconds;
-using std::chrono::steady_clock;
 
 namespace tt {
 
@@ -60,6 +50,9 @@ struct pair_hash {
         return h1 ^ (h2 + hash_combine_prime + (h1 << 6) + (h1 >> 2));
     }
 };
+
+// defined locally in profiler.cpp
+class FabricRoutingLookup;
 
 struct DisptachMetaData {
     // Dispatch command queue command type
@@ -128,7 +121,10 @@ private:
 
     // serialize all noc trace data into per-op json trace files
     void serializeJsonNocTraces(
-        const nlohmann::ordered_json& noc_trace_json_log, const std::filesystem::path& output_dir, chip_id_t device_id);
+        const nlohmann::ordered_json& noc_trace_json_log,
+        const std::filesystem::path& output_dir,
+        chip_id_t device_id,
+        const FabricRoutingLookup& routing_lookup);
 
     void emitCSVHeader(
         std::ofstream& log_file_ofs, const tt::ARCH& device_architecture, int device_core_frequency) const;
@@ -142,10 +138,10 @@ private:
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffers;
 
     // Read all control buffers
-    void readControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state);
+    void readControlBuffers(IDevice* device, const CoreCoord& worker_core, ProfilerDumpState state);
 
     // reset control buffers
-    void resetControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state);
+    void resetControlBuffers(IDevice* device, const CoreCoord& worker_core, ProfilerDumpState state);
 
     // Dumping profile result to file
     void logPacketData(
@@ -167,16 +163,16 @@ private:
         chip_id_t device_id,
         int core_x,
         int core_y,
-        const std::string_view risc_name,
+        std::string_view risc_name,
         uint32_t timer_id,
         uint64_t timestamp,
         uint64_t data,
         uint32_t run_host_id,
-        const std::string_view opname,
-        const std::string_view zone_name,
+        std::string_view opname,
+        std::string_view zone_name,
         kernel_profiler::PacketTypes packet_type,
         uint64_t source_line,
-        const std::string_view source_file,
+        std::string_view source_file,
         const nlohmann::json& metaData);
 
     // dump noc trace related profile data to json file
@@ -185,24 +181,24 @@ private:
         chip_id_t device_id,
         int core_x,
         int core_y,
-        const std::string_view risc_name,
+        std::string_view risc_name,
         uint32_t timer_id,
         uint64_t timestamp,
         uint64_t data,
         uint32_t run_host_id,
-        const std::string_view opname,
-        const std::string_view zone_name,
+        std::string_view opname,
+        std::string_view zone_name,
         kernel_profiler::PacketTypes packet_type,
         uint64_t source_line,
-        const std::string_view source_file);
+        std::string_view source_file);
 
     // Helper function for reading risc profile results
     void readRiscProfilerResults(
         IDevice* device,
         const CoreCoord& worker_core,
-        const ProfilerDumpState state,
+        ProfilerDumpState state,
         const std::vector<uint32_t>& data_buffer,
-        const ProfilerDataBufferSource data_source,
+        ProfilerDataBufferSource data_source,
         const std::optional<ProfilerOptionalMetadata>& metadata,
         std::ofstream& log_file_ofs,
         nlohmann::ordered_json& noc_trace_json_log);
@@ -214,13 +210,11 @@ private:
     void updateTracyContext(std::pair<uint32_t, CoreCoord> device_core);
 
 public:
-    DeviceProfiler(const IDevice* device, const bool new_logs);
+    DeviceProfiler(const IDevice* device, bool new_logs);
 
     DeviceProfiler() = delete;
 
     ~DeviceProfiler();
-
-    std::shared_ptr<tt::tt_metal::Program> sync_program = nullptr;
 
     // Device-core Syncdata
     std::map<CoreCoord, std::tuple<double, double, double>> device_core_sync_info;
@@ -260,8 +254,8 @@ public:
     void dumpResults(
         IDevice* device,
         const std::vector<CoreCoord>& worker_cores,
-        const ProfilerDumpState state = ProfilerDumpState::NORMAL,
-        const ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
+        ProfilerDumpState state = ProfilerDumpState::NORMAL,
+        ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
     // Push device results to tracy
@@ -275,14 +269,24 @@ public:
 
     // Read data from profiler buffer using slow dispatch
     void issueSlowDispatchReadFromProfilerBuffer(IDevice* device);
+
+    // Read data from L1 data buffer using fast dispatch
+    std::vector<uint32_t> issueFastDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core);
+
+    // Read data from L1 data buffer using slow dispatch
+    std::vector<uint32_t> issueSlowDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core);
 };
 
 void write_control_buffer_to_core(
     IDevice* device,
     const CoreCoord& core,
-    const HalProgrammableCoreType core_type,
-    const ProfilerDumpState state,
+    HalProgrammableCoreType core_type,
+    ProfilerDumpState state,
     const std::vector<uint32_t>& control_buffer);
+
+bool onlyProfileDispatchCores(ProfilerDumpState state);
+
+bool isGalaxyMMIODevice(const IDevice* device);
 
 }  // namespace tt_metal
 

@@ -69,9 +69,9 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorRoundtrip) {
 
     Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
 
-    ASSERT_EQ(loaded_tensor.get_tensor_spec().logical_shape(), original_tensor.get_tensor_spec().logical_shape());
-    ASSERT_EQ(loaded_tensor.get_dtype(), original_tensor.get_dtype());
-    ASSERT_EQ(loaded_tensor.get_layout(), original_tensor.get_layout());
+    ASSERT_EQ(loaded_tensor.tensor_spec().logical_shape(), original_tensor.tensor_spec().logical_shape());
+    ASSERT_EQ(loaded_tensor.dtype(), original_tensor.dtype());
+    ASSERT_EQ(loaded_tensor.layout(), original_tensor.layout());
     ASSERT_TRUE(loaded_tensor.storage_type() == StorageType::HOST);
 
     EXPECT_THAT(loaded_tensor.to_vector<float>(), Pointwise(FloatEq(), test_data));
@@ -86,7 +86,7 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
         dump_tensor_flatbuffer(test_file.string(), original_tensor);
         Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
 
-        ASSERT_EQ(loaded_tensor.get_dtype(), DataType::UINT32);
+        ASSERT_EQ(loaded_tensor.dtype(), DataType::UINT32);
         EXPECT_THAT(loaded_tensor.to_vector<uint32_t>(), Pointwise(testing::Eq(), test_data));
     }
 
@@ -98,7 +98,7 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
         dump_tensor_flatbuffer(test_file.string(), original_tensor);
         Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
 
-        ASSERT_EQ(loaded_tensor.get_dtype(), DataType::BFLOAT16);
+        ASSERT_EQ(loaded_tensor.dtype(), DataType::BFLOAT16);
         auto loaded_data = loaded_tensor.to_vector<bfloat16>();
         ASSERT_THAT(loaded_data, SizeIs(test_data.size()));
         for (size_t i = 0; i < test_data.size(); i++) {
@@ -112,13 +112,14 @@ using TensorSerializationFlatbufferT3000Test = T3000MeshDeviceFixture;
 TEST_F(TensorSerializationFlatbufferT3000Test, Shard1DTensorRoundtrip) {
     TemporaryFile test_file("shard1d_flatbuffer.bin");
     const int num_devices = mesh_device_->num_devices();
+    constexpr int kNumElements = 1024;
     std::vector<float> test_data;
     for (int i = 0; i < num_devices; i++) {
-        test_data.insert(test_data.end(), {i * 1.0f, i * 2.0f, i * 3.0f});
+        std::generate_n(std::back_inserter(test_data), kNumElements, [i]() { return i * 1.0f; });
     }
 
-    Tensor input_tensor =
-        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_devices, 3, 1}, DataType::FLOAT32));
+    Tensor input_tensor = Tensor::from_vector(
+        test_data, get_tensor_spec(ttnn::Shape{1, num_devices, kNumElements, 1}, DataType::FLOAT32));
 
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device_, 1);
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
@@ -129,9 +130,9 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard1DTensorRoundtrip) {
 
     Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
 
-    ASSERT_EQ(loaded_tensor.get_tensor_spec().logical_shape(), sharded_tensor.get_tensor_spec().logical_shape());
-    ASSERT_EQ(loaded_tensor.get_dtype(), sharded_tensor.get_dtype());
-    ASSERT_EQ(loaded_tensor.get_layout(), sharded_tensor.get_layout());
+    ASSERT_EQ(loaded_tensor.tensor_spec().logical_shape(), sharded_tensor.tensor_spec().logical_shape());
+    ASSERT_EQ(loaded_tensor.dtype(), sharded_tensor.dtype());
+    ASSERT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
     ASSERT_TRUE(loaded_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
 
     std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
@@ -150,23 +151,23 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2DTensorRoundtrip) {
     TemporaryFile test_file("shard2d_flatbuffer.bin");
     constexpr int kNumRows = 2;
     constexpr int kNumCols = 4;
+    constexpr int kNumElements = 1024;
     const int num_devices = kNumRows * kNumCols;
 
     std::vector<float> test_data;
     for (int i = 0; i < num_devices; i++) {
-        test_data.insert(test_data.end(), {i * 1.0f, i * 2.0f, i * 3.0f});
+        std::generate_n(std::back_inserter(test_data), kNumElements, [i]() { return i * 1.0f; });
     }
 
-    Tensor input_tensor =
-        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, 3}, DataType::FLOAT32));
+    Tensor input_tensor = Tensor::from_vector(
+        test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, kNumElements}, DataType::FLOAT32));
 
     auto mapper = ttnn::distributed::create_mesh_mapper(
         *mesh_device_,
         ttnn::distributed::MeshMapperConfig{
             .placements =
                 {ttnn::distributed::MeshMapperConfig::Shard{1}, ttnn::distributed::MeshMapperConfig::Shard{2}},
-        },
-        ttnn::distributed::MeshShape(kNumRows, kNumCols));
+        });
 
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
 
@@ -176,9 +177,9 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2DTensorRoundtrip) {
 
     Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
 
-    ASSERT_EQ(loaded_tensor.get_tensor_spec().logical_shape(), sharded_tensor.get_tensor_spec().logical_shape());
-    ASSERT_EQ(loaded_tensor.get_dtype(), sharded_tensor.get_dtype());
-    ASSERT_EQ(loaded_tensor.get_layout(), sharded_tensor.get_layout());
+    ASSERT_EQ(loaded_tensor.tensor_spec().logical_shape(), sharded_tensor.tensor_spec().logical_shape());
+    ASSERT_EQ(loaded_tensor.dtype(), sharded_tensor.dtype());
+    ASSERT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
     ASSERT_TRUE(loaded_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
 
     std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
@@ -190,20 +191,21 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2DTensorRoundtrip) {
         EXPECT_THAT(
             loaded_device_tensors[i].to_vector<float>(),
             Pointwise(FloatEq(), original_device_tensors[i].to_vector<float>()));
-        EXPECT_EQ(loaded_device_tensors[i].get_logical_shape(), original_device_tensors[i].get_logical_shape());
+        EXPECT_EQ(loaded_device_tensors[i].logical_shape(), original_device_tensors[i].logical_shape());
     }
 }
 
 TEST_F(TensorSerializationFlatbufferT3000Test, Shard1DFewerShardsThanDevicesRoundtrip) {
     TemporaryFile test_file("shard1d_fewer_flatbuffer.bin");
     const int num_devices = mesh_device_->num_devices();
+    constexpr int kNumElements = 1024;
     std::vector<float> test_data;
     for (int i = 0; i < num_devices - 1; i++) {
-        test_data.insert(test_data.end(), {i * 1.0f, i * 2.0f, i * 3.0f});
+        std::generate_n(std::back_inserter(test_data), kNumElements, [i]() { return i * 1.0f; });
     }
 
-    Tensor input_tensor =
-        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_devices - 1, 3, 1}, DataType::FLOAT32));
+    Tensor input_tensor = Tensor::from_vector(
+        test_data, get_tensor_spec(ttnn::Shape{1, num_devices - 1, kNumElements, 1}, DataType::FLOAT32));
 
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device_, 1);
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
@@ -214,9 +216,9 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard1DFewerShardsThanDevicesRoun
 
     Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
 
-    ASSERT_EQ(loaded_tensor.get_tensor_spec().logical_shape(), sharded_tensor.get_tensor_spec().logical_shape());
-    ASSERT_EQ(loaded_tensor.get_dtype(), sharded_tensor.get_dtype());
-    ASSERT_EQ(loaded_tensor.get_layout(), sharded_tensor.get_layout());
+    ASSERT_EQ(loaded_tensor.tensor_spec().logical_shape(), sharded_tensor.tensor_spec().logical_shape());
+    ASSERT_EQ(loaded_tensor.dtype(), sharded_tensor.dtype());
+    ASSERT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
     ASSERT_TRUE(loaded_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
 
     std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
@@ -236,23 +238,24 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2x3SubmeshRoundtrip) {
     TemporaryFile test_file("shard2x3_flatbuffer.bin");
     constexpr int kNumRows = 2;
     constexpr int kNumCols = 3;
+    constexpr int kNumElements = 1024;
     const int num_devices = kNumRows * kNumCols;
 
     std::vector<float> test_data;
     for (int i = 0; i < num_devices; i++) {
-        test_data.insert(test_data.end(), {i * 1.0f, i * 2.0f, i * 3.0f});
+        std::generate_n(std::back_inserter(test_data), kNumElements, [i]() { return i * 1.0f; });
     }
 
-    Tensor input_tensor =
-        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, 3}, DataType::FLOAT32));
+    Tensor input_tensor = Tensor::from_vector(
+        test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, kNumElements}, DataType::FLOAT32));
 
     auto mapper = ttnn::distributed::create_mesh_mapper(
         *mesh_device_,
         ttnn::distributed::MeshMapperConfig{
             .placements =
                 {ttnn::distributed::MeshMapperConfig::Shard{1}, ttnn::distributed::MeshMapperConfig::Shard{2}},
-        },
-        ttnn::distributed::MeshShape(kNumRows, kNumCols));
+            .mesh_shape_override = ttnn::distributed::MeshShape(kNumRows, kNumCols),
+        });
 
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
 
@@ -262,9 +265,9 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2x3SubmeshRoundtrip) {
 
     Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
 
-    ASSERT_EQ(loaded_tensor.get_tensor_spec().logical_shape(), sharded_tensor.get_tensor_spec().logical_shape());
-    ASSERT_EQ(loaded_tensor.get_dtype(), sharded_tensor.get_dtype());
-    ASSERT_EQ(loaded_tensor.get_layout(), sharded_tensor.get_layout());
+    ASSERT_EQ(loaded_tensor.tensor_spec().logical_shape(), sharded_tensor.tensor_spec().logical_shape());
+    ASSERT_EQ(loaded_tensor.dtype(), sharded_tensor.dtype());
+    ASSERT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
     ASSERT_TRUE(loaded_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
 
     std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
@@ -276,7 +279,55 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2x3SubmeshRoundtrip) {
         EXPECT_THAT(
             loaded_device_tensors[i].to_vector<float>(),
             Pointwise(FloatEq(), original_device_tensors[i].to_vector<float>()));
-        EXPECT_EQ(loaded_device_tensors[i].get_logical_shape(), original_device_tensors[i].get_logical_shape());
+        EXPECT_EQ(loaded_device_tensors[i].logical_shape(), original_device_tensors[i].logical_shape());
+    }
+}
+
+TEST_F(TensorSerializationFlatbufferT3000Test, PartiallyReplicatedRoundtrip) {
+    TemporaryFile test_file("partially_replicated_flatbuffer.bin");
+    constexpr int kNumRows = 2;
+    constexpr int kNumCols = 4;
+    constexpr int kNumElements = 1024;
+    const int num_devices = kNumRows * kNumCols;
+
+    std::vector<float> test_data;
+    for (int i = 0; i < num_devices; i++) {
+        std::generate_n(std::back_inserter(test_data), kNumElements, [i]() { return i * 1.0f; });
+    }
+
+    Tensor input_tensor = Tensor::from_vector(
+        test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, kNumElements}, DataType::FLOAT32));
+
+    auto mapper = ttnn::distributed::create_mesh_mapper(
+        *mesh_device_,
+        ttnn::distributed::MeshMapperConfig{
+            .placements =
+                {ttnn::distributed::MeshMapperConfig::Shard{1}, ttnn::distributed::MeshMapperConfig::Replicate{}},
+        });
+
+    Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
+
+    ASSERT_TRUE(sharded_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
+
+    dump_tensor_flatbuffer(test_file.string(), sharded_tensor);
+
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+
+    ASSERT_EQ(loaded_tensor.tensor_spec().logical_shape(), sharded_tensor.tensor_spec().logical_shape());
+    ASSERT_EQ(loaded_tensor.dtype(), sharded_tensor.dtype());
+    ASSERT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
+    ASSERT_TRUE(loaded_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
+
+    std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
+    std::vector<Tensor> loaded_device_tensors = ttnn::distributed::get_device_tensors(loaded_tensor);
+
+    ASSERT_THAT(loaded_device_tensors, SizeIs(original_device_tensors.size()));
+
+    for (size_t i = 0; i < original_device_tensors.size(); i++) {
+        EXPECT_THAT(
+            loaded_device_tensors[i].to_vector<float>(),
+            Pointwise(FloatEq(), original_device_tensors[i].to_vector<float>()));
+        EXPECT_EQ(loaded_device_tensors[i].logical_shape(), original_device_tensors[i].logical_shape());
     }
 }
 
