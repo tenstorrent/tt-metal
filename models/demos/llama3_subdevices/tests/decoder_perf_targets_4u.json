@@ -70,7 +70,7 @@
             "op_name": "ReduceScatter_FF3",
             "kernel_duration": 9456.963068181818,
             "op_to_op": 911.3131313131312,
-            "first_to_last_start": 626.7323232323232,
+            "first_to_last_start": 370.0,
             "non-overlapped-dispatch-time": 7952.344444444445,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
@@ -80,7 +80,7 @@
         "Matmul_0": {
             "op_name": "QKV_MM",
             "kernel_duration": 8795.294507575758,
-            "op_to_op": 734.2121212121211,
+            "op_to_op": 889.2222222222222,
             "first_to_last_start": 2196.5,
             "non-overlapped-dispatch-time": 5763.372222222222,
             "kernel_duration_relative_margin": 0.05,

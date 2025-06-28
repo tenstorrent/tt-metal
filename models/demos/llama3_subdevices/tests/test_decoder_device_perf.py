@@ -405,7 +405,10 @@ def test_llama_TG_perf_device(
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    device_analysis_types = ["device_kernel_duration", "device_kernel_first_to_last_start"]
+    post_processed_results = run_device_perf(
+        command, subdir, num_iterations, cols, batch_size, device_analysis_types=device_analysis_types
+    )
     profiler.end(step_name)
     profiler.end("run")
 
