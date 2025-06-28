@@ -3,3 +3,4 @@ accelerate >= 0.27.2
 torch>=2.6.0
 torchvision>=0.21.0
 qwen-vl-utils
+nltk
