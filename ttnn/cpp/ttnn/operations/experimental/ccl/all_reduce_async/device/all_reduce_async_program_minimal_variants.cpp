@@ -29,6 +29,12 @@
 #include <type_traits>
 #include <ranges>
 #include <optional>
+
+#define link0_coordinate CoreCoord(5, 3)
+#define link1_coordinate CoreCoord(6, 3)
+#define link2_coordinate CoreCoord(2, 8)
+#define link3_coordinate CoreCoord(3, 8)
+
 using namespace tt::constants;
 
 namespace ttnn {
@@ -42,6 +48,26 @@ CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
         core_ranges.push_back(CoreRange(core));
     }
     return CoreRangeSet(core_ranges);
+}
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> get_custom_worker_core_placement(uint32_t num_links) {
+    std::vector<CoreCoord> sender_worker_cores;
+    sender_worker_cores.emplace_back(link0_coordinate);
+    if (num_links > 1) {
+        sender_worker_cores.emplace_back(link1_coordinate);
+    }
+    if (num_links > 2) {
+        sender_worker_cores.emplace_back(link2_coordinate);
+    }
+    if (num_links > 3) {
+        sender_worker_cores.emplace_back(link3_coordinate);
+    }
+    std::set<CoreRange> sender_worker_cores_set;
+    for (const auto& core : sender_worker_cores) {
+        sender_worker_cores_set.insert(CoreRange(core));
+    }
+    CoreRangeSet sender_worker_corerangeset = CoreRangeSet(sender_worker_cores_set);
+    return {sender_worker_corerangeset, sender_worker_cores};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
@@ -58,13 +84,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool use_noc1_only) {
+    bool use_noc1_only,
+    bool use_custom_worker_core_placement = false) {
     // KERNEL CREATION
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_1;
     tt::tt_metal::NOC writer_noc = use_noc1_only ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
     tt::tt_metal::Program program{};
     auto mesh_device = input_tensor.mesh_device();
+    auto single_device = mesh_device->get_devices().at(0);
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
@@ -110,8 +138,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     auto available_cores = sub_device_cores.subtract(reserved_cores);
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
-    const auto [sender_worker_core_range, sender_worker_cores] =
-        ar_choose_worker_cores(num_links, num_workers_per_link, available_cores);
+    CoreRangeSet sender_worker_core_range;
+    std::vector<CoreCoord> sender_worker_cores;
+    std::tie(sender_worker_core_range, sender_worker_cores) =
+        use_custom_worker_core_placement ? get_custom_worker_core_placement(num_links)
+                                         : ar_choose_worker_cores(num_links, num_workers_per_link, available_cores);
 
     constexpr bool has_work = true;
 
