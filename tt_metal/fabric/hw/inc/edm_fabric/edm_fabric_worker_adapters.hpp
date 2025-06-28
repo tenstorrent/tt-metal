@@ -82,7 +82,7 @@ struct WorkerToFabricEdmSenderImpl {
         const uint16_t buffer_size_bytes = conn.buffer_size_bytes;
         const auto edm_copy_of_wr_counter_addr = conn.buffer_index_semaphore_id;
         // TODO: remove
-        arg_idx += 9;
+        // arg_idx += 9;
 
         const auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
 

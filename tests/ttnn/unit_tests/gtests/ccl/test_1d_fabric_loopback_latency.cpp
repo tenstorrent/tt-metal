@@ -311,9 +311,10 @@ inline void RunPersistent1dFabricLatencyTest(
             rt_args_out.push_back(is_connected_in_direction);
             if (!use_device_init_fabric) {
                 if (is_connected_in_direction) {
-                    const auto connection = local_device_fabric_handle->uniquely_connect_worker(device, direction);
+                    const auto [connection, eth_channel] =
+                        local_device_fabric_handle->uniquely_connect_worker(device, direction);
                     const auto new_rt_args = ttnn::ccl::worker_detail::generate_edm_connection_rt_args(
-                        connection, program, {worker_core_logical});
+                        connection, eth_channel, program, {worker_core_logical});
                     log_info(
                         tt::LogTest,
                         "On device: {}, connecting to EDM fabric in {} direction. EDM noc_x: {}, noc_y: {}",

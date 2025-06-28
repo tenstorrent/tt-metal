@@ -65,7 +65,7 @@ void kernel_main() {
     size_t num_messages_index = get_arg_val<uint32_t>(arg_idx++);;
     size_t stall_duration_index = get_arg_val<uint32_t>(arg_idx++);;
 
-    uint32_t eth_channel = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
     auto fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx, eth_channel);
 
