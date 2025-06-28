@@ -2,6 +2,7 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dm_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dram_unary/test_unary_dram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/one_to_all/test_one_to_all.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/one_to_all/test_multicast_schemes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/loopback/test_loopback.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reshard_hardcoded/test_reshard_hardcoded.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/deinterleave_hardcoded/test_deinterleave_hardcoded.cpp
