@@ -12,6 +12,7 @@ set(PROCS
     trisc=1
     trisc=2
     aerisc
+    subordinate_aerisc
 )
 set(TYPES
     firmware

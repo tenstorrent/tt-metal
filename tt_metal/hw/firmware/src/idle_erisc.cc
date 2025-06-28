@@ -112,6 +112,7 @@ int main() {
 
     noc_bank_table_init(MEM_IERISC_BANK_TO_NOC_SCRATCH);
 
+    noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
@@ -122,7 +123,6 @@ int main() {
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
 #endif
     set_deassert_addresses();
-    //device_setup();
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
@@ -133,12 +133,9 @@ int main() {
     // Wait for all subordinate ERISCs to be ready before reporting the core is done initializing.
     wait_subordinate_eriscs(heartbeat);
     mailboxes->go_message.signal = RUN_MSG_DONE;
-    mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
-    // Cleanup profiler buffer incase we never get the go message
-
+    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
     while (1) {
-
         init_sync_registers();
         // Wait...
         WAYPOINT("GW");
