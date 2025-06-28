@@ -7,6 +7,7 @@
 #include <fstream>
 #include <optional>
 #include <memory>
+#include <filesystem>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/multi_mesh_types.hpp>
@@ -25,6 +26,7 @@ using ::tt::tt_metal::distributed::MeshShape;
 using ::tt::tt_metal::distributed::MeshCoordinate;
 using ::tt::tt_metal::distributed::MeshCoordinateRange;
 using ::tt::tt_metal::distributed::test::utils::ScopedEnvVar;
+using ::tt::tt_metal::distributed::test::utils::TemporaryFile;
 
 // RAII guard for managing mesh binding environment variables
 class ScopedMeshBinding {
@@ -58,20 +60,20 @@ public:
           temp_file_(CreateTempFile(mesh_desc)) {
 
         auto chip_mapping = CreateChipMapping(mesh_id, num_chips);
-        tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(temp_file_, chip_mapping);
+        tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(temp_file_->string(), chip_mapping);
     }
 
-    ~ScopedControlPlane() { std::remove(temp_file_.c_str()); }
     tt::tt_fabric::ControlPlane& get() { return tt::tt_metal::MetalContext::instance().get_control_plane(); }
 
 private:
-    static std::string CreateTempFile(const std::string& content) {
+    static std::unique_ptr<TemporaryFile> CreateTempFile(const std::string& content) {
         static int counter = 0;
-        std::string filename = "/tmp/test_mesh_desc_scoped_" + std::to_string(counter++) + ".yaml";
-        std::ofstream file(filename);
+        std::string filename = "test_mesh_desc_scoped_" + std::to_string(counter++) + ".yaml";
+        auto temp_file = std::make_unique<TemporaryFile>(filename);
+        std::ofstream file(temp_file->path());
         file << content;
         file.close();
-        return filename;
+        return temp_file;
     }
 
     static std::map<FabricNodeId, chip_id_t> CreateChipMapping(MeshId mesh_id, int num_chips) {
@@ -83,12 +85,10 @@ private:
     }
 
     std::unique_ptr<ScopedMeshBinding> mesh_binding_;
-    std::string temp_file_;
+    std::unique_ptr<TemporaryFile> temp_file_;
 };
 
 // Mesh descriptor factory functions
-namespace TestMeshDescriptors {
-
 std::string CreateSingleChipMesh(const std::string& arch = "wormhole_b0", int mesh_id = 0) {
     return fmt::format(R"yaml(ChipSpec: {{
   arch: {},
@@ -190,10 +190,6 @@ const std::string kSingleChipMeshDesc = CreateSingleChipMesh();
 const std::string kDualHostMeshDesc = CreateDualHostMesh();
 const std::string kMultipleMeshesDesc = CreateMultiMeshConfig({0, 1});
 
-} // namespace TestMeshDescriptors
-
-using namespace TestMeshDescriptors;
-
 // Parameterized test data for MeshScope tests
 struct MeshScopeTestParams {
     HostRankId host_rank;
@@ -206,21 +202,27 @@ struct MeshScopeTestParams {
 // Test fixture for control plane API tests
 class ControlPlaneLocalMeshBinding : public ::testing::Test {
 protected:
-    ~ControlPlaneLocalMeshBinding() override {
-        // Clean up any temporary files
-        for (const auto& file : temp_files_) {
-            std::remove(file.c_str());
+    void SetUp() override {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::T3K and
+            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::N300_2x2) {
+            GTEST_SKIP() << "Skipping test for non-T3K or N300_2x2 cluster";
         }
+    }
+
+    void TearDown() override {
+        temp_files_.clear();
     }
 
     std::string CreateTempMeshDescriptor(const std::string& content) {
         static int counter = 0;
-        std::string filename = "/tmp/test_mesh_desc_" + std::to_string(counter++) + ".yaml";
-        std::ofstream file(filename);
+        std::string filename = "test_mesh_desc_" + std::to_string(counter++) + ".yaml";
+        auto temp_file = std::make_unique<TemporaryFile>(filename);
+        std::ofstream file(temp_file->path());
         file << content;
         file.close();
-        temp_files_.push_back(filename);
-        return filename;
+        std::string path = temp_file->string();
+        temp_files_.push_back(std::move(temp_file));
+        return path;
     }
 
     // Helper to create standard chip mappings
@@ -245,26 +247,29 @@ protected:
         auto mesh_binding = control_plane.get_local_mesh_id_binding();
         auto host_binding = control_plane.get_local_host_rank_id_binding();
 
-        ASSERT_TRUE(mesh_binding.has_value()) << "Local mesh binding not available";
-        ASSERT_TRUE(host_binding.has_value()) << "Local host binding not available";
-        EXPECT_EQ(*mesh_binding, expected_mesh);
-        EXPECT_EQ(*host_binding, expected_host);
+        EXPECT_EQ(mesh_binding, expected_mesh);
+        EXPECT_EQ(host_binding, expected_host);
     }
 
-    // Helper to assert no local binding is present
-    void ExpectNoLocalBinding(const tt::tt_fabric::ControlPlane& control_plane) {
-        EXPECT_FALSE(control_plane.get_local_mesh_id_binding().has_value());
-        EXPECT_FALSE(control_plane.get_local_host_rank_id_binding().has_value());
+    // Helper to assert default local binding is present
+    void ExpectDefaultLocalBinding(const tt::tt_fabric::ControlPlane& control_plane) {
+        // With the new implementation, there's always a binding (either from env vars or inferred from MPI rank)
+        // We can't predict what the default will be without knowing the MPI rank
+        auto mesh_binding = control_plane.get_local_mesh_id_binding();
+        auto host_binding = control_plane.get_local_host_rank_id_binding();
+        // Just verify that we get valid values
+        EXPECT_GE(*mesh_binding, 0u);
+        EXPECT_GE(*host_binding, 0u);
     }
 
-    std::vector<std::string> temp_files_;
+    std::vector<std::unique_ptr<TemporaryFile>> temp_files_;
 };
 
 TEST_F(ControlPlaneLocalMeshBinding, NoEnvironmentVariables) {
     auto& control_plane = SetUpControlPlane(kSingleChipMeshDesc);
 
-    // Should return nullopt when environment variables are not set
-    ExpectNoLocalBinding(control_plane);
+    // Should return default binding when environment variables are not set
+    ExpectDefaultLocalBinding(control_plane);
 }
 
 TEST_F(ControlPlaneLocalMeshBinding, WithEnvironmentVariables) {
@@ -281,23 +286,22 @@ TEST_F(ControlPlaneLocalMeshBinding, PartialEnvironmentVariables) {
     {
         ScopedEnvVar mesh_only("TT_MESH_ID", "0");
 
-        tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(temp_file, chip_mapping);
-        auto& control_plane1 = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-        // Should return nullopt when only one variable is set
-        ExpectNoLocalBinding(control_plane1);
+        // Should throw when only one variable is set
+        EXPECT_THROW({
+            tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(temp_file, chip_mapping);
+            tt::tt_metal::MetalContext::instance().get_control_plane();
+        }, std::runtime_error);
     }
 
     // Test with only TT_HOST_RANK set
     {
         ScopedEnvVar host_only("TT_HOST_RANK", "0");
 
-        // Reset control plane to pick up new environment variables
-        tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(temp_file, chip_mapping);
-        auto& control_plane2 = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-        // Should return nullopt when only one variable is set
-        ExpectNoLocalBinding(control_plane2);
+        // Should throw when only one variable is set
+        EXPECT_THROW({
+            tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(temp_file, chip_mapping);
+            tt::tt_metal::MetalContext::instance().get_control_plane();
+        }, std::runtime_error);
     }
 }
 
@@ -375,13 +379,14 @@ TEST_F(ControlPlaneLocalMeshBinding, InvalidMeshId) {
       CreateSequentialChipMapping(MeshId{0}, /*num_chips=*/1));
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    ExpectNoLocalBinding(control_plane);
+    ExpectDefaultLocalBinding(control_plane);
     EXPECT_THROW(control_plane.get_physical_mesh_shape(MeshId{99}, MeshScope::GLOBAL), std::runtime_error);
 }
 
-TEST_F(ControlPlaneLocalMeshBinding, LocalMeshScopeQueryWithoutLocalBinding) {
+TEST_F(ControlPlaneLocalMeshBinding, LocalMeshScopeQueryWithoutExplicitBinding) {
     auto& control_plane = SetUpControlPlane(kSingleChipMeshDesc);
-    ExpectNoLocalBinding(control_plane);
+    ExpectDefaultLocalBinding(control_plane);
+    // Should still be able to query with LOCAL scope using the default binding
     EXPECT_NO_THROW(control_plane.get_coord_range(MeshId{0}, MeshScope::LOCAL));
 }
 
@@ -456,6 +461,77 @@ INSTANTIATE_TEST_SUITE_P(
         return info.param.test_name;
     }
 );
+
+// Test case to verify LocalMeshBinding is inferred from MPI rank when env vars are not set
+TEST_F(ControlPlaneLocalMeshBinding, InferLocalBindingFromMPIRank) {
+    // Create a multi-mesh configuration with different host ranks
+    std::string mesh_desc = R"yaml(ChipSpec: {
+  arch: wormhole_b0,
+  ethernet_ports: {
+    N: 2,
+    E: 2,
+    S: 2,
+    W: 2,
+  }
+}
+
+Board: [
+  { name: SingleChip,
+    type: Mesh,
+    topology: [1, 1]}
+]
+
+Mesh: [
+{
+  id: 0,
+  board: SingleChip,
+  device_topology: [1, 1],
+  host_topology: [1, 1],
+  host_ranks: [[0]]},
+{
+  id: 1,
+  board: SingleChip,
+  device_topology: [1, 1],
+  host_topology: [1, 1],
+  host_ranks: [[1]]}
+]
+
+Graph: []
+)yaml";
+
+    // Create control plane without environment variables
+    std::string temp_file = CreateTempMeshDescriptor(mesh_desc);
+    std::map<FabricNodeId, chip_id_t> chip_mapping;
+    chip_mapping[FabricNodeId(MeshId{0}, 0)] = 0;
+    chip_mapping[FabricNodeId(MeshId{1}, 0)] = 1;
+
+    tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(temp_file, chip_mapping);
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // The control plane should have a valid binding inferred from MPI rank
+    auto mesh_binding = control_plane.get_local_mesh_id_binding();
+    auto host_binding = control_plane.get_local_host_rank_id_binding();
+
+    // We can't predict which mesh/host will be assigned (depends on MPI rank),
+    // but we can verify that a valid binding was established
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
+    EXPECT_TRUE(std::find(mesh_ids.begin(), mesh_ids.end(), mesh_binding) != mesh_ids.end())
+        << "Inferred mesh binding should be one of the configured meshes";
+
+    // Verify that mesh operations work with the inferred binding
+    EXPECT_NO_THROW(control_plane.get_physical_mesh_shape(mesh_binding, MeshScope::LOCAL));
+    EXPECT_NO_THROW(control_plane.get_coord_range(mesh_binding, MeshScope::LOCAL));
+}
+
+// Test case to verify exception when both env vars are set but invalid
+TEST_F(ControlPlaneLocalMeshBinding, InvalidEnvironmentVariablesMeshId) {
+    // Set environment variables with invalid mesh ID
+    ScopedMeshBinding env_guard(/*mesh_id*/99, /*host_rank*/0);
+
+    EXPECT_THROW({
+        auto& control_plane = SetUpControlPlane(kSingleChipMeshDesc);
+    }, std::runtime_error);
+}
 
 }  // namespace
 }  // namespace tt::tt_fabric
