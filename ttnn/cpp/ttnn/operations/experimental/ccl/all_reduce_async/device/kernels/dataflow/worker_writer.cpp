@@ -160,7 +160,7 @@ void kernel_main() {
                 sema_noc_addr,
                 static_cast<uint16_t>(1),
                 static_cast<uint16_t>(32),
-                true);
+                false);
             noc_async_writes_flushed();
             noc_semaphore_inc(sema_noc_addr, 1);
         } else {
