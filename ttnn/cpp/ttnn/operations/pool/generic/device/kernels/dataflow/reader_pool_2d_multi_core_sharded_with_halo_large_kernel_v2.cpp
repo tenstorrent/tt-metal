@@ -33,19 +33,13 @@ template <
     uint32_t in_write_inc,
     uint32_t max_rows_for_reduction,
     uint32_t total_elems_to_reduce,
-    uint32_t remaining_elems,
-    uint32_t in_cb_sz,
     uint32_t bf16_init_value,
     bool is_avg_pool,
     bool wide_reduction,
     uint32_t clear_value_cb_id,
     uint32_t in_cb_ntiles,
     uint32_t interm_reduction_chunks,
-    uint32_t interm_cb_id,
-    uint32_t sync_cb_id1,
-    uint32_t sync_cb_id2,
-    uint32_t sync_cb_id3,
-    uint32_t sync_cb_id4>
+    uint32_t interm_cb_id>
 FORCE_INLINE void read_window_with_top_left_index(
     uint32_t ind, uint32_t in_l1_read_base_addr, uint32_t& out_l1_write_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
@@ -353,19 +347,13 @@ void kernel_main() {
                 in_write_inc,
                 max_rows_for_reduction,
                 total_elems_to_reduce,
-                remaining_elems,
-                in_cb_sz,
                 bf16_init_value,
                 is_avg_pool,
                 wide_reduction,
                 clear_value_cb_id,
                 in_cb_ntiles,
                 interm_reduction_chunks,
-                interm_cb_id,
-                sync_cb_id1,
-                sync_cb_id2,
-                sync_cb_id3,
-                sync_cb_id4>(ind, in_l1_read_base_addr, out_l1_write_addr);
+                interm_cb_id>(ind, in_l1_read_base_addr, out_l1_write_addr);
             out_l1_write_addr += split_reader ? in_nbytes_c : 0;
             if (split_reader && ind == end) {
                 first_row_value = false;
@@ -393,19 +381,13 @@ void kernel_main() {
             in_write_inc,
             max_rows_for_reduction,
             total_elems_to_reduce,
-            remaining_elems,
-            in_cb_sz,
             bf16_init_value,
             is_avg_pool,
             wide_reduction,
             clear_value_cb_id,
             in_cb_ntiles,
             interm_reduction_chunks,
-            interm_cb_id,
-            sync_cb_id1,
-            sync_cb_id2,
-            sync_cb_id3,
-            sync_cb_id4>(0, in_l1_read_base_addr, out_l1_write_addr);
+            interm_cb_id>(0, in_l1_read_base_addr, out_l1_write_addr);
         out_l1_write_addr += split_reader ? in_nbytes_c : 0;
     }
 }  // kernel_main()
