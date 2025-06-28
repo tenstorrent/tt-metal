@@ -37,7 +37,7 @@ MIN_TYPE = "min"
 MAX_TYPE = "max"
 
 
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
     [
@@ -379,6 +379,7 @@ def load_perf_targets(galaxy_type):
     return perf_targets
 
 
+@pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
 # Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
