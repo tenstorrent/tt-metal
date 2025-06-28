@@ -21,12 +21,6 @@ def randomize_tensor(tensor_map, tensor_shape):
         torch_tensor = tensor_map[tensor_shape]
     else:
         torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
-    # torch_tensor = torch.zeros(tensor_shape, dtype=torch.bfloat16)
-    # for n in range(tensor_shape[0]):
-    #     for c in range(tensor_shape[1]):
-    #         for h in range(tensor_shape[2]):
-    #             for w in range(tensor_shape[3]):
-    #                 torch_tensor[n, c, h, w] = h * tensor_shape[3] + w
     return torch_tensor
 
 
@@ -80,7 +74,7 @@ def run_avg_pool2d(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         applied_shard_scheme=shard_scheme,
     )
-    if False:
+    if run_twice:
         ttnn_output = ttnn.avg_pool2d(
             input_tensor=ttnn_input,
             batch_size=in_n,
@@ -105,9 +99,7 @@ def run_avg_pool2d(
     ttnn_output = ttnn.to_torch(ttnn_output)
 
     ## Assertion
-    print(torch_output.flatten())
-    print(ttnn_output.flatten())
-    # assert_with_pcc(torch_output, ttnn_output, 0.98)
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
     allclose = torch.allclose(ttnn_output, torch_output, rtol=0.02)
     assert allclose, " Reference and output tensor are not close"
 
@@ -119,15 +111,14 @@ def run_avg_pool2d(
         # Normal reduction cases are when channels <= 8 * 32 and kernel_hw <= 16
         # Wide reduction cases channels > 8 * 32
         # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
-        # [1, 32, 16, 16],
-        # [1, 512, 112, 32],
-        # [1, 512, 16, 16],
-        # [1, 800, 16, 16],
-        # [2, 32, 16, 16],
-        # [2, 512, 112, 32],
-        # [2, 512, 16, 16],
-        # [2, 800, 16, 16],
-        [1, 320, 48, 48],
+        [1, 32, 16, 16],
+        [1, 512, 112, 32],
+        [1, 512, 16, 16],
+        [1, 800, 16, 16],
+        [2, 32, 16, 16],
+        [2, 512, 112, 32],
+        [2, 512, 16, 16],
+        [2, 800, 16, 16],
     ),
 )
 @pytest.mark.parametrize(
@@ -137,61 +128,60 @@ def run_avg_pool2d(
         # Large reductions go to large kernels
         # Reductions which are large and wide at the same time
         # go to large kernels
-        # (2, 2),
-        # (3, 3),
-        # (5, 5),
-        # (9, 9),
-        (36, 36),
+        (2, 2),
+        (3, 3),
+        (5, 5),
+        (9, 9),
     ),
 )
 @pytest.mark.parametrize(
     "stride",
     (
         (1, 1),
-        # (2, 2),
+        (2, 2),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
         (0, 0),
-        # (1, 2),
-        # (2, 3),
-        # (4, 4),
+        (1, 2),
+        (2, 3),
+        (4, 4),
     ),
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
-        # True,
+        True,
     ],
 )
 @pytest.mark.parametrize(
     "count_include_pad",
     [
         False,
-        # True,
+        True,
     ],
 )
 @pytest.mark.parametrize(
     "divisor_override",
     [
         None,
-        # 5,
+        5,
     ],
 )
 @pytest.mark.parametrize(
     "shard_scheme",
     [
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        # ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
 @pytest.mark.parametrize(
     "use_program_cache",
-    [False],
+    [True, False],
 )
 def test_run_avg_pool2d(
     device,
