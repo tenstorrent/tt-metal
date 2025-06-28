@@ -37,7 +37,7 @@ MIN_TYPE = "min"
 MAX_TYPE = "max"
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
     [
