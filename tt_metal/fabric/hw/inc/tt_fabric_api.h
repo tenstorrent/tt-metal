@@ -354,6 +354,7 @@ template <bool mcast = false>
 void fabric_set_route(
     LowLatencyMeshPacketHeader* packet_header,
     eth_chan_directions direction,
+    uint32_t branch_forward,
     uint32_t start_hop,
     uint32_t num_hops,
     bool terminate = false) {
@@ -362,20 +363,22 @@ void fabric_set_route(
     uint32_t value = 0;
     switch (direction) {
         case eth_chan_directions::EAST:
-            local_packet = tt_low_latency_routing_vector::FORWARD_WEST;
-            forward_packet = tt_low_latency_routing_vector::FORWARD_EAST;
+            local_packet = LowLatencyMeshRoutingFields::FORWARD_WEST;
+            forward_packet = LowLatencyMeshRoutingFields::FORWARD_EAST;
+            packet_header->routing_fields.branch_east_offset = start_hop;
             break;
         case eth_chan_directions::WEST:
-            local_packet = tt_low_latency_routing_vector::FORWARD_EAST;
-            forward_packet = tt_low_latency_routing_vector::FORWARD_WEST;
+            local_packet = LowLatencyMeshRoutingFields::FORWARD_EAST;
+            forward_packet = LowLatencyMeshRoutingFields::FORWARD_WEST;
+            packet_header->routing_fields.branch_west_offset = start_hop;
             break;
         case eth_chan_directions::NORTH:
-            local_packet = tt_low_latency_routing_vector::FORWARD_SOUTH;
-            forward_packet = tt_low_latency_routing_vector::FORWARD_NORTH;
+            local_packet = LowLatencyMeshRoutingFields::FORWARD_SOUTH;
+            forward_packet = LowLatencyMeshRoutingFields::FORWARD_NORTH | branch_forward;
             break;
         case eth_chan_directions::SOUTH:
-            local_packet = tt_low_latency_routing_vector::FORWARD_NORTH;
-            forward_packet = tt_low_latency_routing_vector::FORWARD_SOUTH;
+            local_packet = LowLatencyMeshRoutingFields::FORWARD_NORTH;
+            forward_packet = LowLatencyMeshRoutingFields::FORWARD_SOUTH | branch_forward;
             break;
         default: ASSERT(false);
     }
@@ -386,7 +389,14 @@ void fabric_set_route(
     uint32_t end_hop = start_hop + num_hops;
     for (uint32_t i = start_hop; i < end_hop; i++) {
         if constexpr (mcast) {
-            forward_val = i == end_hop - 1 ? 0 : forward_packet;
+            // If forward north or forward south is set, then it may be 2d mcast and requires east/west forwarding, in
+            // addition to spine forwards on north/south. forward_packet bit 0 and 1 determine if mcast has to branch
+            // east/west from spine. If this is not a north/south mcast, then it cannot be a 2D mcast, and we dont need
+            // to branch.
+            uint32_t mcast_branch = forward_packet & LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS
+                                        ? forward_packet & LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW
+                                        : 0;
+            forward_val = i == end_hop - 1 ? mcast_branch : forward_packet;
             local_val = local_packet;
         } else {
             forward_val = terminate ? (i == end_hop - 1 ? 0 : forward_packet) : forward_packet;
@@ -394,7 +404,7 @@ void fabric_set_route(
         }
         route_vector[i] = local_val | forward_val;
     }
-    packet_header->routing_fields.value = 0;
+    packet_header->routing_fields.hop_index = 0;
 }
 
 void fabric_set_unicast_route(
@@ -440,7 +450,7 @@ void fabric_set_unicast_route(
     uint16_t ew_dim) {
     if (outgoing_direction == eth_chan_directions::EAST || outgoing_direction == eth_chan_directions::WEST) {
         uint32_t ew_hops = my_dev_id < dst_dev_id ? dst_dev_id - my_dev_id : my_dev_id - dst_dev_id;
-        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, ew_hops, true);
+        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, 0, ew_hops, true);
     } else {
         // First hop is north/south. Calculate the number of required hops before turning east/west
         uint32_t ns_hops = 0;
@@ -465,9 +475,9 @@ void fabric_set_unicast_route(
             ns_hops--;
             ew_hops++;
         }
-        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, ns_hops, ew_hops == 0);
+        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, 0, ns_hops, ew_hops == 0);
         if (ew_hops) {
-            fabric_set_route(packet_header, (eth_chan_directions)turn_direction, ns_hops, ew_hops, true);
+            fabric_set_route(packet_header, (eth_chan_directions)turn_direction, 0, ns_hops, ew_hops, true);
         }
     }
 }
@@ -480,14 +490,36 @@ void fabric_set_mcast_route(
     uint16_t w_num_hops,
     uint16_t n_num_hops,
     uint16_t s_num_hops) {
+    uint32_t spine_hops = 0;
+    uint32_t mcast_branch = 0;
+
+    // For 2D Mcast, mcast spine runs N/S and branches are E/W
+    // If api is called with east and/or west hops != 0, it may be a 2D mcast
+    // If so, set the forwarding flags for east and/or west branchs.
     if (e_num_hops) {
-        fabric_set_route<true>(packet_header, eth_chan_directions::EAST, 0, e_num_hops);
-    } else if (w_num_hops) {
-        fabric_set_route<true>(packet_header, eth_chan_directions::WEST, 0, w_num_hops);
-    } else if (n_num_hops) {
-        fabric_set_route<true>(packet_header, eth_chan_directions::NORTH, 0, n_num_hops);
+        mcast_branch |= LowLatencyMeshRoutingFields::FORWARD_EAST;
+    }
+    if (w_num_hops) {
+        mcast_branch |= LowLatencyMeshRoutingFields::FORWARD_WEST;
+    }
+
+    if (n_num_hops) {
+        // Is a 2D mcast if mcast_branch != 0
+        fabric_set_route<true>(packet_header, eth_chan_directions::NORTH, mcast_branch, 0, n_num_hops);
+        spine_hops = n_num_hops;
     } else if (s_num_hops) {
-        fabric_set_route<true>(packet_header, eth_chan_directions::SOUTH, 0, s_num_hops);
+        // Is a 2D mcast if mcast_branch != 0
+        fabric_set_route<true>(packet_header, eth_chan_directions::SOUTH, mcast_branch, 0, s_num_hops);
+        spine_hops = s_num_hops;
+    }
+    if (e_num_hops) {
+        // Is a line mcast if spine_hops == 0
+        fabric_set_route<true>(packet_header, eth_chan_directions::EAST, 0, spine_hops, e_num_hops);
+        spine_hops += e_num_hops;
+    }
+    if (w_num_hops) {
+        // Is a line mcast if spine_hops == 0
+        fabric_set_route<true>(packet_header, eth_chan_directions::WEST, 0, spine_hops, w_num_hops);
     }
 }
 
