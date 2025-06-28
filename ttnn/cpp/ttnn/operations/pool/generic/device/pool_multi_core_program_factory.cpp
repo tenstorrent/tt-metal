@@ -276,8 +276,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_nbytes = datum_size(in_df);
     const uint32_t out_nbytes = datum_size(out_df);
 
-    printf("input channels: %d\n", input_shape[3]);
-
     const uint32_t in_nbytes_c = input_shape[3] / num_shards_c * in_nbytes;     // row of input (channels)
     const uint32_t out_nbytes_c = output_shape[3] / num_shards_c * out_nbytes;  // row of output (channels)
 
@@ -308,14 +306,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                               in_ntiles_c % MAX_TILES_PER_REDUCTION == 1)
             ? tt::constants::TILE_HEIGHT
             : tt::constants::TILE_HEIGHT / 2;
-    printf("is_partial_tile = %d\n", is_partial_tile);
-    printf("is_wide_reduction = %d\n", is_wide_reduction);
-    printf(
-        "condition: %d\n",
-        !is_partial_tile &&
-            !(is_wide_reduction && pool_type == Pool2DType::AVG_POOL2D && in_ntiles_c % MAX_TILES_PER_REDUCTION == 1));
-    printf("tt::constants::TILE_HEIGHT: %d\n", tt::constants::TILE_HEIGHT);
-    printf("max_rows_for_reduction = %d\n", max_rows_for_reduction);
     TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
 
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
@@ -658,11 +648,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         input, kernel_size_h, kernel_size_w, out_h, out_w, input.memory_config(), output.memory_config(), pool_type);
     uint32_t output_cb_size = post_allocate_size - memory_used;
 
-    // TT_FATAL(
-    //     temporary_size + output_cb_size == l1_usage,
-    //     "Calculated CB size {} does not match with the actual CB size {}  ",
-    //     temporary_size + output_cb_size,
-    //     l1_usage);
+    TT_FATAL(
+        temporary_size + output_cb_size == l1_usage,
+        "Calculated CB size {} does not match with the actual CB size {}  ",
+        temporary_size + output_cb_size,
+        l1_usage);
 
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
@@ -764,11 +754,6 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto dilation_h = sliding_window_config.dilation_hw.first;
     auto dilation_w = sliding_window_config.dilation_hw.second;
     auto num_shards_c = sliding_window_config.num_cores_c;
-
-    printf("kernel_size_h: %d\n", kernel_size_h);
-    printf("kernel_size_w: %d\n", kernel_size_w);
-    printf("num_cores_c: %d\n", sliding_window_config.num_cores_c);
-    printf("num_cores_nhw: %d\n", sliding_window_config.num_cores_nhw);
 
     std::vector<uint32_t> op_trace_metadata =
         ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
