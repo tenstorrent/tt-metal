@@ -230,7 +230,7 @@ uint32_t max_shards_per_worker(const std::vector<std::vector<ReadRequest>>& sche
 }
 CoreRangeSet get_llama_ccl_cores() {
     // We externally reserve this core range for CCL cores
-    return CoreRangeSet(CoreRange({1, 6}, {2, 7}));
+    return CoreRangeSet(CoreRange({2, 3}, {3, 3}), CoreRange({5, 8}, {6, 8}));
 }
 
 CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_t num_workers, bool row_wise) {
