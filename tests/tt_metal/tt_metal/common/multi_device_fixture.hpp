@@ -60,7 +60,7 @@ public:
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
         auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        if (arch == tt::ARCH::WORMHOLE_B0 && num_devices == 2 && num_pci_devices == 1) {
+        if (!(arch == tt::ARCH::WORMHOLE_B0 && num_devices == 2 && num_pci_devices == 1)) {
             return true;
         }
         return false;

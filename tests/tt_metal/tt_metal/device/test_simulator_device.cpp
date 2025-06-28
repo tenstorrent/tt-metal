@@ -43,13 +43,21 @@ using namespace tt::test_utils;
 
 class SimulatorFixture : public DeviceFixture {
 protected:
-    void SetUp() override {
-        // Check if simulator mode is enabled
+    static bool WillSkip() {
         if (!tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
-            GTEST_SKIP()
-                << "Simulator mode not enabled. Set TT_METAL_SIMULATOR environment variable to run simulator tests.";
+            return true;
         }
+        return false;
+    }
 
+    static std::string_view GetSkipMessage() {
+        return "Simulator mode not enabled. Set TT_METAL_SIMULATOR environment variable to run simulator tests.";
+    }
+
+    void SetUp() override {
+        if (WillSkip()) {
+            GTEST_SKIP() << GetSkipMessage();
+        }
         // Call parent SetUp to initialize devices
         DeviceFixture::SetUp();
     }

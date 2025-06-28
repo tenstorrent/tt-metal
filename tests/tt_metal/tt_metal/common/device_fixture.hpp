@@ -42,6 +42,20 @@ public:
     }
 
     void SetUp() override { DispatchFixture<DeviceFixture>::SetUp(); }
+
+    static void SetUpTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        DispatchFixture<DeviceFixture>::DoSetUpTestSuite();
+    }
+
+    static void TearDownTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        DispatchFixture<DeviceFixture>::DoTearDownTestSuite();
+    }
 };
 
 class DeviceFixtureWithL1Small : public DeviceFixture {
