@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <sys/types.h>
 #include "dataflow_api.h"
 
 #define ENABLE_DEBUG 0
@@ -98,6 +99,7 @@ void kernel_main() {
     constexpr DataFormat weight_df = get_dataformat(cb_id_weight);
     const InterleavedAddrGenFast<true> s_weight = {
         .bank_base_address = weight_addr_dram_base, .page_size = weight_tile_nbytes, .data_format = weight_df};
+    constexpr uint32_t weights_block_size_bytes = weight_tile_nbytes * weight_block_num_tiles;
 
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
@@ -117,15 +119,13 @@ void kernel_main() {
 
                     // mcast args
                     uint32_t weights_start_address = weight_write_l1_addr;
-                    uint32_t weights_block_size_bytes = 0;
                     for (uint32_t block_weight_h = 0; block_weight_h < weight_block_height_ntiles; block_weight_h++) {
                         uint32_t weight_tile_id = weight_current_block_start_tile_id;
+                        DPRINT << "weight_tile_id: " << weight_tile_id << ENDL();
                         for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles;
                              ++weight_tile_w_i) {
-                            noc_async_read_tile(weight_tile_id, s_weight, weight_write_l1_addr);
+                            noc_async_read_tile(weight_tile_id++, s_weight, weight_write_l1_addr);
                             weight_write_l1_addr += weight_tile_nbytes;
-                            weights_block_size_bytes += weight_tile_nbytes;
-                            weight_tile_id += 1;
                         }
                         weight_current_block_start_tile_id += weight_stride_h;
                     }

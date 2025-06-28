@@ -98,10 +98,7 @@ void MAIN {
     constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(23);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(24);
     constexpr bool partials_cb_uses_output = get_compile_time_arg_val(26);
-
-#ifdef WIDTH_SHARDED
     constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(27);
-#endif
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
@@ -167,7 +164,7 @@ void MAIN {
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 if constexpr (!height_sharded) {
-                    if (in0_block_w_i % 4 == 0) {
+                    if (in0_block_w_i % in0_nblocks_w_tilize == 0) {
                         reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
 
                         // DPRINT_MATH(DPRINT<<"Tilize Loop "<<in0_block_h_i<<" "<<in0_block_w_i<<"\n";)

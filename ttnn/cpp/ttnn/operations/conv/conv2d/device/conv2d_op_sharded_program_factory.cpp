@@ -867,7 +867,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
         get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
         get_cb_info_by_name(cb_info, Conv2dCb::TEMP_SUM).index,
-        partials_cb_uses_output};
+        partials_cb_uses_output,
+        conv_act_c_blocks};
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     const tt::tt_metal::NOC reader_noc =

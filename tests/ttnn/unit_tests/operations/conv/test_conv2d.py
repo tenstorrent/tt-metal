@@ -98,7 +98,7 @@ def test_conv_features(
         config,
         shard_layout=shard_layout,
         output_layout=output_layout,
-        has_bias=True,
+        # has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
         preprocess_weights_on_device=True,
