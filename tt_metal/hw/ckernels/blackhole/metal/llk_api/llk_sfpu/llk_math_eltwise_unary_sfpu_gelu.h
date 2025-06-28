@@ -7,30 +7,12 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "ckernel_sfpu_gelu.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 
-namespace ckernel {
+// the "forward" GELU
+SFPU_SIMPLE_OP_KERNEL(gelu)
+SFPU_INIT_KERNEL(gelu, sfpu::gelu_init)
 
-// New LLK SFPU APIs
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, int vector_mode = (int)VectorMode::RC, int param0 = 0) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_gelu<APPROXIMATE>, dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_gelu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::gelu, APPROXIMATE>(sfpu::gelu_init<APPROXIMATE>);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_gelu_derivative(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_gelu_derivative<APPROXIMATE>, dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_gelu_derivative_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_derivative, APPROXIMATE>(sfpu::gelu_derivative_init<APPROXIMATE>);
-}
-
-}  // namespace ckernel
+// the GELU derivative
+SFPU_SIMPLE_OP_KERNEL(gelu_derivative)
+SFPU_INIT_KERNEL(gelu_derivative, sfpu::gelu_derivative_init)
