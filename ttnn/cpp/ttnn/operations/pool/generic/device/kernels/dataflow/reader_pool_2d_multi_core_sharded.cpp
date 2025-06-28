@@ -233,7 +233,7 @@ void kernel_main() {
             first_row_value = true;
         }
 
-        for (uint16_t ind = start; ind <= end; ind += 2 * stride_w) {
+        for (uint16_t ind = start; ind <= end; ind += (split_reader ? 2 : 1) * stride_w) {
             if constexpr (!one_scalar_per_core) {
                 fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, split_reader, TILE_WIDTH>(
                     scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
