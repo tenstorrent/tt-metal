@@ -400,7 +400,7 @@ Reduction
    :nosignatures:
    :template: function.rst
 
-   ttnn.experimental.cumprod
+   ttnn.cumprod
    ttnn.max
    ttnn.mean
    ttnn.min

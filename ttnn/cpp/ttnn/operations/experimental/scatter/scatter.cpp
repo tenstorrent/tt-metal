@@ -20,6 +20,7 @@ namespace ttnn::operations::experimental {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
+// validate dimension constraints before sending down to device operation working on the last dimension
 void validate_inputs(
     const Tensor& input_tensor,
     const Tensor& index_tensor,
@@ -240,6 +241,10 @@ Tensor ScatterOperation::invoke(
     const bool input_tensor_is_dim_last_idx = (dim == -1 || dim == input_tensor_rank - 1);
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
 
+    // tensors sent to the device operation must be:
+    // - row-major
+    // - transposed to have the last dimension as last axis
+    // - (un)squeezed to 4D
     Shape after_transpose_shape;
     Tensor transformed_input_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
         input_tensor, after_transpose_shape, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);

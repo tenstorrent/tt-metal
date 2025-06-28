@@ -10,7 +10,7 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::experimental::reduction {
+namespace operations::reduction {
 
 struct CumprodOperation {
     static Tensor invoke(
@@ -22,11 +22,8 @@ struct CumprodOperation {
         const QueueId& queue_id = DefaultQueueId);
 };
 
-}  // namespace operations::experimental::reduction
+}  // namespace operations::reduction
 
-namespace experimental {
-constexpr auto cumprod = ttnn::
-    register_operation<"ttnn::experimental::cumprod", ttnn::operations::experimental::reduction::CumprodOperation>();
+constexpr auto cumprod = ttnn::register_operation<"ttnn::cumprod", ttnn::operations::reduction::CumprodOperation>();
 
-}  // namespace experimental
 }  // namespace ttnn

@@ -14,7 +14,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::operations::reduction {
 
 using namespace tt::tt_metal;
 using namespace tt::stl;
@@ -43,15 +43,16 @@ struct CumprodDeviceOperation {
         };
 
         static constexpr std::array<const char*, 3> KERNEL_PATHS{
-            "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/reduction/cumprod/device/kernels/dataflow/"
             "reader_multicore_cumprod.cpp",
-            "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/compute/cumprod_multicore.cpp",
-            "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/reduction/cumprod/device/kernels/compute/cumprod_multicore.cpp",
+            "ttnn/cpp/ttnn/operations/reduction/cumprod/device/kernels/dataflow/"
             "writer_multicore_cumprod.cpp"};
         struct shared_variables_t {
             KernelHandle cumprod_reader_kernel_id;
             KernelHandle cumprod_compute_kernel_id;
             KernelHandle cumprod_writer_kernel_id;
+            std::vector<CoreCoord> cores;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -97,6 +98,8 @@ struct CumprodDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
+    static operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
     static invocation_result_t invoke(
         const Tensor& input_tensor,
         const int32_t& dim,
@@ -106,9 +109,9 @@ struct CumprodDeviceOperation {
         const QueueId& queue_id = DefaultQueueId);
 };
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::operations::reduction
 
 namespace ttnn::prim {
-constexpr auto cumprod = ttnn::
-    register_operation<"ttnn::prim::cumprod", ttnn::operations::experimental::reduction::CumprodDeviceOperation>();
+constexpr auto cumprod =
+    ttnn::register_operation<"ttnn::prim::cumprod", ttnn::operations::reduction::CumprodDeviceOperation>();
 }  // namespace ttnn::prim
