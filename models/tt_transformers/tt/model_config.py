@@ -19,6 +19,7 @@ from models.tt_transformers.tt.common import (
     encode_prompt_hf,
     encode_prompt_instruct,
     freqs_to_rotation_matrix,
+    get_base_model_name,
     get_out_subblock_w,
     nearest_multiple,
     num_to_core_range_set,
@@ -84,8 +85,8 @@ class ModelOptimizations:
         """Configuration optimized for accuracy
         70B+ models still use bfp4 MLPs and BFP8 attention in this configuration
         """
-        base_model_name = model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
-        if base_model_name in ["Llama3.1-70B", "Llama3.2-90B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
+        base_model_name = get_base_model_name(model_name)
+        if base_model_name in ["Llama-3.1-70B", "Llama-3.2-90B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
             logger.info(
                 f"{model_name} is >70B and large models test insensitive precision, using BFP4 MLPs and BFP8 attention even in accuracy mode"
             )
@@ -96,7 +97,7 @@ class ModelOptimizations:
                 }
             )
         else:
-            if model_name.startswith("Llama3") or model_name.startswith("Mistral-7B"):
+            if base_model_name.startswith("Llama-3") or base_model_name.startswith("Mistral-7B"):
                 logger.info(
                     f"Llama 3 and Mistral 7B models test insensitive to attention precision, using BFP8 attention and kv-cache with FP16 MLP accumulation even in accuracy mode"
                 )
@@ -139,7 +140,7 @@ class ModelOptimizations:
         """Configuration optimized for performance
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
-        base_model_name = model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
+        base_model_name = get_base_model_name(model_name)
         if base_model_name == "Qwen2.5-7B":
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
@@ -400,12 +401,12 @@ class ModelArgs:
     )
 
     LOCAL_LLAMA_PARAMS = {
-        "LLAMA3_2_1B_PARAMS": "models/tt_transformers/model_params/Llama3.2-1B-Instruct",
-        "LLAMA3_2_3B_PARAMS": "models/tt_transformers/model_params/Llama3.2-3B-Instruct",
-        "LLAMA3_1_8B_PARAMS": "models/tt_transformers/model_params/Llama3.1-8B-Instruct",
-        "LLAMA3_2_11B_PARAMS": "models/tt_transformers/model_params/Llama3.2-11B-Vision-Instruct",
-        "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama3.1-70B-Instruct",
-        "LLAMA3_2_90B_PARAMS": "models/tt_transformers/model_params/Llama3.2-90B-Vision-Instruct",
+        "LLAMA3_2_1B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
+        "LLAMA3_2_3B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
+        "LLAMA3_1_8B_PARAMS": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
+        "LLAMA3_2_11B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
+        "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
+        "LLAMA3_2_90B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
     }
 
     LOCAL_HF_PARAMS = {
@@ -426,30 +427,7 @@ class ModelArgs:
         self.arch_name = ttnn.get_arch_name()
         self.dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
 
-        if self.num_devices == 0:
-            self.device_name = "CPU"
-        else:
-            if is_blackhole():
-                dict_device_names = {
-                    1: "P100" if self.dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
-                    2: "P300",
-                    4: "P150x4",
-                }
-            elif is_wormhole_b0():
-                dict_device_names = {
-                    1: "N150",
-                    2: "N300",
-                    4: "N150x4",
-                    8: "T3K",
-                    32: "TG",
-                }
-            else:
-                raise ValueError(f"Unsupported architecture: {self.arch_name}")
-
-            if self.num_devices in dict_device_names:
-                self.device_name = dict_device_names[self.num_devices]
-            else:
-                raise ValueError(f"Unsupported number of devices: {self.num_devices} for {self.arch_name}")
+        self.device_name = determine_device_name(self.mesh_device)
 
         logger.info(f"Inferring device name: {self.device_name}")
         device = mesh_device if mesh_device is not None else None
@@ -562,12 +540,12 @@ class ModelArgs:
         if max_prefill_chunk_size_div1024 is None:
             # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
-                "Llama3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
-                "Llama3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama-3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama-3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama-3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama-3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
@@ -592,7 +570,7 @@ class ModelArgs:
             max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
-        if self.base_model_name in ["Llama3.1-8B", "Llama3.2-11B", "Mistral-7B"] and self.device_name == "N150":
+        if self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150":
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
 
@@ -1484,7 +1462,7 @@ class ModelArgs:
 
     @property
     def base_model_name(self):
-        return self.model_name.split("B-")[0] + "B" if "B-" in self.model_name else self.model_name
+        return get_base_model_name(self.model_name)
 
     @property
     def vision_chunk_ntok(self):
@@ -1511,23 +1489,23 @@ class ModelArgs:
         # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
         # Set the model name based on the checkpoint directory being loaded
         if "3.2-1B" in checkpoint_dir:
-            self.model_name = "Llama3.2-1B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.2-1B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
         elif "3.2-3B" in checkpoint_dir:
-            self.model_name = "Llama3.2-3B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.2-3B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
         elif "3.1-8B" in checkpoint_dir:
-            self.model_name = "Llama3.1-8B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.1-8B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
         elif "3.2-11B" in checkpoint_dir:
-            self.model_name = "Llama3.2-11B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8  # shared with 3.1-8B
         elif "3.1-70B" in checkpoint_dir:
-            self.model_name = "Llama3.1-70B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.1-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
         elif "3.2-90B" in checkpoint_dir:
-            self.model_name = "Llama3.2-90B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_90b = True
         else:
@@ -2435,3 +2413,46 @@ def num_to_coregrid(x):
         return ttnn.CoreGrid(y=2, x=6)
     if x == 20:
         return ttnn.CoreGrid(y=4, x=5)
+
+
+def determine_device_name(mesh_device):
+    """
+    Determine device name based on number of devices and architecture.
+
+    Args:
+        mesh_device (MeshDevice): MeshDevice object
+
+    Returns:
+        str: Device name (e.g., "CPU", "N150", "P100", etc.)
+
+    Raises:
+        ValueError: If architecture or device count is unsupported
+    """
+    num_devices = mesh_device.get_num_devices() if mesh_device else 0
+    arch_name = ttnn.get_arch_name()
+    dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
+
+    if num_devices == 0:
+        return "CPU"
+
+    if is_blackhole():
+        dict_device_names = {
+            1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
+            2: "P300",
+            4: "P150x4",
+        }
+    elif is_wormhole_b0():
+        dict_device_names = {
+            1: "N150",
+            2: "N300",
+            4: "N150x4",
+            8: "T3K",
+            32: "TG",
+        }
+    else:
+        raise ValueError(f"Unsupported architecture: {arch_name}")
+
+    if num_devices in dict_device_names:
+        return dict_device_names[num_devices]
+    else:
+        raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")

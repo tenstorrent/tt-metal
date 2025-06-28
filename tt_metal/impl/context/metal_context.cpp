@@ -18,6 +18,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <filesystem>
 #include <tt-metalium/device_pool.hpp>
@@ -40,7 +41,8 @@ void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
 }
 
 void MetalContext::reinitialize() {
-    initialize(dispatch_core_config_, num_hw_cqs_, l1_bank_remap_, worker_l1_size_, false, true);
+    force_reinit_ = true;
+    initialize(dispatch_core_config_, num_hw_cqs_, l1_bank_remap_, worker_l1_size_, false);
 }
 
 void MetalContext::initialize(
@@ -48,8 +50,11 @@ void MetalContext::initialize(
     uint8_t num_hw_cqs,
     const BankMapping& l1_bank_remap,
     size_t worker_l1_size,
-    bool minimal,
-    bool force_reinit) {
+    bool minimal) {
+    // Workaround for galaxy and BH, need to always re-init
+    if (cluster_->is_galaxy_cluster() or cluster_->arch() == ARCH::BLACKHOLE) {
+        force_reinit_ = true;
+    }
     // Settings that affect FW build can also trigger a re-initialization
     auto fw_compile_hash = std::hash<std::string>{}(rtoptions_.get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, *hal_);
@@ -61,7 +66,8 @@ void MetalContext::initialize(
             teardown();
         } else {
             // Re-init request with the same parameters, do nothing unless force re-init requested.
-            if (force_reinit) {
+            if (force_reinit_) {
+                force_reinit_ = false;
                 log_warning(
                     tt::LogAlways,
                     "Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
@@ -203,6 +209,12 @@ MetalContext::MetalContext() {
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
+    distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+}
+
+distributed::multihost::DistributedContext& MetalContext::get_distributed_context() {
+    TT_FATAL(distributed_context_, "Distributed context not initialized.");
+    return *distributed_context_;
 }
 
 MetalContext::~MetalContext() {
@@ -359,6 +371,8 @@ void MetalContext::set_fabric_config(
     const tt_metal::FabricConfig fabric_config,
     tt_metal::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes) {
+    // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch config, not through this function exposed in the detail API.
+    force_reinit_ = true;
     if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED || fabric_config == tt_metal::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
         this->fabric_reliability_mode_ = reliability_mode;
@@ -413,9 +427,10 @@ void MetalContext::initialize_fabric_config() {
         this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& control_plane = this->get_control_plane();
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
-        control_plane.initialize_fabric_context(this->fabric_config_, this->fabric_reliability_mode_);
+        control_plane.initialize_fabric_context(this->fabric_config_);
     }
-    control_plane.configure_routing_tables_for_fabric_ethernet_channels(this->fabric_reliability_mode_);
+    control_plane.configure_routing_tables_for_fabric_ethernet_channels(
+        this->fabric_config_, this->fabric_reliability_mode_);
 }
 
 tt_metal::FabricConfig MetalContext::get_fabric_config() const {
@@ -446,6 +461,7 @@ void MetalContext::initialize_control_plane() {
         case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::SIMULATOR_WORMHOLE_B0: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::SIMULATOR_BLACKHOLE: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::N300_2x2: mesh_graph_descriptor = "n300_2x2_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::INVALID: TT_THROW("Unknown cluster type");
     }
     const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /

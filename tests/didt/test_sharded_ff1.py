@@ -29,10 +29,10 @@ GELU = True
     ],
     indirect=["mesh_device"],
 )
-def test_reproduce_matmul_2d_hang(mesh_device, ff1_hang_dummy_param, didt_workload_iterations, use_program_cache):
+def test_reproduce_matmul_2d_hang(mesh_device, ff1_hang_dummy_param, didt_workload_iterations):
     if is_blackhole() and mesh_device.get_num_devices() > 1:
         pytest.skip("Multi-chip Blackhole has not been tested")
-    test_ff1_matmul(mesh_device, GELU, MATH_FIDELITY, didt_workload_iterations, -1, use_program_cache)
+    test_ff1_matmul(mesh_device, GELU, MATH_FIDELITY, didt_workload_iterations, -1)
 
 
 @skip_for_blackhole("Multi-chip Blackhole has not been tested")
@@ -50,11 +50,9 @@ def test_reproduce_matmul_2d_hang(mesh_device, ff1_hang_dummy_param, didt_worklo
         "logical_chip7",
     ],
 )
-def test_specific_chip_reproduce_matmul_2d_hang(
-    mesh_device, logical_chip_index, didt_workload_iterations, use_program_cache
-):
+def test_specific_chip_reproduce_matmul_2d_hang(mesh_device, logical_chip_index, didt_workload_iterations):
     test_specific_chip_ff1_matmul(
-        mesh_device, logical_chip_index, GELU, MATH_FIDELITY, didt_workload_iterations, -1, use_program_cache, False
+        mesh_device, logical_chip_index, GELU, MATH_FIDELITY, didt_workload_iterations, -1, False
     )
 
 
@@ -67,16 +65,14 @@ def test_specific_chip_reproduce_matmul_2d_hang(
     ],
     indirect=["mesh_device"],
 )
-def test_determinism(mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache):
+def test_determinism(mesh_device, didt_workload_iterations, determinism_check_interval):
     if is_blackhole() and mesh_device.get_num_devices() > 1:
         pytest.skip("Multi-chip Blackhole has not been tested")
 
     if determinism_check_interval == -1:
         determinism_check_interval = 1
 
-    test_ff1_matmul(
-        mesh_device, GELU, MATH_FIDELITY, didt_workload_iterations, determinism_check_interval, use_program_cache, False
-    )
+    test_ff1_matmul(mesh_device, GELU, MATH_FIDELITY, didt_workload_iterations, determinism_check_interval, False)
 
 
 @skip_for_blackhole("Multi-chip Blackhole has not been tested")
@@ -95,7 +91,7 @@ def test_determinism(mesh_device, didt_workload_iterations, determinism_check_in
     ],
 )
 def test_determinism_specific_chip(
-    mesh_device, logical_chip_index, didt_workload_iterations, determinism_check_interval, use_program_cache
+    mesh_device, logical_chip_index, didt_workload_iterations, determinism_check_interval
 ):
     if determinism_check_interval == -1:
         determinism_check_interval = 1
@@ -107,6 +103,5 @@ def test_determinism_specific_chip(
         MATH_FIDELITY,
         didt_workload_iterations,
         determinism_check_interval,
-        use_program_cache,
         False,
     )

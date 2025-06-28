@@ -69,6 +69,7 @@ target_sources(
         core/tensor/serialization.cpp
         core/tensor/storage.cpp
         core/tensor/tensor.cpp
+        core/tensor/tensor_accessor_args.cpp
         core/tensor/tensor_attributes.cpp
         core/tensor/tensor_impl.cpp
         core/tensor/tensor_ops.cpp
@@ -276,6 +277,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/transformer_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/uniform/uniform_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/rand/rand_${PY_BINDING}.cpp
 )
 
 set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
@@ -339,12 +341,6 @@ list(
 # Build the libraries!
 ##################################################
 
-set(TTNN_CPP_BUILD_TYPE SHARED)
-if(WITH_PYTHON_BINDINGS)
-    #ttnncpp will be static when building python bindings
-    set(TTNN_CPP_BUILD_TYPE STATIC)
-endif()
-
 #there are two ways to build TTNN
 # 1) Without Python bindings
 #        ttnncpp will be a dynamic library that can be linked to any project
@@ -355,7 +351,7 @@ endif()
 # Most of the use cases will link to ttnn without caring a lot about the backend, but
 # for those who need this second use case, now it is officially supported
 
-add_library(ttnncpp ${TTNN_CPP_BUILD_TYPE})
+add_library(ttnncpp SHARED)
 add_library(TTNN::CPP ALIAS ttnncpp)
 add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: remove
 
@@ -363,22 +359,20 @@ target_compile_definitions(ttnncpp PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAME
 target_precompile_headers(ttnncpp REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnncpp)
 
-if(TTNN_CPP_BUILD_TYPE STREQUAL "SHARED")
-    set_target_properties(
-        ttnncpp
-        PROPERTIES
-            PREFIX
-                "_"
-            BUILD_RPATH
-                "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
-            INSTALL_RPATH
-                "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN" # FIXME: Install RPATH should not have a build path!
-            CXX_VISIBILITY_PRESET
-                "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
-            ADDITIONAL_CLEAN_FILES
-                "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_'${LIBRARY_NAME}'.so;${PROJECT_SOURCE_DIR}/ttnn/'${LIBRARY_NAME}'.egg-info" # FIXME: Confirm this is a relic of the past and can be deleted; No generated files should land in the source tree!
-    )
-endif()
+set_target_properties(
+    ttnncpp
+    PROPERTIES
+        PREFIX
+            "_"
+        BUILD_RPATH
+            "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
+        INSTALL_RPATH
+            "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN" # FIXME: Install RPATH should not have a build path!
+        CXX_VISIBILITY_PRESET
+            "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
+        ADDITIONAL_CLEAN_FILES
+            "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_'${LIBRARY_NAME}'.so;${PROJECT_SOURCE_DIR}/ttnn/'${LIBRARY_NAME}'.egg-info" # FIXME: Confirm this is a relic of the past and can be deleted; No generated files should land in the source tree!
+)
 
 target_sources(
     ttnncpp
@@ -478,8 +472,17 @@ target_link_libraries(
         TTNN::Ops::Uniform
         TTNN::Ops::Pool
         TTNN::Ops::Normalization
+        TTNN::Ops::Rand
 )
 install(TARGETS ttnncpp LIBRARY COMPONENT ttnn-runtime)
+
+install(
+    TARGETS
+        ttnncpp
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT tar
+)
 
 if(WITH_PYTHON_BINDINGS)
     add_library(ttnn SHARED)
@@ -528,9 +531,7 @@ if(WITH_PYTHON_BINDINGS)
             TT::Metalium
     )
     install(TARGETS ttnn LIBRARY COMPONENT ttnn-runtime)
-endif()
 
-if(WITH_PYTHON_BINDINGS)
     # Install .so into src files for pybinds implementation
     install(
         TARGETS
@@ -549,17 +550,6 @@ if(WITH_PYTHON_BINDINGS)
             ${PROJECT_SOURCE_DIR}/ttnn/ttnn
             COMPONENT
             tt_pybinds
-    )
-else()
-    #when we don't build python bindings, we generate a dynamic library ttnncpp
-    install(
-        TARGETS
-            ttnncpp
-        ARCHIVE
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        LIBRARY
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            COMPONENT tar
     )
 endif()
 
@@ -621,5 +611,5 @@ add_subdirectory(cpp/ttnn/operations/transformer)
 add_subdirectory(cpp/ttnn/operations/uniform)
 add_subdirectory(cpp/ttnn/operations/pool)
 add_subdirectory(cpp/ttnn/operations/normalization)
-
+add_subdirectory(cpp/ttnn/operations/rand)
 add_subdirectory(cpp/ttnn/deprecated)

@@ -76,7 +76,6 @@ def test_run_unpadding_test(
     seq_len_end,
     device,
     dtype,
-    use_program_cache,
 ):
     if is_grayskull():
         pytest.skip("Skipping test on Grayskull")

@@ -7,7 +7,7 @@ Now that we have a basic understanding of how to use the TT Metal API and buildi
 
 This example introduces the concept of using separate data movement and compute kernels that communicate through circular buffers. The compute kernel uses the powerful matrix engine to perform efficient tile-wise matrix multiplication, while data movement kernels handle reading input data from DRAM and writing results back.
 
-We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/matmul_single_core/`` directory.
+We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/matmul/matmul_single_core/`` directory.
 
 Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``matmul_single_core`` executable in the ``build/programming_examples`` directory. For example:
 

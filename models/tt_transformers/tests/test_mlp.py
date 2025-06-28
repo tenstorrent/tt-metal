@@ -33,7 +33,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     "batch_size",
     (1,),
 )
-def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 

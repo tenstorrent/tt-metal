@@ -51,7 +51,7 @@ def get_expected_times(squeezebert):
 @pytest.mark.parametrize("model_name", ["squeezebert/squeezebert-uncased"])
 @pytest.mark.parametrize("sequence_size", [384])
 @pytest.mark.parametrize("squeezebert", [ttnn_functional_squeezebert])
-def test_performance(device, use_program_cache, model_name, sequence_size, squeezebert):
+def test_performance(device, model_name, sequence_size, squeezebert):
     disable_persistent_kernel_cache()
 
     num_iterations = 2

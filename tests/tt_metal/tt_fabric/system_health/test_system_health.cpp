@@ -20,21 +20,60 @@
 namespace tt::tt_fabric {
 namespace system_health_tests {
 
+struct UbbId {
+    std::uint32_t tray_id;
+    std::uint32_t asic_id;
+};
+
+enum class ConnectorType { EXTERNAL, TRACE, LK1, LK2, LK3 };
+
+enum class LinkingBoardType {
+    A,
+    B,
+};
+
 const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
     {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
     {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
 };
 
-std::pair<std::uint32_t, std::uint32_t> get_ubb_ids(chip_id_t chip_id) {
+const std::unordered_map<ConnectorType, LinkingBoardType> linking_board_types = {
+    {ConnectorType::LK1, LinkingBoardType::A},
+    {ConnectorType::LK2, LinkingBoardType::A},
+    {ConnectorType::LK3, LinkingBoardType::B},
+};
+
+UbbId get_ubb_id(chip_id_t chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
     const auto bus_id = cluster.get_bus_id(chip_id);
     auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
     if (tray_bus_id_it != tray_bus_ids.end()) {
         auto ubb_asic_id = bus_id & 0x0F;
-        return std::make_pair(tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id);
+        return UbbId{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id};
     }
-    return std::make_pair(0, 0);
+    return UbbId{0, 0};  // Invalid UBB ID if not found
+}
+
+ConnectorType get_connector_type(chip_id_t chip_id, CoreCoord eth_core, uint32_t chan, ClusterType cluster_type) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    if (cluster.is_external_cable(chip_id, eth_core)) {
+        return ConnectorType::EXTERNAL;
+    }
+    if (cluster_type == ClusterType::GALAXY) {
+        auto ubb_id = get_ubb_id(chip_id);
+        if ((ubb_id.asic_id == 5 || ubb_id.asic_id == 6) && (12 <= chan && chan <= 15)) {
+            return ConnectorType::LK1;
+        } else if ((ubb_id.asic_id == 7 || ubb_id.asic_id == 8) && (12 <= chan && chan <= 15)) {
+            return ConnectorType::LK2;
+        } else if ((ubb_id.asic_id == 4 || ubb_id.asic_id == 8) && (8 <= chan && chan <= 11)) {
+            return ConnectorType::LK3;
+        } else {
+            return ConnectorType::TRACE;
+        }
+    } else {
+        return ConnectorType::TRACE;
+    }
 }
 
 bool is_chip_on_edge_of_mesh(chip_id_t physical_chip_id, tt::ClusterType cluster_type) {
@@ -72,8 +111,26 @@ bool is_chip_on_corner_of_mesh(chip_id_t physical_chip_id, tt::ClusterType clust
 }
 
 std::string get_ubb_id_str(chip_id_t chip_id) {
-    auto [tray_id, ubb_asic_id] = get_ubb_ids(chip_id);
-    return "Tray: " + std::to_string(tray_id) + " N" + std::to_string(ubb_asic_id);
+    auto ubb_id = get_ubb_id(chip_id);
+    return "Tray: " + std::to_string(ubb_id.tray_id) + " N" + std::to_string(ubb_id.asic_id);
+}
+
+std::string get_connector_str(chip_id_t chip_id, CoreCoord eth_core, uint32_t channel, ClusterType cluster_type) {
+    auto connector = get_connector_type(chip_id, eth_core, channel, cluster_type);
+    std::stringstream str;
+    str << "(";
+    switch (connector) {
+        case ConnectorType::EXTERNAL: str << "external connector"; break;
+        case ConnectorType::TRACE: str << "internal trace"; break;
+        case ConnectorType::LK1:
+        case ConnectorType::LK2:
+        case ConnectorType::LK3:
+            str << "linking board " << magic_enum::enum_name(connector).back() << " type "
+                << magic_enum::enum_name(linking_board_types.at(connector));
+            break;
+    }
+    str << ")";
+    return str.str();
 }
 
 TEST(Cluster, ReportIntermeshLinks) {
@@ -156,8 +213,7 @@ TEST(Cluster, ReportSystemHealth) {
             std::stringstream eth_ss;
             cluster.read_core(read_vec, sizeof(uint32_t), virtual_eth_core, retrain_count_addr);
             eth_ss << " eth channel " << std::dec << (uint32_t)chan << " " << eth_core.str();
-            std::string connection_type =
-                cluster.is_external_cable(chip_id, eth_core) ? "(external connector)" : "(internal trace)";
+            std::string connection_type = get_connector_str(chip_id, eth_core, chan, cluster_type);
             if (cluster.is_ethernet_link_up(chip_id, eth_core)) {
                 if (eth_connections.at(chip_id).find(chan) != eth_connections.at(chip_id).end()) {
                     const auto& [connected_chip_id, connected_eth_core] =

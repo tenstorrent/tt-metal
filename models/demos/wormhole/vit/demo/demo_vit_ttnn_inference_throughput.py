@@ -37,7 +37,7 @@ os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": true}'
 @pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-def test_vit(device, use_program_cache):
+def test_vit(device):
     torch.manual_seed(0)
 
     disable_persistent_kernel_cache()
@@ -129,7 +129,6 @@ def test_vit(device, use_program_cache):
         output = ttnn_optimized_sharded_vit_wh.vit(
             config,
             pixel_values,
-            head_masks,
             cls_token,
             position_embeddings,
             parameters=parameters,

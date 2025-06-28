@@ -42,7 +42,7 @@ void MAIN {
             cb_pop_front(cache_cb, Wt);
             untilize_uninit(cache_cb);
 
-            tilize_init_short(untilized_cache2_cb, Wt, out_cb);
+            tilize_init(untilized_cache2_cb, Wt, out_cb);
             cb_wait_front(untilized_cache2_cb, Wt);
             cb_reserve_back(out_cb, Wt);
             tilize_block(untilized_cache2_cb, Wt, out_cb);
