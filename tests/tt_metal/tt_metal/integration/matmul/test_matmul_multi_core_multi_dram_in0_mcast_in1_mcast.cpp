@@ -540,7 +540,7 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::IDevice* device)
 
 }  // namespace unit_tests_common::matmul::test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast
 
-TEST_F(DispatchFixture, TensixMatmulMultiCoreMultiDRAMIn0MCastIn1MCast) {
+TEST_F(AnyDeviceDispatchFixture, TensixMatmulMultiCoreMultiDRAMIn0MCastIn1MCast) {
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();

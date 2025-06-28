@@ -39,7 +39,7 @@ using std::vector;
 // Test sync w/ semaphores betweeen eth/tensix cores
 // Test will hang in the kernel if the sync doesn't work properly
 static void test_sems_across_core_types(
-    tt::tt_metal::DispatchFixture* fixture, vector<tt::tt_metal::IDevice*>& devices, bool active_eth) {
+    tt::tt_metal::AnyDeviceDispatchFixture* fixture, vector<tt::tt_metal::IDevice*>& devices, bool active_eth) {
     // just something unique...
     constexpr uint32_t eth_sem_init_val = 33;
     constexpr uint32_t tensix_sem_init_val = 102;
@@ -119,7 +119,8 @@ static void test_sems_across_core_types(
     }
 }
 
-TEST_F(DispatchFixture, EthTestBlank) {
+TEST_F(AnyDeviceDispatchFixture, EthTestBlank) {
+    log_info(tt::LogTest, "EthTestBlank {}", devices_.size());
     IDevice* device = devices_[0];
     Program program = CreateProgram();
 
@@ -144,7 +145,7 @@ TEST_F(DispatchFixture, EthTestBlank) {
     }
 }
 
-TEST_F(DispatchFixture, TensixTestInitLocalMemory) {
+TEST_F(AnyDeviceDispatchFixture, TensixTestInitLocalMemory) {
     // This test will hang/assert if there is a failure
 
     IDevice* device = devices_[0];
@@ -168,7 +169,7 @@ TEST_F(DispatchFixture, TensixTestInitLocalMemory) {
     this->RunProgram(device, program);
 }
 
-TEST_F(DispatchFixture, EthTestInitLocalMemory) {
+TEST_F(AnyDeviceDispatchFixture, EthTestInitLocalMemory) {
     // This test will hang/assert if there is a failure
 
     if (not this->slow_dispatch_) {
@@ -196,9 +197,11 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
     }
 }
 
-TEST_F(DispatchFixture, TensixActiveEthTestSemaphores) { test_sems_across_core_types(this, this->devices_, true); }
+TEST_F(AnyDeviceDispatchFixture, TensixActiveEthTestSemaphores) {
+    test_sems_across_core_types(this, this->devices_, true);
+}
 
-TEST_F(DispatchFixture, TensixIdleEthTestSemaphores) {
+TEST_F(AnyDeviceDispatchFixture, TensixIdleEthTestSemaphores) {
     if (not this->slow_dispatch_) {
         GTEST_SKIP();
     }
@@ -208,7 +211,7 @@ TEST_F(DispatchFixture, TensixIdleEthTestSemaphores) {
 
 // This test was written to cover issue #12738 (CBs for workers showing up on
 // active eth cores)
-TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
+TEST_F(AnyDeviceDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
     uint32_t intermediate_cb = 24;
     uint32_t out_cb = 16;
     std::map<uint8_t, tt::DataFormat> intermediate_and_out_data_format_spec = {
@@ -294,14 +297,18 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
     }
 }
 
-class EarlyReturnFixture : public DispatchFixture {
-    void SetUp() override {
+class EarlyReturnFixture : public AnyDeviceDispatchFixture {
+public:
+    static bool WillSkip() { return false; }
+
+    static void SetUpTestSuite() {
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(true);
-        DispatchFixture::SetUp();
+        AnyDeviceDispatchFixture::SetUpTestSuite();
     }
-    void TearDown() override {
-        DispatchFixture::TearDown();
+
+    static void TearDownTestSuite() {
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(false);
+        AnyDeviceDispatchFixture::TearDownTestSuite();
     }
 };
 

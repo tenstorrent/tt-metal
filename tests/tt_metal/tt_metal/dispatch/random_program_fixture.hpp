@@ -69,6 +69,13 @@ protected:
 
     IDevice* device_;
 
+    static void SetUpTestSuite() {
+        CommandQueueSingleCardProgramFixture::SetUpTestSuite();
+        log_info(tt::LogTest, "RandomProgramFixture: SetUpTestSuite {}", GetDevicesMap().size());
+    }
+
+    static void TearDownTestSuite() { CommandQueueSingleCardProgramFixture::TearDownTestSuite(); }
+
     void SetUp() override {
         CommandQueueSingleCardProgramFixture::SetUp();
         if (!::testing::Test::IsSkipped()) {
@@ -359,19 +366,14 @@ private:
     }
 };
 
-class RandomProgramTraceFixture : virtual public RandomProgramFixture,
-                                  virtual public CommandQueueSingleCardTraceFixture {
+class RandomProgramTraceFixture : public RandomProgramFixture {
 protected:
     static const uint32_t NUM_TRACE_ITERATIONS = 50;
     Program programs[NUM_PROGRAMS];
 
-    void SetUp() override {
-        CommandQueueSingleCardTraceFixture::SetUp();
-        if (!::testing::Test::IsSkipped()) {
-            // Parent may have skipped
-            this->device_ = this->devices_[0];
-            this->initialize_seed();
-        }
+    static void SetUpTestSuite() {
+        CommandQueueSingleCardTraceFixture::DoSetUpTestSuiteWithTrace(90000000);
+        CommandQueueSingleCardTraceFixture::SelectDevices();
     }
 
     uint32_t trace_programs() {

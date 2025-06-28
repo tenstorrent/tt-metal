@@ -447,7 +447,8 @@ bool assign_runtime_args_to_program(
     return pass;
 }
 
-bool matmul_multi_core_multi_dram(tt_metal::DispatchFixture* fixture, tt_metal::IDevice* device) {
+template <typename FIXTURE>
+bool matmul_multi_core_multi_dram(FIXTURE* fixture, tt_metal::IDevice* device) {
     bool pass = true;
     int num_cores_r = device->compute_with_storage_grid_size().y;
     int num_cores_c = device->compute_with_storage_grid_size().x;
@@ -582,7 +583,7 @@ bool matmul_multi_core_multi_dram(tt_metal::DispatchFixture* fixture, tt_metal::
 
 }  // namespace unit_tests_common::matmul::test_matmul_multi_core_X_dram
 
-TEST_F(DispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
+TEST_F(AnyDeviceDispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         log_info(LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
@@ -596,7 +597,7 @@ TEST_F(DispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
     }
 }
 
-TEST_F(DispatchFixture, TensixMatmulMultiCoreMultiDRAM) {
+TEST_F(AnyDeviceDispatchFixture, TensixMatmulMultiCoreMultiDRAM) {
     // need to update move_tiles_to_dram to support both slow and fast
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         log_info(LogTest, "This test is not supported in slow dispatch mode, need to update move_tiles_to_dram..");

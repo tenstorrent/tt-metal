@@ -19,7 +19,7 @@
 
 namespace tt::tt_metal {
 
-TEST_F(DispatchFixture, InitializeGlobalSemaphores) {
+TEST_F(AnyDeviceDispatchFixture, InitializeGlobalSemaphores) {
     CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
 
     auto cores_vec = corerange_to_cores(cores);
@@ -50,7 +50,7 @@ TEST_F(DispatchFixture, InitializeGlobalSemaphores) {
     }
 }
 
-TEST_F(DispatchFixture, CreateMultipleGlobalSemaphoresOnSameCore) {
+TEST_F(AnyDeviceDispatchFixture, CreateMultipleGlobalSemaphoresOnSameCore) {
     std::vector<CoreRangeSet> cores{CoreRange({0, 0}, {1, 1}), CoreRange({0, 0}, {2, 2}), CoreRange({3, 3}, {5, 6})};
     std::vector<std::vector<CoreCoord>> cores_vecs;
     cores_vecs.reserve(cores.size());
@@ -86,7 +86,7 @@ TEST_F(DispatchFixture, CreateMultipleGlobalSemaphoresOnSameCore) {
     }
 }
 
-TEST_F(DispatchFixture, ResetGlobalSemaphores) {
+TEST_F(AnyDeviceDispatchFixture, ResetGlobalSemaphores) {
     CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
 
     auto cores_vec = corerange_to_cores(cores);

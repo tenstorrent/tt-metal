@@ -52,14 +52,9 @@ using namespace tt;
 
 namespace unit_tests_common::matmul::test_matmul_single_core {
 
+template <typename FIXTURE>
 bool matmul_single_core(
-    tt_metal::DispatchFixture* fixture,
-    tt_metal::IDevice* device,
-    int M,
-    int N,
-    int K,
-    int out_subblock_h,
-    int out_subblock_w) {
+    FIXTURE* fixture, tt_metal::IDevice* device, int M, int N, int K, int out_subblock_h, int out_subblock_w) {
     bool pass = true;
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -263,7 +258,7 @@ bool matmul_single_core(
 }
 }  // namespace unit_tests_common::matmul::test_matmul_single_core
 
-TEST_F(DispatchFixture, TensixMatmulSingleCoreSmall) {
+TEST_F(AnyDeviceDispatchFixture, TensixMatmulSingleCoreSmall) {
     uint32_t M = 4;
     uint32_t K = 4;
     uint32_t N = 4;
@@ -275,7 +270,7 @@ TEST_F(DispatchFixture, TensixMatmulSingleCoreSmall) {
     }
 }
 
-TEST_F(DispatchFixture, TensixMatmulSingleCore) {
+TEST_F(AnyDeviceDispatchFixture, TensixMatmulSingleCore) {
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         log_info(LogTest, "Fast dispatch buffer memory issue, skipping for now");
         GTEST_SKIP();

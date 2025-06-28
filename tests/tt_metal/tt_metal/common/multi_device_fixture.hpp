@@ -20,41 +20,66 @@
 
 namespace tt::tt_metal {
 
-class TwoDeviceFixture : public DispatchFixture {
-protected:
-    void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
-        if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
-            GTEST_SKIP();
+class TwoDeviceFixture : public DispatchFixture<TwoDeviceFixture> {
+public:
+    static bool WillSkip() {
+        if (!IsSlowDispatch()) {
+            return true;
         }
-
-        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        if (num_devices != 2) {
-            GTEST_SKIP() << "TwoDeviceFixture can only be run on machines with two devices";
+        auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        if (num_devices < 2) {
+            return true;
         }
+        return false;
+    }
 
-        DispatchFixture::SetUp();
+    static std::string_view GetSkipMessage() { return "Requires Slow Dispatch and >= 2 Devices"; }
+
+    static void SetUpTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        DispatchFixture<TwoDeviceFixture>::DoSetUpTestSuiteWithNumberOfDevices(2);
+    }
+
+    static void TearDownTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        DispatchFixture<TwoDeviceFixture>::DoTearDownTestSuite();
     }
 };
 
-class N300DeviceFixture : public DispatchFixture {
-protected:
-    void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
-        if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
-            GTEST_SKIP();
+class N300DeviceFixture : public DispatchFixture<N300DeviceFixture> {
+public:
+    static bool WillSkip() {
+        if (IsSlowDispatch()) {
+            return true;
         }
 
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        if (this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices == 2 && num_pci_devices == 1) {
-            DispatchFixture::SetUp();
-        } else {
-            GTEST_SKIP() << "This suite can only be run on N300";
+        auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        if (arch == tt::ARCH::WORMHOLE_B0 && num_devices == 2 && num_pci_devices == 1) {
+            return true;
         }
+        return false;
+    }
+
+    static std::string_view GetSkipMessage() { return "Requires Slow Dispatch and N300"; }
+
+    static void SetUpTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        DispatchFixture<N300DeviceFixture>::DoSetUpTestSuite();
+    }
+
+    static void TearDownTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        DispatchFixture<N300DeviceFixture>::DoTearDownTestSuite();
     }
 };
 

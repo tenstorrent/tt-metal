@@ -85,8 +85,8 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
     return expected_dst_vec;
 }
 
-bool flatten(
-    tt_metal::DispatchFixture* fixture, tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+template <typename FIXTURE>
+bool flatten(FIXTURE* fixture, tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     bool pass = true;
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -312,7 +312,7 @@ bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_
 
 }  // namespace test_flatten
 
-TEST_F(DispatchFixture, TensixFlatten) {
+TEST_F(AnyDeviceDispatchFixture, TensixFlatten) {
     // TODO: Re-enable when #7264 is fixed
     GTEST_SKIP();
     uint32_t num_tiles_r = 2;

@@ -69,8 +69,9 @@ size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& max) {
     return (((rand() % word_size) << 5) + base);
 }
 
+template <typename FIXTURE>
 bool eth_direct_sender_receiver_kernels(
-    tt_metal::DispatchFixture* fixture,
+    FIXTURE* fixture,
     tt_metal::IDevice* sender_device,
     tt_metal::IDevice* receiver_device,
     const size_t& byte_size,

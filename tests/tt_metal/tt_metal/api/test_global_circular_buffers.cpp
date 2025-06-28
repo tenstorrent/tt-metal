@@ -24,7 +24,7 @@
 
 namespace tt::tt_metal {
 
-TEST_F(DispatchFixture, TensixCreateGlobalCircularBuffers) {
+TEST_F(AnyDeviceDispatchFixture, TensixCreateGlobalCircularBuffers) {
     CoreRangeSet cores(CoreRange({1, 1}, {1, 1}));
     CoreRangeSet cores2(CoreRange({1, 1}, {2, 2}));
     CoreRangeSet cores3(CoreRange({3, 3}, {3, 3}));
@@ -57,7 +57,7 @@ TEST_F(DispatchFixture, TensixCreateGlobalCircularBuffers) {
     }
 }
 
-TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
+TEST_F(AnyDeviceDispatchFixture, TensixProgramGlobalCircularBuffers) {
     CoreCoord sender_core = CoreCoord(0, 0);
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     CoreRangeSet receiver_cores(CoreRange({1, 1}, {2, 2}));

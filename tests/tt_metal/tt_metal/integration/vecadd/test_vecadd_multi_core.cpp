@@ -73,7 +73,8 @@ CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBI
 
 namespace unit_tests_common::vecadd::test_vecadd_multi_core {
 
-bool vecadd_multi_core(DispatchFixture* fixture, IDevice* device, uint32_t n_tiles) {
+template <typename FIXTURE>
+bool vecadd_multi_core(FIXTURE* fixture, IDevice* device, uint32_t n_tiles) {
     const uint32_t num_core = 4;
     TT_FATAL(n_tiles >= num_core, "Parameter mismatch {} {}", n_tiles, num_core);
 
@@ -169,7 +170,7 @@ bool vecadd_multi_core(DispatchFixture* fixture, IDevice* device, uint32_t n_til
 }
 }  // namespace unit_tests_common::vecadd::test_vecadd_multi_core
 
-TEST_F(DispatchFixture, VecaddMultiCore) {
+TEST_F(AnyDeviceDispatchFixture, VecaddMultiCore) {
     uint32_t num_tiles = 64;
     ASSERT_TRUE(unit_tests_common::vecadd::test_vecadd_multi_core::vecadd_multi_core(this, devices_.at(0), num_tiles));
 }

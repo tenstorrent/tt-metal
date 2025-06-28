@@ -13,8 +13,16 @@
 
 namespace tt::tt_metal {
 
-class DebugToolsFixture : public DispatchFixture {
-   protected:
+class DebugToolsFixture : public DispatchFixture<DebugToolsFixture> {
+public:
+    static bool WillSkip() {
+        return false;
+    }
+
+    static std::string_view GetSkipMessage() {
+        return "This test does not skip";
+    }
+
     bool watcher_previous_enabled;
 
     void TearDown() override {

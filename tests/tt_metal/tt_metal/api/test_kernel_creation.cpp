@@ -30,7 +30,7 @@ namespace tt::tt_metal {
 using namespace tt;
 
 // Ensures we can successfully create kernels on available compute grid
-TEST_F(DispatchFixture, TensixCreateKernelsOnComputeCores) {
+TEST_F(AnyDeviceDispatchFixture, TensixCreateKernelsOnComputeCores) {
     for (unsigned int id = 0; id < this->devices_.size(); id++) {
         tt_metal::Program program = CreateProgram();
         CoreCoord compute_grid = this->devices_.at(id)->compute_with_storage_grid_size();
@@ -44,7 +44,7 @@ TEST_F(DispatchFixture, TensixCreateKernelsOnComputeCores) {
     }
 }
 
-TEST_F(DispatchFixture, DISABLED_TensixCreateKernelsOnStorageCores) {
+TEST_F(AnyDeviceDispatchFixture, DISABLED_TensixCreateKernelsOnStorageCores) {
     for (unsigned int id = 0; id < this->devices_.size(); id++) {
         if (this->devices_.at(id)->storage_only_cores().empty()) {
             GTEST_SKIP() << "This test only runs on devices with storage only cores";
@@ -66,7 +66,7 @@ TEST_F(DispatchFixture, DISABLED_TensixCreateKernelsOnStorageCores) {
     }
 }
 
-TEST_F(DispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) {
+TEST_F(AnyDeviceDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) {
     if (this->IsSlowDispatch()) {
         GTEST_SKIP() << "This test is only supported in fast dispatch mode";
     }

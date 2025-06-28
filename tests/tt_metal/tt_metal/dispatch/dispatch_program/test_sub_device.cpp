@@ -53,7 +53,57 @@ namespace tt::tt_metal {
 constexpr uint32_t k_local_l1_size = 3200;
 const std::string k_coordinates_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates.cpp";
 
-TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceCBAllocation) {
+class SubDeviceSingleCardTestFixture : public CommandQueueSingleCardFixture {
+public:
+    static void SetUpTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        CommandQueueSingleCardFixture::SetUpTestSuite();
+    }
+
+    static void TearDownTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        CommandQueueSingleCardFixture::TearDownTestSuite();
+    }
+
+    void TearDown() override {
+        if (WillSkip()) {
+            return;
+        }
+        device_->clear_loaded_sub_device_manager();
+        CommandQueueSingleCardFixture::TearDown();
+    }
+};
+
+class SubDeviceMultiCommandQueueSingleCardTestFixture : public MultiCommandQueueSingleDeviceFixture {
+public:
+    static void SetUpTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        MultiCommandQueueSingleDeviceFixture::SetUpTestSuite();
+    }
+
+    static void TearDownTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        MultiCommandQueueSingleDeviceFixture::TearDownTestSuite();
+    }
+
+    void TearDown() override {
+        if (WillSkip()) {
+            return;
+        }
+        device_->clear_loaded_sub_device_manager();
+        MultiCommandQueueSingleDeviceFixture::TearDown();
+    }
+};
+
+TEST_F(SubDeviceSingleCardTestFixture, TensixTestSubDeviceCBAllocation) {
     auto* device = devices_[0];
     CoreRangeSet sharded_cores_1 = CoreRange({0, 0}, {2, 2});
     SubDevice sub_device_1(std::array{sharded_cores_1});
@@ -179,16 +229,16 @@ void test_sub_device_synchronization(IDevice* device) {
     Synchronize(device);
 }
 
-TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
+TEST_F(SubDeviceSingleCardTestFixture, TensixTestSubDeviceSynchronization) {
     auto* device = devices_[0];
     test_sub_device_synchronization(device);
 }
 
-TEST_F(MultiCommandQueueSingleDeviceFixture, TensixTestMultiCQSubDeviceSynchronization) {
+TEST_F(SubDeviceMultiCommandQueueSingleCardTestFixture, TensixTestMultiCQSubDeviceSynchronization) {
     test_sub_device_synchronization(device_);
 }
 
-TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
+TEST_F(SubDeviceSingleCardTestFixture, TensixTestSubDeviceBasicPrograms) {
     constexpr uint32_t k_num_iters = 5;
     auto* device = devices_[0];
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
@@ -211,7 +261,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
     detail::DumpDeviceProfileResults(device);
 }
 
-TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
+TEST_F(SubDeviceSingleCardTestFixture, TensixTestSubDeviceBasicProgramsReuse) {
     constexpr uint32_t k_num_iters = 5;
     auto* device = devices_[0];
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
@@ -252,7 +302,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
     detail::DumpDeviceProfileResults(device);
 }
 
-TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthPrograms) {
+TEST_F(SubDeviceSingleCardTestFixture, TensixActiveEthTestSubDeviceBasicEthPrograms) {
     auto* device = devices_[0];
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     uint32_t num_iters = 5;
@@ -282,7 +332,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthProgra
 }
 
 // Ensure each core in the sub device aware of their own logical coordinate. Same binary used in multiple sub devices.
-TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinates) {
+TEST_F(SubDeviceSingleCardTestFixture, TensixTestSubDeviceMyLogicalCoordinates) {
     auto* device = devices_[0];
     uint32_t local_l1_size = 3200;
     // Make 2 sub devices.
@@ -331,7 +381,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordin
         tt::NCRISC, sub_device_2_cores, device, tt::tt_metal::SubDeviceId{1}, cb_addr);
 }
 
-TEST_F(CommandQueueSingleCardProgramFixture, TensixActiveEthTestSubDeviceMyLogicalCoordinates) {
+TEST_F(SubDeviceSingleCardTestFixture, TensixActiveEthTestSubDeviceMyLogicalCoordinates) {
     auto* device = devices_[0];
     CoreRangeSet sub_device_1_worker_cores{CoreRange({0, 0}, {2, 2})};
     SubDevice sub_device_1(std::array{sub_device_1_worker_cores});
@@ -401,7 +451,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixActiveEthTestSubDeviceMyLogic
 
 // Ensure the relative coordinate for the worker is updated correctly when it is used for multiple sub device
 // configurations
-TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinatesSubDeviceSwitch) {
+TEST_F(SubDeviceSingleCardTestFixture, TensixTestSubDeviceMyLogicalCoordinatesSubDeviceSwitch) {
     auto* device = devices_[0];
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
@@ -441,7 +491,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordin
 }
 
 // Test that RTAs will be correctly updated when using the same program on multiple subdevice managers.
-TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
+TEST_F(SubDeviceSingleCardTestFixture, TensixTestSubDeviceProgramReuseRtas) {
     constexpr uint32_t k_num_iters = 5;
     auto* device = devices_[0];
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
@@ -487,7 +537,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
     }
 }
 
-TEST_F(MultiCommandQueueSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
+TEST_F(SubDeviceMultiCommandQueueSingleCardTestFixture, TensixTestSubDeviceCQOwnership) {
     constexpr uint32_t k_num_iters = 5;
     auto* device = device_;
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});

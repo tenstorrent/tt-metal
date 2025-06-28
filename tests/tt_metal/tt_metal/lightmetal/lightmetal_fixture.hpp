@@ -19,20 +19,34 @@
 
 namespace tt::tt_metal {
 
-class SingleDeviceLightMetalFixture : public CommandQueueFixture {
-protected:
+// This test suite manually manages the device creation and destruction
+class SingleDeviceLightMetalFixture : public DispatchFixture<SingleDeviceLightMetalFixture> {
+public:
+    static bool WillSkip() {
+        if (IsSlowDispatch()) {
+            return true;
+        }
+        return false;
+    }
+
+    static std::string_view GetSkipMessage() { return "Requires fast dispatch"; }
+
     bool replay_binary_;
     std::string trace_bin_path_;
     bool write_bin_to_disk_;
     bool replay_manages_device_;
     size_t trace_region_size_;
+    IDevice* device_;
 
-    void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    void create_device(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+        const chip_id_t device_id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
+        const auto dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        this->device_ =
+            tt::tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_config);
     }
+
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
 
     void CreateDeviceAndBeginCapture(
         const size_t trace_region_size,

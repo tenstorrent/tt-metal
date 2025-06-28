@@ -24,7 +24,7 @@
 
 namespace tt::tt_metal {
 
-TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
+TEST_F(AnyDeviceDispatchFixture, TensixProgramGlobalCircularBuffers) {
     CoreCoord sender_core = CoreCoord(0, 0);
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     CoreRangeSet receiver_cores(CoreRange({1, 1}, {2, 2}));

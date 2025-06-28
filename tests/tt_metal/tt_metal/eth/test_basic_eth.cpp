@@ -56,8 +56,9 @@ namespace unit_tests::erisc::kernels {
  *                                         ╚═╝░░╚══╝░╚════╝░░╚════╝░
  */
 
+template <typename FIXTURE>
 bool reader_kernel_no_send(
-    tt_metal::DispatchFixture* fixture,
+    FIXTURE* fixture,
     tt_metal::IDevice* device,
     const size_t& byte_size,
     const size_t& eth_l1_byte_address,
@@ -122,8 +123,9 @@ bool reader_kernel_no_send(
     return pass;
 }
 
+template <typename FIXTURE>
 bool writer_kernel_no_receive(
-    tt_metal::DispatchFixture* fixture,
+    FIXTURE* fixture,
     tt_metal::IDevice* device,
     const size_t& byte_size,
     const size_t& eth_l1_byte_address,
@@ -304,11 +306,23 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-                static_cast<DispatchFixture*>(this), device, WORD_SIZE, src_eth_l1_byte_address, eth_core));
+                static_cast<CommandQueueSingleCardProgramFixture*>(this),
+                device,
+                WORD_SIZE,
+                src_eth_l1_byte_address,
+                eth_core));
             ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-                static_cast<DispatchFixture*>(this), device, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
+                static_cast<CommandQueueSingleCardProgramFixture*>(this),
+                device,
+                WORD_SIZE * 1024,
+                src_eth_l1_byte_address,
+                eth_core));
             ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-                static_cast<DispatchFixture*>(this), device, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
+                static_cast<CommandQueueSingleCardProgramFixture*>(this),
+                device,
+                WORD_SIZE * 2048,
+                src_eth_l1_byte_address,
+                eth_core));
         }
     }
 }
@@ -324,11 +338,23 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) 
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-                static_cast<DispatchFixture*>(this), device, WORD_SIZE, src_eth_l1_byte_address, eth_core));
+                static_cast<CommandQueueSingleCardProgramFixture*>(this),
+                device,
+                WORD_SIZE,
+                src_eth_l1_byte_address,
+                eth_core));
             ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-                static_cast<DispatchFixture*>(this), device, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
+                static_cast<CommandQueueSingleCardProgramFixture*>(this),
+                device,
+                WORD_SIZE * 1024,
+                src_eth_l1_byte_address,
+                eth_core));
             ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-                static_cast<DispatchFixture*>(this), device, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
+                static_cast<CommandQueueSingleCardProgramFixture*>(this),
+                device,
+                WORD_SIZE * 2048,
+                src_eth_l1_byte_address,
+                eth_core));
         }
     }
 }
@@ -344,20 +370,20 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsNocReadNoSend) {
 
     for (const auto& eth_core : device_0->get_active_ethernet_cores(true)) {
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            static_cast<DispatchFixture*>(this), device_0, WORD_SIZE, src_eth_l1_byte_address, eth_core));
+            static_cast<N300DeviceFixture*>(this), device_0, WORD_SIZE, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            static_cast<DispatchFixture*>(this), device_0, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
+            static_cast<N300DeviceFixture*>(this), device_0, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            static_cast<DispatchFixture*>(this), device_0, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
+            static_cast<N300DeviceFixture*>(this), device_0, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
     }
 
     for (const auto& eth_core : device_1->get_active_ethernet_cores(true)) {
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            static_cast<DispatchFixture*>(this), device_1, WORD_SIZE, src_eth_l1_byte_address, eth_core));
+            static_cast<N300DeviceFixture*>(this), device_1, WORD_SIZE, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            static_cast<DispatchFixture*>(this), device_1, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
+            static_cast<N300DeviceFixture*>(this), device_1, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            static_cast<DispatchFixture*>(this), device_1, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
+            static_cast<N300DeviceFixture*>(this), device_1, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
     }
 }
 
@@ -372,20 +398,20 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsNocWriteNoReceive) {
 
     for (const auto& eth_core : device_0->get_active_ethernet_cores(true)) {
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            static_cast<DispatchFixture*>(this), device_0, WORD_SIZE, src_eth_l1_byte_address, eth_core));
+            static_cast<N300DeviceFixture*>(this), device_0, WORD_SIZE, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            static_cast<DispatchFixture*>(this), device_0, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
+            static_cast<N300DeviceFixture*>(this), device_0, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            static_cast<DispatchFixture*>(this), device_0, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
+            static_cast<N300DeviceFixture*>(this), device_0, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
     }
 
     for (const auto& eth_core : device_1->get_active_ethernet_cores(true)) {
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            static_cast<DispatchFixture*>(this), device_1, WORD_SIZE, src_eth_l1_byte_address, eth_core));
+            static_cast<N300DeviceFixture*>(this), device_1, WORD_SIZE, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            static_cast<DispatchFixture*>(this), device_1, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
+            static_cast<N300DeviceFixture*>(this), device_1, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            static_cast<DispatchFixture*>(this), device_1, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
+            static_cast<N300DeviceFixture*>(this), device_1, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
     }
 }
 
@@ -411,28 +437,28 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc0) {
 
     for (const auto& eth_core : device_->get_inactive_ethernet_cores()) {
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            static_cast<DispatchFixture*>(this),
+            static_cast<BlackholeSingleCardFixture*>(this),
             device_,
             WORD_SIZE * 2048,
             eth_l1_address,
             eth_core,
             noc0_ethernet_config));
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            static_cast<DispatchFixture*>(this),
+            static_cast<BlackholeSingleCardFixture*>(this),
             device_,
             WORD_SIZE * 2048,
             eth_l1_address,
             eth_core,
             noc1_ethernet_config));
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            static_cast<DispatchFixture*>(this),
+            static_cast<BlackholeSingleCardFixture*>(this),
             device_,
             WORD_SIZE * 2048,
             eth_l1_address,
             eth_core,
             noc0_ethernet_config));
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            static_cast<DispatchFixture*>(this),
+            static_cast<BlackholeSingleCardFixture*>(this),
             device_,
             WORD_SIZE * 2048,
             eth_l1_address,
@@ -452,28 +478,28 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc1) {
 
     for (const auto& eth_core : device_->get_inactive_ethernet_cores()) {
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            static_cast<DispatchFixture*>(this),
+            static_cast<BlackholeSingleCardFixture*>(this),
             device_,
             WORD_SIZE * 2048,
             eth_l1_address,
             eth_core,
             noc0_ethernet_config));
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            static_cast<DispatchFixture*>(this),
+            static_cast<BlackholeSingleCardFixture*>(this),
             device_,
             WORD_SIZE * 2048,
             eth_l1_address,
             eth_core,
             noc1_ethernet_config));
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            static_cast<DispatchFixture*>(this),
+            static_cast<BlackholeSingleCardFixture*>(this),
             device_,
             WORD_SIZE * 2048,
             eth_l1_address,
             eth_core,
             noc0_ethernet_config));
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            static_cast<DispatchFixture*>(this),
+            static_cast<BlackholeSingleCardFixture*>(this),
             device_,
             WORD_SIZE * 2048,
             eth_l1_address,

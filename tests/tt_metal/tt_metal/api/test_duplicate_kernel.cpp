@@ -30,7 +30,7 @@ namespace tt::tt_metal {
 using namespace tt;
 
 // Ensures we cannot create duplicate kernels
-TEST_F(DispatchFixture, TensixFailOnDuplicateKernelCreationDataflow) {
+TEST_F(AnyDeviceDispatchFixture, TensixFailOnDuplicateKernelCreationDataflow) {
     for (unsigned int id = 0; id < this->devices_.size(); id++) {
         tt_metal::Program program = CreateProgram();
         CoreCoord compute_grid = this->devices_.at(id)->compute_with_storage_grid_size();
@@ -53,7 +53,7 @@ TEST_F(DispatchFixture, TensixFailOnDuplicateKernelCreationDataflow) {
     }
 }
 
-TEST_F(DispatchFixture, TensixFailOnDuplicateKernelCreationCompute) {
+TEST_F(AnyDeviceDispatchFixture, TensixFailOnDuplicateKernelCreationCompute) {
     for (unsigned int id = 0; id < this->devices_.size(); id++) {
         tt_metal::Program program = CreateProgram();
         CoreCoord compute_grid = this->devices_.at(id)->compute_with_storage_grid_size();
@@ -85,7 +85,7 @@ TEST_F(DispatchFixture, TensixFailOnDuplicateKernelCreationCompute) {
     }
 }
 
-TEST_F(DispatchFixture, TensixPassOnNormalKernelCreation) {
+TEST_F(AnyDeviceDispatchFixture, TensixPassOnNormalKernelCreation) {
     for (unsigned int id = 0; id < this->devices_.size(); id++) {
         tt_metal::Program program = CreateProgram();
         CoreCoord compute_grid = this->devices_.at(id)->compute_with_storage_grid_size();
@@ -115,7 +115,7 @@ TEST_F(DispatchFixture, TensixPassOnNormalKernelCreation) {
     }
 }
 
-TEST_F(DispatchFixture, TensixPassOnMixedOverlapKernelCreation) {
+TEST_F(AnyDeviceDispatchFixture, TensixPassOnMixedOverlapKernelCreation) {
     for (unsigned int id = 0; id < this->devices_.size(); id++) {
         tt_metal::Program program = CreateProgram();
         CoreCoord compute_grid = this->devices_.at(id)->compute_with_storage_grid_size();

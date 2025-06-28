@@ -208,8 +208,9 @@ void create_CBs_for_fused_matmul(
     }
 }
 
+template <typename FIXTURE>
 bool matmul_large_block(
-    tt_metal::DispatchFixture* fixture,
+    FIXTURE* fixture,
     tt_metal::IDevice* device,
     bool activations_rm,
     bool output_rm,
@@ -434,7 +435,7 @@ bool matmul_large_block(
 
 }  // namespace unit_tests_common::matmul::test_matmul_large_block
 
-TEST_F(DispatchFixture, TensixMatmulLargeBlock) {
+TEST_F(AnyDeviceDispatchFixture, TensixMatmulLargeBlock) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;

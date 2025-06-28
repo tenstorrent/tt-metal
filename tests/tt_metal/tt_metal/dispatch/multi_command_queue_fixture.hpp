@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <umd/device/types/arch.h>
 #include "fabric_types.hpp"
 #include "gtest/gtest.h"
 #include "dispatch_fixture.hpp"
@@ -19,175 +20,228 @@
 
 namespace tt::tt_metal {
 
-class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
-protected:
-    void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-
-        this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
-        if (this->num_cqs_ != 2) {
-            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
-            GTEST_SKIP();
-        }
-
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
-        const chip_id_t device_id = 0;
-        const DispatchCoreType dispatch_core_type = this->get_dispatch_core_type();
-        this->create_device(device_id, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
-    }
-
-    void TearDown() override {
-        if (this->device_ != nullptr) {
-            tt::tt_metal::CloseDevice(this->device_);
-        }
-    }
-
-    bool validate_dispatch_mode() {
-        this->slow_dispatch_ = false;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
-            this->slow_dispatch_ = true;
-            return false;
-        }
-        return true;
-    }
-
-    DispatchCoreType get_dispatch_core_type() {
-        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
-        if (this->arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
-            if (!tt::tt_metal::IsGalaxyCluster()) {
-                log_warning(
-                    tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in SetUp()");
-                dispatch_core_type = DispatchCoreType::ETH;
-            }
-        }
-        return dispatch_core_type;
-    }
-
-    void create_device(
-        const chip_id_t device_id,
-        const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-        const DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER) {
-        this->device_ = tt::tt_metal::CreateDevice(
-            device_id, this->num_cqs_, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
-    }
-
-    tt::tt_metal::IDevice* device_ = nullptr;
-    tt::ARCH arch_;
-    uint8_t num_cqs_;
-};
-
-class MultiCommandQueueSingleDeviceEventFixture : public MultiCommandQueueSingleDeviceFixture {};
-
-class MultiCommandQueueSingleDeviceBufferFixture : public MultiCommandQueueSingleDeviceFixture {};
-
-class MultiCommandQueueSingleDeviceProgramFixture : public MultiCommandQueueSingleDeviceFixture {};
-
-class MultiCommandQueueSingleDeviceTraceFixture : public MultiCommandQueueSingleDeviceFixture {
-protected:
-    void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-
-        this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
-        if (this->num_cqs_ != 2) {
-            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
-            GTEST_SKIP();
-        }
-
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    }
-
-    void CreateDevice(const size_t trace_region_size) {
-        const chip_id_t device_id = 0;
-        const DispatchCoreType dispatch_core_type = this->get_dispatch_core_type();
-        this->create_device(device_id, trace_region_size, dispatch_core_type);
-    }
-
-    DispatchCoreType dispatch_core_type_;
-};
-
-class MultiCommandQueueMultiDeviceFixture : public DispatchFixture {
-protected:
-    void SetUp() override {
-        this->slow_dispatch_ = false;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
-            this->slow_dispatch_ = true;
-            GTEST_SKIP();
+class MultiCommandQueueSingleDeviceFixture : public DispatchFixture<MultiCommandQueueSingleDeviceFixture> {
+public:
+    static bool WillSkip() {
+        if (IsSlowDispatch()) {
+            return true;
         }
 
         auto num_cqs = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
         if (num_cqs != 2) {
-            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
-            GTEST_SKIP();
+            return true;
         }
 
-        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
-        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
-        if (arch == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
-            if (!tt::tt_metal::IsGalaxyCluster()) {
-                log_warning(
-                    tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
-                dispatch_core_type = DispatchCoreType::ETH;
-            }
-        }
-
-        std::vector<int> devices_to_open;
-        devices_to_open.reserve(tt::tt_metal::GetNumAvailableDevices());
-        for (int i = 0; i < tt::tt_metal::GetNumAvailableDevices(); ++i) {
-            devices_to_open.push_back(i);
-        }
-        reserved_devices_ = tt::tt_metal::detail::CreateDevices(
-            devices_to_open, num_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
-        for (const auto& [id, device] : reserved_devices_) {
-            devices_.push_back(device);
-        }
+        return false;
     }
 
-    void TearDown() override {
-        if (!reserved_devices_.empty()) {
-            tt::tt_metal::detail::CloseDevices(reserved_devices_);
+    static std::string_view GetSkipMessage() { return "Requires fast dispatch and TT_METAL_GTEST_NUM_HW_CQS=2"; }
+
+    static void SetUpTestSuite() {
+        if (WillSkip()) {
+            return;
         }
+        DispatchFixture<MultiCommandQueueSingleDeviceFixture>::DoSetUpTestSuiteWithNumberOfDevices(1);
     }
 
-    std::vector<tt::tt_metal::IDevice*> devices_;
-    std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
+    static void TearDownTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        DispatchFixture<MultiCommandQueueSingleDeviceFixture>::DoTearDownTestSuite();
+    }
 };
 
-class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture {};
+class MultiCommandQueueSingleDeviceEventFixture : public MultiCommandQueueSingleDeviceFixture {
+public:
+    static void SetUpTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        MultiCommandQueueSingleDeviceFixture::SetUpTestSuite();
+    }
 
-class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
+    static void TearDownTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        MultiCommandQueueSingleDeviceFixture::TearDownTestSuite();
+    }
 
+    void SetUp() override {
+        if (WillSkip()) {
+            GTEST_SKIP() << GetSkipMessage();
+        }
+        // This test needs to start device counters at zero each time
+        MultiCommandQueueSingleDeviceFixture::ResetTestSuite();
+        MultiCommandQueueSingleDeviceFixture::SetUp();
+    }
+};
+
+class MultiCommandQueueSingleDeviceBufferFixture : public MultiCommandQueueSingleDeviceFixture {
+public:
+    static void SetUpTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        MultiCommandQueueSingleDeviceFixture::SetUpTestSuite();
+    }
+
+    static void TearDownTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        MultiCommandQueueSingleDeviceFixture::TearDownTestSuite();
+    }
+};
+
+class MultiCommandQueueSingleDeviceProgramFixture : public MultiCommandQueueSingleDeviceFixture {
+public:
+    static void SetUpTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        MultiCommandQueueSingleDeviceFixture::SetUpTestSuite();
+    }
+
+    static void TearDownTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        MultiCommandQueueSingleDeviceFixture::TearDownTestSuite();
+    }
+};
+
+class MultiCommandQueueSingleDeviceTraceFixture : public MultiCommandQueueSingleDeviceFixture {
+protected:
+    static void SetUpTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        MultiCommandQueueSingleDeviceFixture::DoSetUpTestSuite(32 * 1024, DEFAULT_L1_SMALL_SIZE, 1);
+    }
+
+    static void TearDownTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        MultiCommandQueueSingleDeviceFixture::DoTearDownTestSuite();
+    }
+};
+
+class MultiCommandQueueMultiDeviceFixture : public DispatchFixture<MultiCommandQueueMultiDeviceFixture> {
+public:
+    static bool WillSkip() {
+        if (IsSlowDispatch()) {
+            return true;
+        }
+
+        auto num_cqs = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
+        if (num_cqs != 2) {
+            return true;
+        }
+        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
+        if (num_devices < 2) {
+            return true;
+        }
+
+        return false;
+    }
+
+    static std::string_view GetSkipMessage() {
+        return "Requires fast dispatch, >= 2 devices, and TT_METAL_GTEST_NUM_HW_CQS=2";
+    }
+
+    static void SetUpTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        DispatchFixture<MultiCommandQueueMultiDeviceFixture>::DoSetUpTestSuite();
+    }
+
+    static void TearDownTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        DispatchFixture<MultiCommandQueueMultiDeviceFixture>::DoTearDownTestSuite();
+    }
+};
+
+class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture {
+public:
+    static void SetUpTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        MultiCommandQueueMultiDeviceFixture::SetUpTestSuite();
+    }
+
+    static void TearDownTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        MultiCommandQueueMultiDeviceFixture::DoTearDownTestSuite();
+    }
+};
+
+class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {
+public:
+    static void SetUpTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        MultiCommandQueueMultiDeviceFixture::SetUpTestSuite();
+    }
+
+    static void TearDownTestSuite() {
+        if (WillSkip()) {
+            return;
+        }
+        MultiCommandQueueMultiDeviceFixture::DoTearDownTestSuite();
+    }
+};
+
+// Multi Command Queue on Fabric Fixture
+// This fixture will Open/Close devices on each test since different tests may have different FabricConfig
 class MultiCommandQueueOnFabricMultiDeviceFixture : public MultiCommandQueueMultiDeviceFixture,
                                                     public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
-protected:
-    void SetUp() override {
+public:
+    static bool WillSkip() {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
+            return true;
         }
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs() != 2) {
+            return true;
+        }
+        return false;
+    }
+
+    static void SetUpTestSuite() {}
+
+    static void TearDownTestSuite() {}
+
+    void SetUp() override {
+        if (WillSkip()) {
+            GTEST_SKIP() << GetSkipMessage();
+        }
+
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param
         tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-        MultiCommandQueueMultiDeviceFixture::SetUp();
 
-        if (::testing::Test::IsSkipped()) {
-            tt::tt_metal::detail::SetFabricConfig(
-                FabricConfig::DISABLED, FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-        }
+        MultiCommandQueueMultiDeviceFixture::SetUpTestSuite();
+        MultiCommandQueueMultiDeviceFixture::SetUp();
     }
 
     void TearDown() override {
+        if (WillSkip()) {
+            return;
+        }
         MultiCommandQueueMultiDeviceFixture::TearDown();
-        tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
+        MultiCommandQueueMultiDeviceFixture::TearDownTestSuite();
+
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
+        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
     }
 };
 

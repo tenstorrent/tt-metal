@@ -517,6 +517,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileToDramBank0) {
 
 TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileToAllDramBanks) {
     for (IDevice* device : devices_) {
+        log_info(tt::LogTest, "Running On Device {}", device->id());
         TestBufferConfig config = {
             .num_pages = uint32_t(device->allocator()->get_num_banks(BufferType::DRAM)),
             .page_size = 2048,
@@ -529,6 +530,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileToAllDramBanks) {
 TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
     constexpr uint32_t num_round_robins = 2;
     for (IDevice* device : devices_) {
+        log_info(tt::LogTest, "Running On Device {}", device->id());
         TestBufferConfig config = {
             .num_pages = num_round_robins * (device->allocator()->get_num_banks(BufferType::DRAM)),
             .page_size = 2048,
@@ -539,8 +541,8 @@ TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileAcrossAllDramBanksTwiceR
 
 TEST_F(CommandQueueSingleCardBufferFixture, Sending131072Pages) {
     for (IDevice* device : devices_) {
-        TestBufferConfig config = {.num_pages = 131072, .page_size = 128, .buftype = BufferType::DRAM};
         log_info(tt::LogTest, "Running On Device {}", device->id());
+        TestBufferConfig config = {.num_pages = 131072, .page_size = 128, .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
@@ -548,6 +550,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, Sending131072Pages) {
 TEST_F(CommandQueueSingleCardBufferFixture, TestPageLargerThanAndUnalignedToTransferPage) {
     constexpr uint32_t num_round_robins = 2;
     for (IDevice* device : devices_) {
+        log_info(tt::LogTest, "Running On Device {}", device->id());
         TestBufferConfig config = {
             .num_pages = num_round_robins * (device->allocator()->get_num_banks(BufferType::DRAM)),
             .page_size = DispatchSettings::TRANSFER_PAGE_SIZE + 32,
@@ -558,6 +561,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestPageLargerThanAndUnalignedToTran
 
 TEST_F(CommandQueueSingleCardBufferFixture, TestSinglePageLargerThanMaxPrefetchCommandSize) {
     for (IDevice* device : devices_) {
+        log_info(tt::LogTest, "Running On Device {}", device->id());
         const uint32_t max_prefetch_command_size =
             MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
         TestBufferConfig config = {
@@ -568,6 +572,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestSinglePageLargerThanMaxPrefetchC
 
 TEST_F(CommandQueueSingleCardBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSize) {
     for (IDevice* device : devices_) {
+        log_info(tt::LogTest, "Running On Device {}", device->id());
         const uint32_t max_prefetch_command_size =
             MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
         TestBufferConfig config = {
@@ -599,6 +604,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestMultiplePagesLargerThanMaxPrefet
 
 TEST_F(CommandQueueSingleCardBufferFixture, TestSingleUnalignedPageLargerThanMaxPrefetchCommandSize) {
     for (IDevice* device : devices_) {
+        log_info(tt::LogTest, "Running On Device {}", device->id());
         const uint32_t max_prefetch_command_size =
             MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
         uint32_t unaligned_page_size = max_prefetch_command_size + 4;
@@ -609,6 +615,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestSingleUnalignedPageLargerThanMax
 
 TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSize) {
     for (IDevice* device : devices_) {
+        log_info(tt::LogTest, "Running On Device {}", device->id());
         const uint32_t max_prefetch_command_size =
             MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
         TestBufferConfig config = {
@@ -642,6 +649,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestNon32BAlignedPageSizeForDram) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
 
     for (IDevice* device : devices_) {
+        log_info(tt::LogTest, "Running On Device {}", device->id());
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
@@ -651,6 +659,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestNon32BAlignedPageSizeForDram2) {
     TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
 
     for (IDevice* device : devices_) {
+        log_info(tt::LogTest, "Running On Device {}", device->id());
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
@@ -1004,6 +1013,7 @@ TEST_F(MultiCommandQueueMultiDeviceBufferFixture, TestIssueMultipleReadWriteComm
 }
 
 TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileToDramBank0) {
+    log_info(tt::LogTest, "Running On Device {}", this->device_->id());
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
     CommandQueue& a = this->device_->command_queue(0);
     CommandQueue& b = this->device_->command_queue(1);
@@ -1013,6 +1023,7 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileToDramBank0) {
 }
 
 TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileToAllDramBanks) {
+    log_info(tt::LogTest, "Running On Device {}", this->device_->id());
     TestBufferConfig config = {
         .num_pages = uint32_t(this->device_->allocator()->get_num_banks(BufferType::DRAM)),
         .page_size = 2048,
@@ -1026,6 +1037,7 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileToAllDramBanks) {
 }
 
 TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
+    log_info(tt::LogTest, "Running On Device {}", this->device_->id());
     constexpr uint32_t num_round_robins = 2;
     TestBufferConfig config = {
         .num_pages = num_round_robins * (this->device_->allocator()->get_num_banks(BufferType::DRAM)),
@@ -1040,6 +1052,7 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileAcrossAllDramBank
 }
 
 TEST_F(MultiCommandQueueSingleDeviceBufferFixture, Sending131072Pages) {
+    log_info(tt::LogTest, "Running On Device {}", this->device_->id());
     // Was a failing case where we used to accidentally program cb num pages to be total
     // pages instead of cb num pages.
     TestBufferConfig config = {.num_pages = 131072, .page_size = 128, .buftype = BufferType::DRAM};
@@ -1052,6 +1065,7 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, Sending131072Pages) {
 }
 
 TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDram) {
+    log_info(tt::LogTest, "Running On Device {}", this->device_->id());
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
 
     CommandQueue& a = this->device_->command_queue(0);
@@ -1062,6 +1076,7 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForD
 }
 
 TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDram2) {
+    log_info(tt::LogTest, "Running On Device {}", this->device_->id());
     // From stable diffusion read buffer
     TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
 
@@ -1073,6 +1088,7 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForD
 }
 
 TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
+    log_info(tt::LogTest, "Running On Device {}", this->device_->id());
     uint32_t page_size = 2048;
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());

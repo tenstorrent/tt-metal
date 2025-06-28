@@ -62,7 +62,7 @@ tt::tt_metal::KernelHandle CreateKernelFromVariant(tt::tt_metal::Program& progra
     return kernel;
 }
 
-bool dram_single_core_db(tt::tt_metal::DispatchFixture* fixture, tt_metal::IDevice* device) {
+bool dram_single_core_db(tt::tt_metal::AnyDeviceDispatchFixture* fixture, tt_metal::IDevice* device) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -124,9 +124,7 @@ bool dram_single_core_db(tt::tt_metal::DispatchFixture* fixture, tt_metal::IDevi
 }
 
 bool dram_single_core(
-    tt::tt_metal::DispatchFixture* fixture,
-    tt_metal::IDevice* device,
-    const DRAMConfig& cfg) {
+    tt::tt_metal::AnyDeviceDispatchFixture* fixture, tt_metal::IDevice* device, const DRAMConfig& cfg) {
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(cfg.dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
@@ -172,9 +170,7 @@ bool dram_single_core(
 }
 
 bool dram_single_core_pre_allocated(
-    tt::tt_metal::DispatchFixture* fixture,
-    tt_metal::IDevice* device,
-    const DRAMConfig& cfg) {
+    tt::tt_metal::AnyDeviceDispatchFixture* fixture, tt_metal::IDevice* device, const DRAMConfig& cfg) {
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(cfg.dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
     // Create a program
@@ -226,7 +222,7 @@ bool dram_single_core_pre_allocated(
 
 namespace tt::tt_metal {
 
-TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCore) {
+TEST_F(AnyDeviceDispatchFixture, TensixDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
         .core_range = {{0, 0}, {0, 0}},
@@ -242,7 +238,7 @@ TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCore) {
     }
 }
 
-TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCorePreAllocated) {
+TEST_F(AnyDeviceDispatchFixture, TensixDRAMLoopbackSingleCorePreAllocated) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
         .core_range = {{0, 0}, {0, 0}},
@@ -258,7 +254,7 @@ TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCorePreAllocated) {
     }
 }
 
-TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
+TEST_F(AnyDeviceDispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
@@ -268,7 +264,7 @@ TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
     }
 }
 
-TEST_F(DispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
+TEST_F(AnyDeviceDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
     if (!this->IsSlowDispatch()) {
@@ -295,7 +291,7 @@ TEST_F(DispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
     }
 }
 
-TEST_F(DispatchFixture, IdleEthDRAMLoopbackSingleCore) {
+TEST_F(AnyDeviceDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
     if (!this->IsSlowDispatch()) {

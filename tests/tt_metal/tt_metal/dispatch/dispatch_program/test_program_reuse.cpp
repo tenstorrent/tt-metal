@@ -175,6 +175,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
     if (devices_[0]->arch() != ARCH::WORMHOLE_B0) {
         GTEST_SKIP();
     }
+    log_info(LogTest, "Running TestProgramReuseSanity");
     CoreCoord worker_grid_size = devices_[0]->compute_with_storage_grid_size();
     CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
     CoreRange cr1({0, 4}, {worker_grid_size.x - 1, worker_grid_size.y - 1});

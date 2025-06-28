@@ -41,7 +41,7 @@ struct DRAMtoL1MulticastConfig {
 };
 
 bool dram_to_l1_multicast(
-    tt::tt_metal::DispatchFixture* fixture, tt_metal::IDevice* device, const DRAMtoL1MulticastConfig& cfg) {
+    tt::tt_metal::AnyDeviceDispatchFixture* fixture, tt_metal::IDevice* device, const DRAMtoL1MulticastConfig& cfg) {
     bool pass = true;
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -147,7 +147,7 @@ bool dram_to_l1_multicast(
 
 namespace tt::tt_metal {
 
-TEST_F(DispatchFixture, TensixDRAMtoL1Multicast) {
+TEST_F(AnyDeviceDispatchFixture, TensixDRAMtoL1Multicast) {
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,
@@ -158,7 +158,7 @@ TEST_F(DispatchFixture, TensixDRAMtoL1Multicast) {
             this, devices_.at(id), test_config));
     }
 }
-TEST_F(DispatchFixture, TensixDRAMtoL1MulticastLoopbackSrc) {
+TEST_F(AnyDeviceDispatchFixture, TensixDRAMtoL1MulticastLoopbackSrc) {
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 500 * 1024,
         .target_grid_offset = 0,

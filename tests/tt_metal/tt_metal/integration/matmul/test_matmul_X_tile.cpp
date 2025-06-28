@@ -119,8 +119,9 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
     }
 }
 
+template <typename FIXTURE>
 void matmul_tile(
-    tt_metal::DispatchFixture* fixture,
+    FIXTURE* fixture,
     tt_metal::IDevice* device,
     const MatmulTileConfig& cfg,
     vector<uint32_t> activations,
@@ -380,7 +381,7 @@ using namespace unit_tests_common::matmul::test_matmul_X_tile;
 }
 */
 
-TEST_F(DispatchFixture, TensixMatmulSingleTile) {
+TEST_F(AnyDeviceDispatchFixture, TensixMatmulSingleTile) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -411,7 +412,7 @@ TEST_F(DispatchFixture, TensixMatmulSingleTile) {
     }
 }
 
-TEST_F(DispatchFixture, TensixMatmulMultiTile) {
+TEST_F(AnyDeviceDispatchFixture, TensixMatmulMultiTile) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -450,7 +451,7 @@ TEST_F(DispatchFixture, TensixMatmulMultiTile) {
     }
 }
 
-TEST_F(DispatchFixture, TensixMatmulBlock) {
+TEST_F(AnyDeviceDispatchFixture, TensixMatmulBlock) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -487,7 +488,7 @@ TEST_F(DispatchFixture, TensixMatmulBlock) {
     }
 }
 
-TEST_F(DispatchFixture, TensixMatmulBlockInitShort) {
+TEST_F(AnyDeviceDispatchFixture, TensixMatmulBlockInitShort) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -524,7 +525,7 @@ TEST_F(DispatchFixture, TensixMatmulBlockInitShort) {
     }
 }
 
-TEST_F(DispatchFixture, TensixMatmulBlockInitShortWithDt) {
+TEST_F(AnyDeviceDispatchFixture, TensixMatmulBlockInitShortWithDt) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
