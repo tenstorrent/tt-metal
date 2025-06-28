@@ -65,7 +65,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
         return false;
     }
     // Check if the L1 size is sufficient for the test configuration
-    if (master_l1_info.size < total_size_bytes) {
+    if (master_l1_info.size < bytes_per_transaction) {
         log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
@@ -84,7 +84,6 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
         (uint32_t)sem_id};
 
     // Kernels
-
     auto sender_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/data_movement/one_to_one/kernels/sender.cpp",
@@ -94,14 +93,10 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
             .noc = NOC::RISCV_0_default,
             .compile_args = sender_compile_args});
 
-    // Receiver Kernel
-
-    // Runtime Arguments
-
     // Physical Core Coordinates
     CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
 
-    // Setting the runtime arguments
+    // Runtime Arguments
     SetRuntimeArgs(program, sender_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
@@ -115,7 +110,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     // but the number of elements is bound to change
     // l1_data_format is assumed to be bfloat16
     size_t element_size_bytes = bfloat16::SIZEOF;
-    uint32_t num_elements = total_size_bytes / element_size_bytes;
+    uint32_t num_elements = bytes_per_transaction / element_size_bytes;
     std::vector<uint32_t> packed_input = tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, num_elements, chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_golden = packed_input;
@@ -130,7 +125,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     // Record Output from Subordinate L1
     std::vector<uint32_t> packed_output;
     tt_metal::detail::ReadFromDeviceL1(
-        device, test_config.subordinate_core_coord, l1_base_address, total_size_bytes, packed_output);
+        device, test_config.subordinate_core_coord, l1_base_address, bytes_per_transaction, packed_output);
 
     // Compare output with golden vector
     bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
@@ -160,7 +155,8 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
 
     // Parameters
     uint32_t max_transactions = 256;
-    uint32_t max_pages_per_transaction = 64;
+    uint32_t max_pages_per_transaction =
+        arch_ == tt::ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
@@ -170,7 +166,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
         for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
              pages_per_transaction *= 2) {
             // Check if the total page size is within the limits
-            if (num_of_transactions * pages_per_transaction > max_transmittable_pages) {
+            if (pages_per_transaction > max_transmittable_pages) {
                 continue;
             }
 
