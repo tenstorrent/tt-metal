@@ -29,7 +29,7 @@ The entry point to yolov8x model is YOLOv8x in
 pytest models/demos/yolov8x/demo/demo.py
 ```
 
-- e2e perf with trace(40 fps):
+- e2e perf with trace(45 fps):
 ```bash
 pytest models/demos/yolov8x/tests/test_e2e_performant.py
 ```

@@ -38,7 +38,7 @@ pytest --disable-warnings tests/ttnn/integration_tests/ufld_v2/test_ttnn_ufld_v2
 ```
 
 ### Performant Model with Trace+2CQ
-- end-2-end perf is 302 FPS
+- end-2-end perf is 1414 FPS
 
 Use the following command to run the performant Model with Trace+2CQs:
 
