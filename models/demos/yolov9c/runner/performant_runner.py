@@ -87,6 +87,8 @@ class YOLOv9PerformantRunner:
     def _execute_yolov9_trace_2cqs_inference(self, tt_inputs_host=None):
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
         ttnn.wait_for_event(1, self.op_event)
+        print("tt_inputs_host", tt_inputs_host.shape)
+        print("self.tt_image_res", self.tt_image_res.shape)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
