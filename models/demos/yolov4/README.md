@@ -61,8 +61,5 @@ For 640x640:
 
 - To run the test with a different input image, add your image path to the `imgfile` parameter in the `@pytest.mark.parametrize` section of `demo.py`:
 
-### mAP Accuracy Test
-- To be added soon
-
 ### Web Demo
-- You may try the interactive web demo (35 FPS end-2-end) for 320x320 following the [instructions](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov4/README.md)
+- Try the interactive web demo (35 FPS end-2-end) for 320x320 following the [instructions](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov4/README.md)
