@@ -57,6 +57,48 @@ void wait_until_cores_done(
 }  // namespace llrt
 
 namespace device_cpu_allocator {
+
+// Fork safety handlers for DevicePool
+namespace {
+    static std::mutex fork_safety_mutex;
+    static bool fork_handlers_registered = false;
+
+    void device_pool_prefork() {
+        // Acquire locks to ensure consistent state during fork
+        fork_safety_mutex.lock();
+        if (DevicePool::instance_ptr() != nullptr) {
+            // Note: We can't directly access the lock member, so we'll handle this differently
+            // The child will need to reinitialize completely
+        }
+    }
+
+    void device_pool_parent_postfork() {
+        // Release locks in parent process
+        fork_safety_mutex.unlock();
+    }
+
+    void device_pool_child_postfork() {
+        // In child process, reset all state
+        // The singleton instance pointer needs to be cleared so the child
+        // can create its own instance when needed
+        if (DevicePool::instance_ptr() != nullptr) {
+            // Clear the singleton instance - child must reinitialize
+            DevicePool::reset_instance();
+        }
+        // Reset the fork safety mutex
+        new (&fork_safety_mutex) std::mutex();
+    }
+
+    void register_fork_handlers() {
+        if (!fork_handlers_registered) {
+            int result = pthread_atfork(device_pool_prefork, device_pool_parent_postfork, device_pool_child_postfork);
+            if (result == 0) {
+                fork_handlers_registered = true;
+            }
+        }
+    }
+}
+
 std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(std::unordered_set<uint32_t>& free_cores) {
     std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = {};
     if (numa_available() != -1) {
@@ -237,6 +279,10 @@ void DevicePool::initialize(
     // Issue #19729: use_max_eth_core_count_on_all_devices is a workaround
     // to allow TT-Mesh Workload dispatch to target active ethernet cores.
     ZoneScoped;
+
+    // Register fork handlers on first initialization
+    device_cpu_allocator::register_fork_handlers();
+
     log_debug(tt::LogMetal, "DevicePool initialize");
     tt::tt_metal::MetalContext::instance().initialize(
         dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
@@ -913,6 +959,16 @@ DevicePool::~DevicePool() {
         }
     }
     this->devices.clear();
+}
+
+// Static method to get instance pointer (for fork handlers)
+DevicePool* DevicePool::instance_ptr() {
+    return _inst;
+}
+
+// Static method to reset instance (for fork handlers)
+void DevicePool::reset_instance() {
+    _inst = nullptr;
 }
 
 }  // namespace tt
