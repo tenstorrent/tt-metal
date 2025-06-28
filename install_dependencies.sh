@@ -147,6 +147,24 @@ init_packages() {
     # Set packages based on determined family
     case "$pkg_family" in
         debian)
+            # Determine g++ version based on Ubuntu version
+            local gpp_package="g++"
+            if [[ "$OS_ID" == "ubuntu" ]]; then
+                case "$OS_VERSION" in
+                    "22.04")
+                        gpp_package="g++-12"
+                        echo "[INFO] Using g++-12 for Ubuntu 22.04 (gcc-12 will be installed as dependency)"
+                        ;;
+                    "24.04")
+                        gpp_package="g++-14"
+                        echo "[INFO] Using g++-14 for Ubuntu 24.04 (gcc-14 will be installed as dependency)"
+                        ;;
+                    *)
+                        echo "[INFO] Using default g++ for Ubuntu $OS_VERSION"
+                        ;;
+                esac
+            fi
+
             # All packages needed for TT-Metal development
             PACKAGES=(
                 "git"
@@ -155,7 +173,7 @@ init_packages() {
                 "ninja-build"
                 "pkg-config"
                 "cargo"
-                "g++"
+                "$gpp_package"
                 "pandoc"
                 "xz-utils"
                 "python3-dev"
@@ -244,6 +262,16 @@ prep_ubuntu_system() {
     # Add Kitware repository for latest CMake
     wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
     echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $OS_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
+
+    # Add GCC toolchain repository for specific g++ versions if needed
+    if [[ "$OS_ID" == "ubuntu" ]]; then
+        case "$OS_VERSION" in
+            "24.04")
+                echo "[INFO] Adding toolchain repository for g++-14 on Ubuntu 24.04"
+                add-apt-repository -y ppa:ubuntu-toolchain-r/test
+                ;;
+        esac
+    fi
 
     apt-get update
 }
