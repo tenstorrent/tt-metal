@@ -56,4 +56,28 @@ private:
     bool had_original_ = false;
 };
 
+// RAII class to create and delete a temporary file.
+class TemporaryFile {
+public:
+    explicit TemporaryFile(const std::string& filename) :
+        path_(std::filesystem::temp_directory_path() / filename) {}
+
+    ~TemporaryFile() {
+        if (std::filesystem::exists(path_)) {
+            std::filesystem::remove(path_);
+        }
+    }
+
+    TemporaryFile(const TemporaryFile&) = delete;
+    TemporaryFile& operator=(const TemporaryFile&) = delete;
+    TemporaryFile(TemporaryFile&&) = delete;
+    TemporaryFile& operator=(TemporaryFile&&) = delete;
+
+    std::string string() const { return path_.string(); }
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
+
 }  // namespace tt::tt_metal::distributed::test::utils

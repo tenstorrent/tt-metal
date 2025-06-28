@@ -64,8 +64,8 @@ public:
     std::vector<MeshId> get_user_physical_mesh_ids() const;
 
     // Query for the MeshId and HostRankId of the local mesh; returns std::nullopt if binding is not set
-    std::optional<MeshId> get_local_mesh_id_binding() const;
-    std::optional<HostRankId> get_local_host_rank_id_binding() const;
+    MeshId get_local_mesh_id_binding() const;
+    HostRankId get_local_host_rank_id_binding() const;
 
     // Queries that are MeshScope-aware (i.e. return results for local mesh or global mesh)
     MeshShape get_physical_mesh_shape(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
@@ -235,10 +235,10 @@ private:
 
     // Initialize the local mesh binding from the environment variables
     // Returns std::nullopt if not in multi-host context
-    std::optional<LocalMeshBinding> initialize_local_mesh_binding();
+    LocalMeshBinding initialize_local_mesh_binding();
 
     std::unique_ptr<FabricContext> fabric_context_;
-    std::optional<LocalMeshBinding> local_mesh_binding_;
+    LocalMeshBinding local_mesh_binding_;
 };
 
 class GlobalControlPlane {

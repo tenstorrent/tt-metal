@@ -257,19 +257,37 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     }
 }
 
-std::optional<LocalMeshBinding> ControlPlane::initialize_local_mesh_binding() {
+LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     const char* mesh_id_str = std::getenv("TT_MESH_ID");
     const char* host_rank_str = std::getenv("TT_HOST_RANK");
-    if (mesh_id_str == nullptr || host_rank_str == nullptr) {
-        return std::nullopt;
+    if (mesh_id_str == nullptr ^ host_rank_str == nullptr) {
+        TT_THROW("Both TT_MESH_ID and TT_HOST_RANK environment variables must be set together or both unset");
     }
 
-    // Requires LocalMeshBinding to be valid to continue since detected in the environment
+    // If both TT_MESH_ID and TT_HOST_RANK are unset, we'll use the values from the mesh graph descriptor.
+    if (mesh_id_str == nullptr && host_rank_str == nullptr) {
+        auto& ctx = tt::tt_metal::MetalContext::instance().get_distributed_context();
+        auto mpi_rank = *ctx.rank();
+
+        for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
+            const auto& host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(mesh_id);
+            for (const auto& [coord, rank] : host_ranks) {
+                if (mpi_rank == *rank) {
+                    return LocalMeshBinding{
+                        .mesh_id = mesh_id,
+                        .host_rank = HostRankId{rank}};
+                }
+            }
+        }
+        TT_THROW("No local mesh binding found for rank {}", mpi_rank);
+    }
+
+    // If both TT_MESH_ID and TT_HOST_RANK are set, we'll use the values from the environment variables.
     auto local_mesh_binding = LocalMeshBinding{
         .mesh_id = MeshId{std::stoi(mesh_id_str)},
         .host_rank = HostRankId{std::stoi(host_rank_str)}};
 
-    log_debug(tt::LogFabric, "Local mesh binding: mesh_id: {}, host_rank: {}", local_mesh_binding.mesh_id, local_mesh_binding.host_rank);
+    log_debug(tt::LogDistributed, "Local mesh binding: mesh_id: {}, host_rank: {}", local_mesh_binding.mesh_id, local_mesh_binding.host_rank);
 
     // Validate the local mesh binding exists in the mesh graph descriptor
     auto mesh_ids = this->routing_table_generator_->mesh_graph->get_mesh_ids();
@@ -1471,7 +1489,7 @@ std::vector<MeshId> ControlPlane::get_user_physical_mesh_ids() const {
 }
 
 MeshShape ControlPlane::get_physical_mesh_shape(MeshId mesh_id, MeshScope scope) const {
-    std::optional<HostRankId> local_host_rank_id = MeshScope::LOCAL == scope ? this->get_local_host_rank_id_binding() : std::nullopt;
+    std::optional<HostRankId> local_host_rank_id = MeshScope::LOCAL == scope ? std::make_optional(this->get_local_host_rank_id_binding()) : std::nullopt;
     return this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id, local_host_rank_id);
 }
 
@@ -1825,16 +1843,12 @@ uint64_t ControlPlane::get_asic_id(chip_id_t chip_id) const {
     return chip_id_to_asic_id_.at(chip_id);
 }
 
-std::optional<MeshId> ControlPlane::get_local_mesh_id_binding() const {
-    return this->local_mesh_binding_.has_value() ? std::make_optional(this->local_mesh_binding_->mesh_id) : std::nullopt;
-}
+MeshId ControlPlane::get_local_mesh_id_binding() const { return local_mesh_binding_.mesh_id; }
 
-std::optional<HostRankId> ControlPlane::get_local_host_rank_id_binding() const {
-    return this->local_mesh_binding_.has_value() ? std::make_optional(this->local_mesh_binding_->host_rank) : std::nullopt;
-}
+HostRankId ControlPlane::get_local_host_rank_id_binding() const { return local_mesh_binding_.host_rank; }
 
 MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scope) const {
-    std::optional<HostRankId> local_host_rank_id = MeshScope::LOCAL == scope ? this->get_local_host_rank_id_binding() : std::nullopt;
+    std::optional<HostRankId> local_host_rank_id = MeshScope::LOCAL == scope ? std::make_optional(this->get_local_host_rank_id_binding()) : std::nullopt;
     return this->routing_table_generator_->mesh_graph->get_coord_range(mesh_id, local_host_rank_id);
 }
 
