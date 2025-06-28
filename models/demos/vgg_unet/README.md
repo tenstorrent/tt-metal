@@ -30,53 +30,10 @@ Execute the following command:
 pytest tests/ttnn/integration_tests/vgg_unet/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_true]
 ```
 ### E2E performant
-- end-2-end perf with Trace+2CQs is 75 FPS <br>
+- end-2-end perf with Trace+2CQs is 77 FPS <br>
 
-Use the following command to run the e2e perf:
-
-```sh
-pytest models/demos/vgg_unet/tests/test_perf_vgg_unet.py::test_vgg_unet
-```
 
 Use the following command to run the e2e perf with trace 2cq:
 ```sh
 pytest models/demos/vgg_unet/tests/test_e2e_performant.py
 ```
-
-
-## How to run Demo
-
-#### To note:
-The demo runs with random weights by default. To use real weights, download them as described earlier and ensure that `use_pretrained_weight` is set to True.
-
-### Single image
-
-Use the following command to run torch model demo
-
-```sh
-pytest models/demos/vgg_unet/demo/demo.py::test_demo[device_params0-pretrained_weight_false-torch_model-single]
-```
-
-Use the following command to run ttnn model demo
-
-```sh
-pytest models/demos/vgg_unet/demo/demo.py::test_demo[device_params0-pretrained_weight_false-ttnn_model-single]
-```
-
-### Multiple images
-
-Use the following command to run torch model demo
-
-```sh
-pytest models/demos/vgg_unet/demo/demo.py::test_demo[device_params0-pretrained_weight_false-torch_model-multi]
-```
-
-Use the following command to run ttnn model demo
-
-```sh
-pytest models/demos/vgg_unet/demo/demo.py::test_demo[device_params0-pretrained_weight_false-ttnn_model-multi]
-```
-## Supported Hardware
-
-- N150
-- N300

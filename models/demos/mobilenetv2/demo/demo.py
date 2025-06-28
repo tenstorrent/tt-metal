@@ -108,7 +108,7 @@ def test_mobilenetv2_imagenet_demo(
         mobilenetv2_trace_2cq.release_mobilenetv2_trace_2cqs_inference()
         accuracy = correct / (batch_size * iterations)
         logger.info(f"=============")
-        logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
+        logger.info(f"Accuracy for  batch size: {batch_size} over {iterations} iterations is: {accuracy}")
         if entire_imagenet_dataset:
             assert (
                 accuracy < expected_accuracy
@@ -118,7 +118,3 @@ def test_mobilenetv2_imagenet_demo(
         inference_time_avg = total_inference_time / (iterations)
 
         compile_time = first_iter_time - 2 * inference_time_avg
-    logger.info(
-        f"ttnn_{model_version}_batch_size{batch_size} tests inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
-    )
-    logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time}")
