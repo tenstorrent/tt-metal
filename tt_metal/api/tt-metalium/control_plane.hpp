@@ -83,7 +83,7 @@ public:
     std::optional<RoutingDirection> get_forwarding_direction(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const;
 
-    RoutingDirection get_routing_direction_between_neighboring_meshes(MeshId src_mesh_id, MeshId dest_mesh_id) const;
+    RoutingDirection get_routing_direction_from_exit_node(const FabricNodeId& exit_node, MeshId dest_mesh_id) const;
 
     // Return eth channels that can forward the data from src to dest.
     // This will be a subset of the active routers in a given direction since some channels could be

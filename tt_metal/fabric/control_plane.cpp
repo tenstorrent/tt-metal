@@ -988,18 +988,15 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
     this->convert_fabric_routing_table_to_chip_routing_table();
 }
 
-RoutingDirection ControlPlane::get_routing_direction_between_neighboring_meshes(
-    MeshId src_mesh_id, MeshId dest_mesh_id) const {
+RoutingDirection ControlPlane::get_routing_direction_from_exit_node(
+    const FabricNodeId& exit_node, MeshId dest_mesh_id) const {
     const auto& inter_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity();
-    for (std::uint32_t chip_id = 0; chip_id < inter_mesh_connectivity[*src_mesh_id].size(); chip_id++) {
-        const auto& chip_edges = inter_mesh_connectivity[*src_mesh_id][chip_id];
-        for (const auto& [connected_mesh_id, edge] : chip_edges) {
-            if (connected_mesh_id == dest_mesh_id) {
-                return edge.port_direction;
-            }
+    for (const auto& [connected_mesh_id, edge] : inter_mesh_connectivity[*(exit_node.mesh_id)][exit_node.chip_id]) {
+        if (connected_mesh_id == dest_mesh_id) {
+            return edge.port_direction;
         }
     }
-    TT_FATAL(false, "No routing direction found between M{} and M{}", src_mesh_id, dest_mesh_id);
+    TT_FATAL(false, "No routing direction found between M{} and M{}", exit_node.mesh_id, dest_mesh_id);
     return RoutingDirection::NONE;
 }
 
@@ -1870,6 +1867,7 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
                 }
             }
         }
+        TT_FATAL(intermesh_routing_direction != RoutingDirection::NONE, "Direction not found for intermesh link {} on M{} D{}", eth_chan, fabric_node_id.mesh_id, fabric_node_id.chip_id);
         router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[intermesh_routing_direction].push_back(
             eth_chan);
     }

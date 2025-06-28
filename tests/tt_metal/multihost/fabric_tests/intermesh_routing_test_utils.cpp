@@ -140,8 +140,8 @@ void run_unicast_sender_step(BaseFabricFixture* fixture) {
     std::vector<chan_id_t> eth_chans;
     if (control_plane.has_intermesh_links(src_physical_device_id)) {
         // In this case, the src chip is an exit node. Choose an intermesh link to the destination mesh.
-        auto intermesh_routing_direction = control_plane.get_routing_direction_between_neighboring_meshes(
-            src_fabric_node_id.mesh_id, dst_fabric_node_id.mesh_id);
+        auto intermesh_routing_direction = control_plane.get_routing_direction_from_exit_node(
+            src_fabric_node_id, dst_fabric_node_id.mesh_id);
         auto eth_cores_and_chans =
             control_plane.get_active_intermesh_links_in_direction(src_fabric_node_id, intermesh_routing_direction);
         for (auto chan : eth_cores_and_chans) {
@@ -455,8 +455,8 @@ void run_mcast_sender_step(
     chan_id_t edm_port;
     if (control_plane.has_intermesh_links(sender_phys_id)) {
         // In this case, the sender chip is an exit node. Choose an intermesh link to the mcast start mesh.
-        auto intermesh_routing_direction = control_plane.get_routing_direction_between_neighboring_meshes(
-            mcast_sender_node.mesh_id, mcast_start_node.mesh_id);
+        auto intermesh_routing_direction = control_plane.get_routing_direction_from_exit_node(
+            mcast_sender_node, mcast_start_node.mesh_id);
         auto eth_cores_and_chans =
             control_plane.get_active_intermesh_links_in_direction(mcast_sender_node, intermesh_routing_direction);
         for (auto chan : eth_cores_and_chans) {
