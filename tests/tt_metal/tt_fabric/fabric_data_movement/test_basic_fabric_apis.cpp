@@ -152,7 +152,7 @@ void RunAsyncWriteTest(
 
     // Find a device with a neighbour in the specified direction
     if (!find_device_with_neighbor_in_direction(
-            fixture,
+            fixture->get_devices(),
             start_fabric_node_id,
             end_fabric_node_id,
             physical_start_device_id,
@@ -269,7 +269,7 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
 
     // Find a device with a neighbour in the East direction
     if (!find_device_with_neighbor_in_direction(
-            fixture,
+            fixture->get_devices(),
             start_fabric_node_id,
             end_fabric_node_id,
             physical_start_device_id,
@@ -369,7 +369,7 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
 
     // Find a device with a neighbour in the East direction
     if (!find_device_with_neighbor_in_direction(
-            fixture,
+            fixture->get_devices(),
             start_fabric_node_id,
             end_fabric_node_id,
             physical_start_device_id,
@@ -504,7 +504,7 @@ void RunAsyncWriteMulticastTest(
 
     // Find a device with enough neighbours in the specified directions
     if (!find_device_with_neighbor_in_multi_direction(
-            fixture,
+            fixture->get_devices(),
             start_fabric_node_id,
             end_fabric_node_ids_by_dir,
             physical_start_device_id,

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <umd/device/types/arch.h>
 #include "gtest/gtest.h"
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -40,36 +41,35 @@ class ControlPlaneFixture : public ::testing::Test {
 
 class BaseFabricFixture : public ::testing::Test {
 public:
-    tt::ARCH arch_;
-    std::map<chip_id_t, tt::tt_metal::IDevice*> devices_map_;
-    std::vector<tt::tt_metal::IDevice*> devices_;
-    bool slow_dispatch_;
+    inline static std::map<chip_id_t, tt::tt_metal::IDevice*> devices_map;
+    inline static std::vector<tt::tt_metal::IDevice*> devices;
+    inline static tt::ARCH arch;
+    inline static bool slow_dispatch;
 
-    const std::vector<tt::tt_metal::IDevice*>& get_devices() const { return devices_; }
-    void SetUpDevices(tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt) {
-        slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch_) {
-            log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
-        } else {
-            log_info(tt::LogTest, "Running fabric api tests with fast dispatch");
-        }
-        // Set up all available devices
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    const std::vector<tt::tt_metal::IDevice*>& get_devices() const { return devices; }
+
+    static void DoSetUpTestSuite(tt::tt_metal::FabricConfig fabric_config) {
+        tt::tt_metal::detail::SetFabricConfig(fabric_config);
+        slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> ids;
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
-        tt::tt_metal::detail::SetFabricConfig(
-            fabric_config, tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, num_routing_planes);
-        devices_map_ = tt::tt_metal::detail::CreateDevices(ids);
-        for (auto& [id, device] : devices_map_) {
-            devices_.push_back(device);
+        devices_map = tt::tt_metal::detail::CreateDevices(ids);
+        for (auto& [id, device] : devices_map) {
+            devices.push_back(device);
         }
     }
 
+    static void TearDownTestSuite() {
+        tt::tt_metal::detail::CloseDevices(devices_map);
+        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+    }
+
     void RunProgramNonblocking(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
-        if (this->slow_dispatch_) {
+        if (slow_dispatch) {
             tt::tt_metal::detail::LaunchProgram(device, program, false);
         } else {
             tt::tt_metal::CommandQueue& cq = device->command_queue();
@@ -78,7 +78,7 @@ public:
     }
 
     void WaitForSingleProgramDone(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
-        if (this->slow_dispatch_) {
+        if (slow_dispatch) {
             // Wait for the program to finish
             tt::tt_metal::detail::WaitProgramDone(device, program);
         } else {
@@ -87,42 +87,60 @@ public:
             tt::tt_metal::Finish(cq);
         }
     }
-
-    void TearDown() override {
-        tt::tt_metal::detail::CloseDevices(devices_map_);
-        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
-    }
 };
 
 class Fabric1DFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_1D); }
+public:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_1D); }
 };
 
 class Fabric2DFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D); }
+public:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D); }
 };
 
 class Fabric2DDynamicFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC); }
+public:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC); }
 };
 
 class CustomMeshGraphFabric2DDynamicFixture : public BaseFabricFixture {
 public:
+    tt::ARCH arch;
+    std::map<chip_id_t, tt::tt_metal::IDevice*> devices_map;
+    std::vector<tt::tt_metal::IDevice*> devices;
+
+    static void SetUpTestSuite() {
+        // Do not setup test suite here because for this fixture devices cannot be active
+        // when modifying the control plane
+    }
+
+    static void TearDownTestSuite() {
+        // Manual teardown for this fixture
+    }
+
     void SetUp(
         const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
         tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
             mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-        this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
+
+        arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        std::vector<chip_id_t> ids;
+        for (unsigned int id = 0; id < num_devices; id++) {
+            ids.push_back(id);
+        }
+        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
+        devices_map = tt::tt_metal::detail::CreateDevices(ids);
+        for (auto& [id, device] : devices_map) {
+            devices.push_back(device);
+        }
     }
 
-private:
+    void TearDown() override { tt::tt_metal::MetalContext::instance().set_default_control_plane_mesh_graph(); }
+
     void SetUp() override {}
-
-    void TearDown() override {
-        BaseFabricFixture::TearDown();
-        tt::tt_metal::MetalContext::instance().set_default_control_plane_mesh_graph();
-    }
 };
 
 class T3kCustomMeshGraphFabric2DDynamicFixture

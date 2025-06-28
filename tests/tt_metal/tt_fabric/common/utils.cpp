@@ -16,7 +16,7 @@ namespace fabric_router_tests {
 
 // Find a device with enough neighbours in the specified direction
 bool find_device_with_neighbor_in_multi_direction(
-    BaseFabricFixture* fixture,
+    const std::vector<tt::tt_metal::IDevice*>& devices,
     FabricNodeId& src_fabric_node_id,
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>>& dst_fabric_node_ids_by_dir,
     chip_id_t& src_physical_device_id,
@@ -25,7 +25,6 @@ bool find_device_with_neighbor_in_multi_direction(
     std::optional<RoutingDirection> incoming_direction) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
-    auto devices = fixture->get_devices();
     // Find a device with enough neighbours in the specified direction
     bool connection_found = false;
     for (auto* device : devices) {
@@ -72,14 +71,13 @@ bool find_device_with_neighbor_in_multi_direction(
 }
 
 bool find_device_with_neighbor_in_direction(
-    BaseFabricFixture* fixture,
+    const std::vector<tt::tt_metal::IDevice*>& devices,
     FabricNodeId& src_fabric_node_id,
     FabricNodeId& dst_fabric_node_id,
     chip_id_t& src_physical_device_id,
     chip_id_t& dst_physical_device_id,
     RoutingDirection direction) {
-    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto devices = fixture->get_devices();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     for (auto* device : devices) {
         src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
 

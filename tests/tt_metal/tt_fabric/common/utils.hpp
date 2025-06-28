@@ -16,7 +16,7 @@ namespace tt::tt_fabric {
 namespace fabric_router_tests {
 
 bool find_device_with_neighbor_in_multi_direction(
-    BaseFabricFixture* fixture,
+    const std::vector<tt::tt_metal::IDevice*>& devices,
     FabricNodeId& src_fabric_node_id,
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>>& dst_fabric_node_ids_by_dir,
     chip_id_t& src_physical_device_id,
@@ -25,7 +25,7 @@ bool find_device_with_neighbor_in_multi_direction(
     std::optional<RoutingDirection> incoming_direction = std::nullopt);
 
 bool find_device_with_neighbor_in_direction(
-    BaseFabricFixture* fixture,
+    const std::vector<tt::tt_metal::IDevice*>& devices,
     FabricNodeId& src_fabric_node_id,
     FabricNodeId& dst_fabric_node_id,
     chip_id_t& src_physical_device_id,

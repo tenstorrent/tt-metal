@@ -134,7 +134,7 @@ void RunTestLineMcast(
     }
 
     bool mcast_group_found = find_device_with_neighbor_in_multi_direction(
-        fixture,
+        fixture->get_devices(),
         mcast_start_id,
         mcast_group,
         mcast_start_phys_id,
@@ -325,7 +325,7 @@ void RunTestUnicastRaw(
     if (!is_2d_fabric) {
         // Find a device with enough neighbours in the specified directions
         if (!find_device_with_neighbor_in_multi_direction(
-                fixture,
+                fixture->get_devices(),
                 src_fabric_node_id,
                 end_fabric_node_ids_by_dir,
                 src_physical_device_id,
@@ -666,7 +666,7 @@ void RunTestUnicastConnAPI(BaseFabricFixture* fixture, uint32_t num_hops, Routin
     chip_id_t not_used_2;
     // Find a device with a neighbour in the East direction
     bool connection_found = find_device_with_neighbor_in_direction(
-        fixture, src_fabric_node_id, dst_fabric_node_id, not_used_1, not_used_2, direction);
+        fixture->get_devices(), src_fabric_node_id, dst_fabric_node_id, not_used_1, not_used_2, direction);
     if (!connection_found) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
@@ -708,7 +708,7 @@ void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture) {
 
 void RunTestUnicastTGGateways(BaseFabricFixture* fixture) {
     // TODO: remove this restriction once tunneling is disabled
-    if (!fixture->slow_dispatch_) {
+    if (!BaseFabricFixture::slow_dispatch) {
         log_info(tt::LogTest, "This test can only be run with TT_METAL_SLOW_DISPATCH_MODE currently");
         GTEST_SKIP();
     }
@@ -777,7 +777,7 @@ void RunTestMCastConnAPI(
     // Get the mcast sender device and mcast receiver devices that satisfy the input number of hops in forward and
     // backward directions.
     if (!find_device_with_neighbor_in_multi_direction(
-            fixture,
+            fixture->get_devices(),
             src_fabric_node_id,
             end_fabric_node_ids_by_dir,
             src_phys_chip_id,
@@ -1038,7 +1038,7 @@ void RunTestChipMCast1D(
     // Get the mcast sender device and mcast receiver devices that satisfy the input number of hops in forward and
     // backward directions.
     if (!find_device_with_neighbor_in_multi_direction(
-            fixture,
+            fixture->get_devices(),
             src_fabric_node_id,
             end_fabric_node_ids_by_dir,
             src_phys_chip_id,
