@@ -181,7 +181,6 @@ inline void llk_unpack_tilizeA_B(
     // But currently ops do not populate that array correctly
     const std::uint32_t face_r_dim = unpA_face_r_dim;
 
-    const bool narrow_tile = get_operand_narrow_tile(operandA_id);    
     const std::uint32_t base_address_a =
         get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
     const bool narrow_tile = get_operand_narrow_tile(operandA_id);

@@ -6,6 +6,7 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 
 SFPU_ROUNDING_KERNEL(floor, 8, false)
 SFPU_ROUNDING_KERNEL(floor_float32, 8, true)
