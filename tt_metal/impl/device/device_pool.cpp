@@ -281,6 +281,7 @@ void DevicePool::initialize(
     // while initializing default sub device state.
     // This call will be a no-op if fabric is disabled.
     // May be called again below
+    log_info(tt::LogMetal, "Initializing Fabric in Device Pool with {} devices", device_ids);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     // Try to enable FD on Fabric if dispatching to remote devices. Fabric can only be enabled if all devices are open.

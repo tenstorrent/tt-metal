@@ -245,14 +245,12 @@ TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
 
 class MeshEndToEndT3kTraceTests : public MeshDeviceFixtureBase {
 protected:
-    static void SetUpTestSuite() {
-        MeshDeviceFixtureBase::DoSetUpTestSuite(MeshFixtureConfig{
-            .mesh_device_types = {MeshDeviceType::T3000},
+    MeshEndToEndT3kTraceTests() :
+        MeshDeviceFixtureBase(Config{
+            .mesh_device_types = {MeshDeviceFixtureBase::MeshDeviceType::T3000},
             .num_cqs = 2,
             .trace_region_size = 3072,  // 1024 per workload necessary
-        });
-    }
-    static void TearDownTestSuite() { MeshDeviceFixtureBase::TearDownTestSuite(); }
+        }) {}
 };
 
 TEST_F(MeshEndToEndT3kTraceTests, EltwiseAddTest) {
