@@ -1364,7 +1364,7 @@ void build_tt_fabric_program(
         if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
             return;
         }
-        constexpr uint32_t k_DispatchFabricRouterContextSwitchInterval = 64;
+        constexpr uint32_t k_DispatchFabricRouterContextSwitchInterval = 16;
         // Dispatch requires a higher context switching freq to service slow dispatch / UMD / debug tools
         edm_builder.set_firmware_context_switch_interval(k_DispatchFabricRouterContextSwitchInterval);
         edm_builder.set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);

@@ -100,6 +100,10 @@ public:
     static void SetUpTestSuite() { DispatchFixture::DoSetUpTestSuite(24 * 1024); }
 
     static void TearDownTestSuite() { DispatchFixture::TearDownTestSuite(); }
+
+    void SetUp() override {}
+
+    void TearDown() override {}
 };
 
 class DeviceSingleCardFixture : public DispatchFixture {
