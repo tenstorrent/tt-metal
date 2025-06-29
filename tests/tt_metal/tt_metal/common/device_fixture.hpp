@@ -97,7 +97,9 @@ public:
 
 class DeviceFixtureWithL1Small : public DeviceFixture {
 public:
-    static void SetUpTestSuite() { DeviceFixture::DoSetUpTestSuite(24 * 1024); }
+    static void SetUpTestSuite() { DispatchFixture::DoSetUpTestSuite(24 * 1024); }
+
+    static void TearDownTestSuite() { DispatchFixture::TearDownTestSuite(); }
 };
 
 class DeviceSingleCardFixture : public DispatchFixture {
