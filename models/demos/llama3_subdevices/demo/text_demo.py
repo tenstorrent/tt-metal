@@ -126,12 +126,9 @@ def create_tt_model(
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
+
         page_table = reverse_permutation.reshape(
             max_batch_size, paged_attention_config.max_num_blocks // max_batch_size
-        )
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
         )
 
     model = TtTransformer(
