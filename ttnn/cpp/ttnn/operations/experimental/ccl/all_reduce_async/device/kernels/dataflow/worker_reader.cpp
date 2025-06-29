@@ -54,4 +54,5 @@ void kernel_main() {
         shard_tile_id = 0;
         core_id++;
     }
+    DPRINT << "worker_reader done \n";
 }

@@ -30,6 +30,17 @@ constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_target
 constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
 
 void kernel_main() {
+    /*
+    DPRINT << "writer kernel start \n";
+    DPRINT << "my_chip_id: " << my_chip_id << "\n";
+    DPRINT << "reserved_packet_header_cb_id: " << reserved_packet_header_cb_id << "\n";
+    DPRINT << "num_packet_headers_storable: " << num_packet_headers_storable << "\n";
+    DPRINT << "cb0_id: " << cb0_id << "\n";
+    DPRINT << "packet_size_in_pages: " << packet_size_in_pages << "\n";
+    DPRINT << "tensor0_page_size: " << tensor0_page_size << "\n";
+    DPRINT << "num_targets_forward_direction: " << num_targets_forward_direction << "\n";
+    DPRINT << "num_targets_backward_direction: " << num_targets_backward_direction << "\n";
+    */
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -51,6 +62,19 @@ void kernel_main() {
     const uint32_t reduction_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     const uint32_t num_mcast_ranges = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t link = get_arg_val<uint32_t>(arg_idx++);
+
+    /*
+        DPRINT << "reduction_input_cb_id: " << reduction_input_cb_id << "\n";
+        // DPRINT << "out_ready_sem_bank_addr: " << out_ready_sem_bank_addr << "\n";
+        DPRINT << "num_tiles_per_core: " << num_tiles_per_core << "\n";
+        DPRINT << "num_tiles_to_read: " << num_tiles_to_read << "\n";
+        DPRINT << "first_core_tile_start_offset: " << first_core_tile_start_offset << "\n";
+        DPRINT << "num_cores: " << num_cores << "\n";
+        DPRINT << "num_mcast_cores: " << num_mcast_cores << "\n";
+        DPRINT << "out_ready_sem_wait_value: " << out_ready_sem_wait_value << "\n";
+        DPRINT << "reduction_semaphore_send_addr: " << reduction_semaphore_send_addr << "\n";
+        DPRINT << "num_mcast_ranges: " << num_mcast_ranges << "\n";
+        */
 
     // Set up for mcasting to reduction workers
     volatile tt_l1_ptr uint32_t* reduction_semaphore_send_addr_ptr =
@@ -112,22 +136,43 @@ void kernel_main() {
         uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
         num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
         cb_wait_front(cb0_id, num_tiles_to_read_this_core);
+        // DPRINT << "num_tiles_to_read_this_core: " << num_tiles_to_read_this_core << "\n";
         size_t l1_read_addr = get_read_ptr(cb0_id);
 
         uint64_t noc0_dest_noc_addr =
-            get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], reduction_input_addr + writer_chip_offset);
+            safe_get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], reduction_input_addr + writer_chip_offset);
+
+        uint64_t sema_noc_addr = safe_get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], out_ready_sem_bank_addr);
 
         // Within-shard offset
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
 
         // This issues a flush barrier
-        write_and_advance_local_read_address_for_fabric_write(
-            noc0_dest_noc_addr,
-            pkt_hdr_forward,
-            pkt_hdr_backward,
-            fabric_connection,
-            l1_read_addr,
-            num_tiles_to_read_this_core * tensor0_page_size);
+        if (shard_tile_id + num_tiles_to_read_this_core >= num_tiles_per_core ||
+            tiles_read + num_tiles_to_read_this_core >= num_tiles_to_read) {
+            fused_write_atomic_and_advance_local_read_address_for_fabric_write(
+                noc0_dest_noc_addr,
+                pkt_hdr_forward,
+                pkt_hdr_backward,
+                fabric_connection,
+                l1_read_addr,
+                num_tiles_to_read_this_core * tensor0_page_size,
+                sema_noc_addr,
+                static_cast<uint16_t>(1),
+                static_cast<uint16_t>(32),
+                false);
+            noc_async_writes_flushed();
+            noc_semaphore_inc(sema_noc_addr, 1);
+        } else {
+            write_and_advance_local_read_address_for_fabric_write(
+                noc0_dest_noc_addr,
+                pkt_hdr_forward,
+                pkt_hdr_backward,
+                fabric_connection,
+                l1_read_addr,
+                num_tiles_to_read_this_core * tensor0_page_size);
+        }
+
         if constexpr (dynamic_alternate) {
             std::swap(
                 pkt_hdr_forward->routing_fields.value,
@@ -144,6 +189,7 @@ void kernel_main() {
     }
 
     // 2. mcast output ready semaphore
+    /*
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     // Write the mcast packet (forward)
@@ -179,11 +225,13 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
+    */
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close_start();
     }
 
     // 3. wait for mcast output ready semaphore
+    /*
     while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
 
     // loop over mcast ranges
@@ -205,7 +253,7 @@ void kernel_main() {
 
     // 4. global semaphore reset
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
-
+    */
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close_finish();
     }
