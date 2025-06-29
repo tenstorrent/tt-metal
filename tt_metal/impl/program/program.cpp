@@ -1279,7 +1279,7 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
     }
 }
 
-void Program::generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
+void Program::generate_dispatch_commands(IDevice* device) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
     uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
@@ -1303,25 +1303,14 @@ void Program::generate_dispatch_commands(IDevice* device, bool use_prefetcher_ca
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
-        program_dispatch::assemble_device_commands(
-            program_command_sequence, impl(), device, sub_device_id, use_prefetcher_cache);
-
-        program_command_sequence.kernel_bins_sizeB = this->impl().kernel_bins_sizeB;
-        program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
-
+        program_dispatch::assemble_device_commands(program_command_sequence, impl(), device, sub_device_id);
         // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
         // This means programs will contain stale entries in the cache until the program is deleted
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
-    } else {
-        TT_ASSERT(
-            cached_program_command_sequences.at(command_hash).prefetcher_cache_used == use_prefetcher_cache,
-            "Prefetcher cache used mismatch for program {} on device {}",
-            this->get_id(),
-            device->id());
     }
 }
 
-void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
+void ProgramImpl::generate_trace_dispatch_commands(IDevice* device) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
     uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
@@ -1345,19 +1334,10 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
-        program_dispatch::assemble_device_commands(
-            program_command_sequence, *this, device, sub_device_id, use_prefetcher_cache);
-        program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
-        program_command_sequence.kernel_bins_sizeB = this->kernel_bins_sizeB;
+        program_dispatch::assemble_device_commands(program_command_sequence, *this, device, sub_device_id);
         // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
         // This means programs will contain stale entries in the cache until the program is deleted
         trace_cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
-    } else {
-        TT_ASSERT(
-            trace_cached_program_command_sequences.at(command_hash).prefetcher_cache_used == use_prefetcher_cache,
-            "Prefetcher cache used mismatch for program {} on device {}",
-            this->get_id(),
-            device->id());
     }
 }
 
@@ -1737,15 +1717,14 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
     std::array<ProgramImpl*, 1> programs_array = {this};
     tt::stl::Span<ProgramImpl*> programs(programs_array);
 
-    (void)ProgramImpl::finalize_program_offsets(
-        device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+    ProgramImpl::finalize_program_offsets(device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
 
     set_finalized();
 }
 
 // Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
 // program data structures in L1. Will be used when assembling dispatch commands for this program
-uint32_t detail::ProgramImpl::finalize_program_offsets(
+void detail::ProgramImpl::finalize_program_offsets(
     IDevice* device,
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
@@ -1807,14 +1786,6 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     for (auto& program : programs) {
         program->set_program_attrs_across_core_types(device);
     }
-
-    // determine max program size across all programs
-    uint32_t max_program_sizeB = 0;
-    for (auto& program : programs) {
-        program->kernel_bins_sizeB = state.kernel_text_size;
-        max_program_sizeB = std::max(max_program_sizeB, state.kernel_text_size);
-    }
-    return max_program_sizeB;
 }
 
 std::unordered_map<uint64_t, ProgramCommandSequence>&

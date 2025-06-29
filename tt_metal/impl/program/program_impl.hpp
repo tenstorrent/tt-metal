@@ -54,8 +54,7 @@ void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence,
     detail::ProgramImpl& program,
     IDevice* device,
-    SubDeviceId sub_device_id,
-    bool use_prefetcher_cache);
+    SubDeviceId sub_device_id);
 }
 
 using kernel_id_array_t = std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX>;
@@ -186,7 +185,7 @@ public:
     const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
     const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
 
-    void generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
+    void generate_trace_dispatch_commands(IDevice* device);
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_trace_cached_program_command_sequences() noexcept;
 
     // debug/test
@@ -198,10 +197,8 @@ public:
 
     void finalize_offsets(IDevice* device);
 
-    // Helper function to finalize program offsets with custom getters. Returns the maximum kernel binaries size among
-    // all the programs, to determine whether the mesh workload can fit in the prefetcher cache all of the programs in
-    // it.
-    static uint32_t finalize_program_offsets(
+    // Helper function to finalize program offsets with custom getters
+    static void finalize_program_offsets(
         IDevice* device,
         const KernelsGetter& kernels_getter,
         const KernelGroupsGetter& kernel_groups_getter,
@@ -284,8 +281,6 @@ private:
     // Counts how much space is needed for each core + each launch buffer msg queue.
     std::vector<uint32_t> program_config_sizes_;
 
-    uint32_t kernel_bins_sizeB = 0;
-
     // The rta_updates from one cached command sequence may reference data in another cached command sequence.
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
     std::unordered_map<uint64_t, ProgramCommandSequence> trace_cached_program_command_sequences_;
@@ -336,8 +331,7 @@ private:
         ProgramCommandSequence& program_command_sequence,
         ProgramImpl& program,
         IDevice* device,
-        SubDeviceId sub_device_id,
-        bool use_prefetcher_cache);
+        SubDeviceId sub_device_id);
 
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
