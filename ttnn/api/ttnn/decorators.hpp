@@ -4,6 +4,15 @@
 
 #pragma once
 
+#include <cstddef> // size_t
+#include <tuple>
+#include <type_traits> // is_same_v, decay
+#include <optional>
+#include <string>
+#include <utility> // index_sequence, forward
+#include <vector>
+
+#include <fmt/format.h>
 #include <reflect>
 
 #include <tt-metalium/graph_tracking.hpp>
