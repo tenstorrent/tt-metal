@@ -170,8 +170,12 @@ void kernel_main() {
 
             noc_async_read_barrier();
 
+            // tt::data_movement::common::print_bf16_pages(
+            //     get_write_ptr(cb_id_act_row_major_bfloat16), 1024, act_block_num_tiles);
+
             DPRINT << "push i2c: " << act_block_num_tiles << ENDL();
             cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
+
             reader_offset += window_outer_offset;
             DPRINT << "done reading outer: " << outer << ENDL();
 

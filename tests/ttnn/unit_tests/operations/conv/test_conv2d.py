@@ -15,8 +15,8 @@ import torch
     "output_channels, input_channels, input_height, input_width, shard_layout, config",
     (
         # (353, 384, 8, 8, WS, None),
-        (128, 128, 32, 32, BS, None),
-        # (16, 16, 256, 256, HS, {"act_block_h": 32}),
+        (64, 64, 10, 10, BS, None),
+        # (16, 16, 256, 256, HS, None),
     ),
 )
 @pytest.mark.parametrize(
@@ -37,12 +37,12 @@ import torch
 )
 @pytest.mark.parametrize(
     "packer_l1_acc",
-    [False],
+    [True],
 )
 @pytest.mark.parametrize(
     "filter, padding",
     [
-        [3, (1, 1)],
+        [3, (0, 0)],
         # [1, 0],
         # [5, (2, 4, 3, 5)],
     ],

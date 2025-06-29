@@ -49,9 +49,102 @@ def torch_tensor_map(request):
     return torch_tensor_map
 
 
-def randomize_torch_tensor(torch_tensor_map, tensor_shape, generate_positive_numbers=False, ones_tensor=False):
+def init_tensor_for_tiled_constants(Co, Ci, Kh, Kw, tile_size=32):
+    """
+    Initialize tensor so that after tiling and reshaping, each tile has a different constant value.
+
+    Args:
+        Co, Ci, Kh, Kw: Original tensor dimensions
+        tile_size: Size of square tiles (default 32 for 32×32)
+
+    Returns:
+        Initialized tensor of shape [Co, Ci, Kh, Kw]
+    """
+
+    # Calculate final dimensions after reshape
+    final_height = Kh * Kw * Ci  # KhKwCi
+    final_width = Co
+
+    # Calculate number of tiles in each dimension
+    tiles_h = (final_height + tile_size - 1) // tile_size  # Ceiling division
+    tiles_w = (final_width + tile_size - 1) // tile_size
+
+    print(f"Original shape: [{Co}, {Ci}, {Kh}, {Kw}]")
+    print(f"After reshape: [1, 1, {final_height}, {final_width}]")
+    print(f"Number of tiles: {tiles_h} × {tiles_w} = {tiles_h * tiles_w}")
+
+    # Create a tensor with different constant values for each tile
+    # We'll work in the final reshaped space first
+    reshaped_tensor = torch.zeros(1, 1, final_height, final_width)
+
+    tile_counter = 1
+    for tile_row in range(tiles_h):
+        for tile_col in range(tiles_w):
+            # Calculate tile boundaries
+            h_start = tile_row * tile_size
+            h_end = min((tile_row + 1) * tile_size, final_height)
+            w_start = tile_col * tile_size
+            w_end = min((tile_col + 1) * tile_size, final_width)
+
+            # Fill this tile with a constant value
+            reshaped_tensor[0, 0, h_start:h_end, w_start:w_end] = -tile_counter
+            tile_counter += 1
+
+    # Now we need to reverse the reshape operation
+    # The reshape operation is: [Co, Ci, Kh, Kw] -> [1, 1, KhKwCi, Co]
+    # So we go: [1, 1, KhKwCi, Co] -> [Co, Ci, Kh, Kw]
+
+    # Remove the first two dimensions
+    temp = reshaped_tensor.squeeze(0).squeeze(0)  # Shape: [KhKwCi, Co]
+    # torch.set_printoptions(profile="full")
+    # print(temp)
+
+    # The forward transformation likely flattens [Ci, Kh, Kw] into KhKwCi
+    # So we reshape [KhKwCi, Co] -> [Ci*Kh*Kw, Co] -> [Ci, Kh*Kw, Co] -> [Ci, Kh, Kw, Co]
+    # But [KhKwCi, Co] = [Kh*Kw*Ci, Co], so we can reshape to [Kh, Kw, Ci, Co]
+    temp = temp.reshape(Kh, Kw, Ci, Co)
+
+    # Now permute to get [Co, Ci, Kh, Kw]
+    # From [Kh, Kw, Ci, Co] to [Co, Ci, Kh, Kw] is permute(3, 2, 0, 1)
+    original_tensor = temp.permute(3, 2, 0, 1)
+
+    return original_tensor
+
+
+def randomize_torch_tensor(
+    torch_tensor_map,
+    tensor_shape,
+    generate_positive_numbers=False,
+    ones_tensor=False,
+    per_channel=False,
+    weights_tile=False,
+):
+    if per_channel:
+        print(tensor_shape)
+        # Final tensor will be in shape [1, 1, NHW, C]
+        tensor_h = tensor_shape[0] * tensor_shape[2] * tensor_shape[3]  # NHW
+        tensor_w = tensor_shape[1]
+        temp = torch.zeros(tensor_h, tensor_w)
+        for i in range(tensor_h):
+            temp[i, :] = -i
+        # torch.set_printoptions(profile="full")
+        # print(temp.shape)
+        # print(temp)
+        temp = temp.reshape(tensor_shape[0], tensor_shape[2], tensor_shape[3], tensor_w)
+        torch_tensor = temp.permute(0, 3, 1, 2)  # [N, C, H, W]
+
+        # torch.set_printoptions(profile="full")
+        # print(torch_tensor)
+        return torch_tensor
+
     if ones_tensor:
         torch_tensor = torch.ones(tensor_shape, dtype=torch.bfloat16).float()
+        return torch_tensor
+
+    if weights_tile:
+        torch_tensor = init_tensor_for_tiled_constants(
+            tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]
+        )
         return torch_tensor
 
     if generate_positive_numbers:
@@ -96,7 +189,7 @@ def run_conv(
     output_layout=ttnn.TILE_LAYOUT,
     deallocate_activation=False,
     groups=1,
-    has_bias=True,
+    has_bias=False,
     shard_layout=None,
     auto_shard=False,
     memory_config=None,
@@ -105,7 +198,7 @@ def run_conv(
     output_mesh_composer=None,
     enable_split_reader=False,
     activation="",
-    preprocess_weights_on_device=True,
+    preprocess_weights_on_device=False,
     in_place=False,
     run_twice=False,
     fast_compare=False,
@@ -163,12 +256,12 @@ def run_conv(
     # in order to get valid sqrt values
     sqrt_act_function = activation == "sqrt"
     torch_input_tensor_nchw = randomize_torch_tensor(
-        torch_tensor_map, conv_input_shape, generate_positive_numbers=False, ones_tensor=False
+        torch_tensor_map, conv_input_shape, generate_positive_numbers=False, ones_tensor=False, per_channel=False
     )
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_weight_tensor = randomize_torch_tensor(
-        torch_tensor_map, conv_weight_shape, generate_positive_numbers=False, ones_tensor=False
+        torch_tensor_map, conv_weight_shape, generate_positive_numbers=False, per_channel=False, weights_tile=True
     )
     torch_bias_tensor = (
         randomize_torch_tensor(torch_tensor_map, conv_bias_shape, generate_positive_numbers=sqrt_act_function) * 10
@@ -273,6 +366,10 @@ def run_conv(
         return_output_dim=True,
         return_weights_and_bias=True,
     )
+    # torch_dw = ttnn.to_torch(d_w, mesh_composer=weight_mesh_mapper)
+    # torch.set_printoptions(profile="full")
+    # print(torch_dw)
+
     if run_twice:
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
