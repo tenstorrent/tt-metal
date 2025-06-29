@@ -323,11 +323,11 @@ void DevicePool::initialize(
                     tt::tt_metal::detail::SetFabricConfig(
                         fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
                 }
-                log_info(tt::LogMetal, "Dispatch on {} Fabric", fabric_config);
+                log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues", fabric_config, num_hw_cqs);
             }
         } else if (any_remote_devices) {
             fallback_to_tunneling();
-            log_debug(
+            log_info(
                 tt::LogMetal,
                 "Cannot launch Dispatch on Fabric without all physical devices activated. Using tunneling.");
         }
