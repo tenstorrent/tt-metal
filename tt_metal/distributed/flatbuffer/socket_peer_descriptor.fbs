@@ -29,6 +29,7 @@ table SocketConfig {
     socket_mem_config: SocketMemoryConfig;
     sender_rank: uint32;
     receiver_rank: uint32;
+    socket_id: uint32;
 }
 
 table SocketPeerDescriptor {
@@ -37,6 +38,7 @@ table SocketPeerDescriptor {
     data_buffer_address: uint64;
     mesh_ids: [uint32];
     chip_ids: [uint32];
+    exchange_tag: uint32;
 }
 
 root_type SocketPeerDescriptor;

@@ -107,6 +107,9 @@ public:
     void revoke_and_shrink() override;
     [[nodiscard]] bool is_revoked() override;
 
+    /* ------------- message snooping ------------- */
+    std::size_t snoop_incoming_msg_size(Rank source, Tag tag) const override;
+
     /* ----------------- mpi constructors ---------------- */
     explicit MPIContext(MPI_Comm comm);
     explicit MPIContext(MPI_Comm comm, MPI_Group group);
