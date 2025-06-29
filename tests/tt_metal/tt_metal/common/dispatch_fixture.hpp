@@ -29,6 +29,11 @@ public:
     inline static std::vector<tt::tt_metal::IDevice*> devices_;
     inline static bool slow_dispatch_;
 
+    static bool IsSlowDispatch() {
+        slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+        return slow_dispatch_;
+    }
+
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, const bool skip_finish = false) {
         const uint64_t program_id = program.get_id();
@@ -69,7 +74,6 @@ public:
         }
     }
     int NumDevices() { return this->devices_.size(); }
-    bool IsSlowDispatch() { return this->slow_dispatch_; }
 
     static void DoSetUpTestSuite(
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
