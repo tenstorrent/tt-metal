@@ -1,4 +1,4 @@
-namespace ttnn.flatbuffer;
+namespace tt.tt_metal.distributed.flatbuffer;
 
 table MeshCoordinate {
     // The coordinate values in each dimension

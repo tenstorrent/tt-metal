@@ -1,7 +1,7 @@
 // Define schema for tracing host API calls, called Commands in this context.
-include "flatbuffer/buffer_types.fbs";
-include "flatbuffer/program_types.fbs";
-include "flatbuffer/base_types.fbs";
+include "buffer_types.fbs";
+include "program_types.fbs";
+include "base_types.fbs";
 
 namespace tt.tt_metal.flatbuffer;
 
