@@ -71,6 +71,7 @@ TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {
         mesh_device_->reset_sub_device_stall_group();
     }
     Finish(mesh_device_->mesh_command_queue());
+    mesh_device_->clear_loaded_sub_device_manager();
 }
 
 TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
@@ -161,6 +162,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
             }
         }
     }
+    mesh_device_->clear_loaded_sub_device_manager();
 }
 
 TEST_F(MeshSubDeviceTestSuite, SubDeviceSwitching) {
@@ -216,6 +218,7 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceSwitching) {
         mesh_device_->reset_sub_device_stall_group();
     }
     Finish(mesh_device_->mesh_command_queue());
+    mesh_device_->clear_loaded_sub_device_manager();
 }
 
 TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {
@@ -262,6 +265,7 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {
         mesh_device_->reset_sub_device_stall_group();
     }
     Finish(mesh_device_->mesh_command_queue());
+    mesh_device_->clear_loaded_sub_device_manager();
 }
 }
 }  // namespace
