@@ -6,10 +6,28 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/mesh_socket.hpp>
 
 namespace tt::tt_metal::distributed {
 
 enum class SocketEndpoint : uint8_t { SENDER, RECEIVER };
+
+// Utiity struct used for Sender and Receiver Hanshaking.
+// Each endpoint (sender/receiver) needs to know the following about its peer:
+// 1. The socket config used to create the connection (this is used for validation to ensure that both endpoints
+// correspond to the same socket config)
+// 2. Addresses of the peer's socket config and data buffers
+// 3. The Mesh and Chip IDs corresponding to the peer endpoint (to compute the fabric encoding)
+
+// For single-host sockets, this struct can be directly used when writing the socket config to the MeshDevice.
+// For multi-host sockets, this struct is serialized to a FlatBuffer and sent over the network to the peer endpoint.
+struct SocketPeerDescriptor {
+    SocketConfig config;
+    DeviceAddr config_buffer_address = 0;
+    DeviceAddr data_buffer_address = 0;
+    std::vector<uint32_t> mesh_ids;
+    std::vector<uint32_t> chip_ids;
+};
 
 // Create send/receive socket config buffers
 std::shared_ptr<MeshBuffer> create_socket_config_buffer(
