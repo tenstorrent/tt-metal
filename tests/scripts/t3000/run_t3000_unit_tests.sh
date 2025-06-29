@@ -13,7 +13,10 @@ run_t3000_ttmetal_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttmetal_tests"
-  ./build/test/tt_metal/distributed/distributed_unit_tests
+  # Run all distributed unit tests except MeshSocket
+  TT_METAL_FD_FABRIC=true ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="-*MeshSocket*" ; fail+=$?
+  # Run MeshSocket tests separately because they are taking a long time when running with the rest of the tests
+  TT_METAL_FD_FABRIC=true ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*MeshSocket*" ; fail+=$?
 
   echo "LOG_METAL: Testing TT_METAL_VISIBLE_DEVICES functionality"
   ./tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh ; fail+=$?
@@ -22,15 +25,15 @@ run_t3000_ttmetal_tests() {
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips" ; fail+=$?
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsDirectRingGatherAllChips" ; fail+=$?
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsInterleavedRingGatherAllChips" ; fail+=$?
-  TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*" ; fail+=$?
-  ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueMultiDevice*Fixture.*" ; fail+=$?
-  ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintFixture.*:WatcherFixture.*" ; fail+=$?
+  TT_METAL_FD_FABRIC=true TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*" ; fail+=$?
+  TT_METAL_FD_FABRIC=true ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueMultiDevice*Fixture.*" ; fail+=$?
+  TT_METAL_FD_FABRIC=true ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintFixture.*:WatcherFixture.*" ; fail+=$?
 
   # Programming examples
-  ./build/programming_examples/distributed/distributed_program_dispatch
-  ./build/programming_examples/distributed/distributed_buffer_rw
-  ./build/programming_examples/distributed/distributed_eltwise_add
-  ./build/programming_examples/distributed/distributed_trace_and_events
+  TT_METAL_FD_FABRIC=true ./build/programming_examples/distributed/distributed_program_dispatch
+  TT_METAL_FD_FABRIC=true ./build/programming_examples/distributed/distributed_buffer_rw
+  TT_METAL_FD_FABRIC=true ./build/programming_examples/distributed/distributed_eltwise_add
+  TT_METAL_FD_FABRIC=true ./build/programming_examples/distributed/distributed_trace_and_events
 
   # Record the end time
   end_time=$(date +%s)
@@ -55,10 +58,10 @@ run_t3000_ttfabric_tests() {
   #TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 
   # these tests cover mux fixture as well
-  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+  TT_METAL_FD_FABRIC=true ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+  TT_METAL_FD_FABRIC=true ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
 
-  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
+  TT_METAL_FD_FABRIC=true ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
 
   TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity.yaml
 
