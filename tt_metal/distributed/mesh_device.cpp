@@ -136,8 +136,21 @@ MeshDevice::ScopedDevices::ScopedDevices(
     size_t num_command_queues,
     size_t worker_l1_size,
     const DispatchCoreConfig& dispatch_core_config) {
+    // Open all devices by default if there are any remote devices (fabric requirement)
+    // But only expose the requested device ids to the user
+    bool any_remote_devices = std::any_of(device_ids.begin(), device_ids.end(), [](int id) {
+        return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(id) != id;
+    });
+    std::vector<int> device_ids_to_init;
+    if (any_remote_devices) {
+        for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
+            device_ids_to_init.push_back(i);
+        }
+    } else {
+        device_ids_to_init = device_ids;
+    }
     opened_devices_ = tt::tt_metal::detail::CreateDevices(
-        device_ids,
+        device_ids_to_init,
         num_command_queues,
         l1_small_size,
         trace_region_size,

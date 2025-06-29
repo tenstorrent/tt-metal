@@ -71,7 +71,9 @@ private:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
     class ScopedDevices {
     private:
+        // Devices that were initialized
         std::map<chip_id_t, IDevice*> opened_devices_;
+        // Devices which are exposed to the user
         std::vector<IDevice*> devices_;
 
     public:
