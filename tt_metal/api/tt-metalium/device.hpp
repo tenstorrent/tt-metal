@@ -92,7 +92,7 @@ public:
         const std::vector<CoreCoord>& logical_cores) const = 0;
 
     // Returns the optimal DRAM bank coordinates to logical worker assignment
-    virtual std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment() = 0;
+    virtual std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc = NOC::NOC_0) = 0;
 
     // Convert a logical coordinate to virtual coordinate
     virtual CoreCoord virtual_core_from_logical_core(

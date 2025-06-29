@@ -45,8 +45,11 @@ void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2,
 }
 
 void get_optimal_dram_bank_to_reader_assignment(
-    tt::tt_metal::IDevice* device, std::vector<CoreCoord>& all_worker_cores_ordered, CoreRangeSet& all_worker_cores) {
-    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment();
+    tt::tt_metal::IDevice* device,
+    std::vector<CoreCoord>& all_worker_cores_ordered,
+    CoreRangeSet& all_worker_cores,
+    tt_metal::NOC noc) {
+    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
     std::set<CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
         all_cores_set.insert(CoreRange(worker_core));
@@ -98,10 +101,32 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
 
     tt_metal::Program program{};
 
+    uint32_t start_core_x = 0;
+    uint32_t start_core_y = 0;
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_mcast_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
+
+    CoreCoord top_left_core = {(std::size_t)start_core_x, (std::size_t)start_core_y};
+    CoreCoord bottom_right_core = {
+        (std::size_t)start_core_x + compute_with_storage_grid_size.x - 1,
+        (std::size_t)start_core_y + compute_with_storage_grid_size.y - 1};
+    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+
+    // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+
+    CoreCoord start_core_noc = top_left_core_physical;
+    CoreCoord end_core_noc = bottom_right_core_physical;
+    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+        std::swap(start_core_noc, end_core_noc);
+    }
+
     // get the dram readers
     std::vector<CoreCoord> all_worker_cores_ordered;
     CoreRangeSet all_worker_cores;
-    get_optimal_dram_bank_to_reader_assignment(device, all_worker_cores_ordered, all_worker_cores);
+    get_optimal_dram_bank_to_reader_assignment(device, all_worker_cores_ordered, all_worker_cores, in0_noc);
 
     // dram banks
     uint32_t num_dram_banks = all_worker_cores_ordered.size();
@@ -264,35 +289,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores_in_rect_grid, INVALID);
     auto in0_mcast_sender_valid_semaphore_id = tt_metal::CreateSemaphore(program, all_cores_in_rect_grid, VALID);
 
-    uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-
-    uint32_t num_mcast_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
-
-    CoreCoord top_left_core = {(std::size_t)start_core_x, (std::size_t)start_core_y};
-    CoreCoord bottom_right_core = {
-        (std::size_t)start_core_x + compute_with_storage_grid_size.x - 1,
-        (std::size_t)start_core_y + compute_with_storage_grid_size.y - 1};
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
-
     bool in0_is_dram = false;
     bool in1_is_dram = true;
     bool in3_is_dram = true;
 
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
-
-    // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
-
-    CoreCoord start_core_noc = top_left_core_physical;
-    CoreCoord end_core_noc = bottom_right_core_physical;
-    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
-        std::swap(start_core_noc, end_core_noc);
-    }
 
     uint32_t num_blocks_per_shard = num_blocks / all_storage_cores_vec.size();
     log_debug(tt::LogOp, "num_blocks_per_shard: {}", num_blocks_per_shard);

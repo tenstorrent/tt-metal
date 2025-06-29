@@ -615,11 +615,11 @@ uint32_t Device::num_sub_devices() const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices();
 }
 
-CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel) const {
+CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel, NOC noc) const {
     return tt::tt_metal::MetalContext::instance()
         .get_cluster()
         .get_soc_desc(id_)
-        .get_preferred_worker_core_for_dram_view(dram_channel);
+        .get_preferred_worker_core_for_dram_view(dram_channel, noc);
 }
 
 CoreCoord Device::logical_core_from_dram_channel(uint32_t dram_channel) const {
@@ -851,7 +851,7 @@ void Device::reset_sub_device_stall_group() {
     sub_device_manager_tracker_->get_active_sub_device_manager()->reset_sub_device_stall_group();
 }
 
-std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment() {
+std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
     // Top level function that users (ex: Op Writers) can use to assign Tensix Worker cores
     // as DRAM readers or writers. Returns logical coordinates of optimally placed workers.
     // This function queries Physical Coordinates (only exposed directly to the Device class)
@@ -874,7 +874,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id());
         std::vector<CoreCoord> dram_phy_coords;
         for (int i = 0; i < num_dram_banks; ++i) {
-            auto dram_core = dram_core_from_dram_channel(i);
+            auto dram_core = this->dram_core_from_dram_channel(i, noc);
             if (dram_is_virtualized) {
                 tt::umd::CoreCoord umd_dram_coord = soc_d.translate_coord_to(
                     tt_xy_pair(dram_core.x, dram_core.y), CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
