@@ -460,7 +460,6 @@ private:
     void open_devices_internal(tt::tt_metal::FabricConfig fabric_config) {
         tt::tt_metal::detail::SetFabricConfig(fabric_config);
         mesh_device_ = MeshDevice::create(mesh_shape_);
-        mesh_device_->disable_and_clear_program_cache();
 
         for (const auto& coord : available_device_coordinates_) {
             auto* device = mesh_device_->get_device(coord);
