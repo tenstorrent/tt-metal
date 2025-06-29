@@ -33,7 +33,6 @@ def test_upblock(
     residuals,
     block_id,
     reset_seeds,
-    conv_weights_dtype,
 ):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
