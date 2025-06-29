@@ -216,7 +216,6 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
-
     auto view = mesh_device->get_view();
 
     // build a line of devices
@@ -225,6 +224,12 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
         view.get_device(MeshCoordinate(0, 1)),
         view.get_device(MeshCoordinate(0, 2)),
         view.get_device(MeshCoordinate(0, 3))};
+
+    // https://github.com/tenstorrent/tt-metal/issues/24235
+    for (auto device : devices) {
+        device->disable_and_clear_program_cache();
+    }
+
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,

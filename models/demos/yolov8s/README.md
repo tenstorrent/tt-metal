@@ -37,7 +37,7 @@ pytest --disable-warnings tests/ttnn/integration_tests/yolov8s/test_yolov8s.py::
 
 ### Performant Model with Trace+2CQ
 
-- end-2-end perf is 161 FPS
+- end-2-end perf is 175 FPS
 
 Use the following command to run the performant Model with Trace+2CQs:
 

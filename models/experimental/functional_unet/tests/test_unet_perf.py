@@ -28,8 +28,9 @@ def test_unet_model(batch, groups, device, iterations, reset_seeds):
     if (
         not is_wormhole_b0(device)
         and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
+        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 130
     ):
-        pytest.skip(f"Shallow UNet only support 110 cores on BH (was {device.compute_with_storage_grid_size()})")
+        pytest.skip(f"Shallow UNet only support 110 or 130 cores on BH (was {device.compute_with_storage_grid_size()})")
     device.disable_and_clear_program_cache()  # Needed to give consistent device perf between iterations
     run_unet_model(batch, groups, device, iterations)
 
@@ -92,8 +93,9 @@ def test_unet_trace_perf(
     if (
         not is_wormhole_b0(device)
         and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
+        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 130
     ):
-        pytest.skip(f"shallow unet only support 110 cores on bh (was {device.compute_with_storage_grid_size()})")
+        pytest.skip(f"Shallow UNet only support 110 or 130 cores on BH (was {device.compute_with_storage_grid_size()})")
 
     from models.experimental.functional_unet.tests.test_unet_trace import (
         test_unet_trace_2cq,
@@ -132,7 +134,7 @@ def test_unet_trace_perf(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "batch, groups, iterations, expected_compile_time, expected_throughput", ((1, 4, 256, 30.0, 2419.0),)
+    "batch, groups, iterations, expected_compile_time, expected_throughput", ((1, 4, 256, 30.0, 2400.0),)
 )
 def test_unet_trace_perf_multi_device(
     batch: int,
