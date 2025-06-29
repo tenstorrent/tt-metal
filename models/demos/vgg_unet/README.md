@@ -48,9 +48,8 @@ Execute the following command:
 pytest tests/ttnn/integration_tests/vgg_unet/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_true]
 ```
 
-### Performant Model with Trace+2CQ
-Use the following command to run the e2e perf:
-- end-2-end perf with Trace+2CQs is 80 FPS <br>
+### E2E performant
+- end-2-end perf with Trace+2CQs is 77 FPS <br>
 
 Use the following command to run the e2e perf with trace 2cq:
 ```sh

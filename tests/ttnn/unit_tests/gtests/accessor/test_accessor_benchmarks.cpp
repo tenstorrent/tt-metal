@@ -8,11 +8,12 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include <string>
+#include <cstdint>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include "ttnn/cpp/ttnn/operations/sharding_utilities.hpp"
+#include <ttnn/tensor/tensor_accessor_args.hpp>
 
 namespace accessor_benchmarks {
 
@@ -80,18 +81,18 @@ void benchmark_all_args_combinations_single_core(
     const auto input_shard_view = input_mesh_buffer->get_device_buffer(mesh_coordinate);
     const auto local_device = input_shard_view->device();
 
-    const auto input_bank_base_address = input_mesh_buffer->address();
-
     tt::tt_metal::detail::SetDeviceProfilerDir(res_path + "/" + params.test_name);
     tt::tt_metal::detail::FreshProfilerDeviceLog();
     for (uint8_t i = 0; i < 1 << 5; ++i) {
-        ArgsConfig args_loc_cnf(i);
-        if (args_loc_cnf.test(ArgConfig::RankCRTA) and
-            (!args_loc_cnf.test(ArgConfig::TensorShapeCRTA) or !args_loc_cnf.test(ArgConfig::ShardShapeCRTA))) {
+        tensor_accessor::ArgsConfig args_loc_cnf(i);
+        if (args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeRank) and
+            (!args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeTensorShape) or
+             !args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeShardShape))) {
             // If rank is runtime, tensor and shard shapes must also be runtime
             continue;
         }
-        if (args_loc_cnf.test(ArgConfig::NumBanksCRTA) and !args_loc_cnf.test(ArgConfig::BankCoordsCRTA)) {
+        if (args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeNumBanks) and
+            !args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeBankCoords)) {
             // If number of banks is runtime, bank coordinates must also be runtime
             continue;
         }
@@ -105,14 +106,9 @@ void benchmark_all_args_combinations_single_core(
         auto program = CreateProgram();
 
         constexpr CoreCoord grid = {0, 0};
-        const auto data_format = params.data_format;
-        const auto aligned_page_size = input_shard_view->aligned_page_size();
 
         // Set up sharded accessor compile-time args for reader kernel
-        const auto& input_buffer_distribution_spec =
-            *input_mesh_buffer->device_local_config().sharding_args.buffer_distribution_spec();
-        const auto sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
-            *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type(), args_loc_cnf);
+        const auto sharded_accessor_args = TensorAccessorArgs(*input_shard_view, args_loc_cnf);
 
         std::map<std::string, std::string> defines{{"ACCESSOR_CONFIG_NAME", crta_config_str}};
         // Create reader kernel
@@ -163,7 +159,7 @@ INSTANTIATE_TEST_SUITE_P(
     AccessorTests,
     AccessorBenchmarks,
     ::testing::Values(
-        // Sweep across shape ranks since ShardedAccessor calculations scale with rank
+        // Sweep across shape ranks since TensorAccessor calculations scale with rank
         // TODO: Other interesting parameters to try:
         // - Page size: Possible that compiler optimizes division for power of 2 page sizes
         // - Shape dim: Possible that compiler optimizes division or modulo for certain values

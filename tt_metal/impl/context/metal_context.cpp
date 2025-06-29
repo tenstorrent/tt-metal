@@ -427,9 +427,10 @@ void MetalContext::initialize_fabric_config() {
         this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& control_plane = this->get_control_plane();
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
-        control_plane.initialize_fabric_context(this->fabric_config_, this->fabric_reliability_mode_);
+        control_plane.initialize_fabric_context(this->fabric_config_);
     }
-    control_plane.configure_routing_tables_for_fabric_ethernet_channels(this->fabric_reliability_mode_);
+    control_plane.configure_routing_tables_for_fabric_ethernet_channels(
+        this->fabric_config_, this->fabric_reliability_mode_);
 }
 
 tt_metal::FabricConfig MetalContext::get_fabric_config() const {
@@ -460,6 +461,7 @@ void MetalContext::initialize_control_plane() {
         case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::SIMULATOR_WORMHOLE_B0: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::SIMULATOR_BLACKHOLE: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::N300_2x2: mesh_graph_descriptor = "n300_2x2_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::INVALID: TT_THROW("Unknown cluster type");
     }
     const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /

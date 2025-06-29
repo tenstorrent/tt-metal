@@ -190,18 +190,26 @@ class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixt
 
 class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
 
-class CommandQueueOnFabricMultiDeviceFixture : public CommandQueueMultiDeviceFixture {
+class CommandQueueOnFabricMultiDeviceFixture : public CommandQueueMultiDeviceFixture,
+                                               public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
 protected:
     void SetUp() override {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
         }
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
+        // This will force dispatch init to inherit the FabricConfig param
+        tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
         CommandQueueMultiDeviceFixture::SetUp();
+
+        if (::testing::Test::IsSkipped()) {
+            tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
+        }
     }
 
     void TearDown() override {
         CommandQueueMultiDeviceFixture::TearDown();
+        tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
     }
 };
