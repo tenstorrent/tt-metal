@@ -68,4 +68,3 @@ Note: The model is evaluated with 512 samples.
 - The post-processing is performed using PyTorch.
 - The first time the Imagenet demo is run, you need to login to huggingface using your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`.
 - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens.
-
