@@ -24,7 +24,6 @@ protected:
     }
 
     void SetUp() override {
-        this->DetectDispatchMode();
         if (this->SkipTestSuiteIfNotGalaxyMotherboard()) {
             GTEST_SKIP() << "Not a galaxy mobo";
         }

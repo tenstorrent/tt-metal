@@ -57,7 +57,7 @@ static void test_sems_across_core_types(
         }
 
         const auto& eth_cores_unordered =
-            active_eth ? device->get_active_ethernet_cores() : device->get_inactive_ethernet_cores();
+            active_eth ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
 
         std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
         if (eth_cores.size() > 0) {
@@ -125,7 +125,7 @@ TEST_F(DispatchFixture, EthTestBlank) {
 
     // TODO: tweak when FD supports idle eth
     const auto& eth_cores_unordered =
-        this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores();
+        this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
 
     std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
 
@@ -181,7 +181,7 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
 
     // TODO: tweak when FD supports idle eth
     const auto& eth_cores =
-        this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores();
+        this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
@@ -295,12 +295,14 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 }
 
 class EarlyReturnFixture : public DispatchFixture {
-    void SetUp() override {
+protected:
+    static void SetUpTestSuite() {
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(true);
-        DispatchFixture::SetUp();
+        DispatchFixture::SetUpTestSuite();
     }
-    void TearDown() override {
-        DispatchFixture::TearDown();
+
+    static void TearDownTestSuite() {
+        DispatchFixture::TearDownTestSuite();
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(false);
     }
 };
