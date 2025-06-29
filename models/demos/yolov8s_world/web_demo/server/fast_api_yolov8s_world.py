@@ -12,12 +12,12 @@ from fastapi import FastAPI, File, UploadFile
 from PIL import Image
 
 import ttnn
-from models.demos.yolov8x.demo.demo_utils import load_coco_class_names
-from models.demos.yolov8x.runner.performant_runner import YOLOv8xPerformantRunner
+from models.demos.yolov8s_world.demo.demo_utils import load_coco_class_names
+from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
 from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
 
 app = FastAPI(
-    title="YOLOv8x object detection",
+    title="YOLOv8s_world object detection",
     description="Inference engine to detect objects in image.",
     version="0.0",
 )
@@ -59,12 +59,12 @@ async def startup():
             num_command_queues=2,
         )
         device.enable_program_cache()
-        model = YOLOv8xPerformantRunner(device, 1)
+        model = YOLOv8sWorldPerformantRunner(device, 1)
     else:
         device_id = 0
         device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
         device.enable_program_cache()
-        model = YOLOv8xPerformantRunner(device, 1)
+        model = YOLOv8sWorldPerformantRunner(device, 1)
 
 
 @app.on_event("shutdown")
@@ -193,7 +193,7 @@ async def objdetection_v2(file: UploadFile = File(...)):
     image = torch.permute(image, (0, 3, 1, 2))
     t1 = time.time()
     response = model.run(image)
-    response = ttnn.to_torch(response)
+    response = ttnn.to_torch(response[0])
     names = load_coco_class_names()
     results = postprocess(response, image, image1, names=names)[0]
     t2 = time.time()

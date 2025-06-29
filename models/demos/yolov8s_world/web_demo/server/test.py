@@ -4,34 +4,23 @@
 import logging
 import os
 import time
-from io import BytesIO
 
 import numpy as np
 import torch
-from fastapi import FastAPI, File, UploadFile
+
+# from fastapi import FastAPI, File, UploadFile
 from PIL import Image
 
 import ttnn
-from models.demos.yolov8x.demo.demo_utils import load_coco_class_names
-from models.demos.yolov8x.runner.performant_runner import YOLOv8xPerformantRunner
-from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
 
-app = FastAPI(
-    title="YOLOv8x object detection",
-    description="Inference engine to detect objects in image.",
-    version="0.0",
-)
+# from models.demos.yolov9c.reference import yolov9c
+from models.demos.yolov8s.tests.yolov8s_e2e_performant import Yolov8sTrace2CQ
+from models.demos.yolov9c.demo.demo_utils import load_coco_class_names
 
+# from models.demos.yolov9c.tt import ttnn_yolov9c
+from models.experimental.yolo_evaluation.yolo_evaluation_utils import postprocess
 
-@app.get("/")
-async def root():
-    return {"message": "Hello World"}
-
-
-# Configure the logger
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler()]
-)
+model = None
 
 
 def get_dispatch_core_config():
@@ -45,8 +34,7 @@ def get_dispatch_core_config():
     return dispatch_core_config
 
 
-@app.on_event("startup")
-async def startup():
+def startup():
     global model
     if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
         print("WH_ARCH_YAML:", os.environ.get("WH_ARCH_YAML"))
@@ -59,18 +47,17 @@ async def startup():
             num_command_queues=2,
         )
         device.enable_program_cache()
-        model = YOLOv8xPerformantRunner(device, 1)
+        model = Yolov8sTrace2CQ()
     else:
         device_id = 0
         device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
         device.enable_program_cache()
-        model = YOLOv8xPerformantRunner(device, 1)
+        model = Yolov8sTrace2CQ()
+    model.initialize_yolov8s_trace_2cqs_inference(device, 1)
 
 
-@app.on_event("shutdown")
-async def shutdown():
-    # model.release()
-    model.release()
+# def shutdown():
+#    model.release()
 
 
 def process_output(output):
@@ -176,12 +163,25 @@ def nms_cpu(boxes, confs, nms_thresh=0.5, min_mode=False):
     return np.array(keep)
 
 
-@app.post("/objdetection_v2")
-async def objdetection_v2(file: UploadFile = File(...)):
-    contents = await file.read()
+def objdetection_v2():
+    # contents = await file.read()
     # Load and convert the image to RGB
-    image = Image.open(BytesIO(contents)).convert("RGB")
-    image1 = np.array(image)
+    global model
+    image = Image.open("/home/ttuser/ssinghal/tt-metal/models/sample_data/huggingface_cat_image.jpg").convert("RGB")
+    padding_size = (640, 640)
+
+    # Create a new image with the desired size and black background
+    new_img = Image.new("RGB", padding_size, "black")
+
+    # Calculate position to paste the original image
+    position = ((padding_size[0] - image.width) // 2, (padding_size[1] - image.height) // 2)
+
+    # Paste the original image onto the new image
+    new_img.paste(image, position)
+
+    # new_img.save(output_path)
+    image1 = np.array(new_img)
+    print(image1.shape)
     if type(image1) == np.ndarray and len(image1.shape) == 3:  # cv2 image
         image = torch.from_numpy(image1).float().div(255.0).unsqueeze(0)
     elif type(image1) == np.ndarray and len(image1.shape) == 4:
@@ -192,14 +192,16 @@ async def objdetection_v2(file: UploadFile = File(...)):
 
     image = torch.permute(image, (0, 3, 1, 2))
     t1 = time.time()
+    # ttnn_im = ttnn.from_torch(image, dtype=ttnn.bfloat16)
     response = model.run(image)
     response = ttnn.to_torch(response)
     names = load_coco_class_names()
     results = postprocess(response, image, image1, names=names)[0]
+    print(results)
     t2 = time.time()
     logging.info("The inference on the sever side took: %.3f seconds", t2 - t1)
-    conf_thresh = 0.6
-    nms_thresh = 0.5
+    conf_thresh = 0.8
+    nms_thresh = 0.6
 
     output = []
     # print(results["boxes"]["xyxy"])
@@ -231,3 +233,8 @@ async def objdetection_v2(file: UploadFile = File(...)):
     logging.info("The post-processing to get the boxes took: %.3f seconds", t3 - t2)
 
     return output
+
+
+startup()
+objdetection_v2()
+shutdown()
