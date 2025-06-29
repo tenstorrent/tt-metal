@@ -825,10 +825,6 @@ SubDeviceManagerId Device::create_sub_device_manager(tt::stl::Span<const SubDevi
     return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
 }
 
-std::tuple<SubDeviceManagerId, SubDeviceId> Device::create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    return sub_device_manager_tracker_->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
-}
-
 void Device::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
 }

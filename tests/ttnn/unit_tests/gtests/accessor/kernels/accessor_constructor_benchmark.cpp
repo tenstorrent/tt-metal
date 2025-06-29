@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "accessor/sharded_accessor.h"
+#include "accessor/tensor_accessor.h"
 
 void kernel_main() {
     constexpr uint32_t base_idx_cta = 0;
@@ -13,9 +13,9 @@ void kernel_main() {
     for (size_t i = 0; i < loop_count; ++i) {
         {
             DeviceZoneScopedN(ACCESSOR_CONFIG_NAME);
-            auto args = nd_sharding::make_args<base_idx_cta, base_idx_crta>();
-            volatile auto sharded_accessor = nd_sharding::make_sharded_accessor_from_args(args, 0, 1024);
-            (void)sharded_accessor;
+            auto args = make_tensor_accessor_args<base_idx_cta, base_idx_crta>();
+            volatile auto tensor_accessor = make_tensor_accessor_from_args(args, 0, 1024);
+            (void)tensor_accessor;
         }
     }
 }

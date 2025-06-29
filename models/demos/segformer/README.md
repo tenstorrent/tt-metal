@@ -73,5 +73,14 @@ Semantic segmentation: [source](https://huggingface.co/nvidia/segformer-b0-finet
   pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py
   ```
 
+### Segformer End-to-End inference (Trace + 2cq):
+
+- Use the following command to run the performant Model with Trace+2CQs:
+
+```python
+pytest --disable-warnings models/demos/segformer/tests/perf/test_perf_segformer_trace_2cq.py
+```
+
+
 ## ToDo:
 To add the performant model demo and the performance numbers using the trace+2cqs pipeline.

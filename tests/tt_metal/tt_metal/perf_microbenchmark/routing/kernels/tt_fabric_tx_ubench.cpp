@@ -146,8 +146,7 @@ void kernel_main() {
         );
 #ifndef FVC_MODE_PULL
 #ifdef LOW_LATENCY_ROUTING
-        uint32_t outgoing_direction =
-            get_next_hop_router_direction(client_interface, 0, dest_device >> 16, dest_device & 0xFFFF);
+        uint32_t outgoing_direction = get_next_hop_router_direction(dest_device >> 16, dest_device & 0xFFFF);
         if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
             fabric_set_unicast_route(
                 client_interface,

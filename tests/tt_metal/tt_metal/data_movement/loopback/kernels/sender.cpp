@@ -7,8 +7,8 @@
 
 // L1 to L1 send
 void kernel_main() {
-    uint32_t src_addr = get_compile_time_arg_val(0);
-    uint32_t dst_addr = get_compile_time_arg_val(1);
+    constexpr uint32_t src_addr = get_compile_time_arg_val(0);
+    constexpr uint32_t dst_addr = get_compile_time_arg_val(1);
     constexpr uint32_t num_of_transactions = get_compile_time_arg_val(2);
     constexpr uint32_t transaction_num_pages = get_compile_time_arg_val(3);
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(4);
@@ -20,10 +20,13 @@ void kernel_main() {
 
     constexpr uint32_t transaction_size_bytes = transaction_num_pages * page_size_bytes;
 
-    uint64_t dst_noc_addr = get_noc_addr(dest_x, dest_y, dst_addr);
+    DeviceTimestampedData("Number of transactions", num_of_transactions);
+    DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
+    DeviceTimestampedData("Test id", test_id);
 
     {
         DeviceZoneScopedN("RISCV0");
+        uint64_t dst_noc_addr = get_noc_addr(dest_x, dest_y, dst_addr);
         for (uint32_t i = 0; i < num_of_transactions; i++) {
             noc_async_write(src_addr, dst_noc_addr, transaction_size_bytes);
         }
@@ -32,8 +35,4 @@ void kernel_main() {
 
     uint64_t sem_addr = get_noc_addr(dest_x, dest_y, semaphore);
     noc_semaphore_inc(sem_addr, 1);
-
-    DeviceTimestampedData("Number of transactions", num_of_transactions);
-    DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
-    DeviceTimestampedData("Test id", test_id);
 }

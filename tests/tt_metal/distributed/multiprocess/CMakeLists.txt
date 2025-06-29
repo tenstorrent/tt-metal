@@ -1,0 +1,21 @@
+add_executable(distributed_multiprocess_tests)
+target_sources(
+    distributed_multiprocess_tests
+    PRIVATE
+        main.cpp
+        test_visible_devices_mp.cpp
+)
+set_target_properties(
+    distributed_multiprocess_tests
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/distributed/multiprocess
+)
+target_link_libraries(distributed_multiprocess_tests PRIVATE test_metal_common_libs)
+target_include_directories(
+    distributed_multiprocess_tests
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/distributed/multiprocess
+)

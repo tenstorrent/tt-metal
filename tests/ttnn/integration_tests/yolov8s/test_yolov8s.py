@@ -13,11 +13,11 @@ from loguru import logger
 from ultralytics import YOLO
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import disable_persistent_kernel_cache
-from models.experimental.yolov8s.tt.tt_yolov8s_utils import (
+from models.demos.yolov8s.tt.tt_yolov8s_utils import (
     ttnn_decode_bboxes,
     custom_preprocessor,
 )
-from models.experimental.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel, TtConv, TtC2f, TtSppf, TtDFL
+from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel, TtConv, TtC2f, TtSppf, TtDFL
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True, ids=["0"])
@@ -45,7 +45,7 @@ def test_yolov8s_640(device, input_tensor, use_weights_from_ultralytics):
 
     n, c, h, w = input_tensor.shape
     if c == 3:
-        c = 8
+        c = 16
     input_mem_config = ttnn.create_sharded_memory_config(
         [n, c, h, w],
         ttnn.CoreGrid(x=8, y=8),

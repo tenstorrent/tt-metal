@@ -144,8 +144,8 @@ target_sources(
     unit_tests_ttnn_accessor
     PRIVATE
         accessor/test_accessor_benchmarks.cpp
-        accessor/test_sharded_accessor.cpp
-        accessor/test_sharded_accessor_on_device.cpp
+        accessor/test_tensor_accessor.cpp
+        accessor/test_tensor_accessor_on_device.cpp
 )
 setup_ttnn_test_target(unit_tests_ttnn_accessor)
 
