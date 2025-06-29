@@ -11,10 +11,16 @@
 #include <unordered_map>
 
 #include "impl/program/program_impl.hpp"
+#include "mesh_coord.hpp"
 
 namespace tt::tt_metal {
     class Inspector;
     class MetalContext;
+
+    namespace distributed {
+        class MeshDevice;
+        class MeshWorkloadImpl;
+    }
 }
 
 #define TT_INSPECTOR_THROW(...) \
@@ -51,11 +57,23 @@ struct ProgramData {
     std::unordered_map<std::size_t, ProgramBinaryStatus> binary_status_per_device;
 };
 
+struct MeshDeviceData {
+    std::weak_ptr<const distributed::MeshDevice> mesh_device;
+    std::size_t mesh_id;
+};
+
+struct MeshWorkloadData {
+    std::weak_ptr<const distributed::MeshWorkloadImpl> mesh_workload;
+    std::size_t mesh_workload_id;
+};
+
 class Logger {
 private:
     time_point start_time;
     std::ofstream programs_ostream;
     std::ofstream kernels_ostream;
+    std::ofstream mesh_devices_ostream;
+    std::ofstream mesh_workloads_ostream;
     bool initialized;
 
     int64_t convert_timestamp(const time_point& tp) const {
@@ -72,6 +90,14 @@ public:
     void log_program_kernel_compile_finished(const ProgramData& program_data, const inspector::KernelData& kernel_data) noexcept;
     void log_program_compile_finished(const ProgramData& program_data) noexcept;
     void log_program_binary_status_change(const ProgramData& program_data, std::size_t device_id, ProgramBinaryStatus status) noexcept;
+
+    void log_mesh_device_created(const distributed::MeshDevice* mesh_device) noexcept;
+    void log_mesh_device_destroyed(const distributed::MeshDevice* mesh_device) noexcept;
+    void log_mesh_device_initialized(const distributed::MeshDevice* mesh_device) noexcept;
+    void log_mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
+    void log_mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
+    void log_mesh_workload_add_program(const distributed::MeshWorkloadImpl* mesh_workload, const distributed::MeshCoordinateRange& device_range, std::size_t program_id) noexcept;
+    void log_mesh_workload_set_program_binary_status(const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
 };
 
 class Data {
@@ -80,7 +106,11 @@ private:
 
     inspector::Logger logger;
     std::mutex programs_mutex;
+    std::mutex mesh_devices_mutex;
+    std::mutex mesh_workloads_mutex;
     std::unordered_map<uint64_t, inspector::ProgramData> programs_data;
+    std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
+    std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data;
 
     friend class tt::tt_metal::Inspector;
 };

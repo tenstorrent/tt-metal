@@ -293,6 +293,9 @@ public:
 
     std::string to_string() const;
     bool is_parent_mesh() const;
+    std::optional<int> get_parent_mesh_id() const {
+        return parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt;
+    }
 
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
 
