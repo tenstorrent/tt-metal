@@ -7,20 +7,7 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "ckernel_sfpu_elu.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 
-namespace ckernel {
-
-// New LLK SFPU APIs
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_elu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::elu, APPROXIMATE>(sfpu::elu_init<APPROXIMATE>);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_elu(uint dst_index, uint param0) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_elu<APPROXIMATE>, dst_index, (int)VectorMode::RC, param0);
-}
-
-}  // namespace ckernel
+SFPU_INIT_KERNEL(elu, sfpu::elu_init)
+SFPU_UNARY_KERNEL(elu)

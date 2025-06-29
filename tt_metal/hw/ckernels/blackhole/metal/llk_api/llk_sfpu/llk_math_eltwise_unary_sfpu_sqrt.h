@@ -7,19 +7,6 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "ckernel_sfpu_sqrt.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 
-namespace ckernel {
-
-// New LLK SFPU APIs
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_sqrt(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_sqrt<APPROXIMATE>, dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_sqrt_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::sqrt, APPROXIMATE>(sfpu::sqrt_init<APPROXIMATE>);
-}
-
-}  // namespace ckernel
+SFPU_INIT_KERNEL(sqrt, sfpu::sqrt_init)

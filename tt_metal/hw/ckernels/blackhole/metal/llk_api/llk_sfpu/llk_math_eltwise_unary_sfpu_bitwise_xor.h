@@ -7,21 +7,6 @@
 #include "ckernel_sfpu_bitwise_xor.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 
-namespace ckernel {
-
-// New LLK SFPU APIs
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_bitwise_xor_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::bitwise_xor, APPROXIMATE>();
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_bitwise_xor(
-    uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_bitwise_xor<APPROXIMATE>, dst_index, vector_mode, param0);
-}
-
-}  // namespace ckernel
+SFPU_UNARY_ONE_PARAM_KERNEL(bitwise_xor, RC, uint param0, param0)
