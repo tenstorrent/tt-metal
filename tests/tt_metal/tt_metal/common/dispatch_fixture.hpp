@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <umd/device/types/arch.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include "gtest/gtest.h"
 #include <map>
@@ -19,13 +20,36 @@
 
 namespace tt::tt_metal {
 
-// A dispatch-agnostic test fixture using CRTP for per-class static instances
+// Fixture Configuration for Dispatch Fixtures
+struct DispatchFixtureConfig {
+    // Require slow dispatch
+    bool slow_dispatch = false;
+    // Require a specified number of HW CQs
+    uint8_t num_hw_cqs = 1;
+    // Require a specified architecture. Invalid means any architecture.
+    ARCH arch = tt::ARCH::Invalid;
+    // Scoped number of devices to expose to the test
+    size_t num_devices_to_create = std::numeric_limits<size_t>::max();
+    // Trace region size
+    uint32_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
+    // L1 Small size
+    uint32_t l1_small_size = DEFAULT_L1_SMALL_SIZE;
+
+    std::string GetSkipMessage() const {
+        return fmt::format(
+            "Requires {}, NUM HW CQs: {}, ARCH: {}",
+            slow_dispatch ? "Slow Dispatch" : "Fast Dispatch",
+            num_hw_cqs,
+            arch);
+    }
+};
+
+//
+// A dispatch-agnostic test fixture
 // If using Fast Dispatch, number of HW CQs is determined from the RTOptions
 //
-// Concrete classes must provide
-// static bool WillSkip() : Returns true if the test should be skipped
-// static std::string_view GetSkipMessage() : Returns a string describing the test requirements. This is used for the
-// skip message
+// Concrete classes must provide a DispatchFixtureConfig struct that will be used to configure the fixture and determine
+// if the test should be skipped.
 //
 // For GTEST to properly instantiate a SetUpSuite and TearDownSuite for each suite, the concrete classes must
 // each implement their own SetUpSuite and TearDownSuite. Calling DispatchFixture::SetUpTestSuite() and
