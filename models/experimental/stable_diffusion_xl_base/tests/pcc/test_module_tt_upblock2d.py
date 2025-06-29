@@ -26,7 +26,6 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 def test_upblock(
     device,
     input_shape,
@@ -44,7 +43,7 @@ def test_upblock(
 
     torch_crosattn = unet.up_blocks[block_id]
 
-    model_config = ModelOptimisations(conv_w_dtype=conv_weights_dtype)
+    model_config = ModelOptimisations()
     tt_crosattn = TtUpBlock2D(device, state_dict, f"up_blocks.{block_id}", model_config=model_config)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
