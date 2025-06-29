@@ -135,7 +135,7 @@ private:
     void SetUp() override {}
 
     void TearDown() override {
-        BaseFabricFixture::TearDown();
+        BaseFabricFixture::DoTearDownTestSuite();
         tt::tt_metal::MetalContext::instance().set_default_control_plane_mesh_graph();
     }
 };

@@ -184,7 +184,6 @@ protected:
         if (ShouldSkip()) {
             return;
         }
-        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
 
         std::vector<chip_id_t> chip_ids;
         for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
@@ -214,7 +213,6 @@ protected:
             return;
         }
         tt::tt_metal::detail::CloseDevices(reserved_devices_internal);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
     }
 
     static void SetUpTestSuite() { CommandQueueMultiDeviceFixture::DoSetUpTestSuite(); }
