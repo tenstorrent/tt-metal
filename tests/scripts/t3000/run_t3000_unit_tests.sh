@@ -7,13 +7,16 @@ if [ -z "${ARCH_NAME}" ]; then
   exit 1
 fi
 
+# Enable FD Fabric for all tests
+export TT_METAL_FD_FABRIC=true
+
 run_t3000_ttmetal_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttmetal_tests"
-  TT_METAL_FD_FABRIC=true ./build/test/tt_metal/distributed/distributed_unit_tests ; fail+=$?
+  ./build/test/tt_metal/distributed/distributed_unit_tests
 
   echo "LOG_METAL: Testing TT_METAL_VISIBLE_DEVICES functionality"
   ./tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh ; fail+=$?
@@ -22,15 +25,15 @@ run_t3000_ttmetal_tests() {
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips" ; fail+=$?
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsDirectRingGatherAllChips" ; fail+=$?
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsInterleavedRingGatherAllChips" ; fail+=$?
-  TT_METAL_FD_FABRIC=true TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*" ; fail+=$?
-  TT_METAL_FD_FABRIC=true ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueMultiDevice*Fixture.*" ; fail+=$?
-  TT_METAL_FD_FABRIC=true ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintFixture.*:WatcherFixture.*" ; fail+=$?
+  TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*" ; fail+=$?
+  ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueMultiDevice*Fixture.*" ; fail+=$?
+  ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintFixture.*:WatcherFixture.*" ; fail+=$?
 
   # Programming examples
-  TT_METAL_FD_FABRIC=true ./build/programming_examples/distributed/distributed_program_dispatch
-  TT_METAL_FD_FABRIC=true ./build/programming_examples/distributed/distributed_buffer_rw
-  TT_METAL_FD_FABRIC=true ./build/programming_examples/distributed/distributed_eltwise_add
-  TT_METAL_FD_FABRIC=true ./build/programming_examples/distributed/distributed_trace_and_events
+  ./build/programming_examples/distributed/distributed_program_dispatch
+  ./build/programming_examples/distributed/distributed_buffer_rw
+  ./build/programming_examples/distributed/distributed_eltwise_add
+  ./build/programming_examples/distributed/distributed_trace_and_events
 
   # Record the end time
   end_time=$(date +%s)
@@ -55,10 +58,10 @@ run_t3000_ttfabric_tests() {
   #TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 
   # these tests cover mux fixture as well
-  TT_METAL_FD_FABRIC=true ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-  TT_METAL_FD_FABRIC=true ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
 
-  TT_METAL_FD_FABRIC=true ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
+  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
 
   # Unicast tests
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity --fabric_command 1 --board_type t3k --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
@@ -90,15 +93,15 @@ run_t3000_ttnn_tests() {
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./build/test/ttnn/unit_tests_ttnn
-  TT_METAL_FD_FABRIC=true ./build/test/ttnn/unit_tests_ttnn_ccl
-  TT_METAL_FD_FABRIC=true ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor
-  TT_METAL_FD_FABRIC=true ./build/test/ttnn/unit_tests_ttnn_ccl_ops
-  TT_METAL_FD_FABRIC=true ./build/test/ttnn/test_ccl_multi_cq_multi_device
-  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_events.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/operations/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
-  TT_METAL_FD_FABRIC=true pytest -n auto tests/ttnn/unit_tests/test_multi_device.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true pytest -n auto tests/ttnn/unit_tests/test_multi_device_async.py ; fail+=$?
+  ./build/test/ttnn/unit_tests_ttnn_ccl
+  ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor
+  ./build/test/ttnn/unit_tests_ttnn_ccl_ops
+  ./build/test/ttnn/test_ccl_multi_cq_multi_device
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_events.py ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/operations/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/test_multi_device.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/test_multi_device_async.py ; fail+=$?
   pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
   pytest tests/ttnn/distributed/test_data_parallel_example.py ; fail+=$?
   pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; fail+=$?
@@ -118,9 +121,9 @@ run_t3000_falcon7b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
-  TT_METAL_FD_FABRIC=true pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_mlp.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_attention.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_decoder.py ; fail+=$?
+  pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_mlp.py ; fail+=$?
+  pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_attention.py ; fail+=$?
+  pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_decoder.py ; fail+=$?
   #pytest models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py
 
   # Record the end time
@@ -139,7 +142,7 @@ run_t3000_falcon40b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon40b_tests"
 
-  TT_METAL_FD_FABRIC=true WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_1_layer_t3000.py ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_1_layer_t3000.py ; fail+=$?
 
 
   # Record the end time
@@ -168,13 +171,13 @@ run_t3000_llama3-small_tests() {
 
   # Run all Llama3 tests for 1B, 3B and 8B weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
-    TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
-    TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-    TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
-    TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
-    TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-    TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
-    TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
@@ -198,13 +201,13 @@ run_t3000_llama3.2-11b_tests() {
   # Llama3.2-11B weights
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
-  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -226,13 +229,13 @@ run_t3000_llama3.1-70b_tests() {
   # Llama3.1-70B weights
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
 
-  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
-  TT_METAL_FD_FABRIC=true LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
+  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
+  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
+  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
