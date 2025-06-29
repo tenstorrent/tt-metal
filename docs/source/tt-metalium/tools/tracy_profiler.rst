@@ -184,3 +184,42 @@ Profiling Device
 In tracy enabled builds, device data of all active cores on devices used for the test will automatically show up.
 
 Please refer to :ref:`Device Program Profiler<device_program_profiler>` for more detailed overview of device side profiling with tracy.
+
+Generating Data for TT-NN Visualizer with Tracy
+-----------------------------------------------
+
+Tracy can be used to generate a performance report folder which can be used with `TT-NN Visualizer <https://github.com/tenstorrent/ttnn-visualizer>`_:
+
+..  code-block:: sh
+
+    python -m tracy -r -p -v -m pytest path/to/test.py
+
+This collects host and device side profiling logs, then post-processes and aggregates them into a csv file named like ``ops_perf_results_2025_06_25_14_04_34.csv``,
+under a folder with a timestamped name (e.g. ``2025_06_25_14_04_34``):
+
+.. image:: ../_static/tracy_perf_report.png
+    :alt: Tracy performance report
+
+Additional CLI options:
+
+- ``-o``, ``--output-folder``: This option is for providing the output folder for storing the performance report folder created. The default output folder is ``${TT_METAL_HOME}/generated/profiler/reports``
+
+- ``-n``, ``--name-append``: Name to be appended to the the performance report folder and its files
+
+- ``--collect-noc-traces``: Specifying this option will also create timeline files using `tt-npe <https://github.com/tenstorrent/tt-npe>`_ in a subdirectory named ``npe_viz``. These are used in the NPE tab on TT-NN Visualizer to visualize NoC traffic and congestion.
+  **Note**: This option requires that npe is properly installed (See `here <https://github.com/tenstorrent/tt-npe/blob/main/docs/src/getting_started.md#quick-start>`_ for instructions).
+
+Once this folder containing the performance report is generated, it can be uploaded under the Reports tab in TT-NN Visualizer
+
+.. image:: ../_static/ttnn_visualizer_perf_report_upload.png
+    :alt: TT-NN Visualizer performance report upload
+
+and viewed in the Performance tab:
+
+.. image:: ../_static/ttnn_visualizer_performance.png
+    :alt: TT-NN Visualizer Performance analysis
+
+and NPE tab (if ``--collect-noc-traces`` was used):
+
+.. image:: ../_static/ttnn_visualizer_npe.png
+    :alt: TT-NN Visualizer NPE

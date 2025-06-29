@@ -302,6 +302,7 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
         setup.deviceInputLog = deviceTimesLog
         deviceData = import_log_run_stats(setup)
         freq = deviceData["deviceInfo"]["freq"]
+        arch = deviceData["deviceInfo"]["arch"]  # passed to NPE later
         for device in devicesOps:
             assert device in deviceData["devices"].keys()
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
@@ -426,7 +427,7 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
     # if enabled, analyze noc trace files present in log folder and add
     # relevant statistics to 'ops' dict
     if analyze_noc_traces:
-        npe_stats = analyzeNoCTraces(logFolder)
+        npe_stats = analyzeNoCTraces(logFolder, arch)
         if npe_stats is not None:
             ops_found = 0
             for op_id in ops:
@@ -664,6 +665,8 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
         os.system(f"cp {logFolder / TRACY_FILE_NAME} {outFolder}")
     if os.path.isfile(f"{logFolder / PROFILER_DEVICE_SIDE_LOG}"):
         os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
+    if os.path.isdir(f"{logFolder.parent / 'npe_viz'}"):
+        os.system(f"cp -r {logFolder.parent / 'npe_viz'} {outFolder}")
 
     logger.info(f"Generating OPs CSV")
     allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
@@ -903,14 +906,14 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
     logger.info(f"OPs csv generated at: {allOpsCSVPath}")
 
 
-def analyzeNoCTraces(logFolder):
+def analyzeNoCTraces(logFolder, arch):
     """Attempts to import tt-npe from $PYTHONPATH and process noc traces to
     obtain per-operation DRAM BW and NoC utilization statistics"""
     try:
         from npe_analyze_noc_trace_dir import analyze_noc_traces_in_dir
 
         logger.info(f"tt-npe module imported successfully; analyzing noc traces ... ")
-        return analyze_noc_traces_in_dir(logFolder, False, True)
+        return analyze_noc_traces_in_dir(logFolder, arch, True, True)
     except ImportError:
         logger.warning("Could not import tt-npe module. Ensure tt-npe is built, then source 'tt-npe/ENV_SETUP'")
         return None
