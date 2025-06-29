@@ -22,6 +22,7 @@ The MobileNetV2 model has been pre-trained on the ImageNet dataset and can be us
 - The entry point to mobilenetv2 model is MobileNetV2 in `models/demos/mobilenetv2/tt/ttnn_monilenetv2.py`.
 - Supported Input Resolution - (224,224) (Height,Width)
 - Batch Size :8
+- Dataset used for evaluation - **imagenet-1k**
 
 ### Model performant running with Trace+2CQ
 
@@ -54,3 +55,16 @@ Use the following command to run the Demo on ImageNet dataset:
 ```bash
 pytest  models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo
 ```
+
+### Performant evaluation with Trace+2CQ
+Use the following command to run the performant evaluation with Trace+2CQs:
+
+```
+pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval[8-224-tt_model-device_params0]
+```
+Note: The model is evaluated with 512 samples.
+
+#### Note:
+- The post-processing is performed using PyTorch.
+- The first time the Imagenet demo is run, you need to login to huggingface using your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`.
+- To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens.
