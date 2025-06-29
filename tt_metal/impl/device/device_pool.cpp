@@ -324,7 +324,7 @@ void DevicePool::initialize(
                 }
                 log_info(tt::LogMetal, "Dispatch on {} Fabric", fabric_config);
             }
-        } else {
+        } else if (any_remote_devices) {
             fallback_to_tunneling();
             log_debug(
                 tt::LogMetal,
