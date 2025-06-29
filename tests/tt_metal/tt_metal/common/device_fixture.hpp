@@ -97,13 +97,17 @@ public:
 
 class DeviceFixtureWithL1Small : public DeviceFixture {
 public:
-    static void SetUpTestSuite() { DispatchFixture::DoSetUpTestSuite(24 * 1024); }
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
 
-    static void TearDownTestSuite() { DispatchFixture::TearDownTestSuite(); }
+    void SetUp() override {
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        DispatchFixture::DoSetUpTestSuite(24 * 1024);
+    }
 
-    void SetUp() override {}
-
-    void TearDown() override {}
+    void TearDown() override { DispatchFixture::TearDownTestSuite(); }
 };
 
 class DeviceSingleCardFixture : public DispatchFixture {
