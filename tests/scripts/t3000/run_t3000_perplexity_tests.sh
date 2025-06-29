@@ -1,5 +1,7 @@
 #!/bin/bash
 
+export TT_METAL_FD_FABRIC=true
+
 run_t3000_falcon7b_perplexity_tests() {
   # Record the start time
   fail=0
