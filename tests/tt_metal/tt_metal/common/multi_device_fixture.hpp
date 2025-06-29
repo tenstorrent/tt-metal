@@ -83,6 +83,7 @@ public:
     }
 };
 
+template <typename IMPL>
 class MeshDeviceFixtureBase : public ::testing::Test {
 public:
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> get_mesh_device() {
@@ -116,12 +117,15 @@ protected:
         FabricConfig fabric_config = FabricConfig::DISABLED;
     };
 
-    MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
+    inline static std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
+    inline static Config config_;
 
-    void SetUp() override {
+    static void DoSetUpTestSuite(const Config& fixture_config) {
+        config_ = fixture_config;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            GTEST_SKIP() << "Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.";
+            log_info(LogTest, "Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.");
+            return;
         }
 
         const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -129,8 +133,11 @@ protected:
         const auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         const auto mesh_device_type = derive_mesh_device_type(num_devices, arch);
         if (!mesh_device_type) {
-            GTEST_SKIP() << fmt::format(
-                "Skipping MeshDevice test suite on a machine with an unsupported number of devices {}.", num_devices);
+            log_info(
+                LogTest,
+                "Skipping MeshDevice test suite on a machine with an unsupported number of devices {}.",
+                num_devices);
+            return;
         }
 
         if (!config_.mesh_device_types.empty() &&
@@ -140,12 +147,14 @@ protected:
                 config_.mesh_device_types.begin(),
                 config_.mesh_device_types.end(),
                 std::back_inserter(requested_device_types),
-                [](const auto t) { return std::string(magic_enum::enum_name(t)); });
-            GTEST_SKIP() << fmt::format(
+                [](const auto t) { return mesh_device_type_to_string(t); });
+            log_info(
+                LogTest,
                 "Skipping MeshDevice test suite on a {} machine that does not match any of the configured mesh device "
                 "types {}",
-                magic_enum::enum_name(*mesh_device_type),
+                mesh_device_type_to_string(*mesh_device_type),
                 boost::algorithm::join(requested_device_types, ", "));
+            return;
         }
 
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
@@ -167,7 +176,7 @@ protected:
             config_.worker_l1_size);
     }
 
-    void TearDown() override {
+    static void DoTearDownTestSuite() {
         if (!mesh_device_) {
             return;
         }
@@ -178,11 +187,16 @@ protected:
         }
     }
 
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
+    static void SetUpTestSuite() { DoSetUpTestSuite(config_); }
+    static void TearDownTestSuite() { DoTearDownTestSuite(); }
+
+    void SetUp() override {}
+
+    void TearDown() override {}
 
 private:
     // Returns the mesh shape for a given mesh device type.
-    MeshShape get_mesh_shape(MeshDeviceType mesh_device_type) {
+    static MeshShape get_mesh_shape(MeshDeviceType mesh_device_type) {
         switch (mesh_device_type) {
             case MeshDeviceType::N150:
             case MeshDeviceType::P150: return MeshShape(1, 1);
@@ -194,8 +208,21 @@ private:
         }
     }
 
+    // Manual string conversion for MeshDeviceType enum
+    static std::string mesh_device_type_to_string(MeshDeviceType mesh_device_type) {
+        switch (mesh_device_type) {
+            case MeshDeviceType::N150: return "N150";
+            case MeshDeviceType::P150: return "P150";
+            case MeshDeviceType::N300: return "N300";
+            case MeshDeviceType::P300: return "P300";
+            case MeshDeviceType::T3000: return "T3000";
+            case MeshDeviceType::TG: return "TG";
+            default: return "Unknown";
+        }
+    }
+
     // Determines the mesh device type based on the number of devices.
-    std::optional<MeshDeviceType> derive_mesh_device_type(size_t num_devices, tt::ARCH arch) {
+    static std::optional<MeshDeviceType> derive_mesh_device_type(size_t num_devices, tt::ARCH arch) {
         switch (num_devices) {
             case 1: {
                 switch (arch) {
@@ -226,61 +253,90 @@ private:
             default: return std::nullopt;
         }
     }
-
-    Config config_;
 };
 
 // Fixtures that determine the mesh device type automatically.
 // The associated test will be run if the topology is supported.
-class GenericMeshDeviceFixture : public MeshDeviceFixtureBase {
+class GenericMeshDeviceFixture : public MeshDeviceFixtureBase<GenericMeshDeviceFixture> {
 protected:
-    GenericMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.num_cqs = 1}) {}
+    static void SetUpTestSuite() {
+        MeshDeviceFixtureBase<GenericMeshDeviceFixture>::DoSetUpTestSuite(Config{.num_cqs = 1});
+    }
+
+    static void TearDownTestSuite() { MeshDeviceFixtureBase<GenericMeshDeviceFixture>::DoTearDownTestSuite(); }
 };
 
-class GenericMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
+class GenericMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase<GenericMultiCQMeshDeviceFixture> {
 protected:
-    GenericMultiCQMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.num_cqs = 2}) {}
+    static void SetUpTestSuite() {
+        MeshDeviceFixtureBase<GenericMultiCQMeshDeviceFixture>::DoSetUpTestSuite(Config{.num_cqs = 2});
+    }
+
+    static void TearDownTestSuite() { MeshDeviceFixtureBase<GenericMultiCQMeshDeviceFixture>::DoTearDownTestSuite(); }
 };
 
 // Fixtures that specify the mesh device type explicitly.
 // The associated test will be run if the cluster topology matches
 // what is specified.
-class T3000MeshDeviceFixture : public MeshDeviceFixtureBase {
+class T3000MeshDeviceFixture : public MeshDeviceFixtureBase<T3000MeshDeviceFixture> {
 protected:
-    T3000MeshDeviceFixture() : MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::T3000}}) {}
+    static void SetUpTestSuite() {
+        MeshDeviceFixtureBase<T3000MeshDeviceFixture>::DoSetUpTestSuite(
+            Config{.mesh_device_types = {MeshDeviceType::T3000}});
+    }
+
+    static void TearDownTestSuite() { MeshDeviceFixtureBase<T3000MeshDeviceFixture>::DoTearDownTestSuite(); }
 };
 
-class TGMeshDeviceFixture : public MeshDeviceFixtureBase {
+class TGMeshDeviceFixture : public MeshDeviceFixtureBase<TGMeshDeviceFixture> {
 protected:
-    TGMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}}) {}
+    static void SetUpTestSuite() {
+        MeshDeviceFixtureBase<TGMeshDeviceFixture>::DoSetUpTestSuite(Config{.mesh_device_types = {MeshDeviceType::TG}});
+    }
+
+    static void TearDownTestSuite() { MeshDeviceFixtureBase<TGMeshDeviceFixture>::DoTearDownTestSuite(); }
 };
 
-class T3000MultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
+class T3000MultiCQMeshDeviceFixture : public MeshDeviceFixtureBase<T3000MultiCQMeshDeviceFixture> {
 protected:
-    T3000MultiCQMeshDeviceFixture() :
-        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::T3000}, .num_cqs = 2}) {}
+    static void SetUpTestSuite() {
+        MeshDeviceFixtureBase<T3000MultiCQMeshDeviceFixture>::DoSetUpTestSuite(
+            Config{.mesh_device_types = {MeshDeviceType::T3000}, .num_cqs = 2});
+    }
+
+    static void TearDownTestSuite() { MeshDeviceFixtureBase<T3000MultiCQMeshDeviceFixture>::DoTearDownTestSuite(); }
 };
 
-class TGMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
+class TGMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase<TGMultiCQMeshDeviceFixture> {
 protected:
-    TGMultiCQMeshDeviceFixture() :
-        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}, .num_cqs = 2}) {}
+    static void SetUpTestSuite() {
+        MeshDeviceFixtureBase<TGMultiCQMeshDeviceFixture>::DoSetUpTestSuite(
+            Config{.mesh_device_types = {MeshDeviceType::TG}, .num_cqs = 2});
+    }
+
+    static void TearDownTestSuite() { MeshDeviceFixtureBase<TGMultiCQMeshDeviceFixture>::DoTearDownTestSuite(); }
 };
 
-class T3000MeshDevice1DFabricFixture : public MeshDeviceFixtureBase {
+class T3000MeshDevice1DFabricFixture : public MeshDeviceFixtureBase<T3000MeshDevice1DFabricFixture> {
 protected:
-    T3000MeshDevice1DFabricFixture() :
-        MeshDeviceFixtureBase(Config{
-            .mesh_device_types = {MeshDeviceType::T3000}, .num_cqs = 1, .fabric_config = FabricConfig::FABRIC_1D}) {}
+    static void SetUpTestSuite() {
+        MeshDeviceFixtureBase<T3000MeshDevice1DFabricFixture>::DoSetUpTestSuite(Config{
+            .mesh_device_types = {MeshDeviceType::T3000}, .num_cqs = 1, .fabric_config = FabricConfig::FABRIC_1D});
+    }
+
+    static void TearDownTestSuite() { MeshDeviceFixtureBase<T3000MeshDevice1DFabricFixture>::DoTearDownTestSuite(); }
 };
 
-class T3000MeshDevice2DFabricFixture : public MeshDeviceFixtureBase {
+class T3000MeshDevice2DFabricFixture : public MeshDeviceFixtureBase<T3000MeshDevice2DFabricFixture> {
 protected:
-    T3000MeshDevice2DFabricFixture() :
-        MeshDeviceFixtureBase(Config{
+    static void SetUpTestSuite() {
+        MeshDeviceFixtureBase<T3000MeshDevice2DFabricFixture>::DoSetUpTestSuite(Config{
             .mesh_device_types = {MeshDeviceType::T3000},
             .num_cqs = 1,
-            .fabric_config = FabricConfig::FABRIC_2D_DYNAMIC}) {}
+            .fabric_config = FabricConfig::FABRIC_2D_DYNAMIC});
+    }
+
+    static void TearDownTestSuite() { MeshDeviceFixtureBase<T3000MeshDevice2DFabricFixture>::DoTearDownTestSuite(); }
 };
 
 }  // namespace tt::tt_metal

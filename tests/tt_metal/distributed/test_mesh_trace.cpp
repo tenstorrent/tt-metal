@@ -83,21 +83,31 @@ std::vector<MeshCoordinateRange> tg_all_devices() {
 }
 
 // Define custom fixtures initializing a trace region on the MeshDevice
-class MeshTraceTestSuite : public MeshDeviceFixtureBase {
+class MeshTraceTestSuite : public MeshDeviceFixtureBase<MeshTraceTestSuite> {
 protected:
-    MeshTraceTestSuite() : MeshDeviceFixtureBase(Config{.num_cqs = 1, .trace_region_size = (64 << 20)}) {}
+    static void SetUpTestSuite() {
+        MeshDeviceFixtureBase<MeshTraceTestSuite>::DoSetUpTestSuite(
+            Config{.num_cqs = 1, .trace_region_size = (64 << 20)});
+    }
+    static void TearDownTestSuite() { MeshDeviceFixtureBase<MeshTraceTestSuite>::DoTearDownTestSuite(); }
 };
 
-class MeshTraceTestT3000 : public MeshDeviceFixtureBase {
+class MeshTraceTestT3000 : public MeshDeviceFixtureBase<MeshTraceTestT3000> {
 protected:
-    MeshTraceTestT3000() :
-        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::T3000}, .trace_region_size = (64 << 20)}) {}
+    static void SetUpTestSuite() {
+        MeshDeviceFixtureBase<MeshTraceTestT3000>::DoSetUpTestSuite(
+            Config{.mesh_device_types = {MeshDeviceType::T3000}, .trace_region_size = (64 << 20)});
+    }
+    static void TearDownTestSuite() { MeshDeviceFixtureBase<MeshTraceTestT3000>::DoTearDownTestSuite(); }
 };
 
-class MeshTraceTestTG : public MeshDeviceFixtureBase {
+class MeshTraceTestTG : public MeshDeviceFixtureBase<MeshTraceTestTG> {
 protected:
-    MeshTraceTestTG() :
-        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}, .trace_region_size = (64 << 20)}) {}
+    static void SetUpTestSuite() {
+        MeshDeviceFixtureBase<MeshTraceTestTG>::DoSetUpTestSuite(
+            Config{.mesh_device_types = {MeshDeviceType::TG}, .trace_region_size = (64 << 20)});
+    }
+    static void TearDownTestSuite() { MeshDeviceFixtureBase<MeshTraceTestTG>::DoTearDownTestSuite(); }
 };
 
 TEST_F(MeshTraceTestSuite, Sanity) {

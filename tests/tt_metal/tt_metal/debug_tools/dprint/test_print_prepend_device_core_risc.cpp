@@ -32,6 +32,16 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+// A fixture that enables prepend_device_core_risc by default
+class DPrintPrependFixture : public DPrintFixture {
+protected:
+    void ExtraSetUp() override {
+        // Enable prepend_device_core_risc for this test
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
+            tt::llrt::RunTimeDebugFeatureDprint, true);
+    }
+};
+
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 void UpdateGoldenOutput(std::vector<string>& golden_output, const IDevice* device, const string& risc) {
@@ -99,20 +109,14 @@ void RunTest(DPrintFixture* fixture, IDevice* device, const bool add_active_eth_
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-TEST_F(DPrintFixture, TensixTestPrintPrependDeviceCoreRisc) {
-    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
-        tt::llrt::RunTimeDebugFeatureDprint, true);
+TEST_F(DPrintPrependFixture, TensixTestPrintPrependDeviceCoreRisc) {
     for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
             [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device); }, device);
     }
-    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
-        tt::llrt::RunTimeDebugFeatureDprint, false);
 }
 
-TEST_F(DPrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
-    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
-        tt::llrt::RunTimeDebugFeatureDprint, true);
+TEST_F(DPrintPrependFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
     for (IDevice* device : this->devices_) {
         if (device->get_active_ethernet_cores(true).empty()) {
             log_info(tt::LogTest, "Skipping device {} due to no active ethernet cores...", device->id());
@@ -122,6 +126,4 @@ TEST_F(DPrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
             [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true); },
             device);
     }
-    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
-        tt::llrt::RunTimeDebugFeatureDprint, false);
 }

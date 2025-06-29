@@ -296,14 +296,21 @@ namespace tt::tt_metal {
 
 TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
-    CoreCoord sender_core_0 = CoreCoord(9, 6);
-    CoreCoord sender_core_1 = CoreCoord(1, 6);
 
-    CoreCoord receiver_core_0 = CoreCoord(9, 0);
-    CoreCoord receiver_core_1 = CoreCoord(1, 0);
+    auto send_cores = device_0->get_ethernet_sockets(device_1->id());
+    auto receiver_cores = device_1->get_ethernet_sockets(device_0->id());
+
+    if (send_cores.size() != 2 || receiver_cores.size() != 2) {
+        GTEST_SKIP() << "Not enough eth cores to run test. Need 2 on each device.";
+    }
+
+    CoreCoord sender_core_0 = send_cores[0];
+    CoreCoord sender_core_1 = send_cores[1];
+
+    CoreCoord receiver_core_0 = receiver_cores[0];
+    CoreCoord receiver_core_1 = receiver_cores[1];
 
     uint32_t MAX_NUM_WORDS =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) /
@@ -329,14 +336,21 @@ TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
 
 TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
-    CoreCoord sender_core_0 = CoreCoord(9, 0);
-    CoreCoord sender_core_1 = CoreCoord(1, 0);
 
-    CoreCoord receiver_core_0 = CoreCoord(9, 6);
-    CoreCoord receiver_core_1 = CoreCoord(1, 6);
+    auto send_cores = device_1->get_ethernet_sockets(device_0->id());
+    auto receiver_cores = device_0->get_ethernet_sockets(device_1->id());
+
+    if (send_cores.size() != 2 || receiver_cores.size() != 2) {
+        GTEST_SKIP() << "Not enough eth cores to run test. Need 2 on each device.";
+    }
+
+    CoreCoord sender_core_0 = send_cores[0];
+    CoreCoord sender_core_1 = send_cores[1];
+
+    CoreCoord receiver_core_0 = receiver_cores[0];
+    CoreCoord receiver_core_1 = receiver_cores[1];
 
     uint32_t MAX_NUM_WORDS =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) /
@@ -362,14 +376,21 @@ TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
 
 TEST_F(N300DeviceFixture, ActiveEthBidirectionalCoreDirectSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
-    CoreCoord sender_core_0 = CoreCoord(9, 6);
-    CoreCoord sender_core_1 = CoreCoord(1, 6);
 
-    CoreCoord receiver_core_0 = CoreCoord(9, 0);
-    CoreCoord receiver_core_1 = CoreCoord(1, 0);
+    auto send_cores = device_1->get_ethernet_sockets(device_0->id());
+    auto receiver_cores = device_0->get_ethernet_sockets(device_1->id());
+
+    if (send_cores.size() != 2 || receiver_cores.size() != 2) {
+        GTEST_SKIP() << "Not enough eth cores to run test. Need 2 on each device.";
+    }
+
+    CoreCoord sender_core_0 = send_cores[0];
+    CoreCoord sender_core_1 = send_cores[1];
+
+    CoreCoord receiver_core_0 = receiver_cores[0];
+    CoreCoord receiver_core_1 = receiver_cores[1];
 
     uint32_t MAX_NUM_WORDS =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) /
@@ -443,7 +464,6 @@ TEST_F(N300DeviceFixture, ActiveEthRandomDirectSendTests) {
 
 TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
@@ -501,7 +521,6 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
 
 TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 

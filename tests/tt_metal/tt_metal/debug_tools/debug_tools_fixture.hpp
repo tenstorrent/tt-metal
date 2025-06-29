@@ -13,20 +13,28 @@
 
 namespace tt::tt_metal {
 
-class DebugToolsFixture : public DispatchFixture<DebugToolsFixture> {
+// Debug Tools Fixtures Open and Close the device for each
+// test due to some of the tests are designed to cause a failure on the device.
+
+class DebugToolsFixture : public AnyDeviceDispatchFixture {
 public:
-    static bool WillSkip() {
-        return false;
-    }
-
-    static std::string_view GetSkipMessage() {
-        return "This test does not skip";
-    }
-
     bool watcher_previous_enabled;
 
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
+    void SetUp() override {
+        log_info(tt::LogTest, "DebugToolsFixture::SetUp");
+        AnyDeviceDispatchFixture::SetUpTestSuite();
+        AnyDeviceDispatchFixture::SetUp();
+        log_info(tt::LogTest, "DebugToolsFixture::SetUp with {}", devices_.size());
+
+    }
+
     void TearDown() override {
-        DispatchFixture::TearDown();
+        log_info(tt::LogTest, "DebugToolsFixture::TearDown");
+        AnyDeviceDispatchFixture::TearDown();
+        AnyDeviceDispatchFixture::TearDownTestSuite();
     }
 
     template <typename T>
@@ -49,10 +57,14 @@ public:
         DprintServerAwait();
     }
 
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
 protected:
     // Running with dprint + watcher enabled can make the code size blow up, so let's force watcher
     // disabled for DPRINT tests.
     void SetUp() override {
+        log_info(tt::LogTest, "DPrintFixture::SetUp with {}", devices_.size());
         // The core range (virtual) needs to be set >= the set of all cores
         // used by all tests using this fixture, so set dprint enabled for
         // all cores and all devices
@@ -120,6 +132,9 @@ protected:
 // For usage by tests that need the dprint server devices disabled.
 class DPrintDisableDevicesFixture : public DPrintFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void ExtraSetUp() override {
         // For this test, mute each devices using the environment variable
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, false);
@@ -135,6 +150,9 @@ class WatcherFixture : public DebugToolsFixture {
 public:
     inline static const string log_file_name = "generated/watcher/watcher.log";
     inline static const int interval_ms = 250;
+
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
 
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(IDevice* device, Program& program, bool wait_for_dump = false) {
@@ -222,6 +240,9 @@ public:
     tt::llrt::TargetSelection saved_target_selection[tt::llrt::RunTimeDebugFeatureCount];
 
     std::map<CoreType, std::vector<CoreCoord>> delayed_cores;
+
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
 
     void SetUp() override {
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_debug_delay(5000000);

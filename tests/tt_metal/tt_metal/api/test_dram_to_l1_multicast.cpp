@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <chrono>
 #include <fmt/base.h>
+#include <ctime>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -53,10 +54,10 @@ bool dram_to_l1_multicast(
 
     uint32_t local_buffer_addr = 200 * 1024;
 
-    // same address as local_buffer
-    // Note: src will NOT write into its dst buffer address
-    // since we are not setting NOC_CMD_BRCST_SRC_INCLUDE
-    uint32_t dest_buffer_addr = 200 * 1024;
+    // Use the dest_buffer_addr from configuration
+    uint32_t dest_buffer_addr = cfg.dest_buffer_addr;
+    // Reseed the random number generator
+    std::srand((unsigned)(time(NULL)));
 
     tt_metal::InterleavedBufferConfig dram_config{
         .device = device,
@@ -152,6 +153,8 @@ TEST_F(AnyDeviceDispatchFixture, TensixDRAMtoL1Multicast) {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast.cpp",
+        .exclude_start = {0, 0},
+        .exclude_direction = {0, 0},
     };
     for (unsigned int id = 0; id < devices_.size(); id++) {
         ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(
@@ -163,6 +166,8 @@ TEST_F(AnyDeviceDispatchFixture, TensixDRAMtoL1MulticastLoopbackSrc) {
         .dest_buffer_addr = 500 * 1024,
         .target_grid_offset = 0,
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_include_src.cpp",
+        .exclude_start = {0, 0},
+        .exclude_direction = {0, 0},
     };
     for (unsigned int id = 0; id < devices_.size(); id++) {
         ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(

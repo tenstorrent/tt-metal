@@ -361,14 +361,13 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) 
 
 TEST_F(N300DeviceFixture, ActiveEthKernelsNocReadNoSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
     const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
-    for (const auto& eth_core : device_0->get_active_ethernet_cores(true)) {
+    for (const auto& eth_core : device_0->get_ethernet_sockets(device_1->id())) {
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
             static_cast<N300DeviceFixture*>(this), device_0, WORD_SIZE, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
@@ -377,7 +376,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsNocReadNoSend) {
             static_cast<N300DeviceFixture*>(this), device_0, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
     }
 
-    for (const auto& eth_core : device_1->get_active_ethernet_cores(true)) {
+    for (const auto& eth_core : device_1->get_ethernet_sockets(device_0->id())) {
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
             static_cast<N300DeviceFixture*>(this), device_1, WORD_SIZE, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
@@ -389,14 +388,13 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsNocReadNoSend) {
 
 TEST_F(N300DeviceFixture, ActiveEthKernelsNocWriteNoReceive) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
     const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
-    for (const auto& eth_core : device_0->get_active_ethernet_cores(true)) {
+    for (const auto& eth_core : device_0->get_ethernet_sockets(device_1->id())) {
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
             static_cast<N300DeviceFixture*>(this), device_0, WORD_SIZE, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
@@ -405,7 +403,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsNocWriteNoReceive) {
             static_cast<N300DeviceFixture*>(this), device_0, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
     }
 
-    for (const auto& eth_core : device_1->get_active_ethernet_cores(true)) {
+    for (const auto& eth_core : device_1->get_ethernet_sockets(device_0->id())) {
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
             static_cast<N300DeviceFixture*>(this), device_1, WORD_SIZE, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
