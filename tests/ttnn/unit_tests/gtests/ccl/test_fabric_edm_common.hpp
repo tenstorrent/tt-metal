@@ -546,6 +546,8 @@ void generate_sender_worker_kernels(
     log_trace(tt::LogTest, "last_message_semaphore_address: {}", local_worker_last_message_semaphore_id);
     log_trace(
         tt::LogTest, "Sender communicating with EDM: x={}, y={}", (uint32_t)edm_noc_core.x, (uint32_t)edm_noc_core.y);
+    // Looks like `fabric_erisc_datamover_sender_worker_sender.cpp` is for ETH core? as written in
+    // edm_fabric_worker_adapters.hpp's template
     std::vector<uint32_t> sender_worker_writer_runtime_args{
         worker_fabric_connection.edm_buffer_base_addr,
         worker_fabric_connection.edm_l1_sem_addr,
@@ -733,7 +735,9 @@ void generate_multi_input_test_worker_reader_kernel(
     ttnn::ccl::cmd::CclCommandCode command_type,
     const DataMovementConfig& datamovement_kernel_config,
     const std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& chip0_worker_forward_fabric_connection,
+    const std::optional<tt::tt_fabric::chan_id_t> fwd_eth_channel,
     const std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& chip0_worker_backward_fabric_connection,
+    const std::optional<tt::tt_fabric::chan_id_t> bwd_eth_channel,
     const std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence>& optional_teardown_sequence,
     const ttnn::ccl::cmd::CclCommandDestArgs& dest_args) {
     bool fabric_enabled = std::holds_alternative<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args) ||
@@ -833,7 +837,9 @@ void generate_multi_input_test_worker_reader_kernel(
         ccl_command_stream0,
         ccl_command_stream1,
         chip0_worker_forward_fabric_connection,
-        chip0_worker_backward_fabric_connection);
+        fwd_eth_channel,
+        chip0_worker_backward_fabric_connection,
+        bwd_eth_channel);
 }
 
 void generate_multi_input_test_worker_kernels_for_local_tensor_write(
@@ -854,7 +860,9 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
     const ttnn::ccl::v2::TensorSlice& out1_tensor_slice,
     const std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence>& optional_teardown_sequence,
     std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& chip0_worker_forward_fabric_connection,
+    const std::optional<tt::tt_fabric::chan_id_t> fwd_eth_channel,
     std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& chip0_worker_backward_fabric_connection,
+    const std::optional<tt::tt_fabric::chan_id_t> bwd_eth_channel,
     const ttnn::ccl::cmd::CclCommandDestArgs& dest_args) {
     // Just want a dummy DF
     tt::DataFormat df = page_size == 1024   ? tt::DataFormat::Bfp8
@@ -889,6 +897,8 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
         std::nullopt,
         std::nullopt,
         std::nullopt,
+        std::nullopt,
+        std::nullopt,
         dest_args);
 
     generate_multi_input_test_worker_reader_kernel(
@@ -904,7 +914,9 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
         ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR,
         tt_metal::WriterDataMovementConfig{},
         chip0_worker_forward_fabric_connection,
+        fwd_eth_channel,
         chip0_worker_backward_fabric_connection,
+        bwd_eth_channel,
         optional_teardown_sequence,
         dest_args);
 }
@@ -1001,11 +1013,14 @@ bool RunLocalTestWithMultiInputReaders(
 
     const size_t num_pages_per_edm_buffer = 2;
 
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> chip0_worker_forward_fabric_connection =
+    auto [chip0_worker_forward_fabric_connection, fwd_eth_channel] =
         fabric_enabled ? line_fabric->uniquely_connect_worker(devices[0], ttnn::ccl::EdmLineFabricOpInterface::FORWARD)
-                       : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>{std::nullopt};
+                       : std::make_tuple(
+                             std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>{std::nullopt},
+                             std::optional<tt::tt_fabric::chan_id_t>{std::nullopt});
 
     std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> chip0_worker_backward_fabric_connection = std::nullopt;
+    std::optional<tt::tt_fabric::chan_id_t> bwd_eth_channel = std::nullopt;
 
     generate_multi_input_test_worker_kernels_for_local_tensor_write(
         programs.at(0),
@@ -1025,7 +1040,9 @@ bool RunLocalTestWithMultiInputReaders(
         out1_tensor_slice,
         std::nullopt,
         chip0_worker_forward_fabric_connection,
+        fwd_eth_channel,
         chip0_worker_backward_fabric_connection,
+        bwd_eth_channel,
         dest_args);
 
     log_info(tt::LogTest, "subdevice_managers.has_value(): {}", subdevice_managers.has_value());
@@ -1166,7 +1183,7 @@ bool RunLineFabricTest(
     const auto& worker_core = worker_cores.at(0);
     log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
-    auto chip0_worker_fabric_connection =
+    auto [chip0_worker_fabric_connection, eth_channel] =
         line_fabric.uniquely_connect_worker(devices[0], ttnn::ccl::EdmLineFabricOpInterface::FORWARD);
 
     const std::size_t pages_per_send = chip0_worker_fabric_connection.buffer_size_bytes / page_size;
@@ -2023,6 +2040,8 @@ bool RunPipelinedWorkersTest(
                 reader_cmd_stream,
                 std::nullopt,
                 std::nullopt,
+                std::nullopt,
+                std::nullopt,
                 std::nullopt);
             ttnn::ccl::worker_detail::generate_multi_input_command_stream_kernel_rt_args(
                 program,
@@ -2034,6 +2053,8 @@ bool RunPipelinedWorkersTest(
                 cb_packet_size_in_pages,
                 {worker_cores.at(worker)},
                 writer_cmd_stream,
+                std::nullopt,
+                std::nullopt,
                 std::nullopt,
                 std::nullopt,
                 std::nullopt);
@@ -2969,9 +2990,10 @@ void Run1DFabricPacketSendTest(
                             {worker_core},
                             rt_args_out);
                     } else {
-                        const auto connection = local_device_fabric_handle->uniquely_connect_worker(device, direction);
+                        const auto [connection, eth_channel] =
+                            local_device_fabric_handle->uniquely_connect_worker(device, direction);
                         const auto new_rt_args = ttnn::ccl::worker_detail::generate_edm_connection_rt_args(
-                            connection, program, {worker_core});
+                            connection, eth_channel, program, {worker_core});
                         log_info(
                             tt::LogTest,
                             "On device: {}, connecting to EDM fabric in {} direction. EDM noc_x: {}, noc_y: {}",

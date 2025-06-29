@@ -117,7 +117,9 @@ void kernel_main() {
 
     transmit_config config;
     size_t arg_idx = 0;
-    auto sender = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+    uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
+    auto sender =
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx, eth_channel);
     volatile uint32_t* const last_message_semaphore_address = reinterpret_cast<volatile uint32_t* const >(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
     size_t output_buffer0_addr = get_arg_val<uint32_t>(arg_idx++);
     size_t output_buffer1_addr = get_arg_val<uint32_t>(arg_idx++);

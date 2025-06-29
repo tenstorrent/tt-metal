@@ -37,8 +37,9 @@ void kernel_main() {
     constexpr uint32_t data_size = get_compile_time_arg_val(3);
     // Setup Fabric Headers and Connections
     size_t rt_args_idx = 0;
+    uint32_t eth_channel = get_arg_val<uint32_t>(rt_args_idx++);
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx, eth_channel);
 
     // This kernel relies on two fabric headers stored in fabric_packet_header_cb:
     //  - data_packet_header: Used for issuing writes to downstream data cores
