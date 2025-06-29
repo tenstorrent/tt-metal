@@ -18,6 +18,7 @@ void py_bind_fabric_api(py::module& module) {
         .value("FABRIC_1D", tt::tt_metal::FabricConfig::FABRIC_1D)
         .value("FABRIC_1D_RING", tt::tt_metal::FabricConfig::FABRIC_1D_RING)
         .value("FABRIC_2D", tt::tt_metal::FabricConfig::FABRIC_2D)
+        .value("FABRIC_2D_DYNAMIC", tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC)
         .value("CUSTOM", tt::tt_metal::FabricConfig::CUSTOM);  // DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4
     py::enum_<tt::tt_metal::FabricReliabilityMode>(module, "FabricReliabilityMode", R"(
         Specifies how the fabric initialization handles system health and configuration.
