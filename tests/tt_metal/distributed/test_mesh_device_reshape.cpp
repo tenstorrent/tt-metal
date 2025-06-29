@@ -31,14 +31,6 @@ namespace {
 
 using ::testing::SizeIs;
 
-std::vector<chip_id_t> get_physical_device_ids(const MeshDevice& mesh) {
-    std::vector<chip_id_t> device_ids;
-    for (auto* device : mesh.get_devices()) {
-        device_ids.push_back(device->id());
-    }
-    return device_ids;
-}
-
 class T3KReshapeTestFixture : public ::testing::Test {
 public:
     void SetUp() override {
