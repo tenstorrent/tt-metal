@@ -15,6 +15,7 @@ from models.experimental.yolov11.reference import yolov11
 from models.experimental.yolov11.tt import ttnn_yolov11
 
 
+@pytest.mark.skip(reason="#24336: YOLOv11 tests are currently disabled")
 @pytest.mark.parametrize(
     "resolution",
     [
