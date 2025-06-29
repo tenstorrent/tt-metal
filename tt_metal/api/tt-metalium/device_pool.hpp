@@ -41,6 +41,10 @@ public:
         return *_inst;
     }
 
+    // For fork safety handlers
+    static DevicePool* instance_ptr();
+    static void reset_instance();
+
     static void initialize(
         const std::vector<chip_id_t>& device_ids,
         uint8_t num_hw_cqs,
