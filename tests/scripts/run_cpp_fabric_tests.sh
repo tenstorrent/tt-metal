@@ -13,6 +13,7 @@ if [[ -z "$ARCH_NAME" ]]; then
 fi
 
 export TT_METAL_CLEAR_L1=1
+export TT_METAL_FD_FABRIC=true
 
 cd $TT_METAL_HOME
 
