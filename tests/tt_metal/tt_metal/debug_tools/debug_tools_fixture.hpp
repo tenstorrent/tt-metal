@@ -64,7 +64,6 @@ protected:
     // Running with dprint + watcher enabled can make the code size blow up, so let's force watcher
     // disabled for DPRINT tests.
     void SetUp() override {
-        log_info(tt::LogTest, "DPrintFixture::SetUp with {}", devices_.size());
         // The core range (virtual) needs to be set >= the set of all cores
         // used by all tests using this fixture, so set dprint enabled for
         // all cores and all devices

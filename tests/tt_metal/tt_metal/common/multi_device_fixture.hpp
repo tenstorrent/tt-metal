@@ -120,11 +120,49 @@ protected:
     inline static std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
     inline static Config config_;
 
-    static void DoSetUpTestSuite(const Config& fixture_config) {
-        config_ = fixture_config;
+    static bool WillSkip(const Config& config) {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             log_info(LogTest, "Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.");
+            return true;
+        }
+
+        const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+
+        const auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        const auto mesh_device_type = derive_mesh_device_type(num_devices, arch);
+        if (!mesh_device_type) {
+            log_info(
+                LogTest,
+                "Skipping MeshDevice test suite on a machine with an unsupported number of devices {}.",
+                num_devices);
+            return true;
+        }
+
+        if (!config.mesh_device_types.empty() &&
+            config.mesh_device_types.find(*mesh_device_type) == config.mesh_device_types.end()) {
+            std::vector<std::string> requested_device_types;
+            std::transform(
+                config.mesh_device_types.begin(),
+                config.mesh_device_types.end(),
+                std::back_inserter(requested_device_types),
+                [](const auto t) { return mesh_device_type_to_string(t); });
+            log_info(
+                LogTest,
+                "Skipping MeshDevice test suite on a {} machine that does not match any of the configured mesh device "
+                "types {}",
+                mesh_device_type_to_string(*mesh_device_type),
+                boost::algorithm::join(requested_device_types, ", "));
+            return true;
+        }
+
+        return false;
+    }
+
+    static void DoSetUpTestSuite(const Config& fixture_config) {
+        config_ = fixture_config;
+
+        if (WillSkip(fixture_config)) {
             return;
         }
 
@@ -177,7 +215,7 @@ protected:
     }
 
     static void DoTearDownTestSuite() {
-        if (!mesh_device_) {
+        if (!mesh_device_ || WillSkip(config_)) {
             return;
         }
         mesh_device_->close();
@@ -190,7 +228,11 @@ protected:
     static void SetUpTestSuite() { DoSetUpTestSuite(config_); }
     static void TearDownTestSuite() { DoTearDownTestSuite(); }
 
-    void SetUp() override {}
+    void SetUp() override {
+        if (WillSkip(config_)) {
+            GTEST_SKIP();
+        }
+    }
 
     void TearDown() override {}
 
