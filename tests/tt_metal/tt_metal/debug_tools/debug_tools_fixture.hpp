@@ -6,10 +6,7 @@
 
 #include <gtest/gtest.h>
 #include "debug/watcher_server.hpp"
-#include "dispatch_fixture.hpp"
 #include "tt_metal/tt_metal/common/dispatch_fixture.hpp"
-
-#include "dprint_server.hpp"
 
 namespace tt::tt_metal {
 
@@ -38,7 +35,7 @@ public:
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
         DebugToolsFixture::RunProgram(device, program);
-        DprintServerAwait();
+        MetalContext::instance().dprint_server()->await();
     }
 
 protected:
@@ -73,11 +70,15 @@ protected:
         DebugToolsFixture::TearDown();
         ExtraTearDown();
 
-        // If test induced a watcher error, re-initialize the context.
-        if (DPrintServerHangDetected()) {
-            MetalContext::instance().reinitialize();
+        // If test induced a dprint error, re-initialize the context. If the test brought down the whole server/context,
+        // then no need to do this since it'll re-init for the next test.
+        if (MetalContext::instance().dprint_server() and MetalContext::instance().dprint_server()->hang_detected()) {
+            // Special case for watcher_dump testing, keep the error for watcher dump to look at later. TODO: remove
+            // when watcher_dump is removed.
+            if (getenv("TT_METAL_WATCHER_KEEP_ERRORS") == nullptr) {
+                MetalContext::instance().reinitialize();
+            }
         }
-
 
         // Reset DPrint settings
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureDprint, {});
@@ -99,8 +100,8 @@ protected:
         IDevice* device
     ) {
         DebugToolsFixture::RunTestOnDevice(run_function, device);
-        DPrintServerClearLogFile();
-        DPrintServerClearSignals();
+        MetalContext::instance().dprint_server()->clear_log_file();
+        MetalContext::instance().dprint_server()->clear_signals();
     }
 
     // Override this function in child classes for additional setup commands between DPRINT setup
