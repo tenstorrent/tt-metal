@@ -5,28 +5,19 @@
 #pragma once
 
 #include <type_traits>
-#include "accessor/detail/array_wrapper.hpp"
-#include "detail/dspec.h"
-#include "detail/helpers.hpp"
+#include "array_wrapper.h"
+#include "dspec.h"
+#include "helpers.h"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "dataflow_api.h"
+#include "dataflow_api_addrgen.h"
 #endif
 
-namespace nd_sharding {
-using detail::ArrayDynamicWrapper;
-using detail::ArrayStaticWrapperU16;
-using detail::ArrayStaticWrapperU32;
-template <size_t StartIdx, uint32_t Size>
-using array_u32_cta_sequence_wrapper_t = detail::struct_cta_sequence_wrapper_t<ArrayStaticWrapperU32, StartIdx, Size>;
-template <size_t StartIdx, uint32_t Size>
-using array_packed_u16_cta_sequence_wrapper_t =
-    detail::struct_cta_sequence_wrapper_packed_u16_from_u32_t<StartIdx, Size>;
-
 /**
- * @brief Accessor that encapsulates the logic for accessing sharded tensors pages.
+ * @brief Accessor that encapsulates the logic for accessing tensors pages.
  *
- * The ShardedAccessor provides efficient access to pages in a sharded tensor by:
+ * The TensorAccessor provides efficient access to pages in a tensor by:
  * 1. Computing which bank contains a given page
  * 2. Calculating the offset within that bank
  * 3. Providing NOC address computation and async operations
@@ -34,14 +25,14 @@ using array_packed_u16_cta_sequence_wrapper_t =
  * @tparam DSpec        DistributionSpec type.
  */
 template <typename DSpec>
-struct ShardedAccessor {
+struct TensorAccessor {
 private:
     // DSpec can be static or dynamic, so we use a conditional instance
-    using StaticDspec = detail::ConditionalStaticInstance<DSpec, DSpec::is_static>;
-    [[no_unique_address]] detail::ConditionalField<!DSpec::is_static, DSpec> dspec_instance;
+    using StaticDspec = tensor_accessor::detail::ConditionalStaticInstance<DSpec, DSpec::is_static>;
+    [[no_unique_address]] tensor_accessor::detail::ConditionalField<!DSpec::is_static, DSpec> dspec_instance;
 
-    [[no_unique_address]] mutable detail::ConditionalField<!DSpec::has_static_rank, uint32_t[detail::MAX_RANK]>
-        _page_coord;
+    [[no_unique_address]] mutable tensor_accessor::detail::
+        ConditionalField<!DSpec::has_static_rank, uint32_t[tensor_accessor::MAX_RANK]> _page_coord;
     const size_t bank_base_address;
 
     // Page size is either compile-time constant or runtime value
@@ -49,12 +40,12 @@ private:
 
 public:
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
-    constexpr explicit ShardedAccessor(
+    constexpr explicit TensorAccessor(
         DSpec_&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in = 0) :
         dspec_instance(std::forward<DSpec_>(dspec)), bank_base_address(bank_base_address_in), page_size(page_size_in) {}
 
     template <typename DSpec_ = DSpec, std::enable_if_t<DSpec_::is_static, int> = 0>
-    ShardedAccessor(const size_t bank_base_address_in = 0, uint32_t page_size_in = 0) :
+    TensorAccessor(const size_t bank_base_address_in = 0, uint32_t page_size_in = 0) :
         bank_base_address(bank_base_address_in), page_size(page_size_in) {}
 
     constexpr auto& dspec() const {
@@ -112,7 +103,7 @@ public:
         return get_bank_and_offset(page_coord);
     }
 
-    template <typename ArrType, std::enable_if_t<detail::has_subscript_operator_v<ArrType>, int> = 0>
+    template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
     PageMapping get_bank_and_offset(const ArrType page_coord) const {
         // Flattened shard id is used to compute the bank id and shard id within a bank
         // - First, get the shard coordinate with page_coord[i] / dspec.shard_shape[i]
@@ -143,45 +134,55 @@ public:
     }
 };
 
-// Factory functions to create ShardedAccessor instance
+// Factory functions to create TensorAccessor instance
 template <size_t CTA_BASE, size_t CRTA_BASE>
-FORCE_INLINE auto make_args() {
-    return detail::ArgsOffsets<CTA_BASE, CRTA_BASE>();
+FORCE_INLINE auto make_tensor_accessor_args() {
+    return tensor_accessor::ArgsOffsets<CTA_BASE, CRTA_BASE>();
 }
 
 template <size_t CTA_BASE>
-FORCE_INLINE auto make_args(const size_t crta_base) {
-    return detail::ArgsOffsets<CTA_BASE>(crta_base);
+FORCE_INLINE auto make_tensor_accessor_args(const size_t crta_base) {
+    return tensor_accessor::ArgsOffsets<CTA_BASE>(crta_base);
 }
 
 template <typename ArgsOffsetsT>
-FORCE_INLINE auto make_sharded_accessor_from_args(
+FORCE_INLINE auto make_tensor_accessor_from_args(
     const ArgsOffsetsT& args, const size_t bank_base_address_in, const uint32_t page_size_in) {
-    auto dspec = detail::make_dspec_from_args(args);
-    return ShardedAccessor<decltype(dspec)>(std::move(dspec), bank_base_address_in, page_size_in);
+    if constexpr (ArgsOffsetsT::is_sharded) {
+        auto dspec = tensor_accessor::make_dspec_from_args(args);
+        return TensorAccessor<decltype(dspec)>(std::move(dspec), bank_base_address_in, page_size_in);
+    } else {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        constexpr bool is_dram = ArgsOffsetsT::is_dram;
+        return InterleavedAddrGen<is_dram>{
+            .bank_base_address = bank_base_address_in,
+            .page_size = page_size_in,
+        };
+#else
+        return nullptr;
+#endif
+    }
 }
 
 template <
     uint32_t RankCT = 0,
     uint32_t NumBanksCT = 0,
-    typename TensorShapeWrapper = ArrayDynamicWrapper,
-    typename ShardShapeWrapper = ArrayDynamicWrapper,
-    typename BankCoordsWrapper = ArrayDynamicWrapper>
-FORCE_INLINE auto make_dspec(
+    typename TensorShapeWrapper = tensor_accessor::ArrayDynamicWrapper,
+    typename ShardShapeWrapper = tensor_accessor::ArrayDynamicWrapper,
+    typename BankCoordsWrapper = tensor_accessor::ArrayDynamicWrapper>
+FORCE_INLINE auto make_tensor_dspec(
     uint32_t rank_rt = 0,
     uint32_t num_banks_rt = 0,
     uint32_t* tensor_shape_ptr = nullptr,
     uint32_t* shard_shape_ptr = nullptr,
     uint16_t* bank_coords_ptr = nullptr) {
-    return detail::make_dspec<RankCT, NumBanksCT, TensorShapeWrapper, ShardShapeWrapper, BankCoordsWrapper>(
+    return tensor_accessor::make_dspec<RankCT, NumBanksCT, TensorShapeWrapper, ShardShapeWrapper, BankCoordsWrapper>(
         rank_rt, num_banks_rt, tensor_shape_ptr, shard_shape_ptr, bank_coords_ptr);
 }
 
 template <typename DSpec>
-FORCE_INLINE auto make_sharded_accessor_from_dspec(
+FORCE_INLINE auto make_tensor_accessor_from_dspec(
     DSpec&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in) {
-    return ShardedAccessor<std::decay_t<decltype(dspec)>>(
+    return TensorAccessor<std::decay_t<decltype(dspec)>>(
         std::forward<DSpec>(dspec), bank_base_address_in, page_size_in);
 }
-
-}  // namespace nd_sharding

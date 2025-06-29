@@ -132,7 +132,9 @@ static void build_golden_link_counts(
 };
 
 void ControlPlane::initialize_dynamic_routing_plane_counts(
-    const IntraMeshConnectivity& intra_mesh_connectivity, tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
+    const IntraMeshConnectivity& intra_mesh_connectivity,
+    tt_metal::FabricConfig fabric_config,
+    tt_metal::FabricReliabilityMode reliability_mode) {
     if (fabric_config == tt_metal::FabricConfig::CUSTOM || fabric_config == tt_metal::FabricConfig::DISABLED) {
         return;
     }
@@ -551,6 +553,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
         mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "n150_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "n300_2x2_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "multihost_t3k_mesh_graph_descriptor.yaml") {
         // Pick out the chip with the lowest ethernet coordinate (i.e. NW chip)
         const auto& chip_eth_coords =
@@ -907,8 +910,8 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                 bool connections_exist = connected_chips_and_eth_cores.find(physical_connected_chip_id) !=
                                          connected_chips_and_eth_cores.end();
                 TT_FATAL(
-                    connections_exist || reliability_mode !=
-                                             tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+                    connections_exist ||
+                        reliability_mode != tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
                     "Expected connections to exist for M{}D{} to D{}",
                     mesh_id,
                     chip_id,
@@ -977,7 +980,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
     this->convert_fabric_routing_table_to_chip_routing_table();
 }
 
-void ControlPlane::write_routing_tables_to_chip(MeshId mesh_id, chip_id_t chip_id) const {
+void ControlPlane::write_routing_tables_to_eth_cores(MeshId mesh_id, chip_id_t chip_id) const {
     FabricNodeId fabric_node_id{mesh_id, chip_id};
     const auto& chip_intra_mesh_routing_tables = this->intra_mesh_routing_tables_.at(fabric_node_id);
     const auto& chip_inter_mesh_routing_tables = this->inter_mesh_routing_tables_.at(fabric_node_id);
@@ -1304,6 +1307,84 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_channels_in_direction
     return {};
 }
 
+// Write routing table to Tensix cores on a specific chip
+void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const {
+    FabricNodeId src_fabric_node_id{mesh_id, chip_id};
+    auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
+
+    tensix_routing_l1_info_t tensix_routing_info = {};
+    tensix_routing_info.mesh_id = *mesh_id;
+    tensix_routing_info.device_id = chip_id;
+
+    // Build intra-mesh routing entries (chip-to-chip routing)
+    std::fill_n(
+        tensix_routing_info.intra_mesh_routing_table,
+        tt::tt_fabric::MAX_MESH_SIZE,
+        (eth_chan_directions)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
+    const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
+    TT_FATAL(
+        router_intra_mesh_routing_table[*mesh_id][chip_id].size() <= tt::tt_fabric::MAX_MESH_SIZE,
+        "ControlPlane: Intra mesh routing table size exceeds maximum allowed size");
+    for (chip_id_t dst_chip_id = 0; dst_chip_id < router_intra_mesh_routing_table[*mesh_id][chip_id].size();
+         dst_chip_id++) {
+        if (chip_id == dst_chip_id) {
+            tensix_routing_info.intra_mesh_routing_table[dst_chip_id] =
+                (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
+            continue;
+        }
+        auto forwarding_direction = router_intra_mesh_routing_table[*mesh_id][chip_id][dst_chip_id];
+        tensix_routing_info.intra_mesh_routing_table[dst_chip_id] =
+            forwarding_direction != RoutingDirection::NONE
+                ? this->routing_direction_to_eth_direction(forwarding_direction)
+                : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
+    }
+
+    // Build inter-mesh routing entries (mesh-to-mesh routing)
+    std::fill_n(
+        tensix_routing_info.inter_mesh_routing_table,
+        tt::tt_fabric::MAX_NUM_MESHES,
+        (eth_chan_directions)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
+    const auto& router_inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
+    TT_FATAL(
+        router_inter_mesh_routing_table[*mesh_id][chip_id].size() <= tt::tt_fabric::MAX_NUM_MESHES,
+        "ControlPlane: Inter mesh routing table size exceeds maximum allowed size");
+    for (std::uint32_t dst_mesh_id = 0; dst_mesh_id < router_inter_mesh_routing_table[*mesh_id][chip_id].size();
+         dst_mesh_id++) {
+        if (*mesh_id == dst_mesh_id) {
+            tensix_routing_info.inter_mesh_routing_table[dst_mesh_id] =
+                (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
+            continue;
+        }
+        auto forwarding_direction = router_inter_mesh_routing_table[*mesh_id][chip_id][dst_mesh_id];
+        tensix_routing_info.inter_mesh_routing_table[dst_mesh_id] =
+            forwarding_direction != RoutingDirection::NONE
+                ? this->routing_direction_to_eth_direction(forwarding_direction)
+                : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
+    }
+
+    TT_FATAL(
+        tt_metal::MetalContext::instance().hal().get_dev_size(
+            tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::TENSIX_ROUTING_TABLE) ==
+            sizeof(tensix_routing_l1_info_t),
+        "ControlPlane: Tensix routing table size mismatch");
+    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
+    const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_desc.get_cores(CoreType::TENSIX, CoordSystem::PHYSICAL);
+    // Write to all Tensix cores
+    // TODO: "mcast" to all tensix cores
+    for (const auto& tensix_core : tensix_cores) {
+        auto virtual_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
+                physical_chip_id, CoreCoord(tensix_core.x, tensix_core.y));
+
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            (void*)&tensix_routing_info,
+            sizeof(tensix_routing_l1_info_t),
+            tt_cxy_pair(physical_chip_id, virtual_core),
+            tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+                tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_TABLE));
+    }
+}
+
 std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_routing_planes_in_direction(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction) const {
     auto eth_chans = get_active_fabric_eth_channels_in_direction(fabric_node_id, routing_direction);
@@ -1336,7 +1417,8 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
         TT_ASSERT(
             this->inter_mesh_routing_tables_.contains(fabric_node_id),
             "Intra mesh routing tables keys mismatch with inter mesh routing tables");
-        this->write_routing_tables_to_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        this->write_routing_tables_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        this->write_routing_tables_to_eth_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
     }
 }
 
@@ -1710,8 +1792,7 @@ uint64_t ControlPlane::get_asic_id(chip_id_t chip_id) const {
 
 ControlPlane::~ControlPlane() = default;
 
-GlobalControlPlane::GlobalControlPlane(
-    const std::string& mesh_graph_desc_file) {
+GlobalControlPlane::GlobalControlPlane(const std::string& mesh_graph_desc_file) {
     mesh_graph_desc_file_ = mesh_graph_desc_file;
     // Initialize host mappings
     this->initialize_host_mapping();
@@ -1723,8 +1804,8 @@ GlobalControlPlane::GlobalControlPlane(
     const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     mesh_graph_desc_file_ = mesh_graph_desc_file;
     this->initialize_host_mapping();
-    control_plane_ = std::make_unique<ControlPlane>(
-        mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
+    control_plane_ =
+        std::make_unique<ControlPlane>(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
 }
 
 void GlobalControlPlane::initialize_host_mapping() {

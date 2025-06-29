@@ -8,10 +8,9 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "helpers.hpp"
+#include "helpers.h"
 
-namespace nd_sharding {
-namespace detail {
+namespace tensor_accessor {
 template <typename T, T... Elements>
 struct ArrayStaticWrapper {
     constexpr static bool is_static = true;
@@ -80,7 +79,7 @@ struct ArrayWrapperTypeSelectorU32;
 template <size_t StartIdx, uint32_t Size>
 struct ArrayWrapperTypeSelectorU32<true, StartIdx, Size> {
     // Both size and elements are known at compile time -- we can construct a static wrapper
-    using type = struct_cta_sequence_wrapper_t<ArrayStaticWrapperU32, StartIdx, Size>;
+    using type = detail::struct_cta_sequence_wrapper_t<ArrayStaticWrapperU32, StartIdx, Size>;
 };
 
 template <size_t StartIdx, uint32_t Size>
@@ -89,5 +88,4 @@ struct ArrayWrapperTypeSelectorU32<false, StartIdx, Size> {
     using type = ArrayDynamicWrapper;
 };
 
-}  // namespace detail
-}  // namespace nd_sharding
+}  // namespace tensor_accessor

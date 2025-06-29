@@ -6,13 +6,12 @@
 
 #include <cstdint>
 #include <variant>
-#include "helpers.hpp"
-#include "array_wrapper.hpp"
-#include "args_location.hpp"
+#include "helpers.h"
+#include "array_wrapper.h"
+#include "args_location.h"
 #include <cstring>
 
-namespace nd_sharding {
-namespace detail {
+namespace tensor_accessor {
 
 /**
  * @brief Holds all the distribution specification information for a tensor: rank, number of banks, tensor shape, shard
@@ -45,8 +44,8 @@ struct DistributionSpec {
     static constexpr auto rank_ct = RankCT;
     static constexpr uint32_t num_banks_ct = NumBanksCT;
 
-    using ShapeDynamic = Span<uint32_t>;
-    using BankCoordsDynamic = Span<uint16_t>;
+    using ShapeDynamic = detail::Span<uint32_t>;
+    using BankCoordsDynamic = detail::Span<uint16_t>;
     using ShapeStatic = std::array<uint32_t, rank_ct>;
     using BankCoordsStatic = std::array<uint16_t, num_banks_ct>;
 
@@ -278,7 +277,7 @@ auto make_dspec(
     // BankCoords = std::array<uint32_t, NumBanksCT> if static, otherwise Span<uint32_t>
     typename DSpec::BankCoords bank_coord_array;
 
-    auto span_from_pointer = []<typename T>(auto& arr, T* ptr, size_t size) { arr = Span<T>(ptr, size); };
+    auto span_from_pointer = []<typename T>(auto& arr, T* ptr, size_t size) { arr = detail::Span<T>(ptr, size); };
 
     auto array_from_pointer = []<typename T>(auto& arr, T* ptr, size_t size) {
         std::memcpy(arr.data(), ptr, sizeof(T) * size);
@@ -376,5 +375,4 @@ auto make_dspec_from_args(const ArgsOffsets& args_offsets) {
                                          : nullptr);
 }
 
-}  // namespace detail
-}  // namespace nd_sharding
+}  // namespace tensor_accessor
