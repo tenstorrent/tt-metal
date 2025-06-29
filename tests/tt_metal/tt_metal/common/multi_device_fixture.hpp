@@ -172,6 +172,12 @@ protected:
         }
     }
 
+    void SetUp() override {
+        if (ShouldSkip()) {
+            GTEST_SKIP();
+        }
+    }
+
 private:
     // Returns the mesh shape for a given mesh device type.
     static MeshShape get_mesh_shape(MeshDeviceType mesh_device_type) {
