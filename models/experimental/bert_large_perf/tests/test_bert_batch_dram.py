@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import pytest
 from loguru import logger
 import torch
@@ -22,7 +23,7 @@ from models.utility_functions import profiler
 from models.experimental.bert_large_perf.fused_ops.layernorm import create_var_scaler
 
 
-class TtBertBatchDram(torch.nn.Module):
+class TtBertBatchDram(LightweightModule):
     def __init__(self, config, hugging_face_reference_model, var_scaler, device):
         super().__init__()
 

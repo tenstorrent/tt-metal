@@ -7,11 +7,12 @@ from typing import Callable
 import torch
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.wormhole.mamba.reference.args import ModelArgs, ModelMode
 from models.demos.wormhole.mamba.tt.cache import TensorCache
 
 
-class TtMambaSSM(torch.nn.Module):
+class TtMambaSSM(LightweightModule):
     def __init__(self, args: ModelArgs, device, configs, load_fn: Callable):
         super().__init__()
 

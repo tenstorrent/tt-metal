@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torch import nn
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
 from models.demos.falcon7b_common.tt.model_utils import (
     get_default_hifi2_kernel_config,
@@ -94,7 +94,7 @@ def falcon_dense_h_to_4h_matmul(
     )
 
 
-class TtFalconMLPPrefill(nn.Module):
+class TtFalconMLPPrefill(LightweightModule):
     def __init__(
         self,
         mesh_device,
@@ -274,7 +274,7 @@ class TtFalconMLPPrefill(nn.Module):
         return hidden_states
 
 
-class TtFalconMLPDecode(nn.Module):
+class TtFalconMLPDecode(LightweightModule):
     def __init__(
         self,
         mesh_device,

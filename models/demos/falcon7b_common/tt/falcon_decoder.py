@@ -5,15 +5,15 @@
 from typing import Optional, Tuple
 
 import torch
-from torch import nn
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.falcon7b_common.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
 from models.demos.falcon7b_common.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
 from models.demos.falcon7b_common.tt.model_utils import get_weights_cached, layernorm
 
 
-class TtFalconDecoderLayer(nn.Module):
+class TtFalconDecoderLayer(LightweightModule):
     def __init__(
         self,
         mesh_device,

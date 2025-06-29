@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import pytest
 from loguru import logger
 
@@ -34,7 +35,7 @@ def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_b
     return feed_forward_
 
 
-class TtFeedForwardModel(torch.nn.Module):
+class TtFeedForwardModel(LightweightModule):
     def __init__(self, encoder_idx, state_dict, device):
         super().__init__()
 
@@ -107,7 +108,7 @@ class TtFeedForwardModel(torch.nn.Module):
         return self.ffn(activation)
 
 
-class PytorchFeedForwardModel(torch.nn.Module):
+class PytorchFeedForwardModel(LightweightModule):
     def __init__(self, hugging_face_reference_model):
         super().__init__()
         self.ff1 = hugging_face_reference_model.bert.encoder.layer[0].intermediate

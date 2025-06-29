@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.llama_common import get_llama_path, get_weight_cache_path, tt_all_gather_torch
 from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
@@ -15,7 +16,7 @@ from models.utility_functions import get_devices_for_t3000, skip_for_grayskull, 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
-class TtLlamaQKV(torch.nn.Module):
+class TtLlamaQKV(LightweightModule):
     def __init__(
         self,
         devices,
@@ -64,7 +65,7 @@ class TtLlamaQKV(torch.nn.Module):
         return fused_query_key_value[0]
 
 
-class PytorchLlamaQKVModel(torch.nn.Module):
+class PytorchLlamaQKVModel(LightweightModule):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
         self.attn = hf_reference_model.layers[layer_num].attention

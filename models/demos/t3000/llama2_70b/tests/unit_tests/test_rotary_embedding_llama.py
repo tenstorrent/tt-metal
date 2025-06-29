@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import apply_rotary_emb, precompute_freqs_cis
 from models.demos.t3000.llama2_70b.tt.llama_common import freqs_to_rotation_matrix, gather_rotary_emb, precompute_freqs
 from models.utility_functions import skip_for_grayskull
@@ -21,7 +22,7 @@ def get_rotation_mat(dhead, end, start_pos, seqlen, batch):
     return rot_emb
 
 
-class TtLlamaRotary(torch.nn.Module):
+class TtLlamaRotary(LightweightModule):
     def __init__(
         self,
         device,
@@ -62,7 +63,7 @@ class TtLlamaRotary(torch.nn.Module):
         return xq, xk
 
 
-class PytorchLlamaRotaryModel(torch.nn.Module):
+class PytorchLlamaRotaryModel(LightweightModule):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
         self.n_heads = hf_reference_model.params.n_heads

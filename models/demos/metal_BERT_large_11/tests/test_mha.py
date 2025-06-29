@@ -9,12 +9,13 @@ from transformers import BertForQuestionAnswering
 from tt_lib.utils import pad_activation
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.metal_BERT_large_11.tt.mha import TtMultiHeadAttentionModel
 from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
 from models.utility_functions import comp_allclose, comp_pcc
 
 
-class PytorchMultiHeadAttentionModel(torch.nn.Module):
+class PytorchMultiHeadAttentionModel(LightweightModule):
     def __init__(self, hugging_face_reference_model):
         super().__init__()
         self.mha = hugging_face_reference_model.bert.encoder.layer[0].attention.self

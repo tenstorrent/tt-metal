@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from abc import abstractmethod
 import pytest
 from loguru import logger
@@ -19,7 +20,7 @@ from models.utility_functions import (
 )
 
 
-class TtBertShared(torch.nn.Module):
+class TtBertShared(LightweightModule):
     @abstractmethod
     def __init__(self, config, hugging_face_reference_model, device):
         super().__init__()

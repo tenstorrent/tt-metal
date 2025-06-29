@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.falcon7b_common.tests.test_utils import get_num_devices, load_hf_model, tt_from_torch
 from models.demos.falcon7b_common.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
 from models.demos.falcon7b_common.tt.model_config import get_model_config
@@ -15,7 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from ttnn import ShardTensorToMesh
 
 
-class PytorchFalconMLPModel(torch.nn.Module):
+class PytorchFalconMLPModel(LightweightModule):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
         self.mlp = hf_reference_model.transformer.h[layer_num].mlp

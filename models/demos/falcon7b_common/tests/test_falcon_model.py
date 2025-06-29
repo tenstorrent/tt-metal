@@ -6,6 +6,7 @@ import pytest
 import torch
 from loguru import logger
 
+from models.common.lightweightmodule import LightweightModule
 from models.demos.falcon7b_common.tests.test_utils import (
     concat_device_out_layer_present,
     get_num_devices,
@@ -18,7 +19,7 @@ from models.utility_functions import tt_tensors_to_torch_tensors
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
-class PytorchFalconModel(torch.nn.Module):
+class PytorchFalconModel(LightweightModule):
     def __init__(self, hf_reference_model, num_layers):
         super().__init__()
         self.model = hf_reference_model.transformer

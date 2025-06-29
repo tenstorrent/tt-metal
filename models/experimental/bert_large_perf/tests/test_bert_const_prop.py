@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from loguru import logger
 import torch
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
@@ -24,7 +25,7 @@ from models.utility_functions import (
 from models.utility_functions import profiler
 
 
-class TtBertBatchDram(torch.nn.Module):
+class TtBertBatchDram(LightweightModule):
     def __init__(self, config, hugging_face_reference_model, seq_len, device):
         super().__init__()
 

@@ -7,13 +7,14 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.model_config import get_model_config  # get_tt_cache_path,
 from models.utility_functions import pad_by_zero, torch2tt_tensor, tt2torch_tensor
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
-class TtLlamaKVUpdate(torch.nn.Module):
+class TtLlamaKVUpdate(LightweightModule):
     def __init__(
         self,
         device,
@@ -42,7 +43,7 @@ class TtLlamaKVUpdate(torch.nn.Module):
         return self.layer_past
 
 
-class PytorchLlamaKVUpdateModel(torch.nn.Module):
+class PytorchLlamaKVUpdateModel(LightweightModule):
     def __init__(self, hf_reference_model, layer_past):
         super().__init__()
         self.n_heads = hf_reference_model.params.n_heads
