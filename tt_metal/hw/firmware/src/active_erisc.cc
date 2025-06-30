@@ -86,8 +86,11 @@ inline void wait_subordinate_eriscs() {
     WAYPOINT("SED");
 }
 
+#if 0
 extern "C" [[gnu::section(".start")]]
 int _start() {
+#endif
+void Application() {
 #if 0
     // Enable GPREL optimizations.
     asm(R"ASM(
@@ -98,6 +101,7 @@ int _start() {
 	.option pop
 	)ASM");
 #endif
+#if 0
 // Remove when base FW is updated to save/restore local memory
 {
   auto save_state_ptr = reinterpret_cast<volatile uint32_t*>(MEM_ERISC_SYSENG_LOCAL_MEM_STATE);
@@ -109,9 +113,17 @@ int _start() {
       ++save_state_ptr;
   }
 }
+#endif
     configure_csr();
     WAYPOINT("I");
-    do_crt1((uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH);
+    //    do_crt1((uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH);
+    {
+        // Can we arrange for base fw to load this to the right place?
+        uint32_t* data_image = (uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
+        extern uint32_t __ldm_data_start[];
+        extern uint32_t __ldm_data_end[];
+        l1_to_local_mem_copy(__ldm_data_start, data_image, __ldm_data_end - __ldm_data_start);
+    }
 
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
 
@@ -206,6 +218,7 @@ int _start() {
 
         invalidate_l1_cache();
     }
+#if 0
 // Remove when base FW is updated to save/restore local memory
 {
     auto save_state_ptr = reinterpret_cast<volatile uint32_t*>(MEM_ERISC_SYSENG_LOCAL_MEM_STATE);
@@ -217,5 +230,6 @@ int _start() {
         ++save_state_ptr;
     }
 }
-    return 0;
+#endif
+    return;
 }
