@@ -259,6 +259,18 @@ std::optional<LocalMeshBinding> ControlPlane::initialize_local_mesh_binding() {
     const char* mesh_id_str = std::getenv("TT_MESH_ID");
     const char* host_rank_str = std::getenv("TT_HOST_RANK");
     if (mesh_id_str == nullptr || host_rank_str == nullptr) {
+        auto ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        auto mpi_rank = *ctx->rank();
+        const auto& mesh_ids = this->routing_table_generator_->mesh_graph->get_mesh_ids();
+
+        for (const auto& mesh_id : mesh_ids) {
+            const auto& host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(mesh_id);
+            for (const auto& [coord, rank] : host_ranks) {
+                if (mpi_rank == *rank) {
+                    return LocalMeshBinding{.mesh_id = mesh_id, .host_rank = HostRankId{rank}};
+                }
+            }
+        }
         return std::nullopt;
     }
 
@@ -344,6 +356,7 @@ void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
         auto fabric_node_id = this->get_fabric_node_id_from_mesh_coord(mesh_id, mesh_coord);
         return logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     };
+    const auto& mesh_coord_range = this->get_coord_range(mesh_id, MeshScope::LOCAL);
     for (const auto& mesh_coord : mesh_coord_range) {
         chip_id_t physical_chip_id = get_physical_chip_id(mesh_coord);
         MeshCoordinate mesh_coord_next{mesh_coord[0], mesh_coord[1] + 1};
@@ -395,9 +408,10 @@ void ControlPlane::validate_mesh_connections() const {
 // TODO: update logical_mesh_chip_id_to_physical_chip_id_mapping_ to be updated here probably
 std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     MeshId mesh_id, chip_id_t nw_chip_physical_chip_id) const {
-    auto start_coord = this->mesh_coord_ranges_.at(mesh_id).start_coord();
-    auto mesh_ns_size = this->mesh_coord_ranges_.at(mesh_id).shape()[0];
-    auto mesh_ew_size = this->mesh_coord_ranges_.at(mesh_id).shape()[1];
+    const auto& mesh_coord_range = this->get_coord_range(mesh_id, MeshScope::LOCAL);
+    auto start_coord = mesh_coord_range.start_coord();
+    auto mesh_ns_size = mesh_coord_range.shape()[0];
+    auto mesh_ew_size = mesh_coord_range.shape()[1];
 
     std::uint32_t num_ports_per_side =
         routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
@@ -548,6 +562,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
     std::uint32_t mesh_ns_size, mesh_ew_size;
     std::string mesh_graph_desc_filename = std::filesystem::path(mesh_graph_desc_file).filename().string();
     std::map<FabricNodeId, chip_id_t> logical_mesh_chip_id_to_physical_chip_id_mapping;
+
     if (mesh_graph_desc_filename == "tg_mesh_graph_descriptor.yaml") {
         // Add the N150 MMIO devices
         auto eth_coords_per_chip =
@@ -586,15 +601,11 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
         }
 
     } else if (mesh_graph_desc_filename == "dual_galaxy_mesh_graph_descriptor.yaml") {
-        auto ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-        auto rank = *ctx->rank();
-        auto mesh_coordinate_range =
-            this->routing_table_generator_->mesh_graph->get_coord_range(MeshId{0}, HostRankId(rank));
         nw_chip_physical_id = 0;
         const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(MeshId{0}, nw_chip_physical_id);
         // TODO: move all the looping here inside get_mesh_physical_chip_ids
         int i = 0;
-        for (const auto& mesh_coord : this->mesh_coord_ranges_.at(MeshId{0})) {
+        for (const auto& mesh_coord : this->get_coord_range(MeshId{0}, MeshScope::LOCAL)) {
             auto fabric_node_id = this->get_fabric_node_id_from_mesh_coord(MeshId{0}, mesh_coord);
             logical_mesh_chip_id_to_physical_chip_id_mapping.insert({fabric_node_id, physical_chip_ids[i]});
             i++;
@@ -1770,8 +1781,7 @@ GlobalControlPlane::GlobalControlPlane(
     this->initialize_host_mapping();
     auto ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     auto rank = *ctx->rank();
-    control_plane_ =
-        std::make_unique<ControlPlane>(mesh_graph_desc_file, host_rank_to_mesh_coord_ranges_.at(HostRankId(rank)));
+    control_plane_ = std::make_unique<ControlPlane>(mesh_graph_desc_file);
 }
 
 GlobalControlPlane::GlobalControlPlane(
