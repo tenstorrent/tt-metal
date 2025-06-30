@@ -43,6 +43,7 @@ run_tg_tests() {
     pytest -n auto tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
     pytest -n auto tests/ttnn/unit_tests/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
     pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_post_commit.py --timeout=300 ; fail+=$?
+    pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_TG.py --timeout=500 ; fail+=$?
 
   else
     echo "LOG_METAL: Unknown model type: $1"
