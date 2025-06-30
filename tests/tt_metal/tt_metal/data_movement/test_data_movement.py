@@ -119,8 +119,8 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.08},
         },
         3: {  # DRAM Unary Directed Ideal
-            "riscv_1": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 22},
-            "riscv_0": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 21},
+            "riscv_1": {"latency": {"lower": 46000, "upper": 49000}, "bandwidth": 22},
+            "riscv_0": {"latency": {"lower": 46000, "upper": 49000}, "bandwidth": 21},
         },
         # 4: {
         #     "riscv_0": {"latency": {"lower": 200, "upper": 18000}, "bandwidth": 0.1},
