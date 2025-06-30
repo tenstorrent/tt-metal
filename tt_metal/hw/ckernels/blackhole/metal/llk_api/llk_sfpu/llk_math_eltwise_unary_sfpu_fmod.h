@@ -11,4 +11,4 @@
 
 SFPU_INIT_PARAMS_KERNEL(fmod, sfpu::init_fmod, uint param0, uint param1, param0, param1)
 
-SFPU_UNARY_PARAMS_KERNEL(fmod, RC, uint param0, uint param1, param0, param1)
+SFPU_UNARY_PARAMS_KERNEL_ONLY_COMPUTE(fmod, RC, uint param0, uint param1, param0, param1)

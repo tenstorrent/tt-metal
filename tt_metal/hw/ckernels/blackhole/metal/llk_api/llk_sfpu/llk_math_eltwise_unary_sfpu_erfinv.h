@@ -10,4 +10,4 @@
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 
 SFPU_INIT_KERNEL(erfinv, sfpu::erfinv_init)
-SFPU_SIMPLE_OP_KERNEL(erfinv)
+SFPU_OP_SUFFIX_KERNEL(erfinv)

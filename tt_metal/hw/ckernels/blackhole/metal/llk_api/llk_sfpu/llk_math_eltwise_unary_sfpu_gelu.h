@@ -10,9 +10,7 @@
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 
 // the "forward" GELU
-SFPU_SIMPLE_OP_KERNEL(gelu)
 SFPU_INIT_KERNEL(gelu, sfpu::gelu_init)
 
 // the GELU derivative
-SFPU_SIMPLE_OP_KERNEL(gelu_derivative)
 SFPU_INIT_KERNEL(gelu_derivative, sfpu::gelu_derivative_init)

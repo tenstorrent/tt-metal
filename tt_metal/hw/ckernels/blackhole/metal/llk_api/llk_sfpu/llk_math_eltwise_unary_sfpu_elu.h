@@ -9,5 +9,10 @@
 #include "ckernel_sfpu_elu.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 
-SFPU_INIT_KERNEL(elu, sfpu::elu_init)
-SFPU_UNARY_KERNEL(elu)
+namespace ckernel {
+
+// New LLK SFPU APIs
+
+SFPU_INIT_AND_ONE_PARAM_RC_KERNEL(elu, sfpu::elu_init)
+
+}  // namespace ckernel

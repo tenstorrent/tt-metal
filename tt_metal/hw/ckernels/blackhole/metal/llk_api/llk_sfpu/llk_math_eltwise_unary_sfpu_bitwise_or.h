@@ -9,5 +9,10 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 
-SFPU_UNARY_KERNEL(bitwise_or)
+namespace ckernel {
 
+// New LLK SFPU APIs
+
+SFPU_UNARY_ONE_PARAM_KERNEL(bitwise_or, RC, uint param0, param0)
+
+}  // namespace ckernel

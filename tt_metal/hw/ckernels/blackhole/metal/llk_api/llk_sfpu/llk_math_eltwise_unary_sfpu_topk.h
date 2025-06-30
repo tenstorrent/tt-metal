@@ -9,10 +9,16 @@
 #include "ckernel_sfpu_topk.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 
-SFPU_INIT_KERNEL(topk, sfpu::topk_init)
-SFPU_UNARY_PARAMS_KERNEL(
+namespace ckernel {
+
+// New LLK SFPU APIs
+
+SFPU_INIT_ONLY_WITH_TYPE(topk, topk_local_sort, sfpu::topk_init)
+
+SFPU_UNARY_PARAMS_KERNEL_WITH_CUSTOM_CALC(
     topk_local_sort,
     RC_custom,
+    ckernel::sfpu::calculate_bitonic_topk_phases_steps,
     int idir,
     int i_end_phase,
     int i_start_phase,
@@ -23,10 +29,14 @@ SFPU_UNARY_PARAMS_KERNEL(
     i_start_phase,
     i_end_step,
     i_start_step)
-SFPU_UNARY_PARAMS_KERNEL(topk_merge, RC_custom, int m_iter, int k, m_iter, k)
-SFPU_UNARY_PARAMS_KERNEL(
+
+SFPU_UNARY_PARAMS_KERNEL_WITH_EXTRA_TEMPLATE(
+    topk_merge, RC_custom, ckernel::sfpu::calculate_bitonic_topk_merge, bool idir = false, int m_iter, int k, m_iter, k)
+
+SFPU_UNARY_PARAMS_KERNEL_WITH_CUSTOM_CALC(
     topk_rebuild,
     RC_custom,
+    ckernel::sfpu::calculate_bitonic_topk_rebuild,
     bool idir,
     int m_iter,
     int k,
@@ -37,3 +47,5 @@ SFPU_UNARY_PARAMS_KERNEL(
     k,
     logk,
     skip_second)
+
+}  // namespace ckernel

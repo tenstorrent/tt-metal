@@ -9,6 +9,14 @@
 #include "ckernel_sfpu_unary_max_min.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 
-SFPU_UNARY_PARAMS_KERNEL(unary_max, RC, uint param0, param0)
-SFPU_UNARY_PARAMS_KERNEL(unary_min, RC, uint param0, param0)
-SFPU_UNARY_INT32_KERNEL(unary_max)
+namespace ckernel {
+
+// New LLK SFPU APIs
+
+// Unary maximum
+SFPU_UNARY_MAXMIN_KERNEL(unary_max, true, uint param0, param0)
+
+// Unary minimum
+SFPU_UNARY_MAXMIN_KERNEL(unary_min, false, uint param0, param0)
+
+}  // namespace ckernel

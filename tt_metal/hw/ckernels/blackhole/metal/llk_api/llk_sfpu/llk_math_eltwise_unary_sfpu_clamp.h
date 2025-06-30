@@ -9,4 +9,10 @@
 #include "ckernel_sfpu_clamp.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 
-SFPU_UNARY_PARAMS_KERNEL(clamp, RC, uint param0, uint param1, uint param2, param0, param1, param2)
+namespace ckernel {
+
+// New LLK SFPU APIs
+
+SFPU_UNARY_PARAMS_KERNEL_NO_INITCB(clamp, RC, uint param0, uint param1, uint param2, param0, param1, param2)
+
+}  // namespace ckernel

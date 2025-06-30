@@ -9,4 +9,10 @@
 #include "ckernel_sfpu_heaviside.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 
-SFPU_UNARY_PARAMS_KERNEL(heaviside, RC, uint param0, param0)
+namespace ckernel {
+
+// New LLK SFPU APIs
+
+SFPU_UNARY_ONE_PARAM_KERNEL(heaviside, RC, uint param0, param0)
+
+}  // namespace ckernel

@@ -12,8 +12,8 @@
 // int32 variants
 SFPU_COMP_INT32_KERNEL(ne, unary_ne)
 SFPU_COMP_INT32_KERNEL(eq, unary_eq)
-SFPU_COMP_INT32_KERNEL(gt, unary_gt)
-SFPU_COMP_INT32_KERNEL(lt, unary_lt)
+SFPU_COMP_INT32_KERNEL_UNDERSCORE(gt, unary_gt)
+SFPU_COMP_INT32_KERNEL_UNDERSCORE(lt, unary_lt)
 
 // normal variants
 SFPU_COMP_KERNEL(ne)
