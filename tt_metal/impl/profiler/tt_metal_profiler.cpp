@@ -186,7 +186,6 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     for (auto writeTime : writeTimes) {
         writeSum += writeTime;
     }
-    double writeOverhead = (double)writeSum / sampleCount;
 
     constexpr uint32_t briscIndex = 0;
     uint64_t addr = reinterpret_cast<uint64_t>(&profiler_msg->buffer[briscIndex][kernel_profiler::CUSTOM_MARKERS]);
@@ -198,7 +197,6 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     uint32_t preHostTime = 0;
     bool firstSample = true;
 
-    uint64_t deviceStartTime = (uint64_t(sync_times[0] & 0xFFF) << 32) | sync_times[1];
     uint32_t deviceStartTime_H = sync_times[0] & 0xFFF;
     uint32_t deviceStartTime_L = sync_times[1];
     preDeviceTime = deviceStartTime_L;

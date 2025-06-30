@@ -67,7 +67,6 @@ int main() {
         CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
-        constexpr uint32_t num_output_tiles = 2;
         CircularBufferConfig cb_output_config =
             CircularBufferConfig(num_input_tiles * tile_size_bytes, {{output_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(output_cb_index, tile_size_bytes);

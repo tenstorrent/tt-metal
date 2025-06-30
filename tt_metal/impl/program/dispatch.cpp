@@ -464,7 +464,6 @@ void generate_runtime_args_cmds(
             num_packed_cmds_in_seq,
             max_packed_cmds);
     }
-    uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
     uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     while (num_packed_cmds_in_seq != 0) {
         // Generate the device command
@@ -946,7 +945,6 @@ public:
                 unicast_semaphore_cmds.push_back({.dst = semaphore.offset(), .size = sizeof(uint32_t)});
                 auto& unicast_cmds = unicast_semaphore_cmds.back();
                 // TODO: we only fast dispatch to active eth...
-                uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                     extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), CoreType::ETH);
                 for (const auto& dst_noc_info : dst_noc_unicast_info) {
@@ -1025,7 +1023,6 @@ public:
             std::vector<uint32_t>(program.get_program_config(index).cb_size / sizeof(uint32_t), 0));
         if (num_multicast_cb_sub_cmds > 0) {
             uint32_t i = 0;
-            uint32_t max_overall_index = 0;
             uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
             auto index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
             for (const CoreRange& core_range : circular_buffers_unique_coreranges) {
@@ -1034,7 +1031,6 @@ public:
                 const CoreCoord& virtual_end =
                     device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
 
-                const uint32_t num_receivers = core_range.size();
                 auto& cb_config_payload = cb_config_payloads[i];
                 uint32_t max_index = 0;
                 const auto& circular_buffers_on_corerange = program.circular_buffers_on_corerange(core_range);
@@ -1353,7 +1349,6 @@ public:
                 }
             }
         }
-        uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
         for (size_t i = 0; i < batched_dispatch_subcmds.size(); i++) {
             calculator.add_dispatch_write_packed_large(
                 batched_dispatch_subcmds[i].size(),
@@ -2115,7 +2110,6 @@ void update_traced_program_dispatch_commands(
     }
 
     // Update CB Configs
-    uint32_t remote_offset_index = program.get_program_config(tensix_index).local_cb_size / sizeof(uint32_t);
     TT_ASSERT(
         trace_node.cb_configs_payloads.size() ==
         cached_program_command_sequence.circular_buffers_on_core_ranges.size());
@@ -2388,7 +2382,6 @@ KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {
 template <typename WorkloadType, typename DeviceType>
 uint32_t program_base_addr_on_core(
     WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType programmable_core_type) {
-    uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
     const auto& sub_device_ids = workload.determine_sub_device_ids(generic_device);
     // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
     // Addresses are not the same across sub-devices

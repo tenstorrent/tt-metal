@@ -141,8 +141,6 @@ int main() {
 
     // Print partial results so we can see the output is correct (plus or minus some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going to be less accurate)\n";
-    bfloat16* a_bf16 = reinterpret_cast<bfloat16*>(a_data.data());
-    bfloat16* b_bf16 = reinterpret_cast<bfloat16*>(b_data.data());
     bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(result_data.data());
     bfloat16* golden_bf16 = reinterpret_cast<bfloat16*>(golden_data.data());
 

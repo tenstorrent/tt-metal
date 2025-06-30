@@ -623,7 +623,6 @@ void dump_command_queue_raw_data(
 
             out_file << "0x" << std::setfill('0') << std::setw(8) << line_addr << ": ";
             for (uint32_t idx = 0; idx < 16; idx++) {
-                uint8_t val = read_data[line_offset + idx];
                 out_file << " " << std::setfill('0') << std::setw(2) << +read_data[line_offset + idx];
             }
             if (line_addr == write_ptr) {

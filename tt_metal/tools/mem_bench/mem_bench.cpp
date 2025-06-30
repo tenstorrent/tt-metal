@@ -109,7 +109,6 @@ TestResult mem_bench_page_sizing(benchmark::State& state) {
 // Reports host bw.
 TestResult mem_bench_copy_multithread(benchmark::State& state) {
     static_assert((MEMCPY_ALIGNMENT & ((MEMCPY_ALIGNMENT)-1)) == 0);
-    constexpr uint32_t k_DeviceId = 0;
     TestResult results;
     Context ctx{
         {},
@@ -285,7 +284,6 @@ TestResult mem_bench_multi_mmio_devices(
     TestResult results;
 
     // One thread to wait for program on each device
-    int num_threads = devices.size();
 
     for (auto _ : state) {
         std::map<int, Program> programs;                  // device : programs
@@ -301,7 +299,6 @@ TestResult mem_bench_multi_mmio_devices(
                      .value()});
         }
 
-        double host_copy_time = 0;
         execute_work_synced_start(
             1,
             [devices, &programs](int /*thread_idx*/) {

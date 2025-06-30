@@ -10,8 +10,6 @@
 using namespace tt;
 
 void RunCustomCycle(tt_metal::IDevice* device, int fastDispatch) {
-    bool pass = true;
-
     CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};

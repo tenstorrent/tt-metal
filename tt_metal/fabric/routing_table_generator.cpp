@@ -188,7 +188,6 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
         MeshId src_mesh_id{src_mesh_id_val};
         auto paths = get_paths_to_all_meshes(src_mesh_id, inter_mesh_connectivity);
         MeshShape mesh_shape = this->mesh_graph->get_mesh_shape(src_mesh_id);
-        std::uint32_t ns_size = mesh_shape[0];
         std::uint32_t ew_size = mesh_shape[1];
         for (chip_id_t src_chip_id = 0; src_chip_id < this->inter_mesh_table_[src_mesh_id_val].size(); src_chip_id++) {
             for (std::uint32_t dst_mesh_id_val = 0; dst_mesh_id_val < this->inter_mesh_table_.size(); dst_mesh_id_val++) {

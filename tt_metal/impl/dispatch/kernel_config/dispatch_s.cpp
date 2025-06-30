@@ -33,7 +33,6 @@ using namespace tt::tt_metal;
 void DispatchSKernel::GenerateStaticConfigs() {
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
-    uint8_t cq_id_ = this->cq_id_;
     auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
 
     uint32_t dispatch_s_buffer_base = 0xff;

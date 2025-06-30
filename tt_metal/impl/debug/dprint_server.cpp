@@ -1338,7 +1338,6 @@ void DprintServerAttach(chip_id_t device_id) {
 
     // If no server is running, create one
     if (!DprintServerIsRunning()) {
-        DebugPrintServerContext* ctx = new DebugPrintServerContext();
         tt::tt_metal::MetalContext::instance().rtoptions().set_disable_dma_ops(true);
     }
 

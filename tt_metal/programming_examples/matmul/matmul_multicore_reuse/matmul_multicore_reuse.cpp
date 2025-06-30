@@ -90,9 +90,6 @@ void matmul_multicore_reuse(
     uint32_t Mt = M / TILE_HEIGHT;
     uint32_t Kt = K / TILE_WIDTH;
     uint32_t Nt = N / TILE_WIDTH;
-    uint32_t KtNt = Kt * Nt;
-    uint32_t MtKt = Mt * Kt;
-    uint32_t MtNt = Mt * Nt;
 
     // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])2
@@ -210,9 +207,6 @@ void matmul_multicore_reuse(
     auto src0_dram_buffer = CreateBuffer(dram_config_A);
     auto src1_dram_buffer = CreateBuffer(dram_config_B);
     auto dst_dram_buffer = CreateBuffer(dram_config_C);
-    uint32_t src0_addr = src0_dram_buffer->address();
-    uint32_t src1_addr = src1_dram_buffer->address();
-    uint32_t dst_addr = dst_dram_buffer->address();
 
     /*
      * Config of Circular Buffer in the device L1

@@ -240,7 +240,6 @@ void LightMetalReplayImpl::setup_devices() {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(setup_devices) - Using hardcoded CreateDevices() as temp hack.");
     TT_FATAL(!device_, "Device already setup in LightMetalReplay, no need to call setup_devices()");
     const size_t trace_region_size = 4096;  // Default is 0
-    const int device_id = 0;
     const auto dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
     const chip_id_t mmio_device_id = 0;
     auto devices_map = tt::tt_metal::detail::CreateDevices(

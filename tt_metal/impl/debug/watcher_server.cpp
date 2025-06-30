@@ -285,7 +285,6 @@ void watcher_init(chip_id_t device_id) {
     // Initialize debug ring buffer to a known init val, we'll check against this to see if any
     // data has been written.
     std::vector<uint32_t> debug_ring_buf_init_val(sizeof(debug_ring_buf_msg_t) / sizeof(uint32_t), 0);
-    debug_ring_buf_msg_t* ring_buf_data = reinterpret_cast<debug_ring_buf_msg_t*>(&(debug_ring_buf_init_val[0]));
     data->debug_ring_buf.current_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
     data->debug_ring_buf.wrapped = 0;
 
@@ -562,8 +561,7 @@ void watcher_read_kernel_ids_from_file() {
     size_t len;
     while (getline(&line, &len, f) != -1) {
         string s(line);
-        s = s.substr(0, s.length() - 1);            // Strip newline
-        int k_id = stoi(s.substr(0, s.find(":")));  // Format is {k_id}: {kernel}
+        s = s.substr(0, s.length() - 1);  // Strip newline
         watcher::kernel_names.push_back(s.substr(s.find(":") + 2));
     }
 }

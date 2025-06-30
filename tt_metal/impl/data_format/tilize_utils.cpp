@@ -66,7 +66,6 @@ std::vector<T> convert_layout_row_major_to_tile_swizzled(
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
     tilized_result.resize(in_row_major.size());
-    uint64_t out_index = 0;
     for (auto b = 0; b < B; b++) {
         for (auto hs = 0; hs < H; hs += tile_H) {
             for (auto ws = 0; ws < W; ws += tile_W) {
@@ -105,7 +104,6 @@ std::vector<T> convert_layout_tile_swizzled_to_row_major(
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
     result.resize(in_tile_swizzled.size());
-    uint64_t linear = 0;
     for (auto b = 0; b < B; b++) {
         for (auto hs = 0; hs < H; hs += tile_H) {
             for (auto ws = 0; ws < W; ws += tile_W) {

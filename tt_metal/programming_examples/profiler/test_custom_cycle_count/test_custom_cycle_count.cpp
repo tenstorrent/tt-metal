@@ -24,7 +24,6 @@ bool RunCustomCycle(tt_metal::IDevice* device, int loop_count) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     constexpr int loop_size = 50;
-    constexpr bool profile_device = true;
     std::map<std::string, std::string> kernel_defines = {
         {"LOOP_COUNT", std::to_string(loop_count)}, {"LOOP_SIZE", std::to_string(loop_size)}};
 

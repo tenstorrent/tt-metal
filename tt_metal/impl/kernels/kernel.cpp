@@ -572,7 +572,6 @@ void ComputeKernel::read_binaries(IDevice* device) {
         const ll_api::memory& binary_mem =
             llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
         binaries.push_back(&binary_mem);
-        uint32_t binary_size = binary_mem.get_packed_size();
     }
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
