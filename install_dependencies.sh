@@ -188,6 +188,7 @@ init_packages() {
                 "libcapstone-dev"
                 "libc++-17-dev"
                 "libc++abi-17-dev"
+                "wget"
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi-bin" "libopenmpi-dev")
@@ -214,6 +215,7 @@ init_packages() {
                 "boost-devel"
                 "tbb-devel"
                 "capstone-devel"
+                "wget"
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi" "openmpi-devel")
