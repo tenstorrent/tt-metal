@@ -72,6 +72,7 @@ tt_metal/jit_build/**/CMakeLists.txt @pgkeller @abhullar-tt @nathan-TT @jbaumanT
 tt_metal/kernels/ @abhullar-tt # these should go away or get moved to tests
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @pgkeller @tt-asaigal @tt-aho
 tt_metal/programming_examples/ @tt-asaigal @afuller-TT @mo-tenstorrent @tenstorrent/metalium-api-owners @marty1885
+tt_metal/programming_examples/profiler/ @mo-tenstorrent @sagarwalTT
 tt_metal/programming_examples/profiler/test_noc_event_profiler/ @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
 tt_metal/soc_descriptors @abhullar-tt @aliuTT @ubcheema
 tt_metal/test @tenstorrent/metalium-developers-infra
