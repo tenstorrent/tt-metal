@@ -69,6 +69,8 @@ def comment_out_unused_variables(log_file, num_variables_to_comment=5, output_lo
     )
     common_variable_types = [
         "auto",
+        "tt::tt_metal::DispatchQueryManager*",
+        "int64_t",
         "const",
         "IDevice*",
         "const auto",
@@ -199,6 +201,31 @@ def comment_out_unused_variables(log_file, num_variables_to_comment=5, output_lo
                         )
                         source_lines[line_number - 1] = strip_left_of_namespace(
                             source_lines[line_number - 1], namespace="tt_metal::CreateKernel"
+                        )
+                        with open(filename, "w") as source_file:
+                            source_file.writelines(source_lines)
+                        continue
+
+                    if "MakeCircularBufferBFP16" in original_line:
+                        print(f"original line: {original_line}")
+                        logging.info(
+                            f"Line {line_number} in {filename}:{line_number} is a MakeCircularBufferBFP16 call. slicing variable definition."
+                        )
+                        source_lines[line_number - 1] = strip_left_of_namespace(
+                            source_lines[line_number - 1], namespace="MakeCircularBufferBFP16"
+                        )
+                        print(f"modified line: {source_lines[line_number - 1]}")
+                        with open(filename, "w") as source_file:
+                            source_file.writelines(source_lines)
+                        continue
+
+                    if "CreateCircularBuffer" in original_line:
+                        print("FFFFFFFFFFFFFFF")
+                        logging.info(
+                            f"Line {line_number} in {filename}:{line_number} is a CreateCircularBuffer call. slicing variable definition."
+                        )
+                        source_lines[line_number - 1] = strip_left_of_namespace(
+                            source_lines[line_number - 1], namespace="CreateCircularBuffer"
                         )
                         with open(filename, "w") as source_file:
                             source_file.writelines(source_lines)
