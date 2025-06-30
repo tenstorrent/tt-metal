@@ -68,6 +68,7 @@ void kernel_main() {
     constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(26);
 
     constexpr uint32_t num_mcast_cores = num_input_cores > num_output_cores ? num_input_cores : num_output_cores;
+    constexpr bool skip_mcast = num_mcast_cores == 1;
     uint32_t i = 0;  // Runtime arg index
 
     uint32_t this_core_x = get_arg_val<uint32_t>(i);
@@ -206,72 +207,83 @@ void kernel_main() {
 
             for (uint32_t act_w_outer_i = 0; act_w_outer_i < num_input_cores; act_w_outer_i++) {
                 cb_reserve_back(cb_id_act, act_block_num_tiles);
-                if (act_w_outer_i == this_core_id) {
-                    // MCAST SENDER: send entire tilized input to other cores in column
-                    // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e.
-                    // its value should be act_mcast_num_dests), then reset the semaphore_addr value back to zero for
-                    // the next block
-
-                    noc_semaphore_wait_min(act_mcast_sender_semaphore_addr_ptr, num_mcast_cores - 1);
-                    noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
-
-                    noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
-
-                    // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
+                if constexpr (skip_mcast) {
+                    cb_reserve_back(cb_id_act, act_block_num_tiles);
                     cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
 
-                    // Now we have the block in the CB address, we can mcast to dests!
                     uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
+                    uint32_t cb_addr = get_write_ptr(cb_id_act);
+                    noc_async_write(tilized_act_start_address, get_noc_addr(cb_addr), act_mcast_sender_size_bytes);
+                } else {
+                    if (act_w_outer_i == this_core_id) {
+                        // MCAST SENDER: send entire tilized input to other cores in column
+                        // wait until all act mcast destinations have atomically incremented the act semaphore_addr
+                        // (i.e. its value should be act_mcast_num_dests), then reset the semaphore_addr value back to
+                        // zero for the next block
 
-                    // num_dests will source, since we are copying to a different local CB as well
-                    uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
+                        noc_semaphore_wait_min(act_mcast_sender_semaphore_addr_ptr, num_mcast_cores - 1);
+                        noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
-                    noc_async_write_multicast_loopback_src(
-                        tilized_act_start_address,
-                        act_multicast_data_addr,
-                        act_mcast_sender_size_bytes,
-                        num_reader_cores,
-                        true);
+                        noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                    // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
-                    // vc even though cmd bufs are different Also, this only works because we are setting VCs statically
-                    // (using NOC_CMD_STATIC_VC).
+                        // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
+                        cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
+
+                        // Now we have the block in the CB address, we can mcast to dests!
+                        uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
+
+                        // num_dests will source, since we are copying to a different local CB as well
+                        uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
+
+                        noc_async_write_multicast_loopback_src(
+                            tilized_act_start_address,
+                            act_multicast_data_addr,
+                            act_mcast_sender_size_bytes,
+                            num_reader_cores,
+                            true);
+
+                        // Note: no need for write barrier, since these two multicasts are done on the same noc id and
+                        // same vc even though cmd bufs are different Also, this only works because we are setting VCs
+                        // statically (using NOC_CMD_STATIC_VC).
 
 #ifdef ARCH_BLACKHOLE
-                    // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may
-                    // not be sent in order they are issued
-                    noc_async_writes_flushed();
+                        // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and
+                        // may not be sent in order they are issued
+                        noc_async_writes_flushed();
 #endif
-                    // We should also multicast VALID flag to destinations for receiver semaphore
-                    noc_semaphore_set_multicast_loopback_src(
-                        act_mcast_sender_semaphore_valid_addr,
-                        act_mcast_receiver_semaphore_noc_addr,
-                        num_reader_cores,
-                        false);
-                    noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-                } else {
-                    // MCAST RECEIVER: receive entire tilized input from sender core
-                    // Set act semaphore value to INVALID
-                    noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
+                        // We should also multicast VALID flag to destinations for receiver semaphore
+                        noc_semaphore_set_multicast_loopback_src(
+                            act_mcast_sender_semaphore_valid_addr,
+                            act_mcast_receiver_semaphore_noc_addr,
+                            num_reader_cores,
+                            false);
+                        noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+                    } else {
+                        // MCAST RECEIVER: receive entire tilized input from sender core
+                        // Set act semaphore value to INVALID
+                        noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                    uint32_t sender_x = act_mcast_x_lookup[sender_noc_x];
-                    uint32_t sender_y = act_mcast_y_lookup[sender_noc_y];
+                        uint32_t sender_x = act_mcast_x_lookup[sender_noc_x];
+                        uint32_t sender_y = act_mcast_y_lookup[sender_noc_y];
 
-                    // Atomic increment source core counter
-                    uint64_t act_mcast_sender_semaphore_noc_addr =
-                        get_noc_addr(sender_x, sender_y, act_mcast_sender_semaphore_addr);
-                    noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
+                        // Atomic increment source core counter
+                        uint64_t act_mcast_sender_semaphore_noc_addr =
+                            get_noc_addr(sender_x, sender_y, act_mcast_sender_semaphore_addr);
+                        noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
 
-                    // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+                        // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
+                        noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+                    }
                 }
 
                 cb_push_back(cb_id_act, act_block_num_tiles);
 
-                sender_noc_x++;
-                if (sender_noc_x >= num_cores_x) {
-                    sender_noc_x = 0;
-                    sender_noc_y++;
+                if constexpr (!skip_mcast) {
+                    sender_noc_x++;
+                    if (sender_noc_x >= num_cores_x) {
+                        sender_noc_x = 0;
+                        sender_noc_y++;
+                    }
                 }
 
             }  // num_input_cores
