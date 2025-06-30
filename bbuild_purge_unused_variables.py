@@ -19,6 +19,8 @@ def remove_commented_lines(start_directory=".", comment_string="--commented out 
         for filename in files:
             if filename.endswith((".cpp", ".c", ".hpp", ".h", ".cxx", ".hxx")):  # Adjust file extensions as needed
                 filepath = os.path.join(root, filename)
+                if ".cpmcache" in filepath:
+                    continue
                 try:
                     with open(filepath, "r") as f:
                         lines = f.readlines()

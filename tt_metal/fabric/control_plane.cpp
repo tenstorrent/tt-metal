@@ -139,7 +139,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
         return;
     }
     auto topology = FabricContext::get_topology_from_config(fabric_config);
-    size_t min_routing_planes = std::numeric_limits<size_t>::max();
 
     auto apply_min =
         [this](

@@ -151,10 +151,6 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.dev_completion_q_rd_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     } else if (static_config_.is_d_variant.value()) {
-        uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t cq_size = device_->sysmem_manager().get_cq_size();
-        uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
-
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.dispatch_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();

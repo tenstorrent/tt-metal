@@ -211,7 +211,6 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
 
     TT_FATAL(in_tile_nfaces.size() % tile_HW == 0, "Input size must be divisible by tile size");
     int num_tiles = in_tile_nfaces.size() / tile_HW;
-    size_t dest_idx = 0;
     for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         int tile_start = tile_idx * tile_HW;
 
@@ -363,7 +362,6 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
     size_t col_faces = tile_W / face_W;
     size_t tile_rows = H / tile_H;
     size_t tile_cols = W / tile_W;
-    size_t row_of_tiles_num_elements = tile_H * W;
 
     // We don't transpose face order if we have only one face in the row or column
     transpose_face_order = transpose_face_order && row_faces > 1 && col_faces > 1;
@@ -398,7 +396,6 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
             }
         };
 
-    size_t n_tiles = in_nfaces.size() / (tile_H * tile_W);
     size_t batch_start = 0;
     for (size_t b = 0; b < B; b++) {
         for (size_t tile_row = 0; tile_row < tile_rows; tile_row++) {
