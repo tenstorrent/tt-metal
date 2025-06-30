@@ -11,7 +11,7 @@ repos:
     - id: check-added-large-files
 # Using this mirror lets us use mypyc-compiled black, which is about 2x faster
 - repo: https://github.com/psf/black-pre-commit-mirror
-  rev: 25.1.0
+  rev: 23.10.1
   hooks:
     - id: black
       language_version: python3
@@ -28,11 +28,11 @@ repos:
       files: ^models/
       exclude: ^models/(demos/llama3_subdevices|experimental)/
 - repo: https://github.com/BlankSpruce/gersemi
-  rev: 0.19.3
+  rev: 0.16.2
   hooks:
   - id: gersemi
 - repo: https://github.com/adrienverge/yamllint.git
-  rev: v1.37.1
+  rev: v1.35.1
   hooks:
     - id: yamllint
 - repo: https://github.com/pre-commit/mirrors-clang-format
