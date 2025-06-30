@@ -8,14 +8,26 @@ The model consists of two different text encoders together with their tokenizers
 
 The tests are executed using the following command:
 
+T3K
 ```sh
-pytest models/experimental/flux/tests
+MESH_DEVICE=T3K WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/flux/tests/test_transformer_block.py'
+```
+
+N300
+```sh
+MESH_DEVICE=N300 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/flux/tests/test_transformer_block.py'
 ```
 
 ## Running the Demo
 
 The demo is executed using the following command:
 
+T3K
 ```sh
-pytest models/experimental/flux/demo.py
+MESH_DEVICE=T3K WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/flux/demo.py ; fail+=$?
+```
+
+N300
+```sh
+MESH_DEVICE=N300 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/flux/demo.py ; fail+=$?
 ```
