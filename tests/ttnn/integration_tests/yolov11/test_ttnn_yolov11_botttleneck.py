@@ -15,7 +15,6 @@ from models.experimental.yolov11.reference.yolov11 import Bottleneck as torch_bo
 from models.experimental.yolov11.tt.ttnn_yolov11_bottleneck import TtnnBottleneck as ttnn_bottleneck
 
 
-@pytest.mark.skip(reason="#24336: YOLOv11 tests are currently disabled")
 @pytest.mark.parametrize(
     "in_channel, out_channel, kernel, stride, padding, dilation, groups,fwd_input_shape",
     [
@@ -32,7 +31,6 @@ from models.experimental.yolov11.tt.ttnn_yolov11_bottleneck import TtnnBottlenec
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolo_v11_bottleneck(
     device,
-    use_program_cache,
     reset_seeds,
     in_channel,
     out_channel,
