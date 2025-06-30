@@ -21,6 +21,7 @@ conftest.py @tenstorrent/metalium-developers-infra
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
 tests/scripts/ @tenstorrent/metalium-developers-infra
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tenstorrent/metalium-developers-infra
+tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu @tenstorrent/metalium-developers-infra
 
 # TT-STL
 tt_stl/ @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt
@@ -255,7 +256,8 @@ models/demos/yolov8x @tenstorrent/cse-developer-ttnn
 models/demos/yolov8s @tenstorrent/cse-developer-ttnn
 models/experimental/stable_diffusion_35_large/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn
 models/experimental/swin_s @tenstorrent/cse-developer-ttnn
-models/experimental/yolov7 @tenstorrent/cse-developer-ttnn
+models/demos/yolov7 @tenstorrent/cse-developer-ttnn
+models/experimental/classification_eval @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra

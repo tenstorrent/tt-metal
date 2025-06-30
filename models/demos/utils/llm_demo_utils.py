@@ -117,13 +117,21 @@ def verify_perf(
     measurements: dict,
     expected_perf_metrics: dict,
     high_tol_percentage=1.15,  # 15% tolerance (approx +-5% CI variance + 5% real increase)
+    expected_measurements: dict = None,
+    lower_is_better_metrics: set = None,
 ):
     """
     Verify the performance metrics against the expected values.
     The metrics that must be provided are specified in expected_measurements below.
+    Args:
+        measurements: dict of measured performance values
+        expected_perf_metrics: dict of expected performance values
+        high_tol_percentage: tolerance percentage (e.g., 1.15 means 15% tolerance)
+        expected_measurements: dict specifying which measurements are required
+        lower_is_better_metrics: set of metric names where lower values are better (e.g., TTFT)
     """
 
-    expected_measurements = {
+    expected_measurements_default = {
         "compile_prefill": False,
         "compile_decode": False,
         "prefill_time_to_token": False,
@@ -132,22 +140,48 @@ def verify_perf(
         "decode_t/s": True,
         "decode_t/s/u": True,
     }
+    expected_measurements = expected_measurements_default if expected_measurements is None else expected_measurements
+
+    # Default metrics where lower is better
+    lower_is_better_metrics_default = {
+        "prefill_time_to_token",
+        "compile_prefill",
+        "compile_decode",
+    }
+    lower_is_better_metrics = (
+        lower_is_better_metrics_default.union(lower_is_better_metrics)
+        if lower_is_better_metrics
+        else lower_is_better_metrics_default
+    )
 
     does_pass = True
     for key in expected_measurements:
         if not expected_measurements[key]:
             continue
         assert (
-            key in measurements and key in expected_perf_metrics
+            key in measurements and key in expected_perf_metrics and expected_perf_metrics[key] is not None
         ), f"Metric {key} not found in measurements or expected_perf_metrics"
-        if measurements[key] < expected_perf_metrics[key]:  # Note: assumes higher is better for metric
-            does_pass = False
-            logger.warning(f"{key} ({measurements[key]}) is lower than expected {expected_perf_metrics[key]}")
-        elif measurements[key] > expected_perf_metrics[key] * high_tol_percentage:
-            does_pass = False
-            logger.warning(
-                f"{key} ({measurements[key]}) is higher than expected {expected_perf_metrics[key]}. Please update the expected perf."
-            )
+
+        if key in lower_is_better_metrics:
+            # For metrics where lower is better (e.g., TTFT)
+            if measurements[key] > expected_perf_metrics[key]:  # Higher than expected is bad
+                does_pass = False
+                logger.warning(f"{key} ({measurements[key]}) is higher than expected {expected_perf_metrics[key]}")
+            elif measurements[key] < expected_perf_metrics[key] * (2 - high_tol_percentage):  # Much lower than expected
+                does_pass = False
+                logger.warning(
+                    f"{key} ({measurements[key]}) is much lower than expected {expected_perf_metrics[key]}. Please update the expected perf."
+                )
+        else:
+            # For metrics where higher is better (e.g., throughput)
+            if measurements[key] < expected_perf_metrics[key]:  # Lower than expected is bad
+                does_pass = False
+                logger.warning(f"{key} ({measurements[key]}) is lower than expected {expected_perf_metrics[key]}")
+            elif measurements[key] > expected_perf_metrics[key] * high_tol_percentage:  # Much higher than expected
+                does_pass = False
+                logger.warning(
+                    f"{key} ({measurements[key]}) is much higher than expected {expected_perf_metrics[key]}. Please update the expected perf."
+                )
 
     if does_pass:
         logger.info("Perf Check Passed!")

@@ -1,0 +1,9 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <tt-metalium/distributed_context.hpp>
+#include <gtest/gtest.h>
+#include "tests/tt_metal/multihost/common/multihost_test_tools.hpp"
+#include <fmt/format.h>
+int main(int argc, char** argv) { return multihost::common::multihost_main(argc, argv); }

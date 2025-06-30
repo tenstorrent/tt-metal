@@ -596,6 +596,7 @@ def run_multi_core_matmul_1d(
     mesh_device.reset_sub_device_stall_group()
 
 
+@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
 @pytest.mark.skipif(is_grayskull(), reason="Test suite for WH only")
 @pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
@@ -715,6 +716,7 @@ def test_tg_matmul_1d_ring_llama_with_rs_perf(
     )
 
 
+@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
 @pytest.mark.skipif(is_grayskull(), reason="Test suite for WH only")
 @pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
@@ -797,8 +799,6 @@ def test_6U_matmul_1d_ring_llama_with_rs_perf(
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
         pytest.skip("Skipping test_run_prefetcher because it only works with a 7x10 grid")
-    if not is_RING_6U:
-        pytest.skip("This test is only for 6U TG devices")
 
     if in1_is_dram_interleaved:
         hop_grid = None

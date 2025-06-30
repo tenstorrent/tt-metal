@@ -307,9 +307,16 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             break;
         case UnaryOpType::MINIMUM:
-            op_init_and_name = {
-                "unary_min_tile_init();",
-                fmt::format("unary_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {
+                    "unary_min_tile_init();", fmt::format("unary_min_int32_tile({}, {}u);", idst, (uint)param0)};
+            } else {
+                op_init_and_name = {
+                    "unary_min_tile_init();",
+                    fmt::format("unary_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
             break;
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
