@@ -11,6 +11,8 @@
 
 using sem_ptr_t = volatile tt_l1_ptr uint32_t*;
 
+constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
+
 /**
 
 * Exchange Wt tiles between two cores
@@ -28,7 +30,7 @@ void sort_noc_exchange_Wt_tiles(
     sem_ptr_t sem_self_ptr) {
     constexpr uint32_t ONE_TILE = 1;
 
-    const uint64_t sem_noc_addr = get_noc_addr(other_core_x, other_core_y, static_cast<uint32_t>(sem_self_ptr));
+    const uint64_t sem_noc_addr = get_noc_addr(other_core_x, other_core_y, reinterpret_cast<uint32_t>(sem_self_ptr));
 
     for (uint32_t w = 0, sem_counter = 1; w < Wt; w++, sem_counter += 2) {
         // Received tile, now sending it to compute
@@ -55,4 +57,23 @@ void sort_noc_exchange_Wt_tiles(
     }  // Wt
 
     noc_semaphore_set(sem_self_ptr, 0);
+}
+
+FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
+    const uint32_t core_id, const uint32_t lookup_table_buffer_cb_index, const uint32_t tile_size = 1024) {
+    // Initialize as max to indicate invalid coordinates
+    uint32_t core_x = 0;
+    uint32_t core_y = 0;
+
+    if (2 * core_id >= tile_size) {
+        return {core_x, core_y};  // Invalid core ID
+    }
+
+    const uint32_t l1_read_addr = get_read_ptr(lookup_table_buffer_cb_index);
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr);
+
+    core_x = ptr[core_id * 2];
+    core_y = ptr[core_id * 2 + 1];
+
+    return {core_x, core_y};
 }
