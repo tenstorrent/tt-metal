@@ -48,12 +48,12 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(const MeshSocket& socket
 void forward_descriptor_to_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
-    std::shared_ptr<multihost::DistributedContext> context);
+    const std::shared_ptr<const multihost::DistributedContext>& context);
 
 SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
-    std::shared_ptr<multihost::DistributedContext> context);
+    const std::shared_ptr<const multihost::DistributedContext>& context);
 
 //  =============== Additional utility functions  ===============
 

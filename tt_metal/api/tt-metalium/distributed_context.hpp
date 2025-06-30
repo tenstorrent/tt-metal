@@ -235,6 +235,7 @@ public:
     [[nodiscard]] virtual bool is_revoked() = 0;
 
     //--- Message snooping -----------------------------------------------
+    // Probe for an incoming message from 'source' with 'tag'. Return the size of the message in bytes
     virtual std::size_t snoop_incoming_msg_size(Rank source, Tag tag) const = 0;
 
     virtual ~DistributedContext() = default;
