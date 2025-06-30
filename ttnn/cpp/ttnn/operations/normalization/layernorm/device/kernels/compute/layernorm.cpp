@@ -18,7 +18,7 @@
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
-#include "ttnn/cpp/ttnn/operations/kernel_helper_functions/reduce_cb.hpp"
+#include "../../../../../kernel_helper_functions/reduce_cb.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
