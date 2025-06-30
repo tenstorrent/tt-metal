@@ -27,7 +27,7 @@ inline void calculate_elu(uint slope) {
         vFloat v = dst_reg[0];
 
         v_if(v < 0.0f) {
-            vFloat v_exp = calculate_exponential_body_improved<APPROXIMATION_MODE>(v);
+            vFloat v_exp = _sfpu_exp_21f_(v);
             v = s * (v_exp - 1.0f);
         }
         v_endif;
