@@ -63,7 +63,7 @@ uint32_t device_index(const std::vector<tt::tt_metal::IDevice*>& devices, const 
             return i;
         }
     }
-    TT_FATAL(false, "Device not found in device_index");
+    TT_THROW("Device not found in device_index");
     return std::numeric_limits<uint32_t>::max();
 }
 
@@ -76,7 +76,7 @@ std::vector<tt::tt_metal::IDevice*> get_axis_devices(
     } else if (axis == 0) {
         return mesh_view.get_devices_on_column(axis_value);
     }
-    TT_FATAL(false, "Axis must be 0 (column) or 1 (row)");
+    TT_THROW("Axis must be 0 (column) or 1 (row)");
     return {};
 }
 

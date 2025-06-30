@@ -13,7 +13,6 @@
 #include <tt-metalium/sub_device.hpp>
 
 namespace ttnn::operations::ccl {
-namespace detail {}  // namespace detail
 
 std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     QueueId queue_id,
