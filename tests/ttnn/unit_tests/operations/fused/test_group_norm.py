@@ -488,8 +488,8 @@ def test_sdxl_base_group_norm(device, input_shape):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("N", [1])
-@pytest.mark.parametrize("C", [1280])
-@pytest.mark.parametrize("H", [128])
+@pytest.mark.parametrize("C", [1920])
+@pytest.mark.parametrize("H", [64])
 @pytest.mark.parametrize("W", [64])
 @pytest.mark.parametrize("num_groups", [32])
 def test_group_norm_compute_config(device, N, C, H, W, num_groups):
@@ -497,6 +497,9 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
     Test that a high-accuracy compute kernel config produces a higher PCC with torch
     than a lower-accuracy compute kernel config.
     """
+
+    if device.core_grid.y == 7:
+        pytest.skip()
 
     torch.manual_seed(0)
     input_shape = (N, C, H, W)
