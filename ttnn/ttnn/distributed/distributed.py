@@ -241,7 +241,7 @@ def ShardTensor2dMesh(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims
 
 # Deprecated. Prefer to use `ttnn.MeshComposerConfig` directly.
 def ConcatMesh2dToTensor(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[int, int]):
-    return ttnn.create_mesh_mapper(
+    return ttnn.create_mesh_composer(
         mesh_device,
         ttnn.MeshComposerConfig(
             [dims[0], dims[1]],
