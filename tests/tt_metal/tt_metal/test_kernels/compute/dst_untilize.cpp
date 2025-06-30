@@ -16,7 +16,7 @@ void MAIN {
     constexpr uint32_t num_faces = get_compile_time_arg_val(2);
     constexpr uint32_t num_rows_per_face = get_compile_time_arg_val(3);
 
-    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     copy_tile_to_dst_init_short(tt::CBIndex::c_0);
     pack_untilize_dest_init<per_core_block_tile_cnt>(tt::CBIndex::c_16, num_rows_per_face, num_faces);
 

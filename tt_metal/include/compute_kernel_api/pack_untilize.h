@@ -18,27 +18,33 @@ namespace ckernel {
 /**
  * Performs the necessary hardware and software initialization for the pack untilize operation. This initialization
  * function should be used when the desired PACK input is already in DEST register - therefore, it doesn't
- * configure UNPACK and MATH threads for transferring data from circular buffers to DEST register. Matching pack
- * untilize operation for this initialization function is `pack_untilize_dest`.
+ * configure UNPACK and MATH threads for transferring data from circular buffers to DEST register (this is done with
+ * `pack_untilize_init` function). Matching pack untilize operation for this initialization function is
+ * `pack_untilize_dest`. In order for this untilization to be performed correctly, some other function must
+ * place the tiles in the DEST register, e.g. `reduce_tile`, `tilize_tile`, etc. This initialization function
+ * should, therefore, be called right after the op-specific initialization function (`reduce_init`, `tilize_init`, etc.).
  *
  * Since pack untilize works on a block of tiles, the user should specify the width of a single block (block_ct_dim),
  * and the width of the full block (full_ct_dim). It is not needed to provide the height of the block during the
  * initialization, since `pack_untilize_block` will loop over the height of the block. Note that the maximum size
- * of the block is limited by the size of the DEST register, which is 8 tiles if the DEST is used in 16-bit mode,
- * and 4 tiles if the DEST is used in 32-bit mode.
+ * of the block is limited by the size of the DEST and synchroization mode used. These are maximum sizes:
+ * - half-sync mode (16-bit mode): 8 tiles
+ * - half-sync mode (32-bit mode): 4 tiles
+ * - full-sync mode (16-bit mode): 16 tiles
+ * - full-sync mode (32-bit mode): 8 tiles
  *
- * This function allows the user to specify face_r_dim and num_faces through function parameters. Setting these
- * parameters results in an expensive MMIO write, so it should be used only when necessary.
- * This should addressed more systematically within the issue tt-metal#22820, since these two values can be inferred
- * from the circular buffer description, the same way as it is done in llk_pack_hw_configure_disaggregated. This
- * would remove the need for llk_pack_untilize_hw_configure_disaggregated altogether and we would pay the price
- * of the MMIO write only once, in compute_kernel_hw_startup.
+ * NOTE: This function allows the user to specify face_r_dim and num_faces through function parameters. Setting these
+ * parameters results in an expensive MMIO write and cannot be avoided currently.
+ * This should be addressed more systematically within the issue tt-metal#22820, since these two values can be inferred
+ * from the circular buffer description, the same way as it is done in `llk_pack_hw_configure_disaggregated`. This
+ * would remove the need for `llk_pack_untilize_hw_configure_disaggregated` altogether and we would pay the price
+ * of the MMIO write only once, in `compute_kernel_hw_startup`.
  *
  * Return value: None
  *
  * | Param Type | Name         | Description                              | Type      | Valid Range     | Required |
  * |------------|--------------|------------------------------------------|-----------|-----------------|----------|
- * | Template   | block_ct_dim | Width of a single block in tiles         | uint32_t  | 1 to 8          | False    |
+ * | Template   | block_ct_dim | Width of a single block in tiles         | uint32_t  | 1 to 16         | False    |
  * | Template   | full_ct_dim  | Width of a full input in tiles           | uint32_t  | >= block_ct_dim | False    |
  * | Template   | narrow_row   |  Whether the provided input is narrow    | bool      | true/false      | False    |
  * | Template   | row_num_datums | Number of datums per row               | uint32_t  | >= 1            | False    |
@@ -73,15 +79,25 @@ ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim = 16, uint32
  *
  * Since pack untilize works on a block of tiles, the user should specify the width of a single block (block_ct_dim),
  * and the width of the full block (full_ct_dim). It is not needed to provide the height of the block during the
- * initialization, since `pack_untilize_block` will loop over the height of the block. Note that the maximum size of
- * the block is limited by the size of the DEST register, which is 8 tiles if the DEST is used in 16-bit mode, and 4
- * tiles if the DEST is used in 32-bit mode.
+ * initialization, since `pack_untilize_block` will loop over the height of the block. Note that the maximum size
+ * of the block is limited by the size of the DEST and synchroization mode used. These are maximum sizes:
+ * - half-sync mode (16-bit mode): 8 tiles
+ * - half-sync mode (32-bit mode): 4 tiles
+ * - full-sync mode (16-bit mode): 16 tiles
+ * - full-sync mode (32-bit mode): 8 tiles
+ *
+ * NOTE: This function allows the user to specify face_r_dim and num_faces through function parameters. Setting these
+ * parameters results in an expensive MMIO write and cannot be avoided currently.
+ * This should be addressed more systematically within the issue tt-metal#22820, since these two values can be inferred
+ * from the circular buffer description, the same way as it is done in `llk_pack_hw_configure_disaggregated`. This
+ * would remove the need for `llk_pack_untilize_hw_configure_disaggregated` altogether and we would pay the price
+ * of the MMIO write only once, in `compute_kernel_hw_startup`.
  *
  * Return value: None
  *
  * | Param Type | Name         | Description                                | Type      | Valid Range     | Required |
  * |------------|--------------|--------------------------------------------|-----------|-----------------|----------|
- * | Template   | block_ct_dim | Width of a single block in tiles           | uint32_t  | 1 to 8          | False    |
+ * | Template   | block_ct_dim | Width of a single block in tiles           | uint32_t  | 1 to 16         | False    |
  * | Template   | full_ct_dim  | Width of a full input in tiles             | uint32_t  | >= block_ct_dim | False    |
  * | Function   | icb          | Input circular buffer identifier           | uint32_t  | 0 to 31         | True     |
  * | Function   | ocb          | Output circular buffer identifier          | uint32_t  | 0 to 31         | True     |
@@ -102,14 +118,18 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb) {
  * by its width in tiles (block_ct_dim) and height in tiles (block_rt_dim). The width of the block has to be the same
  * as the one provided during the initialization of the pack untilize operation (`pack_untilize_init`). It is not
  * needed to provide the height of the block during the initialization, since `pack_untilize_block` will loop over the
- * height of the block. Note that the maximum size of the block is limited by the size of the DEST register, which is 8
- * tiles if the DEST is used in 16-bit mode, and 4 tiles if the DEST is used in 32-bit mode.
+ * height of the block. Note that the maximum size of the block is limited by the size of the DEST and synchroization
+ * mode used. These are maximum sizes:
+ * - half-sync mode (16-bit mode): 8 tiles
+ * - half-sync mode (32-bit mode): 4 tiles
+ * - full-sync mode (16-bit mode): 16 tiles
+ * - full-sync mode (32-bit mode): 8 tiles
  *
  * Return value: None
  *
  * | Param Type | Name         | Description                                 | Type      | Valid Range     | Required |
  * |------------|--------------|---------------------------------------------|-----------|-----------------|----------|
- * | Template   | block_ct_dim | Width of a single block in tiles            | uint32_t  | 1 to 8          | False    |
+ * | Template   | block_ct_dim | Width of a single block in tiles            | uint32_t  | 1 to 16         | False    |
  * | Template   | full_ct_dim  | Width of a full input in tiles              | uint32_t  | >= block_ct_dim | False    |
  * | Function   | icb          | Input circular buffer identifier            | uint32_t  | 0 to 31         | True     |
  * | Function   | block_rt_dim | Height of a single block in tiles           | uint32_t  | >= 1            | True     |
@@ -138,17 +158,22 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
 // clang-format off
 /**
  * Performs the pack untilize operation when PACK input is already in DEST register. In order to properly initialie the operation,
- * a call to `pack_untilize_dest_init` must be made before this function.The width of the block has to be the same
- * as the one provided during the initialization of the pack untilize operation (`pack_untilize_init`). It is not
- * needed to provide the height of the block during the initialization, since `pack_untilize_block` will loop over the
- * height of the block. Note that the maximum size of the block is limited by the size of the DEST register, which is 8 tiles if the
- * DEST is used in 16-bit mode, and 4 tiles if the DEST is used in 32-bit mode.
+ * a call to `pack_untilize_dest_init` must be made before this function. The width of the block has to be the same
+ * as the one provided during the initialization of the pack untilize operation (`pack_untilize_dest_init`). In order for this
+ * untilization to be performed correctly, some other function must place the tiles in the DEST register, e.g. `reduce_tile`,
+ * `tilize_tile`, etc. Unlike `pack_untilize_block`, this function packs a single tile to L1, but block dimensions still need to be
+ * specified for untilization to be performed correctly. Note that the maximum size of the block is limited by the size of the DEST
+ * and synchroization mode used. These are maximum sizes:
+ * - half-sync mode (16-bit mode): 8 tiles
+ * - half-sync mode (32-bit mode): 4 tiles
+ * - full-sync mode (16-bit mode): 16 tiles
+ * - full-sync mode (32-bit mode): 8 tiles
  *
  * Return value: None
  *
  * | Param Type | Name           | Description                                                   | Type      | Valid Range     | Required |
  * |------------|----------------|---------------------------------------------------------------|-----------|-----------------|----------|
- * | Template   | block_ct_dim   | Width of a single block in tiles                              | uint32_t  | 1 to 8          | False    |
+ * | Template   | block_ct_dim   | Width of a single block in tiles                              | uint32_t  | 1 to 16          | False    |
  * | Template   | full_ct_dim    | Width of a full input in tiles                                | uint32_t  | >= block_ct_dim | False    |
  * | Template   | diagonal       | Whether to use diagonal packing                               | bool      | true/false      | False    |
  * | Template   | narrow_row     | Whether the provided input is narrow                          | bool      | true/false      | False    |
