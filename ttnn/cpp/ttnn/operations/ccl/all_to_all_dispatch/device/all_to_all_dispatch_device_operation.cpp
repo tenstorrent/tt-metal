@@ -85,8 +85,6 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_hit(
 
 AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    using namespace tt::tt_metal;
-
     auto input_tensor = tensor_args.input_tensor;
     auto input_shape = input_tensor.get_tensor_spec().logical_shape();
     auto indices_shape = tensor_args.expert_indices_tensor.get_tensor_spec().logical_shape();
@@ -133,12 +131,14 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
 
     auto mem_config = operation_attributes.output_mem_config;
     auto output_tokens_spec = TensorSpec(
-        Shape(output_shape), TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), mem_config));
+        Shape(output_shape),
+        tt::tt_metal::TensorLayout(
+            input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), mem_config));
     auto metadata_spec = TensorSpec(
         Shape(metadata_shape),
-        TensorLayout(
+        tt::tt_metal::TensorLayout(
             tensor_args.expert_indices_tensor.get_dtype(),
-            PageConfig(tensor_args.expert_indices_tensor.get_layout()),
+            tt::tt_metal::PageConfig(tensor_args.expert_indices_tensor.get_layout()),
             mem_config));
     if (tensor_args.optional_output_tensors.has_value()) {
         auto output_tensors = tensor_args.optional_output_tensors.value();

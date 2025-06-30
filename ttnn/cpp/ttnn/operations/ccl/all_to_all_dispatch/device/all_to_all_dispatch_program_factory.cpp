@@ -85,8 +85,6 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
     const MeshCoordinate& mesh_coordinate,
     tt::tt_fabric::Topology& topology,
     const std::optional<uint32_t> axis) {
-    using namespace tt::tt_fabric;
-
     // For readability use symbolic indices instead of raw numbers when accessing the
     // `directions` array `{East, West, North, South}`.
     enum Direction : std::size_t { East = 0, West = 1, North = 2, South = 3 };
@@ -95,7 +93,7 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
     // directions: {East, West, North, South}
     std::array<bool, 4> directions = {false, false, false, false};
 
-    const bool is_ring = topology == Topology::Ring;
+    const bool is_ring = topology == tt::tt_fabric::Topology::Ring;
     auto src_device = mesh_view.get_device(mesh_coordinate);
 
     // Helper that appends neighbours for a single axis
@@ -230,11 +228,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    using namespace tt;
-    using namespace tt::tt_metal;
-    using namespace tt::tt_fabric;
-    using namespace ttnn::ccl;
-
     tt::tt_metal::Program program{};
 
     auto input_tensor = tensor_args.input_tensor;
