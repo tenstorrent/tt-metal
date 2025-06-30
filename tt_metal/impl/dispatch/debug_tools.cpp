@@ -639,8 +639,6 @@ void dump_command_queue_raw_data(
 
 void dump_cqs(std::ofstream& cq_file, std::ofstream& iq_file, SystemMemoryManager& sysmem_manager, bool dump_raw_data) {
     for (SystemMemoryCQInterface& cq_interface : sysmem_manager.get_cq_interfaces()) {
-        chip_id_t mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(
-            sysmem_manager.get_device_id());
         // Dump completion queue + issue queue
         dump_completion_queue_entries(cq_file, sysmem_manager, cq_interface);
         dump_issue_queue_entries(iq_file, sysmem_manager, cq_interface);

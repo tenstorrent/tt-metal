@@ -1241,8 +1241,6 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
 
         std::tie(src_fabric_node_id, src_chan_id) =
             this->get_connected_mesh_chip_chan_ids(src_fabric_node_id, next_chan_id);
-        auto connected_physical_chip_id =
-            this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
         route.push_back({src_fabric_node_id, src_chan_id});
     }
 
