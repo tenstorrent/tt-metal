@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-inline void kernel_sleep(uint32_t loop_count = 1000) { for (volatile uint32_t i = 0; i < loop_count; ++i); }
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
@@ -21,24 +20,9 @@ void kernel_main() {
     const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
-    // DPRINT << "reduction_receiver out_ready_sem_wait_value: " << out_ready_sem_wait_value << "\n";
-    // DPRINT << "reduction_receiver before out_ready_sem_value: "
-    //    << *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) << "\n";
-    // while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
     volatile tt_l1_ptr uint32_t* out_ready_sema =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
     noc_semaphore_wait(out_ready_sema, out_ready_sem_wait_value);
-    // noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr),
-    // out_ready_sem_wait_value);
-    // {
-    //     DPRINT << "reduction_receiver out_ready_sem_value in progress: " << *reinterpret_cast<volatile tt_l1_ptr
-    //     uint32_t*>(out_ready_sem_bank_addr) << "\n";
-    // }
-    // kernel_sleep(100000000);
-    // kernel_sleep(10000);
-
-    // DPRINT << "reduction_receiver afterward out_ready_sem_value: "
-    //        << *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) << "\n";
 
     /*
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
@@ -51,7 +35,6 @@ void kernel_main() {
 
     // 2. Signal compute kernel to start processing
     cb_push_back(cb_id, total_num_reduction_tiles);
-    // DPRINT << "to reset global semaphore\n";
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
-    // DPRINT << "reduction_receiver done \n";
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
+    // *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
 }
