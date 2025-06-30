@@ -429,7 +429,15 @@ void MeshGraph::print_connectivity() const {
     log_debug(tt::LogFabric, "{}", ss.str());
 }
 
+void MeshGraph::validate_mesh_id(MeshId mesh_id) const {
+    if (this->mesh_to_chip_ids_.find(mesh_id) == this->mesh_to_chip_ids_.end()) {
+        TT_THROW("Invalid mesh_id {} in get_mesh_shape", mesh_id);
+    }
+}
+
 MeshShape MeshGraph::get_mesh_shape(MeshId mesh_id, std::optional<HostRankId> host_rank) const {
+    this->validate_mesh_id(mesh_id);
+
     if (host_rank.has_value()) {
         return this->mesh_host_rank_coord_ranges_.at(std::make_pair(mesh_id, *host_rank)).shape();
     }
@@ -438,6 +446,8 @@ MeshShape MeshGraph::get_mesh_shape(MeshId mesh_id, std::optional<HostRankId> ho
 }
 
 MeshCoordinateRange MeshGraph::get_coord_range(MeshId mesh_id, std::optional<HostRankId> host_rank) const {
+    this->validate_mesh_id(mesh_id);
+
     if (host_rank.has_value()) {
         return this->mesh_host_rank_coord_ranges_.at(std::make_pair(mesh_id, *host_rank));
     }
