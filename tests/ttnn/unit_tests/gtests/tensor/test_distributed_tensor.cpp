@@ -196,6 +196,52 @@ TEST_F(TensorDistributionT3000Test, Shard1D) {
     EXPECT_TRUE(ttnn::allclose<float>(concatenated_tensor, expected_tensor));
 }
 
+TEST_F(TensorDistributionT3000Test, PartialConcat) {
+    constexpr int kNumRows = 2;
+    constexpr int kNumCols = 4;
+    std::vector<float> test_data;
+    for (int i = 0; i < kNumRows; i++) {
+        test_data.insert(test_data.end(), {i * 10 + 0, i * 10 + 1, i * 10 + 2});
+    }
+    Tensor input_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, 1, 3}, DataType::FLOAT32));
+
+    auto mapper = create_mesh_mapper(
+        *mesh_device_,
+        MeshMapperConfig{
+            .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Replicate{}},
+        });
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
+
+    EXPECT_EQ(count_unique_buffers(sharded_tensor), kNumRows);
+
+    // Full concat.
+    EXPECT_THAT(
+        aggregate_tensor(
+            sharded_tensor,
+            *create_mesh_composer(
+                *mesh_device_,
+                MeshComposerConfig{
+                    .dims = {-1, 0},
+                }))
+            .to_vector<float>(),
+        // `0, 1, 2` resides on rows; `10, 11, 12` resides on columns.
+        ElementsAre(0, 1, 2, 10, 11, 12, 0, 1, 2, 10, 11, 12, 0, 1, 2, 10, 11, 12, 0, 1, 2, 10, 11, 12));
+
+    // Partial concat over first (2, 1) submesh.
+    EXPECT_THAT(
+        aggregate_tensor(
+            sharded_tensor,
+            *create_mesh_composer(
+                *mesh_device_,
+                MeshComposerConfig{
+                    .dims = {-1, 0},
+                    .mesh_shape_override = MeshShape(2, 1),
+                }))
+            .to_vector<float>(),
+        ElementsAre(0, 1, 2, 10, 11, 12));
+}
+
 class TensorDistributionT3000Test2D : public TensorDistributionT3000Test,
                                       public ::testing::WithParamInterface<MeshShape> {};
 
@@ -378,24 +424,6 @@ TEST_F(TensorDistributionT3000Test, NdComposerInvalidDims) {
         MeshComposerConfig{
             .dims = {0, 1, 2, 3},
         }));
-}
-
-TEST_F(TensorDistributionT3000Test, NdComposerUnevenComposition) {
-    Tensor input_tensor = Tensor::from_vector(
-        std::vector<float>{42.F, 13.F, -99.F}, get_tensor_spec(ttnn::Shape{1, 1, 1, 3}, DataType::FLOAT32));
-    auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
-    Tensor replicated_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
-
-    std::vector<Tensor> device_tensors = get_device_tensors(replicated_tensor);
-
-    auto composer = create_mesh_composer(
-        *mesh_device_,
-        MeshComposerConfig{
-            .dims = {0, 1},
-            .mesh_shape_override = MeshShape(2, 3),
-        });
-
-    EXPECT_ANY_THROW({ Tensor aggregated_tensor = aggregate_tensor(replicated_tensor, *composer); });
 }
 
 TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {

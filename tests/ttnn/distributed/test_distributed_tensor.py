@@ -219,7 +219,7 @@ def test_concat_to_tensor_mesh_torch_comparison(mesh_device, dtype):
 
     num_shards = mesh_device.get_num_devices()
 
-    unconcatenated_ttnn_tensor = generate_ttnn_tensor_of_shards(num_shards, dtype)
+    unconcatenated_ttnn_tensor = generate_ttnn_tensor_of_shards(num_shards, dtype).to(mesh_device)
 
     torch_concat_tensor = ttnn.to_torch(unconcatenated_ttnn_tensor, mesh_composer=torch_composer)
 
@@ -247,7 +247,9 @@ def test_concat2d_to_tensor_mesh_torch_comparison(M, K, N, dtype, mesh_shape, me
 
     num_shards = 4
 
-    unconcatenated_ttnn_tensor = generate_2d_sharded_ttnn_tensor(num_shards, dtype, M, K, mesh_shape, shard_dim)
+    unconcatenated_ttnn_tensor = generate_2d_sharded_ttnn_tensor(num_shards, dtype, M, K, mesh_shape, shard_dim).to(
+        mesh_device
+    )
 
     torch_composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape, dims=concat_dim)
     torch_concat_tensor = ttnn.to_torch(unconcatenated_ttnn_tensor, mesh_composer=torch_composer)
@@ -451,7 +453,9 @@ def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
     shard_dim = (3, 0)
     concat_dim = (1, 3)
 
-    unconcatenated_ttnn_tensor = generate_2d_sharded_ttnn_tensor(num_shards, dtype, M, K, mesh_shape, shard_dim)
+    unconcatenated_ttnn_tensor = generate_2d_sharded_ttnn_tensor(num_shards, dtype, M, K, mesh_shape, shard_dim).to(
+        mesh_device
+    )
 
     rows, cols = mesh_shape
     row_dim, col_dim = concat_dim
