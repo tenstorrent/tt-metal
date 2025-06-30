@@ -33,7 +33,7 @@ def test_e2e_performant_sentencebert(device, batch_size, sequence_length, act_dt
     )
     performant_runner._capture_sentencebert_trace_2cqs()
     inference_times = []
-    for _ in range(10):
+    for _ in range(50):
         t0 = time.time()
         _ = performant_runner.run()
         t1 = time.time()
