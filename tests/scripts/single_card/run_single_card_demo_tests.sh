@@ -285,11 +285,9 @@ run_yolov8s_world_perf() {
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov8s_world/demo/demo.py --timeout 600
 
 }
-
-#comment out vanilla unet for now unitl data and weights loading issues are resolved.
 run_vanilla_unet_demo() {
 
- WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/vanilla_unet/demo/demo.py::test_unet_demo_single_image
+ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
 
 }
 run_yolov8x_perf() {
