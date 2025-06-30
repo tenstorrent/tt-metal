@@ -9,7 +9,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import EmbeddingConfig, ModelConfig, WeightsConfig, WeightStub
+from models.demos.deepseek_v3.utils.config_dataclass import EmbeddingConfig, ModelConfig, WeightConfig, WeightStub
 
 
 class Embedding1D(AbstractModule):
@@ -23,7 +23,7 @@ class Embedding1D(AbstractModule):
         state_dict: dict[str, torch.Tensor],
         output_path: Path,
         mesh_device: ttnn.Device,
-    ) -> WeightsConfig:
+    ) -> WeightConfig:
         """DRAM-sharded weights split 1D across all wormholes
 
         Args:
@@ -80,7 +80,6 @@ class Embedding1D(AbstractModule):
         return EmbeddingConfig(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-            # mesh_device=MeshDeviceStub(tuple(mesh_device.shape)),
         )
 
     @classmethod

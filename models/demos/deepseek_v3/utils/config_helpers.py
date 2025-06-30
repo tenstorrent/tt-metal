@@ -493,13 +493,6 @@ def base_model_name(hf_config):
     return model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
 
 
-def save_and_get_path(path, tensor):
-    """Save a tensor to a file and return the path."""
-    ttnn.dump_tensor(path, tensor)
-    ttnn.deallocate(tensor)
-    return str(path)
-
-
 def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int] | None = None) -> torch.Tensor:
     """Dequantize a pytorch tensor using the provided scale."""
     assert tensor.ndim == inv_scale.ndim and tensor.dtype == torch.float8_e4m3fn and inv_scale.dtype == torch.float32

@@ -19,7 +19,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MulConfig,
     OpConfigBase,
     RunConfig,
-    WeightsConfig,
+    WeightConfig,
     WeightStub,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
@@ -83,7 +83,7 @@ class MLP1D(AbstractModel):
         state_dict: dict[str, torch.Tensor],
         output_path: Path,
         mesh_device: ttnn.Device,
-    ) -> WeightsConfig:
+    ) -> WeightConfig:
         """Convert PyTorch weights to TTNN format for 1D tensor parallelism.
 
         Args:
@@ -361,7 +361,7 @@ class MLP1D(AbstractModel):
         ttnn.deallocate(activated)
 
         # All-reduce across devices to sum partial results
-        output = ttnn.all_reduce(output, mesh_device=mesh_device, **cfg["all_reduce"])
+        output = ttnn.all_reduce(output, **cfg["all_reduce"])
 
         # Reshape output to expected format if we reshaped the input
         if original_shape is not None:
@@ -390,4 +390,4 @@ class MLP1D(AbstractModel):
         ttnn.deallocate(activated)
 
         # All-reduce across devices to sum partial results
-        return ttnn.all_reduce(output, mesh_device=mesh_device, **cfg["all_reduce"])
+        return ttnn.all_reduce(output, **cfg["all_reduce"])
