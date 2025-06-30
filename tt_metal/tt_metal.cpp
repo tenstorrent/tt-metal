@@ -628,7 +628,6 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer) {
 
     auto device = buffer.device();
 
-    auto total_pages = buffer.num_dev_pages();
     uint32_t page_size = buffer.page_size();
 
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();

@@ -291,7 +291,6 @@ TestResult mem_bench_multi_mmio_devices(
         for (auto [device_id, device] : devices) {
             programs[device_id] = CreateProgram();
             Program& pgm = programs[device_id];
-            auto device_hugepage = get_hugepage(device_id, 0);
             auto device_hugepage_size = get_hugepage_size(device_id);
             configured_core_ranges.insert(
                 {device_id,

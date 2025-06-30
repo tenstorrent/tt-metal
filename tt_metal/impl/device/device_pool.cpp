@@ -799,7 +799,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         if (mmio_devices_to_close.find(mmio_device_id) != mmio_devices_to_close.end()) {
             continue;
         }
-        auto mmio_dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
         // iterate over all tunnels origination from this mmio device

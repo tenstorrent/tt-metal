@@ -528,7 +528,6 @@ void MetalContext::reset_cores(chip_id_t device_id) {
         }
     };
 
-    auto mmio_device_id = cluster_->get_associated_mmio_device(device_id);
     // Assert worker cores + dispatch cores, in case they were in a bad state from before.
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
 

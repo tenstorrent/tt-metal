@@ -343,8 +343,6 @@ void DispatchKernel::GenerateDependentConfigs() {
         // Or direct connection to DISPATCH_H if using fabric
         //
         // + A Dispatch_s if enabled
-        auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(downstream_kernels_[0]);
-        auto mux_kernel = dynamic_cast<MuxKernel*>(downstream_kernels_[0]);
 
         bool found_dispatch_s = false;
         bool found_mux = false;

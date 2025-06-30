@@ -158,7 +158,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
         // Get mesh dimensions from the mesh graph descriptor
         auto mesh_ew_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id)[1];
-        auto mesh_ns_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id)[0];
 
         // Convert linear chip_id to 2D mesh coordinates
         auto coord_y = chip_id / mesh_ew_size;
