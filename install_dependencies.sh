@@ -204,11 +204,9 @@ init_packages() {
                 "ninja-build"
                 "pkgconf-pkg-config"
                 "cargo"
-                "pandoc"
                 "xz"
                 "python3-devel"
                 "python3-pip"
-                "python3-virtualenv"
                 "hwloc-devel"
                 "numactl-devel"
                 "libatomic"
@@ -216,8 +214,6 @@ init_packages() {
                 "boost-devel"
                 "tbb-devel"
                 "capstone-devel"
-                "libcxx-devel"
-                "libcxxabi-devel"
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi" "openmpi-devel")
