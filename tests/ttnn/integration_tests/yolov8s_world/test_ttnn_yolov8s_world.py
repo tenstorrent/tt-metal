@@ -679,13 +679,13 @@ def test_WorldModel(device, use_pretrained_weight, reset_seeds):
 
     passing, pcc_1 = assert_with_pcc(ttnn_model_output_y, torch_model_output[0], 0.99)
     passing, pcc_2 = assert_with_pcc(
-        ttnn_model_output_x[0].reshape(torch_model_output[1][0].shape), torch_model_output[1][0], 0.96
+        ttnn_model_output_x[0].reshape(torch_model_output[1][0].shape), torch_model_output[1][0], 0.98
     )
     passing, pcc_3 = assert_with_pcc(
-        ttnn_model_output_x[1].reshape(torch_model_output[1][1].shape), torch_model_output[1][1], 0.96
+        ttnn_model_output_x[1].reshape(torch_model_output[1][1].shape), torch_model_output[1][1], 0.97
     )
     passing, pcc_4 = assert_with_pcc(
-        ttnn_model_output_x[2].reshape(torch_model_output[1][2].shape), torch_model_output[1][2], 0.97
+        ttnn_model_output_x[2].reshape(torch_model_output[1][2].shape), torch_model_output[1][2], 0.98
     )
     logger.info(f"Passing: {passing}, PCC: {pcc_1}")
     logger.info(f"Passing: {passing}, PCC: {pcc_2}")
@@ -768,13 +768,13 @@ def test_YoloModel(device, use_pretrained_weight, reset_seeds):
 
     passing, pcc_1 = assert_with_pcc(ttnn_model_output_y, torch_model_output[0], 0.99)
     passing, pcc_2 = assert_with_pcc(
-        ttnn_model_output_x[0].reshape(torch_model_output[1][0].shape), torch_model_output[1][0], 0.96
+        ttnn_model_output_x[0].reshape(torch_model_output[1][0].shape), torch_model_output[1][0], 0.98
     )
     passing, pcc_3 = assert_with_pcc(
-        ttnn_model_output_x[1].reshape(torch_model_output[1][1].shape), torch_model_output[1][1], 0.96
+        ttnn_model_output_x[1].reshape(torch_model_output[1][1].shape), torch_model_output[1][1], 0.97
     )
     passing, pcc_4 = assert_with_pcc(
-        ttnn_model_output_x[2].reshape(torch_model_output[1][2].shape), torch_model_output[1][2], 0.97
+        ttnn_model_output_x[2].reshape(torch_model_output[1][2].shape), torch_model_output[1][2], 0.98
     )
     logger.info(f"Passing: {passing}, PCC: {pcc_1}")
     logger.info(f"Passing: {passing}, PCC: {pcc_2}")
