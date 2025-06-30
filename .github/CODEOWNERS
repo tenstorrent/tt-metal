@@ -72,6 +72,8 @@ tt_metal/jit_build/**/CMakeLists.txt @pgkeller @abhullar-tt @nathan-TT @jbaumanT
 tt_metal/kernels/ @abhullar-tt # these should go away or get moved to tests
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @pgkeller @tt-asaigal @tt-aho
 tt_metal/programming_examples/ @tt-asaigal @afuller-TT @mo-tenstorrent @tenstorrent/metalium-api-owners @marty1885
+tt_metal/programming_examples/profiler/ @mo-tenstorrent @sagarwalTT
+tt_metal/programming_examples/profiler/test_noc_event_profiler/ @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
 tt_metal/soc_descriptors @abhullar-tt @aliuTT @ubcheema
 tt_metal/test @tenstorrent/metalium-developers-infra
 tt_metal/tools/* @kmabeeTT @nhuang-tt @mo-tenstorrent @tt-dma @ihamer-tt
@@ -80,6 +82,10 @@ tt_metal/tools/mem_bench @nhuang-tt # should be moved to tests micro benchmark?
 tt_metal/tools/profiler/ @mo-tenstorrent @sagarwalTT
 tt_metal/tools/tt_gdb/ @tt-dma # I think this is dead code, can we delete it?
 tt_metal/tools/watcher_dump/ @tt-dma @pgkeller
+tt_metal/tools/profiler/event_metadata.hpp @bgrady-tt @sohaibnadeemTT
+tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT
+tt_metal/tools/profiler/noc_event_profiler.hpp @bgrady-tt @sohaibnadeemTT
+tt_metal/tools/profiler/noc_event_profiler_utils.hpp @bgrady-tt @sohaibnadeemTT
 
 # metal misc
 tt_metal/sfpi-version.sh @nathan-TT @tenstorrent/metalium-developers-infra
@@ -256,7 +262,8 @@ models/demos/yolov8x @tenstorrent/cse-developer-ttnn
 models/demos/yolov8s @tenstorrent/cse-developer-ttnn
 models/experimental/stable_diffusion_35_large/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn
 models/experimental/swin_s @tenstorrent/cse-developer-ttnn
-models/experimental/yolov7 @tenstorrent/cse-developer-ttnn
+models/demos/yolov7 @tenstorrent/cse-developer-ttnn
+models/experimental/classification_eval @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra

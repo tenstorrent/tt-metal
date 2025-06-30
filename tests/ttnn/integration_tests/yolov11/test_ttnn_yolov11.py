@@ -29,7 +29,7 @@ from models.experimental.yolov11.tt import ttnn_yolov11
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_yolov11(device, use_program_cache, reset_seeds, resolution, use_weights_from_ultralytics):
+def test_yolov11(device, reset_seeds, resolution, use_weights_from_ultralytics):
     weights = "yolo11n.pt"
     if use_weights_from_ultralytics:
         torch_model = YOLO(weights)

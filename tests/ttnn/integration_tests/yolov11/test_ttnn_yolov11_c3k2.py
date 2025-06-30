@@ -110,7 +110,6 @@ from models.experimental.yolov11.reference.yolov11 import C3k2 as torch_c3k2
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolo_v11_c3k2(
     device,
-    use_program_cache,
     reset_seeds,
     in_channel,
     out_channel,
