@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "accessor/tensor_accessor.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
 void kernel_main() {
@@ -13,11 +14,10 @@ void kernel_main() {
     uint32_t curr_col_in_batch = get_arg_val<uint32_t>(2);
     uint32_t num_cols = get_arg_val<uint32_t>(3);  // number of cols to read
 
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);
-    constexpr uint32_t Wt = get_compile_time_arg_val(2);
-    constexpr uint32_t HtWt = get_compile_time_arg_val(3);
-    constexpr uint32_t row_chunk = get_compile_time_arg_val(4);
+    constexpr uint32_t Ht = get_compile_time_arg_val(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t HtWt = get_compile_time_arg_val(2);
+    constexpr uint32_t row_chunk = get_compile_time_arg_val(3);
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
@@ -28,12 +28,15 @@ void kernel_main() {
 
 #ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
-    constexpr uint32_t scalar = get_compile_time_arg_val(5);
+    constexpr uint32_t scalar = get_compile_time_arg_val(4);
     generate_reduce_scaler(cb_id_in2, scalar);
+    constexpr uint32_t num_compile_time_args = 5;
+#else
+    constexpr uint32_t num_compile_time_args = 4;
 #endif
 
-    const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    auto tensor_args = make_tensor_accessor_args<num_compile_time_args, 0>();
+    auto tensor_accessor = make_tensor_accessor_from_args(tensor_args, src_addr, tile_bytes);
 
     uint32_t w = curr_col_in_batch;
 
@@ -64,11 +67,10 @@ void kernel_main() {
             w = reset_w;
             col_start_tile_id = reset_col_start;
             for (uint32_t k = i; k < chunk_end; ++k) {
-
-
                 cb_reserve_back(cb_id_in0, onetile);
                 uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-                noc_async_read_tile(curr_id, s, l1_write_addr);
+                uint64_t curr_noc_addr = tensor_accessor.get_noc_addr(curr_id);
+                noc_async_read(curr_noc_addr, l1_write_addr, tile_bytes);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, onetile);
 
