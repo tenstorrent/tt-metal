@@ -165,7 +165,7 @@ def create_tt_model(
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, pcc_check, num_layers",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, pcc_check, only_6u, num_layers",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
@@ -180,6 +180,7 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
             False,  # pcc_check
+            False,  # 6U-only
             80,  # num layers
         ),
         (  # Batch-1 run (Throughput) - 1 user, small prompt
@@ -195,6 +196,7 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
             False,  # pcc_check
+            False,  # 6U-only
             80,  # num layers
         ),
         (  # Repeat-5 Batch-1 run (Throughput) - 1 user, small prompt
@@ -210,9 +212,10 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only,
             False,  # pcc_check
+            False,  # 6U-only
             80,  # num layers
         ),
-        (  # Long-context run - multiple users, long prompt (adapted to the model being used and architecture)
+        (  # Long-context run 16K - multiple users, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -225,9 +228,10 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only,
             False,  # pcc_check
+            False,  # 6U-only
             80,  # num layers
         ),
-        (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
+        (  # Long-context run 32K - Single user, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -240,6 +244,23 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only,
             False,  # pcc_check
+            False,  # 6U-only
+            80,  # num layers
+        ),
+        (  # Max-context [128K] run on 6U - Single user, long prompt (adapted to the model being used and architecture)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            10,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only,
+            False,  # pcc_check,
+            True,  # 6U-only
             80,  # num layers
         ),
         (  # CI Run for PCC check for 1 Layer: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
@@ -255,6 +276,7 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
             True,  # pcc_check
+            False,  # 6U-only
             1,  # num layers
         ),
         (  # CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
@@ -270,6 +292,7 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
             True,  # pcc_check
+            False,  # 6U-only
             80,  # num layers
         ),
     ],
@@ -279,6 +302,7 @@ def create_tt_model(
         "repeat2",  # latency with 5 repeat batches
         "long-context-batch32",  # max-length for 32 users
         "long-context-32k",  # max-length
+        "6u-long-context-128k",  # max-length
         "pcc-1L",  # pcc check for 1L
         "pcc-80L",  # pcc check for 80L + teacher forced
     ],
@@ -328,10 +352,12 @@ def test_demo_text(
     mesh_device,
     is_ci_env,
     ci_only,
+    only_6u,
     num_layers,
     pcc_check,
     pcc_decode_len,
     reset_seeds,
+    galaxy_type,
     request,
 ):
     """
@@ -340,6 +366,29 @@ def test_demo_text(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("Llama TG only supports batch-32")
+
+    if only_6u and galaxy_type != "6U":
+        pytest.skip("This test is only for 6U devices with ring fabric")
+
+        # Override parameters from command line if they are provided
+    input_prompts = request.config.getoption("--input_prompts") or input_prompts
+    if request.config.getoption("--instruct") in [
+        0,
+        1,
+    ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
+        instruct = request.config.getoption("--instruct")
+    repeat_batches = request.config.getoption("--repeat_batches") or repeat_batches
+    max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
+    batch_size = request.config.getoption("--batch_size") or batch_size
+    max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
+    paged_attention = request.config.getoption("--paged_attention") or paged_attention
+    page_params = request.config.getoption("--page_params") or page_params
+    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    if request.config.getoption("--stop_at_eos") in [
+        0,
+        1,
+    ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
+        stop_at_eos = request.config.getoption("--stop_at_eos")
 
     enable_trace = True  # Use tracing for better perf
     prefill_enable_trace = True  # repeat_batches > 1
@@ -355,25 +404,6 @@ def test_demo_text(
     os.chmod(output_directory, 0o755)
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
-    # Override parameters from command line if they are provided
-    # input_prompts = request.config.getoption("--input_prompts") or input_prompts
-    # if request.config.getoption("--instruct") in [
-    #     0,
-    #     1,
-    # ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
-    #     instruct = request.config.getoption("--instruct")
-    # repeat_batches = request.config.getoption("--repeat_batches") or repeat_batches
-    # max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
-    # batch_size = request.config.getoption("--batch_size") or batch_size
-    # max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
-    # paged_attention = request.config.getoption("--paged_attention") or paged_attention
-    # page_params = request.config.getoption("--page_params") or page_params
-    # sampling_params = request.config.getoption("--sampling_params") or sampling_params
-    # if request.config.getoption("--stop_at_eos") in [
-    #     0,
-    #     1,
-    # ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
-    #     stop_at_eos = request.config.getoption("--stop_at_eos")
     stop_at_eos = False
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
