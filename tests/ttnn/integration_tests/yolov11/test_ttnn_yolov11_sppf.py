@@ -14,7 +14,6 @@ from models.experimental.yolov11.reference.yolov11 import SPPF as torch_sppf
 from models.experimental.yolov11.tt.ttnn_yolov11_sppf import TtnnSPPF as ttnn_sppf
 
 
-@pytest.mark.skip(reason="#24336: YOLOv11 tests are currently disabled")
 @pytest.mark.parametrize(
     "in_channel, out_channel, kernel, stride, padding, dilation, groups,fwd_input_shape",
     [
@@ -24,7 +23,6 @@ from models.experimental.yolov11.tt.ttnn_yolov11_sppf import TtnnSPPF as ttnn_sp
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolo_v11_sppf(
     device,
-    use_program_cache,
     reset_seeds,
     in_channel,
     out_channel,

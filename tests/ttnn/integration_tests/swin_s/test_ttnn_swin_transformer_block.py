@@ -87,7 +87,6 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
-@pytest.mark.skip(reason="#24336: Swin transformer tests are currently disabled")
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
