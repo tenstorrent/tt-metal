@@ -112,7 +112,7 @@ void append_fabric_connection_rt_args(
             dst_fabric_node_id.mesh_id);
     }
 
-    // get the direction in which the data will be forwarded from the src_chip_id
+    // get the direction in which the data will be forwarded from the src_fabric_node_id
     std::optional<RoutingDirection> forwarding_direction;
     if (is_2d_fabric) {
         forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
