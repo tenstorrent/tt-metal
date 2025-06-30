@@ -244,7 +244,7 @@ class TriangleAttention(Module):
                 is_causal=False,
                 scale=self.head_dim**-0.5,
                 program_config=ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=(13, 10),
+                    compute_with_storage_grid_size=(8, 8),
                     exp_approx_mode=False,
                     q_chunk_size=256,
                     k_chunk_size=256,
@@ -583,10 +583,12 @@ class Pairformer(Module):
 class AdaLN(Module):
     def __init__(
         self,
+        device,
         state_dict: dict,
         compute_kernel_config: ttnn.DeviceComputeKernelConfig,
     ):
         super().__init__(state_dict, compute_kernel_config)
+        self.device = device
         self.s_norm_weight = self.torch_to_tt("s_norm.weight", use_float32=True)
         self.s_scale_weight = self.torch_to_tt("s_scale.weight")
         self.s_scale_bias = self.torch_to_tt("s_scale.bias")
@@ -622,11 +624,13 @@ class AdaLN(Module):
 class ConditionedTransitionBlock(Module):
     def __init__(
         self,
+        device,
         state_dict: dict,
         compute_kernel_config: ttnn.DeviceComputeKernelConfig,
     ):
         super().__init__(state_dict, compute_kernel_config)
-        self.adaln = AdaLN(filter_dict(state_dict, "adaln"), compute_kernel_config)
+        self.device = device
+        self.adaln = AdaLN(device, filter_dict(state_dict, "adaln"), compute_kernel_config)
         self.swish_weight = self.torch_to_tt("swish_gate.0.weight")
         self.a_to_b_weight = self.torch_to_tt("a_to_b.weight")
         self.b_to_a_weight = self.torch_to_tt("b_to_a.weight")
@@ -657,6 +661,7 @@ class ConditionedTransitionBlock(Module):
 class DiffusionTransformerLayer(Module):
     def __init__(
         self,
+        device,
         dim: int,
         n_heads: int,
         state_dict: dict,
@@ -664,6 +669,7 @@ class DiffusionTransformerLayer(Module):
     ):
         super().__init__(state_dict, compute_kernel_config)
         self.adaln = AdaLN(filter_dict(state_dict, "adaln"), compute_kernel_config)
+        self.device = device
         self.attn_pair_bias = AttentionPairBias(
             head_dim=dim // n_heads,
             n_heads=n_heads,
