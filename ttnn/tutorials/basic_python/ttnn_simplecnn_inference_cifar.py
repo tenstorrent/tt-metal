@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 import torchvision
 import torchvision.transforms as transforms
@@ -19,8 +20,23 @@ def main():
         testset = torchvision.datasets.CIFAR10(root="./data", train=False, download=True, transform=transform)
         testloader = torch.utils.data.DataLoader(testset, batch_size=1, shuffle=False)
 
-        # Load pretrained weights
-        weights = torch.load("simple_cnn_cifar10_weights.pt")
+        # Load pretrained weights or use random weights if not found
+        if os.path.exists("simple_cnn_cifar10_weights.pt"):
+            weights = torch.load("simple_cnn_cifar10_weights.pt")
+            logger.info("Loaded pretrained weights from simple_cnn_cifar10_weights.pt")
+        else:
+            logger.warning("simple_cnn_cifar10_weights.pt not found, using random weights")
+            torch.manual_seed(0)
+            weights = {
+                "conv1.weight": torch.randn((16, 3, 3, 3), dtype=torch.float32),
+                "conv1.bias": torch.randn((16,), dtype=torch.float32),
+                "conv2.weight": torch.randn((32, 16, 3, 3), dtype=torch.float32),
+                "conv2.bias": torch.randn((32,), dtype=torch.float32),
+                "fc1.weight": torch.randn((128, 2048), dtype=torch.float32),
+                "fc1.bias": torch.randn((128,), dtype=torch.float32),
+                "fc2.weight": torch.randn((10, 128), dtype=torch.float32),
+                "fc2.bias": torch.randn((10,), dtype=torch.float32),
+            }
 
         correct = 0
         total = 0
