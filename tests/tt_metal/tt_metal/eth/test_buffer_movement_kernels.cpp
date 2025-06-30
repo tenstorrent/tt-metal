@@ -413,13 +413,20 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
 
 TEST_F(N300DeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);
     uint32_t MAX_BUFFER_SIZE =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
-    for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+    if (sender_device->get_ethernet_sockets(receiver_device->id()).empty()) {
+        GTEST_SKIP() << "No connected ethernet sockets";
+    }
+
+    for (const auto& sender_eth_core : sender_device->get_ethernet_sockets(receiver_device->id())) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                sender_device->id(), sender_eth_core)) {
+            continue;
+        }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         log_info(

@@ -587,7 +587,6 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     }
 
     for (int iter = 0; iter < 100; iter++) {
-        log_info(LogTest, "Run iter {}", iter);
         if (iter) {
             auto& program = mesh_workload.get_programs().at(devices_0);
             auto& rtas = GetRuntimeArgs(program, reader_writer_kernel);

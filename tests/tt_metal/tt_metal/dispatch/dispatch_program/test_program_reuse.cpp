@@ -414,7 +414,6 @@ TEST_F(CommandQueueMultiDeviceFixture, TestDataCopyComputeProgramReuse) {
     }
     // Run program multiple times with different RTAs and validate for each iteration
     for (int iter = 0; iter < 100; iter++) {
-        log_info(LogTest, "Run iter {}", iter);
         if (iter) {
             auto& rtas = GetRuntimeArgs(program, reader_writer_kernel);
             for (auto core : full_grid) {

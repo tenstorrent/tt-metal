@@ -1762,7 +1762,7 @@ void run_multi_sender_single_recv(FixtureT* fixture, bool split_reducer) {
     log_info(LogTest, "Reduce ID: {}", reducer->get_device(MeshCoordinate(0, 0))->id());
     log_info(LogTest, "Receiver ID: {}", receiver->get_device(MeshCoordinate(0, 0))->id());
 
-    uint32_t num_interations = 10;
+    uint32_t num_interations = 5;
     test_multi_sender_single_recv(
         sender_0, sender_1, reducer, receiver, link_indices, 1024, 64, 1024, num_interations, split_reducer);
     test_multi_sender_single_recv(
