@@ -9,18 +9,6 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 
-inline void send_packet(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-    uint64_t noc_dest_addr,
-    uint32_t source_l1_buffer_address,
-    uint32_t packet_payload_size_bytes,
-    tt::tt_fabric::WorkerToFabricEdmSender& connection) {
-    connection.wait_for_empty_write_slot();
-    connection.send_payload_without_header_non_blocking_from_address(
-        source_l1_buffer_address, packet_payload_size_bytes);
-    connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
-
 template <uint32_t mesh_cols, uint32_t mesh_rows, int axis>
 bool is_configured_target(uint32_t src_chip_id, uint32_t dest_chip_id) {
     // axis is the direction along which we are allowed to send packets
