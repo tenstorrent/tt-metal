@@ -163,19 +163,19 @@ void matmul_multi_core(
     // input tiles count is = 2 so one tile can be read while the other is being processed
     const auto cb_data_format = tt::DataFormat::Float16_b;
     uint32_t num_input_tiles = 2;
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    tt_metal::CreateCircularBuffer(
         program,
         all_cores,  // create on all cores
         CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_0, cb_data_format}})
             .set_page_size(CBIndex::c_0, single_tile_size));
 
-    auto cb_src1 = tt_metal::CreateCircularBuffer(
+    tt_metal::CreateCircularBuffer(
         program,
         all_cores,  // create on all cores
         CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_1, cb_data_format}})
             .set_page_size(CBIndex::c_1, single_tile_size));
 
-    auto cb_output = tt_metal::CreateCircularBuffer(
+    tt_metal::CreateCircularBuffer(
         program,
         all_cores,  // create on all cores
         CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_16, cb_data_format}})

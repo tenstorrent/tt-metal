@@ -44,7 +44,6 @@ void DemuxKernel::GenerateStaticConfigs() {
     static_config_.timeout_cycles = 0;
 
     for (int idx = 0; idx < downstream_kernels_.size(); idx++) {
-        FDKernel* k = downstream_kernels_[idx];
         static_config_.remote_tx_queue_id[idx] = 0;
         static_config_.remote_tx_network_type[idx] = (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
         static_config_.output_depacketize_cb_log_page_size[idx] = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;

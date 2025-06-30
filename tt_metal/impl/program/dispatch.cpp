@@ -215,10 +215,6 @@ uint32_t finalize_rt_args(
     uint32_t& rta_offset,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
-    CoreType core_type = MetalContext::instance().hal().get_core_type(programmable_core_type_index);
-    HalProgrammableCoreType programmable_core_type =
-        MetalContext::instance().hal().get_programmable_core_type(programmable_core_type_index);
-
     uint32_t max_unique_rta_size = program_dispatch::configure_rta_offsets_for_kernel_groups(
         programmable_core_type_index, kernels, kernel_groups, base_offset);
     uint32_t crta_base_offset = base_offset + max_unique_rta_size;
@@ -2113,7 +2109,8 @@ void update_traced_program_dispatch_commands(
     TT_ASSERT(
         trace_node.cb_configs_payloads.size() ==
         cached_program_command_sequence.circular_buffers_on_core_ranges.size());
-    for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
+    for ([[maybe_unused]] const auto& cbs_on_core_range :
+         cached_program_command_sequence.circular_buffers_on_core_ranges) {
         uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
         const uint32_t* cb_config_payload_from_trace = trace_node.cb_configs_payloads[i].data();
         std::memcpy(

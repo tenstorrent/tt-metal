@@ -151,8 +151,6 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";
     std::ofstream log_file;
 
-    int64_t writeSum = 0;
-
     constexpr int millisecond_wait = 10;
 
     const double tracyToSecRatio = TracyGetTimerMul();
@@ -180,10 +178,6 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     log_info(tt::LogMetal, "SYNC PROGRAM FINISH IS DONE ON {}", device_id);
     if ((smallestHostime[device_id] == 0) || (smallestHostime[device_id] > hostStartTime)) {
         smallestHostime[device_id] = hostStartTime;
-    }
-
-    for (auto writeTime : writeTimes) {
-        writeSum += writeTime;
     }
 
     constexpr uint32_t briscIndex = 0;

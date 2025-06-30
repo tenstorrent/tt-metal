@@ -1019,9 +1019,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
         }
     }
     for (auto& mmio_device_id_and_kernels : mmio_device_id_to_kernels) {
-        chip_id_t mmio_device_id = mmio_device_id_and_kernels.first;
-        int prefetch_h_id = 0, dispatch_h_id = 0;
-        int demux_id = 0, router_id = 0, tunneler_id = 0;
+        int demux_id = 0, router_id = 0;
         for (auto fd_kernel : mmio_device_id_and_kernels.second) {
             if (auto demux_kernel = dynamic_cast<DemuxKernel*>(fd_kernel)) {
                 demux_kernel->SetPlacementCQID((demux_id++) % 3);
