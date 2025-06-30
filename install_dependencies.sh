@@ -41,6 +41,37 @@ detect_os() {
     fi
 
     echo "Detected OS: $OS_ID $OS_VERSION ($PKG_MANAGER)"
+
+    get_package_family
+}
+
+get_package_family() {
+    case "$OS_ID" in
+        ubuntu|debian)
+            PKG_FAMILY="debian"
+            ;;
+        fedora|centos|rhel|rocky|almalinux)
+            PKG_FAMILY="redhat"
+            ;;
+        *)
+            # For distributions that are similar to supported ones
+            if [[ "$OS_ID_LIKE" == *"debian"* ]] || [[ "$OS_ID_LIKE" == *"ubuntu"* ]]; then
+                PKG_FAMILY="debian"
+            elif [[ "$OS_ID_LIKE" == *"rhel"* ]] || [[ "$OS_ID_LIKE" == *"fedora"* ]]; then
+                PKG_FAMILY="redhat"
+            else
+                PKG_FAMILY="unknown"
+            fi
+            ;;
+    esac
+}
+
+is_debian_based() {
+    [[ "$PKG_FAMILY" == "debian" ]]
+}
+
+is_redhat_based() {
+    [[ "$PKG_FAMILY" == "redhat" ]]
 }
 
 is_supported_os() {
@@ -122,30 +153,14 @@ cleanup_package_cache() {
 
 # Initialize packages
 init_packages() {
-    # Determine package family based on OS
-    local pkg_family=""
-    case "$OS_ID" in
-        ubuntu|debian)
-            pkg_family="debian"
-            ;;
-        fedora|centos|rhel|rocky|almalinux)
-            pkg_family="redhat"
-            ;;
-        *)
-            # For distributions that are similar to supported ones
-            if [[ "$OS_ID_LIKE" == *"debian"* ]] || [[ "$OS_ID_LIKE" == *"ubuntu"* ]]; then
-                pkg_family="debian"
-            elif [[ "$OS_ID_LIKE" == *"rhel"* ]] || [[ "$OS_ID_LIKE" == *"fedora"* ]]; then
-                pkg_family="redhat"
-            else
-                echo "[ERROR] No package list available for $OS_ID (ID_LIKE: $OS_ID_LIKE)"
-                exit 1
-            fi
-            ;;
-    esac
+    # Check if package family is supported
+    if [[ "$PKG_FAMILY" == "unknown" ]]; then
+        echo "[ERROR] No package list available for $OS_ID (ID_LIKE: $OS_ID_LIKE) (PKG_FAMILY: $PKG_FAMILY)"
+        exit 1
+    fi
 
     # Set packages based on determined family
-    case "$pkg_family" in
+    case "$PKG_FAMILY" in
         debian)
             # Determine g++ version based on Ubuntu version
             local gpp_package="g++"
@@ -227,22 +242,15 @@ init_packages() {
 prep_system() {
     echo "[INFO] Preparing system for TT-Metal development ($OS_ID)..."
 
-    case "$OS_ID" in
-        ubuntu|debian)
+    case "$PKG_FAMILY" in
+        debian)
             prep_ubuntu_system
             ;;
-        fedora|centos|rhel|rocky|almalinux)
+        redhat)
             prep_redhat_system
             ;;
         *)
-            # For distributions that are similar to supported ones
-            if [[ "$OS_ID_LIKE" == *"debian"* ]] || [[ "$OS_ID_LIKE" == *"ubuntu"* ]]; then
-                prep_ubuntu_system
-            elif [[ "$OS_ID_LIKE" == *"rhel"* ]] || [[ "$OS_ID_LIKE" == *"fedora"* ]]; then
-                prep_redhat_system
-            else
-                echo "[WARNING] No specific system preparation for $OS_ID"
-            fi
+            echo "[WARNING] No specific system preparation for $OS_ID"
             ;;
     esac
 }
@@ -283,6 +291,12 @@ prep_redhat_system() {
 # However g++-12 and later should also work
 
 install_llvm() {
+    # Only install LLVM on debian-based systems
+    if ! is_debian_based; then
+        echo "[WARNING] Skipping LLVM installation for non-debian distribution ($OS_ID)"
+        return
+    fi
+
     LLVM_VERSION="17"
     echo "[INFO] Checking if LLVM $LLVM_VERSION is already installed..."
     if command -v clang-$LLVM_VERSION &> /dev/null; then
@@ -351,12 +365,10 @@ install_mpi_ulfm(){
     fi
 
     # Check if OS is Ubuntu/Debian-based
-    if [[ "$OS_ID" != "ubuntu" && "$OS_ID" != "debian" ]]; then
-        if [[ "$OS_ID_LIKE" != *"ubuntu"* && "$OS_ID_LIKE" != *"debian"* ]]; then
-            echo "[WARNING] MPI ULFM installation is currently only supported on Ubuntu/Debian-based distributions"
-            echo "[WARNING] This function needs to be expanded to support $OS_ID"
-            return
-        fi
+    if ! is_debian_based; then
+        echo "[WARNING] MPI ULFM installation is currently only supported on Ubuntu/Debian-based distributions"
+        echo "[WARNING] This function needs to be expanded to support $OS_ID"
+        return
     fi
 
     # Only install MPI ULFM for Ubuntu 24.04 or older
@@ -389,12 +401,10 @@ install_mpi_ulfm(){
 
 configure_hugepages() {
     # Check if OS is Ubuntu/Debian-based
-    if [[ "$OS_ID" != "ubuntu" && "$OS_ID" != "debian" ]]; then
-        if [[ "$OS_ID_LIKE" != *"ubuntu"* && "$OS_ID_LIKE" != *"debian"* ]]; then
-            echo "[WARNING] Hugepages configuration is currently only supported on Ubuntu/Debian-based distributions"
-            echo "[WARNING] This function needs to be expanded to support $OS_ID"
-            return
-        fi
+    if ! is_debian_based; then
+        echo "[WARNING] Hugepages configuration is currently only supported on Ubuntu/Debian-based distributions"
+        echo "[WARNING] This function needs to be expanded to support $OS_ID"
+        return
     fi
 
     # Fetch the lastest tt-tools release link and name of package
