@@ -190,10 +190,12 @@ void kernel_main() {
 
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
-    constexpr std::array<bool, 4> directions = DIRECTIONS;
 
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
-    for (uint32_t i = 0; i < 4; i++) {
+    constexpr uint32_t num_directions = 4;
+    constexpr std::array<bool, num_directions> directions = DIRECTIONS;
+
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_directions> fabric_connections;
+    for (uint32_t i = 0; i < directions.size(); i++) {
         if (directions[i] == true) {
             fabric_connections[i] =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
@@ -221,7 +223,7 @@ void kernel_main() {
 
     uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
 
-    for (uint32_t i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < directions.size(); i++) {
         if (directions[i] == true) {
             fabric_connections[i].open_finish();
         }
@@ -310,7 +312,7 @@ void kernel_main() {
     }
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
-    for (uint32_t i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < directions.size(); i++) {
         if (directions[i] == true) {
             fabric_connections[i].close();
         }
