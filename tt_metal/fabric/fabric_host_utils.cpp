@@ -73,11 +73,12 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         forwarding_channels =
             control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
     } else {
-        chip_id_t src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-        chip_id_t dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
+        const auto src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+        const auto dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
         // for 1D check if each port has an active connection to the dst_chip_id
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& soc_desc = cluster.get_soc_desc(src_chip_id);
+
         for (const auto& channel : fabric_channels) {
             const auto eth_core = soc_desc.get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
             auto [connected_chip_id, connected_eth_core] =
