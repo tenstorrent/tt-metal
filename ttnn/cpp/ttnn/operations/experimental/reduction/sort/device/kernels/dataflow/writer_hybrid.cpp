@@ -56,14 +56,14 @@ void kernel_main() {
     constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(2);
     constexpr uint32_t value_tensor_cb_index = get_compile_time_arg_val(3);
     constexpr uint32_t value_tensor_peer_cb_index = get_compile_time_arg_val(4);
-    constexpr uint32_t physical_core_lookup_table_cb_index = get_compile_time_arg_val(5);  // TODO: Fix
+    constexpr uint32_t physical_core_lookup_table_cb_index = get_compile_time_arg_val(5);
     constexpr bool value_tensor_is_dram = get_compile_time_arg_val(6) == 1;
     constexpr uint32_t Wt = get_compile_time_arg_val(7);
     constexpr uint32_t Ht = get_compile_time_arg_val(8);
     constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(9);
     constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(10);
 
-    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(11));  // TODO: Fix
+    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(11));
 
     // Constants
     constexpr uint32_t one_tile = 1;

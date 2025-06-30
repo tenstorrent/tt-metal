@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(1);
     constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(2);
     constexpr uint32_t index_tensor_output_cb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t index_tensor_peer_cb_index = get_compile_time_arg_val(4);  // TODO: Fix
+    constexpr uint32_t index_tensor_peer_cb_index = get_compile_time_arg_val(4);
     constexpr uint32_t physical_core_lookup_table_cb_index = get_compile_time_arg_val(5);
     constexpr bool input_tensor_is_dram = get_compile_time_arg_val(6) == 1;
     constexpr bool index_tensor_output_is_dram = get_compile_time_arg_val(7) == 1;
