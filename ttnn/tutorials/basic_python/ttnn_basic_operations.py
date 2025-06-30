@@ -55,7 +55,9 @@ def main():
     logger.info(f"Matrix Multiplication:\n{matmul_result}")
 
     logger.info("\n--- Simulated Broadcasting (32x32 + Broadcasted Row Vector) ---")
-    broadcast_vector = torch.tensor([[1.0] * 32], dtype=torch.float32).repeat(32, 1)
+    broadcast_vector = torch.tensor(np.arange(0, 32), dtype=torch.float32).repeat(32, 1)
+    logger.info(f"Broadcast Vector:\n{broadcast_vector}")
+
     broadcast_tt = to_tt_tile(broadcast_vector)
     broadcast_add_result = ttnn.add(tt_t4, broadcast_tt)
     logger.info(f"Broadcast Add Result (TT-NN):\n{ttnn.to_torch(broadcast_add_result)}")
