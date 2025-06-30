@@ -26,7 +26,6 @@ target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NA
 target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
 
 set(TENSOR_FLATBUFFER_SCHEMAS
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_coordinate.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_spec.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor.fbs
@@ -34,7 +33,7 @@ set(TENSOR_FLATBUFFER_SCHEMAS
 
 set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
 foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
-    GENERATE_FBS_HEADER(${FBS_FILE})
+    GENERATE_FBS_HEADER(${FBS_FILE} TARGET TTNN::Core)
     list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
 endforeach()
 
@@ -69,6 +68,7 @@ target_sources(
         core/tensor/serialization.cpp
         core/tensor/storage.cpp
         core/tensor/tensor.cpp
+        core/tensor/tensor_accessor_args.cpp
         core/tensor/tensor_attributes.cpp
         core/tensor/tensor_impl.cpp
         core/tensor/tensor_ops.cpp
@@ -276,6 +276,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/transformer_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/uniform/uniform_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/rand/rand_${PY_BINDING}.cpp
 )
 
 set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
@@ -470,6 +471,7 @@ target_link_libraries(
         TTNN::Ops::Uniform
         TTNN::Ops::Pool
         TTNN::Ops::Normalization
+        TTNN::Ops::Rand
 )
 install(TARGETS ttnncpp LIBRARY COMPONENT ttnn-runtime)
 
@@ -608,5 +610,5 @@ add_subdirectory(cpp/ttnn/operations/transformer)
 add_subdirectory(cpp/ttnn/operations/uniform)
 add_subdirectory(cpp/ttnn/operations/pool)
 add_subdirectory(cpp/ttnn/operations/normalization)
-
+add_subdirectory(cpp/ttnn/operations/rand)
 add_subdirectory(cpp/ttnn/deprecated)

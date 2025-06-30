@@ -55,7 +55,6 @@ def test_decoder_inference(
     paged_attention,
     page_params,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):

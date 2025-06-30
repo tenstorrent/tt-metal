@@ -48,13 +48,12 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
 
     with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
         # 2. Load tt_unet, tt_vae and tt_scheduler
-        tt_model_config = ModelOptimisations(conv_w_dtype=ttnn.bfloat16)
+        tt_model_config = ModelOptimisations()
         tt_unet = TtUNet2DConditionModel(
             ttnn_device,
             pipeline.unet.state_dict(),
             "unet",
             model_config=tt_model_config,
-            transformer_weights_dtype=ttnn.bfloat16,
         )
         tt_vae = (
             TtAutoencoderKL(ttnn_device, pipeline.vae.state_dict(), tt_model_config, batch_size)
@@ -332,7 +331,6 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
 )
 def test_demo(
     mesh_device,
-    use_program_cache,
     is_ci_env,
     prompt,
     num_inference_steps,

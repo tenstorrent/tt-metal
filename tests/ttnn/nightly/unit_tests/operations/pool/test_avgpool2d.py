@@ -26,7 +26,6 @@ def randomize_tensor(tensor_map, tensor_shape):
 
 def run_avg_pool2d(
     device,
-    use_program_cache,
     tensor_map,
     input_shape,
     kernel_size,
@@ -211,7 +210,6 @@ def test_run_avg_pool2d(
         )
     run_avg_pool2d(
         device,
-        use_program_cache,
         tensor_map,
         input_shape,
         kernel_size,

@@ -228,6 +228,7 @@ public:
     void init_fabric() override;
     bool close() override;
     void enable_program_cache() override;
+    void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override;
     std::size_t num_program_cache_entries() override;
@@ -248,9 +249,6 @@ public:
     void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
-    // TODO #16526: Temporary api until migration to actual fabric is complete
-    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     bool is_mmio_capable() const override;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 

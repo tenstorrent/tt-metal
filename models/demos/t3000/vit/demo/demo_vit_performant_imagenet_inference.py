@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 
 import pytest
 import torch
@@ -24,12 +25,20 @@ NUM_VALIDATION_IMAGES_IMAGENET = 49920
     "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1700000}], indirect=True
 )
 @pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "batch_size_per_device, iterations",
     ((8, 100),),
 )
 def test_run_vit_trace_2cqs_inference(
     mesh_device,
-    use_program_cache,
     batch_size_per_device,
     iterations,
     imagenet_label_dict,
@@ -92,8 +101,6 @@ def test_run_vit_trace_2cqs_inference(
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=vit_trace_2cq.test_infra.inputs_mesh_mapper,
             )
-            print(f"tt_inputs_host shape: {tt_inputs_host.shape}")
-            print(f"inputs shape: {inputs.shape}")
             output = vit_trace_2cq.execute_vit_trace_2cqs_inference(tt_inputs_host)
             output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
             # 1000 classes trimming
@@ -133,12 +140,20 @@ def test_run_vit_trace_2cqs_inference(
     "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1700000}], indirect=True
 )
 @pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "batch_size_per_device, iterations",
     ((8, 100),),
 )
 def test_run_vit_trace_2cqs_inference_with_random_inputs(
     mesh_device,
-    use_program_cache,
     batch_size_per_device,
     iterations,
     imagenet_label_dict=None,

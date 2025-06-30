@@ -210,9 +210,9 @@ public:
         if (shard_dims.empty()) {
             const TensorSpec tensor_spec(shape, layout);
             tt::tt_metal::HostBuffer replicated_buffer;
-            if (const bool pydata_borrowable = tensor_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
-                                               tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
-                                               tensor_spec.data_type() == tt::tt_metal::convert_to_data_type<T>()) {
+            if (tensor_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
+                tensor_spec.data_type() == tt::tt_metal::convert_to_data_type<T>()) {
                 replicated_buffer = tt::tt_metal::HostBuffer(span, buffer_pin);
             } else {
                 replicated_buffer = tt::tt_metal::host_buffer::get_host_buffer(Tensor::from_span(

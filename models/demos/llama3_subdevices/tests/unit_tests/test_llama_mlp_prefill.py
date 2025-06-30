@@ -43,7 +43,7 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
-def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 

@@ -35,7 +35,6 @@ COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d11
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
 def test_accuracy_sdxl(
     mesh_device,
-    use_program_cache,
     is_ci_env,
     num_inference_steps,
     vae_on_device,
@@ -67,7 +66,6 @@ def test_accuracy_sdxl(
 
     images = test_demo(
         mesh_device,
-        use_program_cache,
         is_ci_env,
         prompts[start_from : start_from + num_prompts],
         num_inference_steps,

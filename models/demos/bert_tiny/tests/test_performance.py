@@ -33,7 +33,6 @@ def test_perf_bert_tiny(
     model_name,
     model_location_generator,
     reset_seeds,
-    use_program_cache,
 ):
     disable_persistent_kernel_cache()
     model_name = str(model_location_generator(model_name, model_subdir="Bert"))
