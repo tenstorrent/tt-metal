@@ -14,7 +14,6 @@ from models.experimental.yolov11.tt.ttnn_yolov11_c3k2 import TtnnC3k2 as ttnn_c3
 from models.experimental.yolov11.reference.yolov11 import C3k2 as torch_c3k2
 
 
-@pytest.mark.skip(reason="#24336: YOLOv11 tests are currently disabled")
 @pytest.mark.parametrize(
     "in_channel, out_channel, kernel, stride, padding, dilation, groups,is_bk_enabled,fwd_input_shape",
     [
@@ -111,7 +110,6 @@ from models.experimental.yolov11.reference.yolov11 import C3k2 as torch_c3k2
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolo_v11_c3k2(
     device,
-    use_program_cache,
     reset_seeds,
     in_channel,
     out_channel,

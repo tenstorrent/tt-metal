@@ -31,7 +31,7 @@ sys.modules["models.yolo"] = yolov7_model
     ],
 )
 @pytest.mark.parametrize("model_type", ["torch_model", "tt_model"])
-def test_demo(device, use_program_cache, reset_seeds, model_type, source):
+def test_demo(device, reset_seeds, model_type, source):
     disable_persistent_kernel_cache()
 
     names = load_coco_class_names()
