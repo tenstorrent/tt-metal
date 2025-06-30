@@ -322,7 +322,7 @@ void DevicePool::initialize(
                     tt::tt_metal::detail::SetFabricConfig(
                         fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
                 }
-                log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues", fabric_config, num_hw_cqs);
+                std::cerr << fmt::format("Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs);
             }
         } else if (any_remote_devices) {
             fallback_to_tunneling();
