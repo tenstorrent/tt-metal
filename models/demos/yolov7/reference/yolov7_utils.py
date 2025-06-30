@@ -2,22 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import datetime
+import glob
+import logging
+import math
+import os
+import platform
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
 import numpy as np
 import torch
 import torch.nn as nn
-import glob
-from pathlib import Path
-import torchvision
-import math
-import datetime
-import logging
-import os
-import platform
-import subprocess
-import time
 import torch.nn.functional as F
-import re
-import sys
+import torchvision
 
 logger = logging.getLogger(__name__)
 
