@@ -15,12 +15,28 @@ set_target_properties(
             Metalium
 )
 
+include(flatbuffers)
+GENERATE_FBS_HEADER(
+    api/tt-metalium/serialized_descriptors/mesh_coordinate.fbs
+    TARGET TT::Metalium
+    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/api/tt-metalium/serialized_descriptors/
+)
+set(API_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
+
+add_custom_target(
+    metalium_GeneratedHeaders
+    DEPENDS
+        ${API_GENERATED_HEADERS}
+    COMMENT "Generating all FlatBuffer headers"
+)
+
 target_sources(
     tt_metal
     PRIVATE
         tt_metal.cpp
         graph/graph_tracking.cpp
         hal.cpp
+        ${API_GENERATED_HEADERS}
 )
 
 target_sources(
@@ -28,7 +44,7 @@ target_sources(
     PUBLIC
         FILE_SET api
         TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_BINARY_DIR}/api
         FILES
             api/tt-metalium/allocator.hpp
             api/tt-metalium/allocator_types.hpp
@@ -136,7 +152,7 @@ target_sources(
             fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/quanta_galaxy_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
             fabric/hw/inc/fabric_routing_mode.h
@@ -387,6 +403,7 @@ target_include_directories(
     tt_metal
     PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/api>"
     PRIVATE
         api/tt-metalium # FIXME: Re-home the tests and remove this
 )
@@ -411,6 +428,7 @@ endif()
 include_directories(
     api
     api/tt-metalium
+    ${CMAKE_CURRENT_BINARY_DIR}/api
 )
 
 add_subdirectory(logging)

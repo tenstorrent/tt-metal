@@ -30,7 +30,7 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 )
 @pytest.mark.parametrize(
     "sampling_params",
-    [{"top_k": 1, "top_p": 0.00, "seed": 42}],
+    [{"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42}],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -98,7 +98,6 @@ def test_tt_model_acc(
     optimizations,
     mesh_device,
     use_reference_file,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
     is_ci_env,
@@ -106,14 +105,23 @@ def test_tt_model_acc(
     if is_ci_env and not use_reference_file:
         pytest.skip("CI test only runs vs reference file")
 
+    top_k = sampling_params["top_k"]
+    if isinstance(top_k, int):
+        top_k = [top_k] * batch_size
+    top_p = sampling_params["top_p"]
+    if isinstance(top_p, float):
+        top_p = [top_p] * batch_size
+    temperature = sampling_params["temperature"]
+    if isinstance(temperature, float):
+        temperature = [temperature] * batch_size
+    seed = sampling_params["seed"]
+
     dtype = ttnn.bfloat8_b
 
     # Load model args and tokenizer
     model_args = TtModelArgs(
         mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len, instruct=True
     )
-
-    # model_args.n_layers = 1
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
@@ -124,7 +132,7 @@ def test_tt_model_acc(
 
     if use_reference_file:
         # Existing reference file loading logic
-        reference_data_file = "models/tt_transformers/tests/reference_outputs/Llama3.1-70B-Instruct.refpt"
+        reference_data_file = "models/tt_transformers/tests/reference_outputs/Llama-3.1-70B-Instruct.refpt"
         logger.info(f"Loading reference data from {reference_data_file}")
         assert os.path.exists(reference_data_file)
         reference_data = torch.load(reference_data_file)
@@ -186,7 +194,7 @@ def test_tt_model_acc(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        sampling_params=sampling_params,
+        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     # Initialize embedding
@@ -235,7 +243,7 @@ def test_tt_model_acc(
         )
 
         # Sampling
-        tt_out_tok = tt_sampling(tt_out[0])
+        tt_out_tok = tt_sampling(tt_out[0], top_k, top_p, seed)
 
         # Update the idxs
         ttnn.plus_one(

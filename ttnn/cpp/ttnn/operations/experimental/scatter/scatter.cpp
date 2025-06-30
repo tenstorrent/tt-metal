@@ -179,42 +179,6 @@ Tensor pre_scatter_transform_tensor(
 
 Tensor post_scatter_transform_tensor(
     Tensor& output_tensor,
-    const int32_t dim,
-    const bool is_dim_last_idx,
-    const Shape& original_logical_shape,
-    const Layout& original_layout) {
-    const auto orig_rank = original_logical_shape.rank();
-
-    if (orig_rank == 1) {
-        output_tensor = ttnn::reshape(output_tensor, original_logical_shape);
-    } else if (orig_rank < 4) {
-        output_tensor = ttnn::squeeze_from_4D(output_tensor, orig_rank);
-    } else if (orig_rank > 4) {
-        ttnn::SmallVector<uint32_t> result_shape(original_logical_shape.cbegin(), original_logical_shape.cend());
-        output_tensor = ttnn::reshape(output_tensor, original_logical_shape);
-    }
-
-    // transposing a row-major tensor here
-    if (!is_dim_last_idx) {
-        output_tensor = ttnn::transpose(output_tensor, dim, -1, output_tensor.memory_config());
-    }
-
-    TT_FATAL(
-        output_tensor.get_logical_shape() == original_logical_shape,
-        "Output tensor transformation did not create correct output shape! Got: {}, expected: {}",
-        output_tensor.get_logical_shape(),
-        original_logical_shape);
-
-    // if the output tensor's original layout is not row-major, convert the output tensor back
-    if (original_layout != Layout::ROW_MAJOR) {
-        output_tensor = ttnn::to_layout(output_tensor, original_layout);
-    }
-
-    return output_tensor;
-}
-
-Tensor post_scatter_transform_tensor(
-    Tensor& output_tensor,
     const Shape& after_transpose_shape,
     const int32_t dim,
     const bool is_dim_last_idx,
@@ -260,13 +224,13 @@ Tensor ScatterOperation::invoke(
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<scatter::ScatterReductionType>& opt_reduction) {
-    const ttnn::Shape original_input_tensor_lshape = input_tensor.logical_shape();
+    const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.padded_shape().rank();
 
     CMAKE_UNIQUE_NAMESPACE::check_support(input_tensor, index_tensor, source_tensor, dim);
     CMAKE_UNIQUE_NAMESPACE::validate_inputs(input_tensor, index_tensor, source_tensor, dim);
 
-    const auto original_index_tensor_lshape = index_tensor.logical_shape();
+    const auto& original_index_tensor_lshape = index_tensor.logical_shape();
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
         return input_tensor;
     }

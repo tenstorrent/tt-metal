@@ -169,11 +169,19 @@ def evaluation(
 ):
     disable_persistent_kernel_cache()
 
+    num_iterations = 500
+
+    if model_type == "torch_model":
+        if model_name == "YOLOv10":
+            num_iterations = 105
+        elif model_name == "YOLOv9c":
+            num_iterations = 20
+
     dataset_name = "coco-2017"
     dataset = fiftyone.zoo.load_zoo_dataset(
         dataset_name,
         split="validation",
-        max_samples=500,
+        max_samples=num_iterations,
     )
 
     source_list = [i["filepath"] for i in dataset]
@@ -215,17 +223,19 @@ def evaluation(
             input_tensor = input_tensor.reshape(1, 1, h * w * n, c)
             ttnn_im = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
             ttnn_im = ttnn.pad(ttnn_im, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
+        elif model_name == "YOLOv8s_World":
+            ttnn_im = torch.clone(im)
         else:
             ttnn_im = im.permute((0, 2, 3, 1))
 
-        if model_name in ["YOLOv11", "YOLOv9c", "YOLOv8x", "YOLOv10"]:
+        if model_name in ["YOLOv11", "YOLOv8x"]:
             ttnn_im = ttnn_im.reshape(
                 1,
                 1,
                 ttnn_im.shape[0] * ttnn_im.shape[1] * ttnn_im.shape[2],
                 ttnn_im.shape[3],
             )
-        if model_name != "YOLOv4":
+        if model_name not in ["YOLOv4", "YOLOv9c", "YOLOv10", "YOLOv8s_World"]:
             if model_name == "YOLOv8x":
                 ttnn_im = ttnn.from_torch(ttnn_im, dtype=input_dtype, layout=input_layout)
             else:
@@ -246,8 +256,15 @@ def evaluation(
                 y1, y2, y3 = gen_yolov4_boxes_confs(preds)
                 output = get_region_boxes([y1, y2, y3])
         else:
-            if model_name in ["YOLOv11", "YOLOv9c", "YOLOv10"]:
+            if model_name in ["YOLOv11"]:
                 preds = model(ttnn_im)
+                preds = ttnn.to_torch(preds, dtype=torch.float32)
+            elif model_name == "YOLOv10":
+                preds = model.run(ttnn_im)
+                preds = ttnn.to_torch(preds, dtype=torch.float32)
+            elif model_name == "YOLOv9c":
+                preds_temp = model.run(ttnn_im)
+                preds = ttnn.clone(preds_temp[0])
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
             elif model_name == "YOLOv8x":
                 ttnn_im = ttnn.pad(ttnn_im, [1, 1, ttnn_im.shape[2], 16], [0, 0, 0, 0], 0)
@@ -258,6 +275,10 @@ def evaluation(
                 result_boxes = preds[0]
                 result_confs = preds[1]
                 output = [result_boxes.to(torch.float16), result_confs.to(torch.float16)]
+            elif model_name == "YOLOv8s_World":
+                preds_temp = model.run(ttnn_im)
+                preds = ttnn.clone(preds_temp[0])
+                preds = ttnn.to_torch(preds, dtype=torch.float32)
             else:
                 preds = model(ttnn_im)
                 preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
@@ -267,7 +288,9 @@ def evaluation(
 
             results = post_processing(img, 0.3, 0.4, output)
         elif model_name == "YOLOv10":
-            results = postprocess(preds, im, im0s, batch, classes, model_name=model_name, conf=0.5)[0]
+            from models.experimental.yolov10.demo.demo_utils import postprocess as postprocess_yolov10
+
+            results = postprocess_yolov10(preds, im, im0s, batch, classes)[0]
         else:
             results = postprocess(preds, im, im0s, batch, classes)[0]
 
@@ -294,8 +317,11 @@ def evaluation(
             predicted_bbox.append(pred)
             save_yolo_predictions_by_model(results, save_dir, source_list[index], model_type)
             index += 1
-    if model_name in ["YOLOv8x"] and model_type == "tt_metal":
-        model.release_yolov8x_trace_2cqs_inference()
+    if model_type == "tt_metal":
+        if model_name in ["YOLOv8x"]:
+            model.release_yolov8x_trace_2cqs_inference()
+        elif model_name in ["YOLOv10", "YOLOv9c", "YOLOv8s_World"]:
+            model.release()
     ground_truth = []
     for i in dataset:
         sample = []
@@ -347,7 +373,6 @@ def evaluation(
 )
 def test_run_yolov4_eval(
     device,
-    use_program_cache,
     batch_size,
     act_dtype,
     weight_dtype,
@@ -394,54 +419,27 @@ def test_run_yolov4_eval(
     "model_type",
     [("tt_model"), ("torch_model")],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov8s_world(device, model_type, res, reset_seeds):
-    from models.demos.yolov8s_world.reference import yolov8s_world
-    from models.demos.yolov8s_world.tt.ttnn_yolov8s_world import TtYOLOWorld
-    from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
-        create_custom_preprocessor,
-        attempt_load,
-        move_to_device,
-    )
-
-    from ttnn.model_preprocessing import preprocess_model_parameters
+def test_yolov8s_world(device, model_type, res, use_program_cache, reset_seeds):
+    from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
+    from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import attempt_load
 
     if model_type == "torch_model":
         model = attempt_load("yolov8s-world.pt", map_location="cpu")
     else:
-        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
-        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
-
-        state_dict = weights_torch_model.state_dict()
-        ds_state_dict = {k: v for k, v in state_dict.items()}
-        new_state_dict = {}
-        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
-            new_state_dict[name1] = parameter2
-
-        torch_model.load_state_dict(new_state_dict)
-        torch_model = torch_model.model
-
-        parameters = preprocess_model_parameters(
-            initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device)
+        model = YOLOv8sWorldPerformantRunner(
+            device,
+            1,  # batch_size
+            ttnn.bfloat16,  # act_dtype
+            ttnn.bfloat8_b,  # weight_dtype
+            resolution=res,
+            model_location_generator=None,
         )
 
-        for i in [12, 15, 19, 22]:
-            parameters["model"][i]["attn"]["gl"]["weight"] = ttnn.to_device(
-                parameters["model"][i]["attn"]["gl"]["weight"], device=device
-            )
-            parameters["model"][i]["attn"]["gl"]["bias"] = ttnn.to_device(
-                parameters["model"][i]["attn"]["gl"]["bias"], device=device
-            )
-            parameters["model"][i]["attn"]["bias"] = ttnn.to_device(
-                parameters["model"][i]["attn"]["bias"], device=device
-            )
-
-        parameters["model"][16] = move_to_device(parameters["model"][16], device)
-
-        parameters["model"][23]["cv4"] = move_to_device(parameters["model"][23]["cv4"], device)
-
-        model = TtYOLOWorld(device=device, parameters=parameters)
+        model._capture_yolov8s_world_trace_2cqs()
 
     input_dtype = ttnn.bfloat16
     input_layout = ttnn.ROW_MAJOR_LAYOUT
@@ -457,6 +455,7 @@ def test_yolov8s_world(device, model_type, res, reset_seeds):
         input_dtype=input_dtype,
         input_layout=input_layout,
         save_dir=save_dir,
+        model_name="YOLOv8s_World",
     )
 
 
@@ -468,7 +467,7 @@ def test_yolov8s_world(device, model_type, res, reset_seeds):
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov8x(device, model_type, res, use_program_cache, reset_seeds):
+def test_yolov8x(device, model_type, res, reset_seeds):
     from models.demos.yolov8x.tests.yolov8x_e2e_performant import Yolov8xTrace2CQ
 
     torch_model = YOLO("yolov8x.pt")
@@ -503,4 +502,91 @@ def test_yolov8x(device, model_type, res, use_program_cache, reset_seeds):
         input_layout=input_layout,
         save_dir=save_dir,
         model_name="YOLOv8x",
+    )
+
+
+@pytest.mark.parametrize(
+    "model_type",
+    [("tt_model"), ("torch_model")],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize("res", [(640, 640)])
+def test_yolov10x(device, model_type, res, reset_seeds):
+    from models.experimental.yolov10.tt.performant_runner import YOLOv10PerformantRunner
+    from models.experimental.yolov10.tests.common import load_torch_model
+
+    if model_type == "torch_model":
+        model = load_torch_model()
+        logger.info("Inferencing using Torch Model")
+    else:
+        model = YOLOv10PerformantRunner(
+            device,
+            act_dtype=ttnn.bfloat8_b,
+            weight_dtype=ttnn.bfloat8_b,
+        )
+        logger.info("Inferencing using ttnn Model")
+
+    save_dir = "models/experimental/yolov10/demo/runs"
+
+    input_dtype = ttnn.bfloat8_b
+    input_layout = ttnn.ROW_MAJOR_LAYOUT
+
+    evaluation(
+        device=device,
+        res=res,
+        model_type=model_type,
+        model=model,
+        parameters=None,
+        input_dtype=input_dtype,
+        input_layout=input_layout,
+        save_dir=save_dir,
+        model_name="YOLOv10",
+    )
+
+
+@pytest.mark.parametrize(
+    "model_type",
+    [("tt_model"), ("torch_model")],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize("res", [(640, 640)])
+def test_yolov9c(device, model_type, res, reset_seeds):
+    from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
+    from models.demos.yolov9c.demo.demo_utils import load_torch_model
+
+    if model_type == "torch_model":
+        model = load_torch_model(model_task="detect")
+        logger.info("Inferencing using Torch Model")
+    else:
+        model = YOLOv9PerformantRunner(
+            device,
+            1,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            model_task="detect",
+            resolution=(640, 640),
+            model_location_generator=None,
+        )
+        model._capture_yolov9_trace_2cqs()
+        logger.info("Inferencing using ttnn Model")
+
+    save_dir = "models/demos/yolov9c/demo/runs"
+
+    input_dtype = ttnn.bfloat8_b
+    input_layout = ttnn.ROW_MAJOR_LAYOUT
+
+    evaluation(
+        device=device,
+        res=res,
+        model_type=model_type,
+        model=model,
+        parameters=None,
+        input_dtype=input_dtype,
+        input_layout=input_layout,
+        save_dir=save_dir,
+        model_name="YOLOv9c",
     )

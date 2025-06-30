@@ -63,7 +63,6 @@ def run_all_broadcast_impl(
     num_links,
     input_dtype,
     layout,
-    use_program_cache,
     function_level_defaults,
     all_broadcast_topology,
     num_iters=1,
@@ -167,13 +166,20 @@ def run_all_broadcast_impl(
 
         output_tensor_goldens_list.append(output_tensors)
         temp_output_tensor = torch.cat(output_tensors, -1)
-        input_tensors = torch.chunk(temp_output_tensor, num_devices, -1)
-        tt_input_tensors = []
-        for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout))
-            logger.info(f"using device {mesh_device.get_device_ids()[i]}")
 
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
+        input_tensor_mesh = ttnn.from_torch(
+            temp_output_tensor,
+            device=mesh_device,
+            layout=layout,
+            dtype=input_dtype,
+            memory_config=input_mem_config,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                mesh_device,
+                ttnn.MeshMapperConfig(
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
+                ),
+            ),
+        )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -265,7 +271,6 @@ def test_all_broadcast(
     layout,
     mem_config,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_broadcast_impl(
@@ -275,7 +280,6 @@ def test_all_broadcast(
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
         function_level_defaults,
         all_broadcast_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
@@ -363,7 +367,6 @@ def test_all_broadcast_sharded(
     input_dtype,
     layout,
     num_iters,
-    use_program_cache,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
@@ -378,7 +381,6 @@ def test_all_broadcast_sharded(
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
         function_level_defaults,
         all_broadcast_topology=ttnn.Topology.Linear,
         num_iters=num_iters,

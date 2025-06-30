@@ -32,6 +32,10 @@ def test_yolov4(
     model_location_generator,
 ):
     disable_persistent_kernel_cache()
+
+    # https://github.com/tenstorrent/tt-metal/issues/23271
+    device.disable_and_clear_program_cache()
+
     profiler.clear()
 
     batch_size = input_shape[0]
@@ -41,8 +45,7 @@ def test_yolov4(
     torch_input = torch_input_tensor.permute(0, 3, 1, 2).float()
     parameters = create_yolov4_model_parameters(torch_model, torch_input, resolution, device)
 
-    ttnn_input = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
-
+    ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, device=device)
     ttnn_model = TtYOLOv4(parameters, device)
 
     logger.info(f"Compiling model with warmup run")
@@ -65,6 +68,7 @@ def test_yolov4(
     for idx in range(iterations):
         profiler.start("inference_time")
         profiler.start(f"inference_time_{idx}")
+        ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, device=device)
         ttnn_output_tensor = ttnn_model(ttnn_input)
         ttnn.deallocate(ttnn_output_tensor[0])
         ttnn.deallocate(ttnn_output_tensor[1])

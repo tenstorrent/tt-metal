@@ -96,8 +96,6 @@ def run_falcon_demo_kv(
 ):
     torch.manual_seed(0)
 
-    device.enable_program_cache()
-
     tt_cache_path = get_tt_cache_path(model_version)
 
     configuration = FalconConfig(**model_config_entries)
@@ -398,8 +396,6 @@ def run_falcon_demo_kv(
 
     print_output_prompts(generated_ids, tokenizer)
 
-    device.disable_and_clear_program_cache()
-
     generated_text = tokenizer.batch_decode(generated_ids.tolist())
 
     measurements = {
@@ -445,7 +441,6 @@ def test_demo(
     user_input,
     model_location_generator,
     device,
-    use_program_cache,
 ):
     disable_persistent_kernel_cache()
 

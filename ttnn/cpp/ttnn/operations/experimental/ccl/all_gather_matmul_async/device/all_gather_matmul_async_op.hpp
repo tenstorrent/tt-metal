@@ -84,7 +84,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
 
     /* General Params */
     const Tensor& input_tensor,
-    Tensor& persistent_intermediate_tensor,
     Tensor& all_gather_output_tensor,
     const Tensor& weight_tensor,
     Tensor& matmul_output_tensor,
@@ -114,7 +113,6 @@ namespace ccl {
 std::vector<Tensor> all_gather_matmul_async(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
-    Tensor& persistent_intermediate_buffer,
     Tensor& persistent_output_buffer,
     uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,

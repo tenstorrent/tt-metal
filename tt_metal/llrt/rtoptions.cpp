@@ -37,7 +37,7 @@ static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 // Used for demonstration purposes and will be removed in the future.
 static const char* TT_METAL_FD_FABRIC_DEMO = "TT_METAL_FD_FABRIC";
-static const char* TT_METAL_VISIBLE_DEVICE_ENV_VAR = "TT_METAL_VISIBLE_DEVICE";
+static const char* TT_METAL_VISIBLE_DEVICES_ENV_VAR = "TT_METAL_VISIBLE_DEVICES";
 
 RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
@@ -60,10 +60,19 @@ RunTimeOptions::RunTimeOptions() {
     }
     this->system_kernel_dir = "/usr/share/tenstorrent/kernels/";
 
-    const char* visible_device_str = std::getenv(TT_METAL_VISIBLE_DEVICE_ENV_VAR);
-    if (visible_device_str != nullptr) {
-        this->is_visible_device_env_var_set = true;
-        this->visible_device = std::stoi(std::string(visible_device_str));
+    const char* visible_devices_str = std::getenv(TT_METAL_VISIBLE_DEVICES_ENV_VAR);
+    if (visible_devices_str != nullptr) {
+        this->is_visible_devices_env_var_set = true;
+        std::string devices_string(visible_devices_str);
+        size_t pos = 0;
+        while ((pos = devices_string.find(',')) != std::string::npos) {
+            std::string device_str = devices_string.substr(0, pos);
+            this->visible_devices.push_back(std::stoi(device_str));
+            devices_string.erase(0, pos + 1);
+        }
+        if (!devices_string.empty()) {
+            this->visible_devices.push_back(std::stoi(devices_string));
+        }
     }
 
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
@@ -202,6 +211,7 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
         this->erisc_iram_enabled = true;
     }
+    this->fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
 
     if (getenv("TT_METAL_DISABLE_RELAXED_MEM_ORDERING")) {
         this->disable_relaxed_memory_ordering = true;
@@ -314,8 +324,6 @@ void RunTimeOptions::ParseInspectorEnv() {
     } else {
         inspector_settings.log_path = std::filesystem::path(get_root_dir()) / "generated/inspector";
     }
-    std::filesystem::remove_all(inspector_settings.log_path);
-    std::filesystem::create_directories(inspector_settings.log_path);
 
     const char* inspector_initialization_is_important_str = getenv("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT");
     if (inspector_initialization_is_important_str != nullptr) {

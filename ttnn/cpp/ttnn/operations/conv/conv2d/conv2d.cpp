@@ -429,7 +429,7 @@ Result conv2d_L1(
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     auto input_tensor = input_tensor_;
-    auto weight_tensor = weight_tensor_;
+    const auto& weight_tensor = weight_tensor_;
     std::optional<ttnn::Tensor> bias_tensor = bias_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     // Store the original stride size for weight folding
@@ -438,6 +438,10 @@ Result conv2d_L1(
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
         input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, false);
+        if (conv_config.deallocate_activation) {
+            Tensor input_tensor_pre_folded = input_tensor_;
+            input_tensor_pre_folded.deallocate(true);
+        }
 
         // Update the input tensor parameters to the folding result
         input_height = folding_result.input_height;
@@ -639,7 +643,13 @@ Result conv2d_L1(
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         if (input_tensor_post_tm.layout() != Layout::TILE) {
-            input_tensor_post_tm = ttnn::to_layout(input_tensor_post_tm, Layout::TILE);
+            Tensor input_tensor_post_tm_tilized =
+                ttnn::to_layout(input_tensor_post_tm, Layout::TILE);
+            if (conv_config.deallocate_activation) {
+                input_tensor_post_tm.deallocate(/*force*/ true);
+                input_tensor_post_tm_tilized = ttnn::move(input_tensor_post_tm_tilized);
+            }
+            input_tensor_post_tm = input_tensor_post_tm_tilized;
         }
 
         // run conv as matmul
@@ -674,6 +684,9 @@ Result conv2d_L1(
             activation,
             compute_config);
 
+        if (conv_config.deallocate_activation) {
+            input_tensor_post_tm.deallocate(/*force*/ true);
+        }
         if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }

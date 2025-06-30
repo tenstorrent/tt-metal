@@ -154,8 +154,8 @@ def test_concat(device, height, width, dim):
     ),
 )
 def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy, layout, cache_mode):
-    if cache_mode:
-        device.enable_program_cache()
+    if not cache_mode:
+        device.disable_and_clear_program_cache()
 
     dim = 2 if strategy == ttnn.ShardStrategy.WIDTH else 3
 
@@ -277,7 +277,7 @@ def test_concat_5d(device, dim):
         ),
     ),
 )
-def test_concat_sharded_pad(device, core_grid, hw, channels1, channels2, shard_height, use_program_cache):
+def test_concat_sharded_pad(device, core_grid, hw, channels1, channels2, shard_height):
     shape1 = [1, 1, hw, channels1]
     shape2 = [1, 1, hw, channels2]
 

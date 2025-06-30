@@ -214,8 +214,12 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.is_2d_fabric =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_topology() ==
             tt_fabric::Topology::Mesh;
+        static_config_.is_2d_fabric_dynamic =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_config() ==
+            tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC;
     } else {
         static_config_.is_2d_fabric = false;
+        static_config_.is_2d_fabric_dynamic = false;
     }
 }
 
@@ -424,7 +428,7 @@ void DispatchKernel::CreateKernel() {
     uint32_t num_virtual_active_eth_cores = tt::DevicePool::instance().get_max_num_eth_cores_across_all_devices();
     uint32_t num_physical_active_eth_cores =
         MetalContext::instance()
-            .get_cluster()
+            .get_control_plane()
             .get_active_ethernet_cores(device_->id(), /*skip_reserved_tunnel_cores*/ true)
             .size();
     bool virtualize_num_eth_cores = num_virtual_active_eth_cores > num_physical_active_eth_cores;
@@ -534,6 +538,9 @@ void DispatchKernel::CreateKernel() {
         defines["FABRIC_RELAY"] = "1";
         if (static_config_.is_2d_fabric.value_or(false)) {
             defines["FABRIC_2D"] = "1";
+        }
+        if (static_config_.is_2d_fabric_dynamic.value_or(false)) {
+            defines["FABRIC_2D_DYNAMIC"] = "1";
         }
     }
     // Compile at Os on IERISC to fit in code region.

@@ -49,6 +49,9 @@ struct ProgramCache;
 }  // namespace tt_metal
 }  // namespace tt
 
+namespace tt::tt_fabric {
+class FabricNodeId;
+}
 namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
@@ -218,13 +221,14 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
-    void reset_cores() override;
-    void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
+    bool compile_fabric() override;
+    void configure_fabric() override;
     void init_fabric() override;
     bool close() override;
     void enable_program_cache() override;
+    void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override;
     std::size_t num_program_cache_entries() override;
@@ -245,9 +249,6 @@ public:
     void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
-    // TODO #16526: Temporary api until migration to actual fabric is complete
-    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     bool is_mmio_capable() const override;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 
@@ -258,6 +259,7 @@ public:
     std::vector<IDevice*> get_devices() const;
     IDevice* get_device(chip_id_t physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
+    tt_fabric::FabricNodeId get_device_fabric_node_id(const MeshCoordinate& coord) const;
 
     DeviceIds get_device_ids() const;
 
