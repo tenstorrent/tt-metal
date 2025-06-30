@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr int32_t pad_w = get_compile_time_arg_val(3);
 
     // channel size in bytes
-    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(4);
+    constexpr uint32_t in_aligned_nbytes_c = get_compile_time_arg_val(4);
 
     // input tensor height / width / channels
     constexpr int32_t in_w = get_compile_time_arg_val(5);
@@ -56,6 +56,7 @@ void kernel_main() {
     constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(23);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(26);
     constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
+    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(28);
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
 
@@ -92,8 +93,9 @@ void kernel_main() {
     constexpr uint32_t total_elems_to_reduce = window_h * window_w;
     constexpr uint32_t remaining_elems = total_elems_to_reduce % max_rows_for_reduction;
     constexpr bool wide_reduction = in_nblocks_c > 1;
-    constexpr uint32_t read_bytes =
-        wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
+    constexpr uint32_t read_bytes = wide_reduction
+                                        ? MAX_ELE_PER_REDUCTION
+                                        : in_aligned_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
 
     if constexpr (!one_scalar_per_core) {
         config_l1_addr = get_read_ptr(config_cb_id);
