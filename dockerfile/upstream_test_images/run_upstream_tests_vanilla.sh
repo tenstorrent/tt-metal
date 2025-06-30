@@ -66,6 +66,7 @@ test_suite_bh_llmbox_metal_unit_tests() {
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/test_system_health
+    ./build/test/tt_metal/unit_tests_eth
 }
 
 test_suite_bh_llmbox_llama_demo_tests() {
