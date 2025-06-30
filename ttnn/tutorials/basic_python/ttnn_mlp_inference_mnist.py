@@ -6,6 +6,7 @@ import torchvision
 import torchvision.transforms as transforms
 import numpy as np
 import ttnn
+import os
 from loguru import logger
 
 
@@ -21,25 +22,26 @@ def main():
         testset = torchvision.datasets.MNIST(root="./data", train=False, download=True, transform=transform)
         testloader = torch.utils.data.DataLoader(testset, batch_size=1, shuffle=False)
 
-        # Pretrained weights
-        weights = torch.load("mlp_mnist_weights.pt")
-        W1 = weights["W1"]
-        b1 = weights["b1"]
-        W2 = weights["W2"]
-        b2 = weights["b2"]
-        W3 = weights["W3"]
-        b3 = weights["b3"]
-
-        """
-        Random weights for MLP - will not predict correctly
-        torch.manual_seed(0)
-        W1 = torch.randn((128, 28 * 28), dtype=torch.float32)
-        b1 = torch.randn((128,), dtype=torch.float32)
-        W2 = torch.randn((64, 128), dtype=torch.float32)
-        b2 = torch.randn((64,), dtype=torch.float32)
-        W3 = torch.randn((10, 64), dtype=torch.float32)
-        b3 = torch.randn((10,), dtype=torch.float32)
-        """
+        if os.path.exists("mlp_mnist_weights.pt"):
+            # Pretrained weights
+            weights = torch.load("mlp_mnist_weights.pt")
+            W1 = weights["W1"]
+            b1 = weights["b1"]
+            W2 = weights["W2"]
+            b2 = weights["b2"]
+            W3 = weights["W3"]
+            b3 = weights["b3"]
+            logger.info("Loaded pretrained weights from mlp_mnist_weights.pt")
+        else:
+            # Random weights for MLP - will not predict correctly
+            logger.warning("mlp_mnist_weights.pt not found, using random weights")
+            torch.manual_seed(0)
+            W1 = torch.randn((128, 28 * 28), dtype=torch.float32)
+            b1 = torch.randn((128,), dtype=torch.float32)
+            W2 = torch.randn((64, 128), dtype=torch.float32)
+            b2 = torch.randn((64,), dtype=torch.float32)
+            W3 = torch.randn((10, 64), dtype=torch.float32)
+            b3 = torch.randn((10,), dtype=torch.float32)
 
         correct = 0
         total = 0
