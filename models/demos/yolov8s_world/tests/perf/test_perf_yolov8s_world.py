@@ -58,7 +58,7 @@ def test_perf_yolov8s_world(
     iterations = 32
     t0 = time.time()
     for _ in range(iterations):
-        _ = performant_runner._execute_yolov8s_world_trace_2cqs_inference(torch_input_tensor)
+        _ = performant_runner.run(torch_input_tensor)
     ttnn.synchronize_device(device)
     t1 = time.time()
 
