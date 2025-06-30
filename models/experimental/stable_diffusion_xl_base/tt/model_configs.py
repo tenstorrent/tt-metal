@@ -7,13 +7,21 @@ import re
 
 
 class ModelOptimisations:
-    def __init__(self, conv_act_dtype=ttnn.bfloat16, conv_w_dtype=ttnn.bfloat16):
+    def __init__(
+        self,
+        conv_act_dtype=ttnn.bfloat16,
+        conv_w_dtype=ttnn.bfloat16,
+        attention_weights_dtype=ttnn.bfloat16,
+        ff_weights_dtype=ttnn.bfloat8_b,
+    ):
         self.conv_configs = {}
         self.matmul_configs = {}
         self.compute_configs = {}
         self.prepared_weights = False
         self.conv_w_dtype = conv_w_dtype
         self.conv_ws_dtype = ttnn.bfloat8_b
+        self.attention_weights_dtype = attention_weights_dtype
+        self.ff_weights_dtype = ff_weights_dtype
 
         # HEIGHT SHARDED
         self.conv_configs["ABH_256_ADB"] = ttnn.Conv2dConfig(
@@ -443,7 +451,7 @@ class ModelOptimisations:
 
         self.matmul_configs["2D_FF2_SEQ_LEN_4096"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
-            in0_block_w=10,  # max is 10, 2 seems optimal
+            in0_block_w=10,  # max is 10
             out_subblock_h=1,
             out_subblock_w=3,
             per_core_M=16,
@@ -491,7 +499,7 @@ class ModelOptimisations:
             fused_activation=[ttnn.UnaryOpType.GELU, True],
         )
 
-        in_0_block_w_geglu_1280 = 5
+        in_0_block_w_geglu_1280 = 5  # max is 5
         per_core_M_geglu_1280 = 4
         per_core_N_geglu_1280 = 20
         out_subblock_h_geglu_1280 = 1
