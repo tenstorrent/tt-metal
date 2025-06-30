@@ -190,6 +190,7 @@ def create_tt_model(
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, num_layers, print_outputs",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, pcc_check, only_6u, num_layers",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
@@ -204,6 +205,7 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # 6U-only
             80,  # num layers
             False,  # print_outputs
         ),
@@ -220,6 +222,7 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # 6U-only
             80,  # num layers
             False,  # print_outputs
         ),
@@ -236,10 +239,11 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # apc_test,
             False,  # pcc_check
+            False,  # 6U-only
             80,  # num layers
             False,  # print_outputs
         ),
-        (  # Long-context run - multiple users, long prompt (adapted to the model being used and architecture)
+        (  # Long-context run 16K - multiple users, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -252,10 +256,11 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # apc_test,
             False,  # pcc_check
+            False,  # 6U-only
             80,  # num layers
             False,  # print_outputs
         ),
-        (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
+        (  # Long-context run 32K - Single user, long prompt (adapted to the model being used and architecture)
             "models/demos/llama3_subdevices/demo/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -268,10 +273,27 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # apc_test,
             False,  # pcc_check
+            False,  # 6U-only
+            80,  # num layers
+        ),
+        (  # Max-context [128K] run on 6U - Single user, long prompt (adapted to the model being used and architecture)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            10,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only,
+            False,  # pcc_check,
+            True,  # 6U-only
             80,  # num layers
             False,  # print_outputs
         ),
-        (  # APC Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
+        (  # CI Run for PCC check for 1 Layer: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -286,6 +308,8 @@ def create_tt_model(
             True,  # pcc_check
             80,  # num layers
             False,  # print_outputs
+            False,  # 6U-only
+            1,  # num layers
         ),
         (  # CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
@@ -300,6 +324,7 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # apc_test
             True,  # pcc_check
+            False,  # 6U-only
             80,  # num layers
             False,  # print_outputs
         ),
@@ -310,6 +335,7 @@ def create_tt_model(
         "repeat2",  # latency with 5 repeat batches
         "long-context-batch32",  # max-length for 32 users
         "long-context-32k",  # max-length
+        "6u-long-context-128k",  # max-length
         "apc-test",  # apc check for 80L + teacher forced for prefill + pcc check on prefill and 1st decode token
         "pcc-80L",  # pcc check for 80L + teacher forced
     ],
@@ -359,10 +385,13 @@ def test_demo_text(
     mesh_device,
     is_ci_env,
     apc_test,
+    ci_only,
+    only_6u,
     num_layers,
     pcc_check,
     pcc_decode_len,
     reset_seeds,
+    galaxy_type,
     request,
     galaxy_type,
     print_outputs,
@@ -380,7 +409,7 @@ def test_demo_text(
     if apc_test:
         demo_targets = load_demo_targets("models/demos/llama3_subdevices/demo/text_demo_targets.json", galaxy_type)
 
-    # Override parameters from command line if they are provided
+        # Override parameters from command line if they are provided
     input_prompts = request.config.getoption("--input_prompts") or input_prompts
     if request.config.getoption("--instruct") in [
         0,
@@ -399,7 +428,6 @@ def test_demo_text(
         1,
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
-    print_outputs = request.config.getoption("--print_outputs") or print_outputs
 
     enable_trace = True  # Use tracing for better perf
     prefill_enable_trace = True  # repeat_batches > 1
