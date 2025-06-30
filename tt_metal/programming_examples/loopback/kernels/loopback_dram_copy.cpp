@@ -34,7 +34,7 @@ void kernel_main() {
         .data_format = DataFormat::Float16_b,
     };
 
-    for (uin32_t i = 0; i < num_tiles; i++) {
+    for (uint32_t i = 0; i < num_tiles; i++) {
         // Issue a read to the NoC and write to the L1 buffer. This operation is asynchronous.
         // thus a barrier is needed to ensure that the read is complete before the write.
         noc_async_read_tile(i, in0, l1_buffer_addr);
