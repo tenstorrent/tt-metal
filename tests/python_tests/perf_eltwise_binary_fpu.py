@@ -15,15 +15,22 @@ from helpers.param_config import (
     generate_params,
     input_output_formats,
 )
-from helpers.perf import ALL_RUN_TYPES, perf_benchmark, write_to_report
+from helpers.perf import (
+    ALL_RUN_TYPES,
+    PerfReport,
+    delete_benchmark_dir,
+    dump_report,
+    perf_benchmark,
+    update_report,
+)
 
-# SUPPORTED FORMATS FOR TEST
-supported_formats = [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
+TEST_NAME = "eltwise_binary_fpu_perf"
 
-test_formats = input_output_formats(supported_formats)
 all_params = generate_params(
-    ["eltwise_binary_fpu_perf"],
-    test_formats,
+    [TEST_NAME],
+    format_combos=input_output_formats(
+        [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
+    ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
     math_fidelity=[
@@ -35,6 +42,15 @@ all_params = generate_params(
 )
 param_ids = generate_param_ids(all_params)
 
+report = PerfReport()
+
+
+@pytest.fixture(scope="module")
+def report_fixture():
+    delete_benchmark_dir(TEST_NAME)
+    yield
+    dump_report(TEST_NAME, report)
+
 
 @pytest.mark.perf
 @pytest.mark.parametrize(
@@ -42,7 +58,9 @@ param_ids = generate_param_ids(all_params)
     clean_params(all_params),
     ids=param_ids,
 )
-def test_perf_eltwise_binary_fpu(testname, formats, dest_acc, mathop, math_fidelity):
+def test_perf_eltwise_binary_fpu(
+    report_fixture, testname, formats, dest_acc, mathop, math_fidelity
+):
 
     # MathFidelity is only used for Elwmul
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
@@ -50,12 +68,12 @@ def test_perf_eltwise_binary_fpu(testname, formats, dest_acc, mathop, math_fidel
 
     test_config = {
         "testname": testname,
-        "tile_cnt": 16,
-        "formats": formats,
-        "dest_acc": dest_acc,
         "mathop": mathop,
+        "formats": formats,
         "math_fidelity": math_fidelity,
+        "tile_cnt": 16,
+        "dest_acc": dest_acc,
     }
 
     results = perf_benchmark(test_config, ALL_RUN_TYPES)
-    write_to_report(test_config, results)
+    update_report(report, test_config, results)
