@@ -74,6 +74,98 @@ ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uin
     }
 }
 
+std::pair<float, uint32_t> get_transaction_bw(
+    uint32_t transaction_size, const std::unordered_map<uint32_t, float>& dict) {
+    for (const auto& [key, val] : dict) {
+        if (key >= transaction_size && transaction_size <= 65536) {
+            return {val, key};
+        }
+    }
+    if (transaction_size > 65536) {
+        return {dict.at(65536) * std::ceil((float)transaction_size / (float)65536), 65536};
+    }
+    return {0.0f, 0};
+}
+
+uint32_t get_cycles_for_read_transaction_size(uint32_t transaction_size, bool is_dram, uint32_t num_transactions) {
+    // for wh, add for other machines
+    std::unordered_map<uint32_t, float> dram_bw = {
+        {16, 0.436},
+        {32, 0.868},
+        {64, 1.736},
+        {128, 3.489},
+        {256, 6.975},
+        {512, 13.889},
+        {1024, 27.891},
+        {2048, 28.411},
+        {4096, 28.227},
+        {8192, 28.537},
+        {16384, 27.831},
+        {32768, 27.758},
+        {65536, 28.694}};
+
+    std::unordered_map<uint32_t, float> l1_read_bw = {
+        {16, 0.868},
+        {32, 1.724},
+        {64, 3.477},
+        {128, 6.885},
+        {256, 13.794},
+        {512, 27.143},
+        {1024, 28.976},
+        {2048, 29.742},
+        {4096, 29.544},
+        {8192, 28.728},
+        {16384, 28.7},
+        {32768, 28.618},
+        {65536, 28.7}};
+    auto result = get_transaction_bw(transaction_size, is_dram ? dram_bw : l1_read_bw);
+    float transaction_bw = result.first;
+    uint32_t transaction_size_mul_32 = result.second;
+    // double check  this value
+    float device_frequency_hz = 1e9;  // 1 GHz
+    uint32_t cycles = (num_transactions * transaction_size_mul_32) / (transaction_bw * 1e9) * device_frequency_hz;
+    return cycles;
+}
+
+uint32_t get_cycles_for_write_transaction_size(uint32_t transaction_size, bool is_dram, uint32_t num_transactions) {
+    // for wh, add for other machines
+    std::unordered_map<uint32_t, float> dram_bw = {
+        {16, 0.436},
+        {32, 0.868},
+        {64, 1.736},
+        {128, 3.489},
+        {256, 6.975},
+        {512, 13.889},
+        {1024, 27.891},
+        {2048, 28.411},
+        {4096, 28.227},
+        {8192, 28.537},
+        {16384, 27.831},
+        {32768, 27.758},
+        {65536, 28.694}};
+
+    std::unordered_map<uint32_t, float> l1_write_bw = {
+        {16, 0.681},
+        {32, 1.254},
+        {64, 2.709},
+        {128, 5.417},
+        {256, 10.823},
+        {512, 21.668},
+        {1024, 27.837},
+        {2048, 27.811},
+        {4096, 27.811},
+        {8192, 27.808},
+        {16384, 27.808},
+        {32768, 27.811},
+        {65536, 28.808}};
+    auto result = get_transaction_bw(transaction_size, is_dram ? dram_bw : l1_write_bw);
+    float transaction_bw = result.first;
+    uint32_t transaction_size_mul_32 = result.second;
+    // double check  this value
+    float device_frequency_hz = 1e9;  // 1 GHz
+    uint32_t cycles = (num_transactions * transaction_size_mul_32) / (transaction_bw * 1e9) * device_frequency_hz;
+    return cycles;
+}
 
 uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,
