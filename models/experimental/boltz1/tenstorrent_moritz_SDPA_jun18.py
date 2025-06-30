@@ -303,6 +303,10 @@ class AttentionPairBias(Module):
         self.z_weight = self.torch_to_tt("proj_z.1.weight")
         self.o_weight = self.torch_to_tt("proj_o.weight")
 
+        self.z_intermediate = ttnn.empty(
+            [1, 768, 768, 16], ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device, ttnn.DRAM_MEMORY_CONFIG
+        )
+
     def __call__(self, s: ttnn.Tensor, z: ttnn.Tensor) -> ttnn.Tensor:
         if not self.diffusion:
             s = ttnn.layer_norm(
@@ -354,10 +358,6 @@ class AttentionPairBias(Module):
 
             signpost(header="AttentionPairBias Z Linear Mapped to Matmul Sliced Start")
 
-            z_intermediate = ttnn.empty(
-                [1, 768, 768, 16], ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device, ttnn.DRAM_MEMORY_CONFIG
-            )
-
             for slice_index in range(0, num_slices):
                 z_chunk = ttnn.interleaved_to_sharded_partial(
                     z,
@@ -385,13 +385,13 @@ class AttentionPairBias(Module):
 
                 ttnn.sharded_to_interleaved_partial(
                     z_chunk,
-                    z_intermediate,
+                    self.z_intermediate,
                     num_slices,
                     slice_index,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
 
-            z = z_intermediate
+            z = self.z_intermediate
             ttnn.deallocate(z_chunk)
             signpost(header="AttentionPairBias Z Linear Mapped to Matmul Sliced End")
 

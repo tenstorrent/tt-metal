@@ -1,4 +1,5 @@
 import pytest, torch
+import ttnn
 
 # from .tenstorrent import (
 # from  .tenstorrent_bfp16_L1 import (
@@ -38,7 +39,7 @@ def median_relative_error(a, b):
 
 @pytest.mark.parametrize("seq_len", [128, 192, 256, 512, 686, 768, 1024])
 def test_pairformer(device, seq_len):
-    # ttnn.device.EnablePersistentKernelCache()  # be careful, can lead to bugs when profiling etc.
+    ttnn.device.EnablePersistentKernelCache()  # be careful, can lead to bugs when profiling etc.
     device.enable_program_cache()
     pairformer = PairformerModule(
         device,
