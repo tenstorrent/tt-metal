@@ -372,7 +372,7 @@ template <>
 inline void apply_unary_int_comp<SfpuType::unary_ge>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
 {
     const sfpi::vInt s = scalar;
-    v_if (v >= ZERO && s <= ZERO)
+    v_if (v >= ZERO && s < ZERO)
     {
         out_val = ONE;
     }
@@ -396,7 +396,7 @@ inline void apply_unary_int_comp<SfpuType::unary_le>(sfpi::vInt& v, int scalar, 
     {
         out_val = ONE;
     }
-    v_elseif (v > ZERO && s < ZERO)
+    v_elseif (v >= ZERO && s < ZERO)
     {
         out_val = ZERO;
     }
