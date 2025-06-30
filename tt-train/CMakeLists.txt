@@ -49,8 +49,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND ENABLE_LIBCXX)
     add_link_options(-stdlib=libc++)
 endif()
 
-add_compile_options(-Wno-unused-variable)
-
 message(STATUS "c++ Standard: ${CMAKE_CXX_STANDARD}")
 
 include(cmake/dependencies.cmake)
