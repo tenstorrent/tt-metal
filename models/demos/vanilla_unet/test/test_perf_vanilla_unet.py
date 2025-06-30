@@ -10,8 +10,8 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.experimental.vanilla_unet.reference.unet import UNet
-from models.experimental.vanilla_unet.ttnn.ttnn_unet import TtUnet
+from models.demos.vanilla_unet.reference.unet import UNet
+from models.demos.vanilla_unet.ttnn.ttnn_unet import TtUnet
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import profiler
@@ -28,9 +28,9 @@ def get_expected_times(name):
 def test_vanilla_unet(device, reset_seeds):
     torch.manual_seed(0)
 
-    weights_path = "models/experimental/vanilla_unet/unet.pt"
+    weights_path = "models/demos/vanilla_unet/unet.pt"
     if not os.path.exists(weights_path):
-        os.system("bash models/experimental/vanilla_unet/weights_download.sh")
+        os.system("bash models/demos/vanilla_unet/weights_download.sh")
 
     state_dict = torch.load(
         weights_path,
@@ -115,7 +115,7 @@ def test_vanilla_unet(device, reset_seeds):
     expected_compile_time, expected_inference_time = get_expected_times("vanilla_unet")
 
     prep_perf_report(
-        model_name="models/experimental/vanilla_unet",
+        model_name="models/demos/vanilla_unet",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
         inference_time=inference_time,
