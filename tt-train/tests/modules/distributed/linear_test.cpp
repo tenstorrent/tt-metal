@@ -64,8 +64,9 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -106,8 +107,9 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -144,8 +146,9 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
-    ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, shard_composer);
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -182,8 +185,9 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasInputParallel) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
-    ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, shard_composer);
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -217,8 +221,9 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasAllGather) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -257,8 +262,9 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasAllGather) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -293,8 +299,9 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNoAllGather) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -341,8 +348,9 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -390,8 +398,9 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
 
     xt::xarray<float> test_data = xt::random::rand({in_features * batch_size * sequence_length}, -1.F, 1.F)
                                       .reshape({batch_size, 1U, sequence_length, in_features});
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
     output->backward();
@@ -457,8 +466,9 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
 
     xt::xarray<float> test_data = xt::random::rand({in_features * batch_size * sequence_length}, -1.F, 1.F)
                                       .reshape({batch_size, 1U, sequence_length, in_features});
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
     output->backward();
@@ -524,8 +534,9 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
 
     xt::xarray<float> test_data = xt::random::rand({in_features * batch_size * sequence_length}, -1.F, 1.F)
                                       .reshape({batch_size, 1U, sequence_length, in_features});
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
     output->backward();

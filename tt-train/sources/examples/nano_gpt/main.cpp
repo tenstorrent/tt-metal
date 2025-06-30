@@ -702,26 +702,33 @@ int main(int argc, char **argv) {
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
                 if (device_config.enable_ddp) {
-                    auto data_xtensor = xt::adapt(data, {batch_size, 1U, 1U, sequence_length});
-                    auto data_composer = ttml::core::ShardXTensorToMesh<uint32_t>(device->shape(), 0);
+                    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
                     auto data_tensor =
-                        ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
-                            data_xtensor, device, data_composer, ttnn::Layout::ROW_MAJOR));
+                        ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                            data,
+                            ttml::core::create_shape({batch_size, 1, 1, sequence_length}),
+                            device,
+                            ttnn::Layout::ROW_MAJOR,
+                            mapper.get()));
 
-                    auto targets_xtensor = xt::adapt(targets, {batch_size, sequence_length});
-                    auto targets_composer = ttml::core::ShardXTensorToMesh<uint32_t>(device->shape(), 0);
-                    auto targets_tt_tensor = ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
-                        targets_xtensor, device, targets_composer, ttnn::Layout::ROW_MAJOR);
+                    auto targets_tt_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                        targets,
+                        ttml::core::create_shape({batch_size, sequence_length}),
+                        device,
+                        ttnn::Layout::ROW_MAJOR,
+                        mapper.get());
                     auto targets_tensor = ttml::autograd::create_tensor(targets_tt_tensor);
                     return {data_tensor, targets_tensor};
                 }
 
+                const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
                 auto data_tensor =
                     ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
                         data,
                         ttml::core::create_shape({batch_size, 1, 1, sequence_length}),
                         device,
-                        ttnn::Layout::ROW_MAJOR));
+                        ttnn::Layout::ROW_MAJOR,
+                        mapper.get()));
 
                 auto targets_tensor =
                     ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
