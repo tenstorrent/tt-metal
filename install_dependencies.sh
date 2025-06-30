@@ -202,7 +202,7 @@ init_packages() {
                 "clang"
                 "cmake"
                 "ninja-build"
-                "pkgconfig"
+                "pkgconf-pkg-config"
                 "cargo"
                 "pandoc"
                 "xz"
