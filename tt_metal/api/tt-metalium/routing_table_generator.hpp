@@ -79,3 +79,10 @@ struct hash<tt::tt_fabric::FabricNodeId> {
     }
 };
 }  // namespace std
+
+template <>
+struct fmt::formatter<tt::tt_fabric::FabricNodeId> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator;
+};
