@@ -12,21 +12,15 @@ namespace NAMESPACE {
 
 // Helper constexpr function to compute num_blocks_per_col
 constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) {
-    if (DST_ACCUM_MODE) {
-        for (uint32_t bct = 4; bct >= 1; --bct) {
-            if (per_core_block_tile_cnt % bct == 0) {
-                return per_core_block_tile_cnt / bct;
-            }
-        }
-    } else {
-        for (uint32_t bct = 8; bct >= 1; --bct) {
-            if (per_core_block_tile_cnt % bct == 0) {
-                return per_core_block_tile_cnt / bct;
-            }
+    const uint32_t max_bct = DST_ACCUM_MODE ? 4 : 8;
+
+    for (uint32_t bct = max_bct; bct >= 1; --bct) {
+        if (per_core_block_tile_cnt % bct == 0) {
+            return per_core_block_tile_cnt / bct;
         }
     }
 
-    return 1;  // fallback, though unreachable if per_core_block_tile_cnt ≥ 1
+    return 1;
 }
 
 void MAIN {
