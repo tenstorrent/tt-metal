@@ -120,7 +120,7 @@ void kernel_main() {
                     pkt_hdr_backward,
                     fabric_connection,
                     l1_read_addr,
-                    num_tiles_to_read_this_core * tensor0_page_size,
+                    static_cast<uint16_t>(num_tiles_to_read_this_core * tensor0_page_size),
                     num_tiles_to_read_next_core * tensor0_page_size);
             } else {  // call the normal writer function
                 write_and_advance_local_read_address_for_fabric_write(

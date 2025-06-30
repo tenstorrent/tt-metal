@@ -55,7 +55,7 @@ FORCE_INLINE void scatter_write_and_advance_local_read_address_for_fabric_write(
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
     FabricConnectionManager& fabric_connection,
     size_t& l1_read_addr,
-    uint32_t payload_size_bytes_first_core,
+    uint16_t payload_size_bytes_first_core,
     uint32_t payload_size_bytes_second_core) {
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const auto [dest_noc_xy_next_core, dest_addr_next_core] = get_noc_address_components(noc0_dest_noc_addr_next_core);
