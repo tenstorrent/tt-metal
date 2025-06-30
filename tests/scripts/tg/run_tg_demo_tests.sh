@@ -1,5 +1,7 @@
 #!/bin/bash
 
+export TT_METAL_FD_FABRIC=true
+
 run_tg_llama3_tests() {
   # Record the start time
   fail=0
@@ -88,6 +90,7 @@ run_tg_demo_tests() {
 
 fail=0
 main() {
+  export TT_METAL_FD_FABRIC=true
   # For CI pipeline - source func commands but don't execute tests if not invoked directly
   if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
     echo "Script is being sourced, not executing main function"
