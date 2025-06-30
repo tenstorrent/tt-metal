@@ -603,7 +603,7 @@ def test_sub_device_profiler():
     ARCH_NAME = os.getenv("ARCH_NAME")
     run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
-        "CommandQueueSingleCardFixture.TensixTestSubDeviceBasicPrograms",
+        "CommandQueueSingleCardSubDeviceFixture.TensixTestSubDeviceBasicPrograms",
     )
     run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",

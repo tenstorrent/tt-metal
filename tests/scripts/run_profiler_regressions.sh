@@ -6,6 +6,8 @@ source scripts/tools_setup_common.sh
 
 set -eo pipefail
 
+export TT_METAL_FD_FABRIC=true
+
 run_mid_run_tracy_push() {
     echo "Smoke test, checking tracy mid-run device data push for hangs"
     remove_default_log_locations
