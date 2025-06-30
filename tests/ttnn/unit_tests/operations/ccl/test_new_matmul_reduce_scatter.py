@@ -166,10 +166,20 @@ def run_reduce_scatter_impl(
         mm_input_tensor = torch.rand(mm_input_shape).bfloat16()
         input_tensors = torch.chunk(mm_input_tensor, num_devices, 3)
         torch_input_tensor_list.append(input_tensors)
-        tt_input_tensors = []
-        for j, t in enumerate(input_tensors):
-            tt_input_tensors.append(ttnn.Tensor(t, rs_input_dtype).to(layout))
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(t3k_mesh_device, mem_config_input)
+
+        input_tensor_mesh = ttnn.from_torch(
+            mm_input_tensor,
+            device=t3k_mesh_device,
+            layout=layout,
+            dtype=rs_input_dtype,
+            memory_config=mem_config_input,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                t3k_mesh_device,
+                ttnn.MeshMapperConfig(
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], ttnn.MeshShape(1, num_devices)
+                ),
+            ),
+        )
 
         tt_input_tensor_mesh_list.append(input_tensor_mesh)
 
