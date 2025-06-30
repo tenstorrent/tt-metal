@@ -187,21 +187,6 @@ inline auto any_row_broadcasted(const Tensor& a, const auto& b) {
 
     return false;
 }
-
-inline auto any_sharded_scalar(const Tensor& a, const auto& b) {
-    if constexpr (requires {
-                      b.get_logical_shape();
-                      b.is_sharded();
-                  }) {
-        const auto& a_shape = a.get_logical_shape();
-        const auto& b_shape = b.get_logical_shape();
-        return (a.is_sharded() or b.is_sharded()) and
-               ((a_shape[-2] == 1 and a_shape[-1] == 1) or (b_shape[-2] == 1 and b_shape[-1] == 1));
-    }
-
-    return false;
-}
-
 inline auto any_sharded_block_format(const Tensor& a, const auto& b) {
     if (a.is_sharded() and is_block_format(a.get_dtype())) {
         return true;
