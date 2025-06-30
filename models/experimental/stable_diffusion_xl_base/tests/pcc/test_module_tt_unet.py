@@ -75,8 +75,6 @@ def run_unet_model(
     encoder_shape,
     temb_shape,
     time_ids_shape,
-    conv_weights_dtype,
-    transformer_weights_dtype,
     iterations=1,
 ):
     unet = UNet2DConditionModel.from_pretrained(
@@ -87,12 +85,11 @@ def run_unet_model(
 
     torch_unet = unet
 
-    model_config = ModelOptimisations(conv_w_dtype=conv_weights_dtype)
+    model_config = ModelOptimisations()
     tt_unet = TtUNet2DConditionModel(
         device,
         state_dict,
         "unet",
-        transformer_weights_dtype=transformer_weights_dtype,
         model_config=model_config,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
@@ -180,8 +177,6 @@ def run_unet_model(
         ((1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
     ],
 )
-@pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_unet(
     device,
@@ -190,8 +185,6 @@ def test_unet(
     encoder_shape,
     temb_shape,
     time_ids_shape,
-    conv_weights_dtype,
-    transformer_weights_dtype,
     reset_seeds,
 ):
     run_unet_model(
@@ -201,6 +194,4 @@ def test_unet(
         encoder_shape,
         temb_shape,
         time_ids_shape,
-        conv_weights_dtype,
-        transformer_weights_dtype,
     )

@@ -32,7 +32,6 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 def test_resnetblock2d(
     device,
     temb_shape,
@@ -44,7 +43,6 @@ def test_resnetblock2d(
     block,
     pcc,
     reset_seeds,
-    conv_weights_dtype,
 ):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
@@ -59,7 +57,7 @@ def test_resnetblock2d(
     else:
         assert "Incorrect block name"
 
-    model_config = ModelOptimisations(conv_w_dtype=conv_weights_dtype)
+    model_config = ModelOptimisations()
     tt_resnet = TtResnetBlock2D(
         device,
         state_dict,
