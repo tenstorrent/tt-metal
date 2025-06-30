@@ -60,7 +60,7 @@ The L1 buffer is created with a size equal to the size of a single tile, which w
 
 .. code-block:: cpp
 
-constexpr uint32_t num_tiles = 50;
+  constexpr uint32_t num_tiles = 50;
   constexpr uint32_t tile_size = TILE_WIDTH * TILE_HEIGHT;
   constexpr uint32_t single_tile_size = sizeof(bfloat16) * tile_size;
   constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
@@ -169,9 +169,10 @@ The ``InterleavedAddrGenFast`` object handles bank addressing and page size auto
     }
 
 .. note::
-  ``InterleavedAddrGenFast`` is a helper class that simplifies the generation of addresses for interleaved buffers. It is feasable and sometimes needed to calculate addresses manually, espicially for complex data disctibution schemes. Without the use of the ``InterleavedAddrGenFast`` class. The kernel would look like this:
+  ``InterleavedAddrGenFast`` is a helper class that automatically handles address generation for interleaved buffers. For more complex data distribution patterns or when you need manual control over addressing, you can calculate addresses directly. Without using ``InterleavedAddrGenFast``, the kernel would look like this:
 
   .. code-block:: cpp
+
     constexpr std::uint32_t num_dram_banks = 6; // Number of DRAM banks on Wormhole
     for (uin32_t i = 0; i < num_tiles; i++) {
         // Round-robin bank selection
