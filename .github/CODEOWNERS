@@ -254,6 +254,7 @@ models/demos/yolov9c @tenstorrent/cse-developer-ttnn
 models/demos/yolov8x @tenstorrent/cse-developer-ttnn
 models/demos/yolov8s @tenstorrent/cse-developer-ttnn
 models/experimental/stable_diffusion_35_large/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn
+models/experimental/flux/ @tenstorrent/cse-developer-ttnn
 models/experimental/swin_s @tenstorrent/cse-developer-ttnn
 models/experimental/yolov7 @tenstorrent/cse-developer-ttnn
 
