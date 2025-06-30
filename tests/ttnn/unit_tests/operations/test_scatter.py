@@ -53,11 +53,10 @@ def select_torch_dtype(ttnn_dtype):
         ([1, 2, 3, 4, 5, 6, 7, 8], 0, [1, 2, 3, 4, 5, 6, 7, 8], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
         ([10, 50, 10, 50, 100], -1, [10, 50, 10, 50, 100], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
         ([50, 200], -1, [50, 200], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
-        ##################
-        # these cases fail due to the int32 transpose issue
-        # ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        # this fails due to https://github.com/tenstorrent/tt-metal/issues/24287
         # ([10, 50, 10, 50, 100], 0, [10, 50, 10, 50, 100], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
-        # ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
         ##################
         # these cases fail due to the to_layout precision issue (fp32 tiled <-> row-major) : #23405
         # ([10, 50, 10, 50, 100], -1, [10, 50, 10, 50, 100], ttnn.float32, ttnn.uint16, ttnn.Layout.TILE),

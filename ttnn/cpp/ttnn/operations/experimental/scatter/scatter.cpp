@@ -79,22 +79,6 @@ void check_support(
     const auto& input_shape = input_tensor.get_logical_shape();
     const auto& index_shape = index_tensor.get_logical_shape();
     const auto& source_shape = source_tensor.get_logical_shape();
-    // check if transpose int garbage case
-    TT_FATAL(
-        !(is_i32(input_dtype) && !is_last_dim(input_shape, dim)),
-        "Scatter doesn't work for i32 tensors and dim != -1 yet (see int32 transpose issues) - input tensor is {}.",
-        magic_enum::enum_name(input_dtype)
-    );
-    TT_FATAL(
-        !(is_i32(index_dtype) && !is_last_dim(index_shape, dim)),
-        "Scatter doesn't work for i32 tensors and dim != -1 yet (see int32 transpose issues) - index tensor is {}.",
-        magic_enum::enum_name(index_dtype)
-    );
-    TT_FATAL(
-        !(is_i32(source_dtype) && !is_last_dim(source_shape, dim)),
-        "Scatter doesn't work for i32 tensors and dim != -1 yet (see int32 transpose issues) - source tensor is {}.",
-        magic_enum::enum_name(source_dtype)
-    );
     // check if to_layout fp32 tiled precision case
     TT_FATAL(
         !(input_dtype == DataType::FLOAT32 && input_layout == Layout::TILE),
