@@ -70,14 +70,32 @@ def main() -> None:
         print("✅ No staged notebooks to process.")
         return
 
+    # Get all currently staged .py files (under OUTPUT_DIR)
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    staged_files = set(Path(f) for f in result.stdout.splitlines())
+    staged_py_files = {f for f in staged_files if f.suffix == ".py" and f.is_relative_to(OUTPUT_DIR)}
+
     new_files = []
     updated_files = []
 
     for notebook in staged_notebooks:
         output_file = OUTPUT_DIR / f"{notebook.stem}.py"
-        tmp_file = OUTPUT_DIR / f".tmp_{notebook.stem}.py"
 
-        convert_with_nbconvert(notebook, tmp_file)
+        # If the .py file is already staged, skip processing
+        if output_file in staged_py_files:
+            print(f"⏭ Skipping {notebook} — {output_file.name} already staged.")
+            continue
+
+        tmp_file = OUTPUT_DIR / f".tmp_{notebook.stem}.py"
+        try:
+            convert_with_nbconvert(notebook, tmp_file)
+        except subprocess.CalledProcessError:
+            print(f"⚠️ Failed to convert {notebook}, continuing.")
+            continue
 
         if not output_file.exists():
             shutil.move(str(tmp_file), str(output_file))
@@ -96,7 +114,7 @@ def main() -> None:
         print("🟢 Staged files:")
         for f in files_to_add:
             print(f" → {f}")
-        sys.exit(1)  # Exit with error code to indicate changes were made
+        sys.exit(1)  # Fail to force user to review
     else:
         print("✅ No changes to generated files.")
 
