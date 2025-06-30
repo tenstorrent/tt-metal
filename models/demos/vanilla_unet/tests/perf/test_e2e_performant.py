@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.vanilla_unet.runner.performant_runner import VanillaUNetPerformantRunner
+from models.demos.vanilla_unet.runner.performant_runner import VanillaUNetPerformantRunner
 from models.utility_functions import run_for_wormhole_b0
 
 
