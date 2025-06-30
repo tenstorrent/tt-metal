@@ -105,6 +105,7 @@ public:
             GTEST_SKIP();
         }
         DispatchFixture::DoSetUpTestSuite(24 * 1024);
+        num_devices_ = NumDevices();
     }
 
     void TearDown() override { DispatchFixture::TearDownTestSuite(); }
