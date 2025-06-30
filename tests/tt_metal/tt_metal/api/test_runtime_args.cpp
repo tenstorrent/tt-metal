@@ -453,16 +453,16 @@ TEST_F(DeviceFixture, TensixIllegalTooManyRuntimeArgs) {
         auto [program, kernel] = unit_tests::runtime_args::initialize_program_compute(
             this->devices_.at(id), core_range_set, 0, 0);  // Kernel isn't run here.
 
-        // Set 100 unique args, then try to set 300 common args and fail.
+        // Set 100 unique args, then try to set max_runtime_args + 1 common args and fail.
         std::vector<uint32_t> initial_runtime_args(100);
         SetRuntimeArgs(program, kernel, core_range_set, initial_runtime_args);
-        std::vector<uint32_t> common_runtime_args(300);
+        std::vector<uint32_t> common_runtime_args(tt::tt_metal::max_runtime_args + 1);
         EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, 0, common_runtime_args));
 
-        // Set 100 common args, then try to set another 300 unique args and fail.
+        // Set 100 common args, then try to set another tt::tt_metal::max_runtime_args + 1 unique args and fail.
         std::vector<uint32_t> more_common_runtime_args(100);
         SetCommonRuntimeArgs(program, kernel, more_common_runtime_args);
-        std::vector<uint32_t> more_unique_args(300);
+        std::vector<uint32_t> more_unique_args(tt::tt_metal::max_runtime_args + 1);
         EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, core_range_set, more_unique_args));
     }
 }
@@ -532,6 +532,52 @@ TEST_F(DeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
 
         unit_tests::runtime_args::verify_results(true, this->devices_.at(id), program, {}, common_rtas);
     }
+}
+
+TEST_F(DeviceFixture, TensixMaxRuntimeArgsCompute) {
+    auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    for (size_t max_runtime_args = 256; max_runtime_args < tt::tt_metal::max_runtime_args / 2;
+         max_runtime_args += 256) {
+        // *2 because we need max_runtime_args for both RTA and CRTA
+        for (unsigned int id = 0; id < num_devices_; id++) {
+            // First run the program with the initial runtime args
+            CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
+            CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
+            CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
+            std::vector<uint32_t> common_runtime_args;
+            for (size_t i = 0; i < max_runtime_args; ++i) {
+                common_runtime_args.push_back(1000 + i);
+            }
+            auto [program, kernel] = unit_tests::runtime_args::initialize_program_compute(
+                this->devices_.at(id), core_range_set, max_runtime_args, common_runtime_args.size());
+
+            std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
+            for (auto core_range : core_range_set.ranges()) {
+                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                        CoreCoord logical_core(x, y);
+                        // Generate an rt arg val based on x and y.
+                        uint32_t val_offset = x * 100 + y * 10;
+                        std::vector<uint32_t> runtime_args;
+                        runtime_args.reserve(max_runtime_args);
+                        for (size_t i = 0; i < max_runtime_args; ++i) {
+                            runtime_args.push_back(101 + val_offset + (i * 66));
+                        }
+                        SetRuntimeArgs(program, kernel, logical_core, runtime_args);
+                        core_to_rt_args[logical_core] = runtime_args;
+                    }
+                }
+            }
+
+            // Set common runtime args, automatically sent to all cores used by kernel.
+            SetCommonRuntimeArgs(program, kernel, common_runtime_args);
+
+            tt_metal::detail::LaunchProgram(this->devices_.at(id), program);
+            unit_tests::runtime_args::verify_results(
+                true, this->devices_.at(id), program, core_to_rt_args, common_runtime_args);
+        }
+    }
+    // Restore original max runtime args.
 }
 
 }  // namespace unit_tests::runtime_args
