@@ -19,9 +19,8 @@ void kernel_main() {
     constexpr uint32_t num_worker_cores = get_compile_time_arg_val(10);
 
     size_t rt_args_idx = 0;
-    uint32_t eth_channel = get_arg_val<uint32_t>(rt_args_idx++);
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx, eth_channel);
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     constexpr uint32_t fabric_packet_header_cb_id = 0;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =

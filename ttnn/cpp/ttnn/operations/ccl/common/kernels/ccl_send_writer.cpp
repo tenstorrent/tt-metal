@@ -131,8 +131,7 @@ void kernel_main() {
     const bool has_forward_fabric_connection = get_arg_val<uint32_t>(arg_idx++) != 0;
     auto forward_fabric_sender = [&]() {
         if (has_forward_fabric_connection) {
-            uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
-            return tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx, eth_channel);
+            return tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
         } else {
             return tt::tt_fabric::WorkerToFabricEdmSender();
         }
@@ -141,8 +140,7 @@ void kernel_main() {
     const bool has_backward_fabric_connection = get_arg_val<uint32_t>(arg_idx++) != 0;
     auto backward_fabric_sender = [&]() {
         if (has_backward_fabric_connection) {
-            uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
-            return tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx, eth_channel);
+            return tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
         } else {
             return tt::tt_fabric::WorkerToFabricEdmSender();
         }

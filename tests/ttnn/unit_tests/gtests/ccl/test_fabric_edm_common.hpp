@@ -2995,7 +2995,9 @@ void Run1DFabricPacketSendTest(
                             link,
                             program,
                             {worker_core},
-                            rt_args_out);
+                            rt_args_out,
+                            CoreType::WORKER,
+                            true);
                     } else {
                         const auto [connection, eth_channel] =
                             local_device_fabric_handle->uniquely_connect_worker(device, direction);

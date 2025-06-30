@@ -58,7 +58,8 @@ void append_fabric_connection_rt_args(
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
-    CoreType core_type = CoreType::WORKER);
+    CoreType core_type = CoreType::WORKER,
+    const bool device_init_fabric = false);
 
 FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id);
 

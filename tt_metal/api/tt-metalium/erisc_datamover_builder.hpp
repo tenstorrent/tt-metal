@@ -308,6 +308,14 @@ void append_worker_to_fabric_edm_sender_rt_args(
     size_t sender_worker_teardown_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out);
+
+// TODO: will be deprecated
+void append_worker_to_fabric_edm_sender_rt_args(
+    const SenderWorkerAdapterSpec& connection,
+    size_t sender_worker_flow_control_semaphore_id,
+    size_t sender_worker_teardown_semaphore_id,
+    size_t sender_worker_buffer_index_semaphore_id,
+    std::vector<uint32_t>& args_out);
 size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args, size_t starting_arg_idx = 0);
 
 class FabricEriscDatamoverBuilder {

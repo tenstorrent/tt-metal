@@ -1033,7 +1033,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
 
 std::vector<uint32_t> generate_edm_connection_rt_args(
     const tt::tt_fabric::SenderWorkerAdapterSpec& connection_info,
-    tt::tt_fabric::chan_id_t eth_channel,
+    tt::tt_fabric::chan_id_t eth_channel, // TODO: delete
     Program &program,
     CoreRangeSet worker_cores) {
     std::vector<uint32_t> new_rt_args;
@@ -1041,8 +1041,7 @@ std::vector<uint32_t> generate_edm_connection_rt_args(
     auto worker_teardown_semaphore_id = CreateSemaphore(program, worker_cores, 0);
     auto worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_cores, 0);
     tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
-        // connection_info,
-        eth_channel,
+        connection_info,
         worker_flow_control_semaphore_id,
         worker_teardown_semaphore_id,
         worker_buffer_index_semaphore_id,

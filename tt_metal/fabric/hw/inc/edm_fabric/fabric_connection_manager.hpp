@@ -78,10 +78,8 @@ public:
         connection_manager.connection_flags = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++) != 0)
                                               << FORWARD_CONNECTION_FLAG_OFFSET;
         if (connection_manager.has_forward_connection()) {
-            uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
             connection_manager.forward_fabric_sender =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
-                    arg_idx, eth_channel);
+                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             if constexpr (connect) {
                 connection_manager.forward_fabric_sender.open_start();
             }
@@ -89,10 +87,8 @@ public:
         connection_manager.connection_flags |= static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++) != 0)
                                                << BACKWARD_CONNECTION_FLAG_OFFSET;
         if (connection_manager.has_backward_connection()) {
-            uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
             connection_manager.backward_fabric_sender =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
-                    arg_idx, eth_channel);
+                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             if constexpr (connect) {
                 connection_manager.backward_fabric_sender.open_start();
             }

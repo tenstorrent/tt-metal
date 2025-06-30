@@ -74,9 +74,8 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fwd_packet_header;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* bwd_packet_header;
 
-    uint32_t eth_channel = get_arg_val<uint32_t>(rt_args_idx++);
     fwd_fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx, eth_channel);
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     fwd_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
 

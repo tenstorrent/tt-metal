@@ -65,24 +65,59 @@ struct WorkerToFabricEdmSenderImpl {
     WorkerToFabricEdmSenderImpl() = default;
 
     template <ProgrammableCoreType my_core_type>
-    static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx, uint32_t eth_channel) {
-        tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
-            reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
-        const auto& conn = connection_info->connections[eth_channel];
-
+    static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
+        uint32_t direction;
+        WorkerXY edm_worker_xy(0, 0);
+        uint32_t edm_buffer_base_addr;
+        uint32_t num_buffers_per_channel;
+        uint32_t edm_l1_sem_id;
+        uint32_t edm_connection_handshake_l1_addr;
+        uint32_t edm_worker_location_info_addr;
+        uint32_t buffer_size_bytes;
+        uint32_t edm_copy_of_wr_counter_addr;
 
-        const auto direction = conn.edm_direction;
-        const WorkerXY edm_worker_xy = WorkerXY::from_uint32(conn.edm_noc_xy);
-        const auto edm_buffer_base_addr = conn.edm_buffer_base_addr;
-        const uint8_t num_buffers_per_channel = conn.num_buffers_per_channel;
-        const size_t edm_l1_sem_id = conn.edm_l1_sem_addr;
-        const auto edm_connection_handshake_l1_addr = conn.edm_connection_handshake_addr;
-        const auto edm_worker_location_info_addr = conn.edm_worker_location_info_addr;
-        const uint16_t buffer_size_bytes = conn.buffer_size_bytes;
-        const auto edm_copy_of_wr_counter_addr = conn.buffer_index_semaphore_id;
-        // TODO: remove
-        // arg_idx += 9;
+        bool use_l1_data = get_arg_val<uint32_t>(arg_idx++) == 1;
+        if (use_l1_data) {
+            uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
+            tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
+                reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+            const auto& conn = connection_info->connections[eth_channel];
+
+            direction = conn.edm_direction;
+            edm_worker_xy = WorkerXY::from_uint32(conn.edm_noc_xy);
+            edm_buffer_base_addr = conn.edm_buffer_base_addr;
+            num_buffers_per_channel = conn.num_buffers_per_channel;
+            edm_l1_sem_id = conn.edm_l1_sem_addr;
+            edm_connection_handshake_l1_addr = conn.edm_connection_handshake_addr;
+            edm_worker_location_info_addr = conn.edm_worker_location_info_addr;
+            buffer_size_bytes = conn.buffer_size_bytes;
+            edm_copy_of_wr_counter_addr = conn.buffer_index_semaphore_id;
+            // DPRINT << "Using L1 data for EDM connection\n";
+            // DPRINT << "eth_channel: " << static_cast<uint32_t>(eth_channel) << "\n";
+        } else {
+            direction = get_arg_val<uint32_t>(arg_idx++);
+            edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
+            edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
+            num_buffers_per_channel = get_arg_val<uint32_t>(arg_idx++);
+            edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
+            edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
+            edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
+            buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
+            edm_copy_of_wr_counter_addr = get_arg_val<uint32_t>(arg_idx++);
+            // DPRINT << "Using runtime args for EDM connection\n";
+        }
+
+        // compare with args passed in
+        // DPRINT << "direction: " << static_cast<uint32_t>(direction) << "\n";
+        // DPRINT << "edm_worker_xy: " << static_cast<uint32_t>(edm_worker_xy.to_uint32()) << "\n";
+        // DPRINT << "edm_buffer_base_addr: " << static_cast<uint32_t>(edm_buffer_base_addr) << "\n";
+        // DPRINT << "num_buffers_per_channel: " << static_cast<uint32_t>(num_buffers_per_channel) << "\n";
+        // DPRINT << "edm_l1_sem_id: " << static_cast<uint32_t>(edm_l1_sem_id) << "\n";
+        // DPRINT << "edm_connection_handshake_l1_addr: " << static_cast<uint32_t>(edm_connection_handshake_l1_addr) <<
+        // "\n"; DPRINT << "edm_worker_location_info_addr: " << static_cast<uint32_t>(edm_worker_location_info_addr) <<
+        // "\n"; DPRINT << "buffer_size_bytes: " << static_cast<uint32_t>(buffer_size_bytes) << "\n"; DPRINT <<
+        // "edm_copy_of_wr_counter_addr: " << static_cast<uint32_t>(edm_copy_of_wr_counter_addr) << "\n";
 
         const auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
 
