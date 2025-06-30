@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 
 from functools import partial
 
@@ -14,7 +14,7 @@ from models.utility_functions import (
 )
 
 
-class TtRobertaSelfOutput(nn.Module):
+class TtRobertaSelfOutput(LightweightModule):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
         self.mem_config = ttnn.L1_MEMORY_CONFIG

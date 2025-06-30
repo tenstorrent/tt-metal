@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 from typing import (
     Dict,
     List,
@@ -13,7 +13,7 @@ from models.experimental.ssd.tt.ssd_classification_head import TtSSDclassificati
 from models.experimental.ssd.tt.ssd_regression_head import TtSSDregressionhead
 
 
-class TtSSDLiteHead(nn.Module):
+class TtSSDLiteHead(LightweightModule):
     def __init__(
         self,
         config,

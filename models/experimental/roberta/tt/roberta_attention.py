@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 
 from typing import Optional, Tuple
 
@@ -13,7 +13,7 @@ from models.experimental.roberta.tt.roberta_self_output import TtRobertaSelfOutp
 
 
 # Copied from transformers.models.bert.modeling_bert.BertAttention with Bert->Roberta
-class TtRobertaAttention(nn.Module):
+class TtRobertaAttention(LightweightModule):
     def __init__(self, config, state_dict, base_address, device, position_embedding_type=None):
         super().__init__()
         self.device = device

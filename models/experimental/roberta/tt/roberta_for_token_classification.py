@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-import torch.nn as nn
 
 from typing import Optional, Tuple, Union
 from dataclasses import dataclass
@@ -22,7 +22,7 @@ class TtTokenClassifierOutput:
     attentions: ttnn.Tensor = None
 
 
-class TtRobertaForTokenClassification(nn.Module):
+class TtRobertaForTokenClassification(LightweightModule):
     def __init__(self, config, state_dict, base_address, device, reference_model):
         super().__init__()
         self.mem_config = ttnn.L1_MEMORY_CONFIG
