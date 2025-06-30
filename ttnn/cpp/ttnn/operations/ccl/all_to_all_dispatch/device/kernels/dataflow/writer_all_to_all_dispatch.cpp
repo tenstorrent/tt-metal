@@ -9,18 +9,6 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 
-inline void send_packet(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-    uint64_t noc_dest_addr,
-    uint32_t source_l1_buffer_address,
-    uint32_t packet_payload_size_bytes,
-    tt::tt_fabric::WorkerToFabricEdmSender& connection) {
-    connection.wait_for_empty_write_slot();
-    connection.send_payload_without_header_non_blocking_from_address(
-        source_l1_buffer_address, packet_payload_size_bytes);
-    connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
-
 template <uint32_t mesh_cols, uint32_t mesh_rows, int axis>
 bool is_configured_target(uint32_t src_chip_id, uint32_t dest_chip_id) {
     // axis is the direction along which we are allowed to send packets
@@ -45,24 +33,6 @@ enum eth_chan_directions {
     SOUTH = 3,
     COUNT = 4,
 };*/
-
-inline eth_chan_directions get_direction(
-    uint32_t src_chip_id, uint32_t dest_chip_id, uint32_t mesh_cols, uint32_t mesh_rows) {
-    // if along the same row, we go east or west
-    eth_chan_directions direction = eth_chan_directions::COUNT;
-    if (src_chip_id / mesh_cols == dest_chip_id / mesh_cols) {
-        direction = src_chip_id < dest_chip_id ? eth_chan_directions::EAST : eth_chan_directions::WEST;
-    }
-    // if along the same column, we go north or south
-    else if (src_chip_id % mesh_cols == dest_chip_id % mesh_cols) {
-        direction = src_chip_id > dest_chip_id ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
-    }
-    // if not along the same row or column, we go north or south; north if dest_chip_id is smaller than src_chip_id
-    else {
-        direction = src_chip_id > dest_chip_id ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
-    }
-    return direction;
-}
 
 // Insert helper that handles the local-device metadata path
 inline void dispatch_metadata_local_device(
@@ -90,8 +60,7 @@ inline void dispatch_metadata_remote_device(
     uint64_t global_noc_semaphore_address,
     volatile PACKET_HEADER_TYPE* metadata_packet_header,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections) {
-    uint32_t route = static_cast<uint32_t>(get_direction(src_chip_id, dest_chip_id, mesh_cols, mesh_rows));
-    DPRINT << "Using route " << route << " from " << src_chip_id << " to " << (uint32_t)dest_chip_id << ENDL();
+    uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
     fabric_set_unicast_route(
@@ -137,7 +106,7 @@ inline void dispatch_input_remote_device(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* token_unicast_packet_header) {
     // Clear the header buffer region.
-    uint32_t route = static_cast<uint32_t>(get_direction(src_chip_id, dest_chip_id, mesh_cols, mesh_rows));
+    uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
     fabric_set_unicast_route(
@@ -221,10 +190,12 @@ void kernel_main() {
 
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
-    constexpr std::array<bool, 4> directions = DIRECTIONS;
 
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
-    for (uint32_t i = 0; i < 4; i++) {
+    constexpr uint32_t num_directions = 4;
+    constexpr std::array<bool, num_directions> directions = DIRECTIONS;
+
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_directions> fabric_connections;
+    for (uint32_t i = 0; i < directions.size(); i++) {
         if (directions[i] == true) {
             fabric_connections[i] =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
@@ -252,7 +223,7 @@ void kernel_main() {
 
     uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
 
-    for (uint32_t i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < directions.size(); i++) {
         if (directions[i] == true) {
             fabric_connections[i].open_finish();
         }
@@ -310,9 +281,7 @@ void kernel_main() {
 
     // Send our selected experts tensor to all other devices and signal that we are done dispatching the input tokens
     // with a semaphore
-    DPRINT << "Global semaphore address value: " << *(uint32_t*)global_semaphore_address << ENDL();
     uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
-    DPRINT << "Sending metadata" << ENDL();
     for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
         uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
         uint64_t metadata_write_addr = get_noc_addr(global_token, metadata_addr_gen);
@@ -326,8 +295,6 @@ void kernel_main() {
                     token_indices_address, metadata_write_addr, metadata_page_size, global_noc_semaphore_address);
             } else if (is_configured_target<mesh_cols, mesh_rows, axis>(src_chip_id, dest_chip_ids[d])) {
                 // dispatch the metadata to the remote device and increment the remote device's copy of the semaphore
-                // DPRINT << "dispatching metadata from " << src_chip_id << " to device " << d << " with fabric id " <<
-                // (uint32_t) dest_chip_ids[d] << ENDL();
                 dispatch_metadata_remote_device(
                     src_chip_id,
                     dest_chip_ids[d],
@@ -345,7 +312,7 @@ void kernel_main() {
     }
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
-    for (uint32_t i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < directions.size(); i++) {
         if (directions[i] == true) {
             fabric_connections[i].close();
         }
