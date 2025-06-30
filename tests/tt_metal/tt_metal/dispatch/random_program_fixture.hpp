@@ -299,7 +299,8 @@ private:
 
         if (is_eth) {
             max_index = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);;
+                            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) -
+                        1;
         }
 
         const uint32_t num = this->generate_random_num(0, max_index);
