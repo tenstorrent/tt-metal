@@ -1166,17 +1166,9 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
                 if (rtoptions_.get_fd_fabric()) {
                     // Last link reserved for dispatch
                     // Only need fabric routers in the same tunnel
-                    const auto is_mmio_device = [&]() {
-                        return cluster_desc_->is_chip_mmio_capable(connnected_chip_id);
-                    };
-                    const auto is_same_tunnel = [&]() {
-                        return chip_id == get_associated_mmio_device(connnected_chip_id);
-                    };
+                    const auto is_mmio_device = [&](int id) { return cluster_desc_->is_chip_mmio_capable(id); };
                     const auto is_last_link = [&]() { return num_reserved_cores == num_cores_to_reserve - 1; };
-                    // TG: MMIO device is a gateway and still need to reserve both tunnels
-                    if (is_galaxy_cluster() && is_mmio_device()) {
-                        // Keep reserving below...
-                    } else if (is_last_link() && is_same_tunnel()) {
+                    if (is_last_link() && is_mmio_device(chip_id) && is_mmio_device(connnected_chip_id)) {
                         num_reserved_cores++;
                         break;
                     }
