@@ -24,7 +24,6 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize("weights_dtype", [ttnn.bfloat16])
 def test_attention(
     device,
     input_shape,
@@ -35,7 +34,6 @@ def test_attention(
     num_attn_heads,
     out_dim,
     reset_seeds,
-    weights_dtype,
 ):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
@@ -56,7 +54,6 @@ def test_attention(
         query_dim,
         num_attn_heads,
         out_dim,
-        weights_dtype=weights_dtype,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_encoder_tensor = (
