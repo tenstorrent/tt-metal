@@ -43,8 +43,8 @@ class Yolov11Conv2D:
             packer_l1_acc=True,
             math_approx_mode=True,
         )
+        self.activation_dtype = activation_dtype
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=activation_dtype,
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
@@ -101,6 +101,7 @@ class Yolov11Conv2D:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.activation_dtype,
         )
         hw = output_height * output_width
         if x.shape[2] != hw:
