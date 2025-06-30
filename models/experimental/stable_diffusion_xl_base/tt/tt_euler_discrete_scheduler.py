@@ -271,18 +271,10 @@ class TtEulerDiscreteScheduler(nn.Module):
         # Upcast to avoid precision issues when computing prev_sample
         # sample = sample.to(torch.float32)
 
-        # leaving gamma calculus just in case we hit it
-        # sigma = self.sigmas[self.step_index]
-        # gamma = min(s_churn / (len(self.sigmas) - 1), 2**0.5 - 1) if s_tmin <= sigma <= s_tmax else 0.0
-        # assert gamma == 0, "gamma > 0 is not supported in this version"
-        # tt_sigma = self.tt_sigmas[self.step_index]
-        # sigma_hat = ttnn.to_layout(tt_sigma, layout=ttnn.TILE_LAYOUT)
-
         # 1. compute predicted original sample (x_0) from sigma-scaled predicted noise
         # NOTE: "original_sample" should not be an expected prediction_type but is left in for
         # backwards compatibility
         assert self.prediction_type == "epsilon"
-        # pred_original_sample = sample - model_output * self.tt_sigma_step
 
         # 2. Convert to an ODE derivative
         rec = ttnn.reciprocal(self.tt_sigma_step)
@@ -295,12 +287,7 @@ class TtEulerDiscreteScheduler(nn.Module):
 
         prev_sample = ttnn.add_(sample, model_output)
 
-        # Cast sample back to model compatible dtype
-        # prev_sample = prev_sample.to(model_output.dtype)
-
-        # Note: Host code is done separately because of tracing
-        # upon completion increase step index by one
-        # self.step_index += 1
+        # Note: Step index inc moved out of step func as it is done on host
 
         # Note: We return None for pred_original_sample since it is never used
         return (prev_sample, None)

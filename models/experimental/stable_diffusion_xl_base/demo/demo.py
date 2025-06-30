@@ -198,27 +198,13 @@ def run_demo_inference(
         tt_time_ids=[negative_add_time_ids, add_time_ids],
     )
 
-    ttnn_added_cond_kwargs = [
-        [
-            {
-                "text_embeds": ttnn_add_text_embed[0],
-                "time_ids": tt_time_ids_device[0],
-            },
-            {
-                "text_embeds": ttnn_add_text_embed[1],
-                "time_ids": tt_time_ids_device[1],
-            },
-        ]
-        for ttnn_add_text_embed in tt_add_text_embeds
-    ]
-
     logger.info("Performing warmup run, to make use of program caching in actual inference...")
     prepare_input_tensors(
         [
             tt_latents,
             *tt_prompt_embeds[0],
-            ttnn_added_cond_kwargs[0][0]["text_embeds"],
-            ttnn_added_cond_kwargs[0][1]["text_embeds"],
+            tt_add_text_embeds[0][0],
+            tt_add_text_embeds[0][1],
         ],
         [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
     )
@@ -249,8 +235,8 @@ def run_demo_inference(
             [
                 tt_latents,
                 *tt_prompt_embeds[0],
-                ttnn_added_cond_kwargs[0][0]["text_embeds"],
-                ttnn_added_cond_kwargs[0][1]["text_embeds"],
+                tt_add_text_embeds[0][0],
+                tt_add_text_embeds[0][1],
             ],
             [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
         )
@@ -286,8 +272,8 @@ def run_demo_inference(
             [
                 tt_latents,
                 *tt_prompt_embeds[iter],
-                ttnn_added_cond_kwargs[iter][0]["text_embeds"],
-                ttnn_added_cond_kwargs[iter][1]["text_embeds"],
+                tt_add_text_embeds[iter][0],
+                tt_add_text_embeds[iter][1],
             ],
             [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
         )
@@ -312,13 +298,14 @@ def run_demo_inference(
             tid_vae=tid_vae,
         )
 
+        logger.info(f"Image gen for {batch_size} prompts completed in {profiler.get('image_gen')[-1]:.2f} seconds")
         logger.info(
             f"Denoising loop for {batch_size} promts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
         )
         logger.info(
             f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
         )
-        profiler.clear()
+        
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
                 break

@@ -117,12 +117,6 @@ def run_unet_inference(
     if isinstance(prompts, str):
         prompts = [prompts]
 
-    # In case of classifier free guidance this is set:
-    # - guidance_scale = 5.0
-    # - 2 runs of unet per iteration
-    # For non classifier free guidance do:
-    # - guidance_scale = 1.0
-    # - 1 run of unet per iteration
     guidance_scale = 5.0
 
     # 0. Set up default height and width for unet
@@ -260,20 +254,6 @@ def run_unet_inference(
         tt_time_ids=[negative_add_time_ids, add_time_ids],
     )
 
-    ttnn_added_cond_kwargs = [
-        [
-            {
-                "text_embeds": ttnn_add_text_embed[0],
-                "time_ids": tt_time_ids_device[0],
-            },
-            {
-                "text_embeds": ttnn_add_text_embed[1],
-                "time_ids": tt_time_ids_device[1],
-            },
-        ]
-        for ttnn_add_text_embed in tt_add_text_embeds
-    ]
-
     prompt_embeds = [torch.cat([t1, t2], dim=0) for t1, t2 in zip(negative_prompt_embeds, prompt_embeds)]
     add_text_embeds = [torch.cat([t1, t2], dim=0) for t1, t2 in zip(negative_pooled_prompt_embeds, add_text_embeds)]
     add_time_ids = [torch.cat([t1, t2], dim=0) for t1, t2 in zip(negative_add_time_ids, add_time_ids)]
@@ -285,8 +265,8 @@ def run_unet_inference(
         [
             tt_latents,
             *tt_prompt_embeds[0],
-            ttnn_added_cond_kwargs[0][0]["text_embeds"],
-            ttnn_added_cond_kwargs[0][1]["text_embeds"],
+            tt_add_text_embeds[0][0],
+            tt_add_text_embeds[0][1],
         ],
         [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
     )
@@ -310,8 +290,8 @@ def run_unet_inference(
         [
             tt_latents,
             *tt_prompt_embeds[0],
-            ttnn_added_cond_kwargs[0][0]["text_embeds"],
-            ttnn_added_cond_kwargs[0][1]["text_embeds"],
+            tt_add_text_embeds[0][0],
+            tt_add_text_embeds[0][1],
         ],
         [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
     )
@@ -339,8 +319,8 @@ def run_unet_inference(
             [
                 tt_latents,
                 *tt_prompt_embeds[iter],
-                ttnn_added_cond_kwargs[iter][0]["text_embeds"],
-                ttnn_added_cond_kwargs[iter][1]["text_embeds"],
+                tt_add_text_embeds[iter][0]["text_embeds"],
+                tt_add_text_embeds[iter][1]["text_embeds"],
             ],
             [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
         )
