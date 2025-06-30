@@ -7,8 +7,6 @@ add_library(TT::STL ALIAS tt_stl)
 #        public API that is pushing C++20 on consumers
 target_compile_features(tt_stl INTERFACE cxx_std_20)
 
-add_compile_options(-Wno-unused-variable)
-
 target_sources(
     tt_stl
     INTERFACE
