@@ -57,7 +57,7 @@ class TtAttention(nn.Module):
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
         norm_weights = state_dict[f"{module_path}.group_norm.weight"]
@@ -93,10 +93,7 @@ class TtAttention(nn.Module):
         self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, ttnn.bfloat16)
 
     def forward(self, input_tensor, input_shape, encoder_hidden_states=None):
-        B, C, H, W = input_shape
-
         hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-        print(f"Shape: {[B, C, H, W]}; Grid: {self.norm_core_grid}; Blocks: {self.num_out_blocks}")
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -117,12 +114,9 @@ class TtAttention(nn.Module):
             hidden_states,
             self.tt_qkv_weights,
             bias=self.tt_qkv_bias,
-            # memory_config=memory_config,
             dtype=ttnn.bfloat16,
-            # compute_kernel_config=self.q_compute_kernel_config,
-            # program_config=self.q_program_config,
+            compute_kernel_config=self.compute_kernel_config,
         )
-        # qkv_fused = ttnn.sharded_to_interleaved(qkv_fused, ttnn.L1_MEMORY_CONFIG)
 
         (
             q_heads,
