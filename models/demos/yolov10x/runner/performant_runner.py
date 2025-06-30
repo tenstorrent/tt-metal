@@ -4,7 +4,7 @@
 
 
 import ttnn
-from models.experimental.yolov10x.runner.performant_runner_infra import YOLOv10PerformanceRunnerInfra
+from models.demos.yolov10x.runner.performant_runner_infra import YOLOv10PerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

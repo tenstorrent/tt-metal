@@ -6,10 +6,10 @@
 import cv2
 import numpy as np
 import torch
+from ultralytics import YOLO
 
 import ttnn
-from models.experimental.yolov10x.reference.yolov10x import YOLOv10
-from ultralytics import YOLO
+from models.demos.yolov10x.reference.yolov10x import YOLOv10
 
 YOLOV10_BOXES_PCC = 0.99
 YOLOV10_CONFS_PCC = 0.9

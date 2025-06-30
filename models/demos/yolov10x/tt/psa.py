@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.yolov10x.tt.attention import TtnnAttention
-from models.experimental.yolov10x.tt.common import Conv, deallocate_tensors
+from models.demos.yolov10x.tt.attention import TtnnAttention
+from models.demos.yolov10x.tt.common import Conv, deallocate_tensors
 from models.experimental.yolo_common.yolo_utils import concat
 
 

@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
+
 import torch
 import torch.nn as nn
-import copy
 
 
 def dist2bbox(distance, anchor_points, xywh=True, dim=-1):

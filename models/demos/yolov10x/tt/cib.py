@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.yolov10x.tt.common import Conv
+from models.demos.yolov10x.tt.common import Conv
 
 
 class TtnnCIB:
