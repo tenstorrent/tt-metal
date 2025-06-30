@@ -619,7 +619,7 @@ class TtImagePoolingAttn:
                         padding=[0, 0],
                         dilation=[1, 1],
                         memory_config=ttnn.L1_MEMORY_CONFIG,
-                        applied_shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                        applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     ),
                     (bs, num_patches, -1),
                 ),
