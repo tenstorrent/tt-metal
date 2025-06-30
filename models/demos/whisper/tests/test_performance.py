@@ -38,7 +38,6 @@ def get_expected_times(model_name):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_performance(
     device,
-    use_program_cache,
     model_name,
     batch_size,
     decoder_sequence_size,

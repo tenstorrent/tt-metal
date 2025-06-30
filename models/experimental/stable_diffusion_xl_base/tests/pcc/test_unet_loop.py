@@ -137,13 +137,12 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, cla
     )
 
     # 2. Load tt_unet and tt_scheduler
-    tt_model_config = ModelOptimisations(conv_w_dtype=ttnn.bfloat16)
+    tt_model_config = ModelOptimisations()
     tt_unet = TtUNet2DConditionModel(
         ttnn_device,
         pipeline.unet.state_dict(),
         "unet",
         model_config=tt_model_config,
-        transformer_weights_dtype=ttnn.bfloat16,
     )
     tt_scheduler = TtEulerDiscreteScheduler(
         ttnn_device,
@@ -462,7 +461,6 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, cla
 )
 def test_unet_loop(
     device,
-    use_program_cache,
     is_ci_env,
     prompt,
     num_inference_steps,

@@ -410,9 +410,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_sender_kernel_rt_a
 }
 
 
-static void convert_slices_to_ccl_commands() {
 
-}
 
 // Moved to (and updated in) ccl_worker_builder.cpp
 /*

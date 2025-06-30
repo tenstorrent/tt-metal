@@ -83,7 +83,6 @@ int main(int argc, char **argv) {
         config.max_steps);
 
     auto *device = &ctx.get_device();
-    device->enable_program_cache();
 
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     auto should_be_divisible_by = (enable_tp ? num_devices : 1U) * 32U;

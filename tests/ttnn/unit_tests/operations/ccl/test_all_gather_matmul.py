@@ -56,11 +56,20 @@ def run_all_gather_matmul_on_t3000_impl(
     ##### Create input tensor for the all gather #####
     _, _, _, hidden_dim = ag_output_shape
     input_tensor = torch.randn(ag_output_shape).float()
-    input_tensors = torch.chunk(input_tensor, num_devices, dim)
-    tt_input_tensors = []
-    for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(tensor=t, data_type=ag_input_dtype, tile=ttnn.Tile(tile)).to(layout))
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(t3k_mesh_device, mem_config_input)
+    input_tensor_mesh = ttnn.from_torch(
+        input_tensor,
+        device=t3k_mesh_device,
+        layout=layout,
+        dtype=ag_input_dtype,
+        memory_config=mem_config_input,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            t3k_mesh_device,
+            ttnn.MeshMapperConfig(
+                [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+            ),
+        ),
+        tile=ttnn.Tile(tile),
+    )
 
     ##### Create the weight matrix for the matmul #####
     if use_bias:
@@ -345,7 +354,6 @@ def test_all_gather_matmul_on_t3000_post_commit(
     mem_config_input,
     mem_config_ag,
     mem_config_mm,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_matmul_on_t3000_impl(
@@ -440,7 +448,6 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
     mem_config_input,
     mem_config_ag,
     mem_config_mm,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_matmul_on_t3000_impl(
@@ -567,7 +574,6 @@ def test_all_gather_matmul_1d_llama_selfout_on_t3000_post_commit(
     mem_config_ag,
     mem_config_mm,
     mem_config_weights,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_matmul_on_t3000_impl(

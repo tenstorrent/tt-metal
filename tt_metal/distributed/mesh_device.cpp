@@ -336,9 +336,6 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     for (auto device : submesh->get_devices()) {
         dynamic_cast<Device*>(device)->set_mesh_device(submesh);
     }
-    if (program_cache_->is_enabled()) {
-        submesh->enable_program_cache();
-    }
 
     submeshes_.push_back(submesh);
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->id(), submesh_shape, offset);
@@ -541,6 +538,11 @@ void MeshDevice::enable_program_cache() {
     program_cache_->enable();
 }
 
+void MeshDevice::clear_program_cache() {
+    log_info(tt::LogMetal, "Clearing program cache on MeshDevice {}", this->id());
+    program_cache_->clear();
+}
+
 void MeshDevice::disable_and_clear_program_cache() {
     log_info(tt::LogMetal, "Disabling and clearing program cache on MeshDevice {}", this->id());
     if (program_cache_->is_enabled()) {
@@ -563,10 +565,6 @@ void MeshDevice::load_sub_device_manager(SubDeviceManagerId sub_device_manager_i
 }
 void MeshDevice::clear_loaded_sub_device_manager() { sub_device_manager_tracker_->clear_loaded_sub_device_manager(); }
 
-std::tuple<SubDeviceManagerId, SubDeviceId> MeshDevice::create_sub_device_manager_with_fabric(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    return sub_device_manager_tracker_->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
-}
 CoreCoord MeshDevice::dram_grid_size() const {
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->dram_grid_size(); });

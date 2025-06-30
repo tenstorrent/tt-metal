@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -23,7 +23,7 @@ from models.tt_transformers.tt.common import (
     sample_host,
 )
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
-from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
+from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -458,7 +458,6 @@ def test_demo_text(
     optimizations,
     stop_at_eos,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     ci_only,
     data_parallel,
@@ -848,7 +847,7 @@ def test_demo_text(
     logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
     logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
     logger.info("")
-    logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token*1000, 2)}ms")
+    logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token * 1000, 2)}ms")
     logger.info(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
@@ -857,13 +856,12 @@ def test_demo_text(
     supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
     supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
 
-    tt_device_name = model_args[0].device_name
+    tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
     model_name = model_args[0].base_model_name
+    model_device_key = f"{tt_device_name}_{model_name}"
 
     if model_name in supported_models:
         assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
-
-        model_device_key = f"{tt_device_name}_{model_name}"
 
         # Set the target prefill t/s for every combination of device and model (optional - for tracking benchmark data)
         dict_target_prefill_tok_s = {}  # TODO: add prefill targets for model-device combinations
@@ -917,6 +915,7 @@ def test_demo_text(
             "decode_t/s": target_decode_tok_s,
             "decode_t/s/u": target_decode_tok_s_u,
         }
+
     else:
         logger.info(f"Model {model_name} does not have performance targets set")
         targets = {}
@@ -963,3 +962,58 @@ def test_demo_text(
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )
+
+        # check measurements against CI performance targets -- for batch size 32
+        if global_batch_size == 32:
+            logger.info(
+                f"Checking measurements against CI performance targets for batch size 32 of {model_name} on {tt_device_name}"
+            )
+            # Targets set to 0.95x observed values for decode rates (higher is better)
+            # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
+            ci_target_ttft = {
+                # N150 targets (milliseconds) - lower is better
+                "N150_Llama3.2-1B": 26,
+                "N150_Llama3.2-3B": 57,
+                "N150_Llama3.1-8B": 112,
+                "N150_Mistral-7B": 106,
+                # N300 targets
+                "N300_Qwen2.5-7B": 150,
+                # T3K targets
+                "T3K_Llama3.1-70B": 181,
+                "T3K_Qwen2.5-72B": 211,
+                "T3K_Qwen3-32B": 470,
+            }
+            ci_target_decode_tok_s_u = {
+                # N150 targets - higher is better
+                "N150_Llama3.2-1B": 58,
+                "N150_Llama3.2-3B": 35,
+                "N150_Llama3.1-8B": 21,
+                "N150_Mistral-7B": 23,
+                # N300 targets
+                "N300_Qwen2.5-7B": 10,
+                # T3K targets
+                "T3K_Llama3.1-70B": 14,
+                "T3K_Qwen2.5-72B": 13,
+                "T3K_Qwen3-32B": 11,
+            }
+
+            # Only call verify_perf if the model_device_key exists in the targets
+            ci_targets = {}
+            if model_device_key in ci_target_ttft:
+                ci_targets["prefill_time_to_token"] = ci_target_ttft[model_device_key] / 1000  # convert to seconds
+            if model_device_key in ci_target_decode_tok_s_u:
+                ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
+                # calculate from per-user rate
+                ci_targets["decode_t/s"] = ci_target_decode_tok_s_u[model_device_key] * global_batch_size
+
+            if ci_targets:  # Only verify performance if we have targets for this model/device combination
+                verify_perf(
+                    measurements,
+                    ci_targets,
+                    high_tol_percentage=1.15,
+                    expected_measurements={k: True for k in ci_targets.keys()},
+                )
+            else:
+                logger.warning(
+                    f"No CI performance targets found for {model_device_key}. Skipping performance verification."
+                )

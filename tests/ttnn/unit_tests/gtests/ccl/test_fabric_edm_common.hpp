@@ -18,6 +18,7 @@
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
@@ -2117,15 +2118,18 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     // INPUT TENSOR setup
     log_info(tt::LogTest, "setting up input tensors");
     size_t page_size = tile_size(DataFormat::Float16);
-    std::vector<Tensor> device_input_tensors;
-    for (size_t i = 0; i < num_devices; i++) {
-        auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to_layout(layout);
 
-        device_input_tensors.push_back(t);
-    }
-    // Need to make it a mesh tensor for use with the op
-    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{})
-                                         .to_device(test_fixture.mesh_device_.get());
+    // Replicate the tensor across (1, num_devices) submesh.
+    const Tensor input_mesh_tensor = ttnn::distributed::distribute_tensor(
+        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::BFLOAT16), input_shape).to_layout(layout),
+        *ttnn::distributed::create_mesh_mapper(
+            *test_fixture.mesh_device_,
+            ttnn::distributed::MeshMapperConfig{
+                .placements =
+                    {ttnn::distributed::MeshMapperConfig::Replicate{},
+                     ttnn::distributed::MeshMapperConfig::Replicate{}},
+                .mesh_shape_override = MeshShape{1, num_devices}}),
+        *test_fixture.mesh_device_);
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
 
     log_info(tt::LogTest, "launching op");
@@ -2181,15 +2185,18 @@ void run_ring_all_gather_with_persistent_fabric(
     // INPUT TENSOR setup
     log_info(tt::LogTest, "setting up input tensors");
     size_t page_size = tile_size(DataFormat::Float16);
-    std::vector<Tensor> device_input_tensors;
-    for (size_t i = 0; i < num_devices; i++) {
-        auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to_layout(layout);
 
-        device_input_tensors.push_back(t);
-    }
-    // Need to make it a mesh tensor for use with the op
-    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{})
-                                         .to_device(test_fixture.mesh_device_.get());
+    // Replicate the tensor across (1, num_devices) submesh.
+    const Tensor input_mesh_tensor = ttnn::distributed::distribute_tensor(
+        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::BFLOAT16), input_shape).to_layout(layout),
+        *ttnn::distributed::create_mesh_mapper(
+            *test_fixture.mesh_device_,
+            ttnn::distributed::MeshMapperConfig{
+                .placements =
+                    {ttnn::distributed::MeshMapperConfig::Replicate{},
+                     ttnn::distributed::MeshMapperConfig::Replicate{}},
+                .mesh_shape_override = MeshShape{1, num_devices}}),
+        *test_fixture.mesh_device_);
 
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
@@ -2957,8 +2964,17 @@ void Run1DFabricPacketSendTest(
                 rt_args_out.push_back(is_connected_in_direction);
                 if (is_connected_in_direction) {
                     if (use_device_init_fabric) {
+                        const auto& device_fabric_node_id =
+                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+                        const auto& connected_device_fabric_node_id =
+                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_device->id());
                         tt::tt_fabric::append_fabric_connection_rt_args(
-                            device->id(), connected_device->id(), link, program, {worker_core}, rt_args_out);
+                            device_fabric_node_id,
+                            connected_device_fabric_node_id,
+                            link,
+                            program,
+                            {worker_core},
+                            rt_args_out);
                     } else {
                         const auto connection = local_device_fabric_handle->uniquely_connect_worker(device, direction);
                         const auto new_rt_args = ttnn::ccl::worker_detail::generate_edm_connection_rt_args(
@@ -3400,8 +3416,11 @@ void generate_1d_fabric_on_full_mesh_worker_rt_args(
                                      std::vector<uint32_t>& rt_args_out) {
         rt_args_out.push_back(is_connected_in_direction);
         if (is_connected_in_direction) {
+            const auto& device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+            const auto& connected_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_device->id());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                device->id(), connected_device->id(), link, program, {worker_core}, rt_args_out);
+                device_fabric_node_id, connected_device_fabric_node_id, link, program, {worker_core}, rt_args_out);
         }
     };
 
@@ -4006,8 +4025,17 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
                     bool is_connected_in_direction, IDevice* connected_device, std::vector<uint32_t>& rt_args_out) {
                     rt_args_out.push_back(is_connected_in_direction);
                     if (is_connected_in_direction) {
+                        const auto& device_fabric_node_id =
+                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+                        const auto& connected_device_fabric_node_id =
+                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_device->id());
                         tt::tt_fabric::append_fabric_connection_rt_args(
-                            device->id(), connected_device->id(), l, program, {worker_core}, rt_args_out);
+                            device_fabric_node_id,
+                            connected_device_fabric_node_id,
+                            l,
+                            program,
+                            {worker_core},
+                            rt_args_out);
                     }
                 };
 

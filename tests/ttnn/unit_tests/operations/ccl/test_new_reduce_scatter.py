@@ -30,7 +30,6 @@ def run_reduce_scatter_impl(
     mem_config_input,
     mem_config_rs,
     rs_topology,
-    use_program_cache,
     num_iters=1,
     enable_trace=True,
 ):
@@ -105,10 +104,20 @@ def run_reduce_scatter_impl(
         rs_input_tensor = torch.rand(rs_global_input_shape).bfloat16()
         input_tensors = torch.chunk(rs_input_tensor, num_devices, dim)
         torch_input_tensor_list.append(input_tensors)
-        tt_input_tensors = []
-        for j, t in enumerate(input_tensors):
-            tt_input_tensors.append(ttnn.Tensor(t, rs_input_dtype).to(layout))
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(t3k_mesh_device, mem_config_input)
+
+        input_tensor_mesh = ttnn.from_torch(
+            rs_input_tensor,
+            device=t3k_mesh_device,
+            layout=layout,
+            dtype=rs_input_dtype,
+            memory_config=mem_config_input,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                t3k_mesh_device,
+                ttnn.MeshMapperConfig(
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+                ),
+            ),
+        )
 
         tt_input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -240,7 +249,6 @@ def test_reduce_scatter_async(
     mem_config_rs,
     enable_trace,
     num_iters,
-    use_program_cache,
     rs_topology,
 ):
     run_reduce_scatter_impl(
@@ -253,7 +261,6 @@ def test_reduce_scatter_async(
         layout,
         mem_config_input,
         mem_config_rs,
-        use_program_cache=use_program_cache,
         rs_topology=rs_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,

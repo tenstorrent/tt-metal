@@ -90,7 +90,7 @@ def test_full_float(device, input_shape, fill_value, dtype):
         ttnn.TILE_LAYOUT,  # Currently only support tile layout
     ],
 )
-def test_full_callback(device, input_shape, fill_value, layout, use_program_cache):
+def test_full_callback(device, input_shape, fill_value, layout):
     for i in range(2):
         torch_any = torch.randint(0, 100, (input_shape), dtype=torch.int32)
         torch_output = torch.full(input_shape, fill_value, dtype=torch.int32)
