@@ -142,7 +142,7 @@ def assert_with_ulp(
         expected_result (Union[ttnn.Tensor, torch.Tensor]): The expected reference tensor
         actual_result (Union[ttnn.Tensor, torch.Tensor]): The actual tensor to compare against the reference
         ulp_threshold (float, optional): Maximum tolerated ULP distance. Defaults to 10.
-        allow_nonfinite (bool, optional): If disabled, any non-finite value (NaN, +inf, -inf) will trigger assertion. If enabled, it will also compare NaNs, +inf and inf.
+        allow_nonfinite (bool, optional): If disabled, any non-finite value (NaN, +inf, -inf) will trigger an assertion. If enabled, differences between non-finite values at the same positions will trigger an assertion.
 
     Note:
         The length of a single ULP is measured using the difference between two consecutive floating point numbers.

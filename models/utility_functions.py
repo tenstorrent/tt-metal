@@ -488,10 +488,10 @@ def is_close(a, b, rtol=1e-2, atol=1e-2, max_mag=2.0, max_mag_fraction=0.02):
     return torch.all(or_abs_rel)
 
 
-def _comp_finite(golden, calculated):
+def _comp_nonfinite(golden, calculated):
     """
-    Check whether two tensors are nonfinite (nan, inf, -inf) at the same positions.
-    If they are, then check whether nonfinite elements are the same.
+    Returns True if tensors contain the same non-finite values (nan, inf, -inf) at the same positions. Also returns True if all elements are finite.
+    Returns False if non-finite values differ between both tensors.
     """
 
     # torch.equal(['nan'], ['nan']] => False
@@ -616,7 +616,7 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
     if not allow_nonfinite and not torch.all(torch.isfinite(calculated)):
         return False, "Calculated tensor contains non-finite values"
 
-    if not _comp_finite(golden, calculated):
+    if not _comp_nonfinite(golden, calculated):
         return False, "Tensors are not finite at the same positions"
     # nonfinite elments can intefere with ULP error calculation
     # To avoid this, replace nan, +inf, -inf with 0
