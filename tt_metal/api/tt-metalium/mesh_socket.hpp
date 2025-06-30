@@ -6,6 +6,7 @@
 
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/routing_table_generator.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -77,6 +78,8 @@ public:
     // Access the socket endpoint type (SENDER or RECEIVER).
     SocketEndpoint get_socket_endpoint_type() const { return socket_endpoint_type_; }
 
+    const tt::tt_fabric::FabricNodeId& get_fabric_node_id(SocketEndpoint endpoint, MeshCoordinate coord) const;
+
 private:
     MeshSocket(
         std::shared_ptr<MeshBuffer> data_buffer,
@@ -93,6 +96,7 @@ private:
     std::shared_ptr<MeshBuffer> config_buffer_;
     SocketConfig config_;
     SocketEndpoint socket_endpoint_type_;
+    std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> fabric_node_id_map_;
 };
 
 }  // namespace tt::tt_metal::distributed

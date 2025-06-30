@@ -55,4 +55,9 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     SocketEndpoint socket_endpoint_type,
     const std::shared_ptr<const multihost::DistributedContext>& context);
 
+std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
+    const SocketConfig& config,
+    const SocketPeerDescriptor& sender_descriptor,
+    const SocketPeerDescriptor& receiver_descriptor);
+
 }  // namespace tt::tt_metal::distributed

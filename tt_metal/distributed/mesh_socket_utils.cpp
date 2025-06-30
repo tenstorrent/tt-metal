@@ -306,11 +306,9 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(const MeshSocket& socket
         .exchange_tag = generate_descriptor_exchange_tag()  // Unique tag for this exchange
     };
     auto device = socket_endpoint.get_config_buffer()->device();
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     for (const auto& [sender_core, recv_core] : config.socket_connection_config) {
         const auto& device_coord = is_sender ? sender_core.device_coord : recv_core.device_coord;
-        auto fabric_node_id =
-            control_plane.get_fabric_node_id_from_physical_chip_id(device->get_device(device_coord)->id());
+        auto fabric_node_id = device->get_device_fabric_node_id(device_coord);
         local_endpoint_desc.mesh_ids.push_back(*fabric_node_id.mesh_id);
         local_endpoint_desc.chip_ids.push_back(fabric_node_id.chip_id);
     }
@@ -387,6 +385,25 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     // Validate that socket configs from remote and local descriptors match
     validate_remote_desc(desc, remote_desc);
     return remote_desc;
+}
+
+std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
+    const SocketConfig& config,
+    const SocketPeerDescriptor& sender_descriptor,
+    const SocketPeerDescriptor& receiver_descriptor) {
+    std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> fabric_node_id_map;
+    for (uint32_t i = 0; i < config.socket_connection_config.size(); ++i) {
+        const auto& connection = config.socket_connection_config[i];
+        fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::SENDER)].emplace(
+            connection.sender_core.device_coord,
+            tt::tt_fabric::FabricNodeId(
+                tt_fabric::MeshId{sender_descriptor.mesh_ids[i]}, sender_descriptor.chip_ids[i]));
+        fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::RECEIVER)].emplace(
+            connection.receiver_core.device_coord,
+            tt::tt_fabric::FabricNodeId(
+                tt_fabric::MeshId{receiver_descriptor.mesh_ids[i]}, receiver_descriptor.chip_ids[i]));
+    }
+    return fabric_node_id_map;
 }
 
 }  // namespace tt::tt_metal::distributed
