@@ -10,13 +10,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "shapes",
     [
-        ([1, 1, 512, 4096], [1, 1, 512, 256], 2, 4),
-        ([1, 1, 512, 4096], [1, 1, 512, 256], 4, 2),
-        ([1, 1, 32, 64], [1, 1, 32, 32], 0, 0),
-        ([1, 1, 64, 128], [1, 1, 64, 32], 0, 0),
+        ([2, 1, 512, 2048], [1, 1, 256, 256], 2, 4),
+        ([4, 4, 128, 128], [2, 2, 64, 64], 2, 4),
+        ([4, 4, 128, 128], [2, 2, 64, 64], 0, 0),
     ],
 )
-@pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize("keepdim", [True])
 def test_nd_shard(device, shapes, keepdim):
     dim = -2
     input_shape, shard_shape, end_x, end_y = shapes

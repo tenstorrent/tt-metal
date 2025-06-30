@@ -26,16 +26,11 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
     const DataFormat data_format = get_dataformat(cb_id_in0);
 
-#ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
     constexpr uint32_t scalar = get_compile_time_arg_val(4);
     generate_reduce_scaler(cb_id_in2, scalar);
-    constexpr uint32_t num_compile_time_args = 5;
-#else
-    constexpr uint32_t num_compile_time_args = 4;
-#endif
 
-    auto tensor_args = make_tensor_accessor_args<num_compile_time_args, 0>();
+    auto tensor_args = make_tensor_accessor_args<5, 0>();
     auto tensor_accessor = make_tensor_accessor_from_args(tensor_args, src_addr, tile_bytes);
 
     uint32_t w = curr_col_in_batch;

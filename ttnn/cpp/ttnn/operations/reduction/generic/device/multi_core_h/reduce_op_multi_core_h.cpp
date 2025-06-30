@@ -139,15 +139,12 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         reader_compile_time_args.insert(
             reader_compile_time_args.end(), tensor_args.compile_time_args.begin(), tensor_args.compile_time_args.end());
 
-        std::map<string, string> reader_defines;
-        reader_defines["REDUCE_SCALER"] = "1";
-
         reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     }
 
     tt_metal::Buffer* dst_buffer = output.buffer();
