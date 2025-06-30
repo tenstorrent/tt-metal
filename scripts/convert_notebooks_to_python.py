@@ -17,8 +17,8 @@ import subprocess
 import sys
 import shutil
 
-NOTEBOOKS_DIR = Path("docs/source/ttnn/ttnn/tutorials/2025_dx_rework")
-OUTPUT_DIR = Path("docs/source/ttnn/ttnn/tutorials/ttnn_tutorials_basic_python")
+NOTEBOOKS_DIR = Path("ttnn/tutorials/2025_dx_rework")
+OUTPUT_DIR = Path("ttnn/tutorials/basic_python")
 TEMPLATE_DIR = Path("scripts/nbconvert_template")
 TEMPLATE_NAME = "ttnn_examples_convert"
 
@@ -49,6 +49,7 @@ def convert_with_nbconvert(notebook: Path, output_tmp: Path) -> None:
             "python",
             f"--template={TEMPLATE_NAME}",
             f"--TemplateExporter.extra_template_basedirs={TEMPLATE_DIR}",
+            "--TemplateExporter.exclude_markdown=True",
             f"--output={output_tmp.name}",
             f"--output-dir={output_tmp.parent}",
             str(notebook),

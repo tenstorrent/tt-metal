@@ -3,9 +3,35 @@
 {% block header %}
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-
 {% endblock header %}
 
-{% block codecell %}
-{{ cell.source | ipython2python }}
-{% endblock codecell %}
+{% block body %}
+{# First pass: output all imports #}
+{%- for cell in nb.cells -%}
+{%- if cell.cell_type == 'code' -%}
+{%- for line in (cell.source | ipython2python).split('\n') -%}
+{%- set stripped = line.strip() -%}
+{%- if stripped.startswith('import ') or stripped.startswith('from ') %}
+{{ line }}
+{%- endif -%}
+{%- endfor -%}
+{%- endif -%}
+{%- endfor %}
+
+def main():
+{%- for cell in nb.cells -%}
+{%- if cell.cell_type == 'code' -%}
+{%- for line in (cell.source | ipython2python).split('\n') -%}
+{%- set stripped = line.strip() -%}
+{%- if stripped and not (stripped.startswith('import ') or stripped.startswith('from ')) %}
+    {{ line }}
+{%- elif not stripped %}
+
+{%- endif -%}
+{%- endfor -%}
+{%- endif -%}
+{%- endfor %}
+
+if __name__ == "__main__":
+    main()
+{% endblock body %}
