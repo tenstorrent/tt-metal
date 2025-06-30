@@ -1,11 +1,12 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
-from models.experimental.yolov7.reference.model import Yolov7_model
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
+
+import ttnn
+from models.demos.yolov7.reference.model import Yolov7_model
 
 
 def create_custom_preprocessor(device):

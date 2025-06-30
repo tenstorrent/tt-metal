@@ -7,32 +7,22 @@ import time
 import pytest
 import torch
 from loguru import logger
-
-import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.experimental.yolov7.reference.model import Yolov7_model
-from models.experimental.yolov7.reference.yolov7_utils import download_yolov7_weights
-from models.experimental.yolov7.tt.ttnn_yolov7 import ttnn_yolov7
-from models.experimental.yolov7.ttnn_yolov7_utils import (
-    create_custom_preprocessor,
-    load_weights,
-    create_yolov7_input_tensors,
-)
-from models.perf.device_perf_utils import (
-    check_device_perf,
-    prep_device_perf_report,
-    run_device_perf,
-)
+import models.demos.yolov7.reference.yolov7_model as yolov7_model
+import models.demos.yolov7.reference.yolov7_utils as yolov7_utils
+import ttnn
+from models.demos.yolov7.reference.model import Yolov7_model
+from models.demos.yolov7.reference.yolov7_utils import download_yolov7_weights
+from models.demos.yolov7.tt.ttnn_yolov7 import ttnn_yolov7
+from models.demos.yolov7.ttnn_yolov7_utils import create_custom_preprocessor, create_yolov7_input_tensors, load_weights
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     run_for_wormhole_b0,
 )
-
-import models.experimental.yolov7.reference.yolov7_utils as yolov7_utils
-import models.experimental.yolov7.reference.yolov7_model as yolov7_model
 
 sys.modules["models.common"] = yolov7_utils
 sys.modules["models.yolo"] = yolov7_model

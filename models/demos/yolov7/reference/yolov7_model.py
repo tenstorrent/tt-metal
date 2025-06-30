@@ -4,18 +4,19 @@
 
 import argparse
 import logging
-import sys
-from pathlib import Path
-from copy import deepcopy
 import math
+import sys
+from copy import deepcopy
+from pathlib import Path
 
 sys.path.append("./")
 logger = logging.getLogger(__name__)
 import torch
-from torch import nn
-from models.experimental.yolov7.reference.yolov7_utils import *
-from models.experimental.yolov7.reference.yolov7_config import config
 import yaml
+from torch import nn
+
+from models.demos.yolov7.reference.yolov7_config import config
+from models.demos.yolov7.reference.yolov7_utils import *
 
 try:
     import thop

@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
+from models.demos.yolov7.tt.common import TtYOLOv7Conv2D as Conv
 from models.experimental.yolo_common.yolo_utils import concat, determine_num_cores, get_core_grid_from_num_cores
-from models.experimental.yolov7.tt.common import TtYOLOv7Conv2D as Conv
 
 
 class ttnn_SPPCSPC:
