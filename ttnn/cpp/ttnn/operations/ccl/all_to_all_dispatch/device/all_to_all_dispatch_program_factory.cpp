@@ -462,7 +462,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         (uint32_t)fabric_max_packet_size,
     };
 
-    auto writer_compile_time_args = reader_compile_time_args;
+    const auto& writer_compile_time_args = reader_compile_time_args;
 
     auto input_buffer = input_tensor.buffer();
     auto indices_buffer = indices_tensor.buffer();
