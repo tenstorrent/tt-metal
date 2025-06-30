@@ -6,6 +6,18 @@ import ttnn
 from models.demos.vanilla_unet.ttnn.common import Conv, ConvTranspose
 
 
+def torch_to_ttnn(input, device=None):
+    input = ttnn.from_torch(input, ttnn.bfloat16, device=device)
+    return input
+
+
+def ttnn_to_torch(input):
+    input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
+    input = ttnn.from_device(input)
+    input = ttnn.to_torch(input)
+    return input
+
+
 class TtUnet:
     def __init__(
         self,

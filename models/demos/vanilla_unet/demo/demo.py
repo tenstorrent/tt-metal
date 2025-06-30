@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,13 +7,12 @@ import os
 
 import pytest
 import torch
-from loguru import logger
 from skimage.io import imsave
 from tqdm import tqdm
 
 import ttnn
-from models.demos.vanilla_unet.common import load_torch_model
 from models.demos.vanilla_unet.demo import demo_utils
+from models.demos.vanilla_unet.reference.unet import UNet
 from models.demos.vanilla_unet.runner.performant_runner import VanillaUNetPerformantRunner
 from models.utility_functions import run_for_wormhole_b0
 
@@ -31,38 +30,47 @@ from models.utility_functions import run_for_wormhole_b0
 @pytest.mark.parametrize("use_torch_model", [False])
 @run_for_wormhole_b0()
 def test_unet_demo_single_image(
-    device,
-    reset_seeds,
-    model_location_generator,
-    use_torch_model,
-    batch_size,
-    act_dtype,
-    weight_dtype,
-    resolution=(480, 640),
+    device, reset_seeds, model_location_generator, use_torch_model, batch_size, act_dtype, weight_dtype
 ):
+    weights_path = "models/demos/vanilla_unet/unet.pt"
+    if not os.path.exists(weights_path):
+        os.system("bash models/demos/vanilla_unet/weights_download.sh")
+
     pred_dir = "models/demos/vanilla_unet/demo/pred"
     # Create the directory if it doesn't exist
     if not os.path.exists(pred_dir):
         os.makedirs(pred_dir)
-    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
-        weights_path = "models/demos/vanilla_unet/unet.pt"
-    else:
-        weights_path = (
-            model_location_generator("vision-models/unet_vanilla", model_subdir="", download_if_ci_v2=True) / "unet.pt"
-        )
+
+    resolution = (480, 640)
+
     args = argparse.Namespace(
         device="cpu",  # Choose "cpu" or "cuda:0" based on your setup
-        batch_size=batch_size,
-        weights=weights_path,  # Path to the pre-trained model weights
+        batch_size=1,
+        weights="models/demos/vanilla_unet/unet.pt",  # Path to the pre-trained model weights
         image="models/demos/vanilla_unet/demo/images/TCGA_CS_4944_20010208_1.tif",  # Path to your input image
         mask="models/demos/vanilla_unet/demo/images/TCGA_CS_4944_20010208_1_mask.tif",  # Path to your input mask
-        image_size=resolution,  # Resize input image to this size
+        image_size=(480, 640),  # Resize input image to this size
         predictions="models/demos/vanilla_unet/demo/pred",  # Directory to save prediction results
     )
 
     loader = demo_utils.data_loader(args)  # loader will load just a single image
 
-    reference_model = load_torch_model(model_location_generator=model_location_generator)
+    state_dict = torch.load(
+        "models/demos/vanilla_unet/unet.pt",
+        map_location=torch.device("cpu"),
+    )
+    ds_state_dict = {k: v for k, v in state_dict.items()}
+
+    reference_model = UNet()
+
+    new_state_dict = {}
+    keys = [name for name, parameter in reference_model.state_dict().items()]
+    values = [parameter for name, parameter in ds_state_dict.items()]
+    for i in range(len(keys)):
+        new_state_dict[keys[i]] = values[i]
+
+    reference_model.load_state_dict(new_state_dict)
+    reference_model.eval()
 
     performant_runner = VanillaUNetPerformantRunner(
         device,
@@ -70,7 +78,7 @@ def test_unet_demo_single_image(
         act_dtype,
         weight_dtype,
         resolution=resolution,
-        model_location_generator=model_location_generator,
+        model_location_generator=None,
     )
 
     # Processing the data
@@ -100,7 +108,7 @@ def test_unet_demo_single_image(
         filepath = os.path.join(args.predictions, filename)
         imsave(filepath, image)
 
-    logger.info(f"Prediction saved to: {pred_dir}")
+    print("Prediction saved to:", filepath)
 
 
 @run_for_wormhole_b0()
@@ -116,37 +124,44 @@ def test_unet_demo_single_image(
 @pytest.mark.parametrize("use_torch_model", [False])
 @run_for_wormhole_b0()
 def test_unet_demo_imageset(
-    device,
-    reset_seeds,
-    model_location_generator,
-    use_torch_model,
-    batch_size,
-    act_dtype,
-    weight_dtype,
-    resolution=(480, 640),
+    device, reset_seeds, model_location_generator, use_torch_model, batch_size, act_dtype, weight_dtype
 ):
+    weights_path = "models/demos/vanilla_unet/unet.pt"
+    if not os.path.exists(weights_path):
+        os.system("bash models/demos/vanilla_unet/weights_download.sh")
     pred_dir = "models/demos/vanilla_unet/demo/pred_image_set"
     # Create the directory if it doesn't exist
     if not os.path.exists(pred_dir):
         os.makedirs(pred_dir)
-
-    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
-        weights_path = "models/demos/vanilla_unet/unet.pt"
-    else:
-        weights_path = (
-            model_location_generator("vision-models/unet_vanilla", model_subdir="", download_if_ci_v2=True) / "unet.pt"
-        )
+    resolution = ((480, 640),)
     args = argparse.Namespace(
         device="cpu",  # Choose "cpu" or "cuda:0" based on your setup
         batch_size=1,
-        weights=batch_size,  # Path to the pre-trained model weights
+        weights="models/demos/vanilla_unet/unet.pt",  # Path to the pre-trained model weights
         images="models/demos/vanilla_unet/demo/imageset",  # Path to your input image
-        image_size=resolution,  # Resize input image to this size
+        image_size=(480, 640),  # Resize input image to this size
         predictions="models/demos/vanilla_unet/demo/pred_image_set",  # Directory to save prediction results
     )
 
     loader = demo_utils.data_loader_imageset(args)
-    unet = load_torch_model(model_location_generator=model_location_generator)
+    state_dict = torch.load(
+        "models/demos/vanilla_unet/unet.pt",
+        map_location=torch.device("cpu"),
+    )
+    ds_state_dict = {k: v for k, v in state_dict.items()}
+
+    reference_model = UNet()
+
+    new_state_dict = {}
+    keys = [name for name, parameter in reference_model.state_dict().items()]
+    values = [parameter for name, parameter in ds_state_dict.items()]
+    for i in range(len(keys)):
+        new_state_dict[keys[i]] = values[i]
+
+    reference_model.load_state_dict(new_state_dict)
+    reference_model.eval()
+
+    unet = reference_model
     if not use_torch_model:
         ttnn_model = VanillaUNetPerformantRunner(
             device,
@@ -154,7 +169,7 @@ def test_unet_demo_imageset(
             act_dtype,
             weight_dtype,
             resolution=resolution,
-            model_location_generator=model_location_generator,
+            model_location_generator=None,
         )
 
     input_list = []
@@ -201,4 +216,4 @@ def test_unet_demo_imageset(
             filename = "{}-{}.png".format(p, str(s).zfill(2))
             filepath = os.path.join(args.predictions, filename)
             imsave(filepath, image)
-    logger.info(f"Predictions saved to: {pred_dir}")
+    print("Prediction saved to:", filepath)
