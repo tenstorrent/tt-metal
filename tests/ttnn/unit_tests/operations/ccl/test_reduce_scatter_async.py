@@ -167,8 +167,6 @@ def run_reduce_scatter_test(
     canonical_input_shape = per_chip_output_shape.copy()
     canonical_input_shape[dim] *= num_devices
 
-    tt_input_tensors = []
-
     numel = canonical_input_shape[0] * canonical_input_shape[1] * canonical_input_shape[2] * canonical_input_shape[3]
     input_tensors = [
         torch.rand(canonical_input_shape).bfloat16() if not debug else torch.ones(canonical_input_shape).bfloat16()
@@ -184,13 +182,18 @@ def run_reduce_scatter_test(
                             for xx in range(32):
                                 input_tensors[-1][w, z, y + yy, x + xx] = tile_id
                         tile_id += 1
-    for i, canonical_input_tensor in enumerate(input_tensors):
-        logger.info(f"Creating input tensor on device {mesh_device.get_device_ids()[i]}")
-        tt_input_tensors.append(ttnn.Tensor(canonical_input_tensor, input_dtype).to(layout))
 
-    assert len(tt_input_tensors) == num_devices
-
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
+    input_tensor_mesh = ttnn.from_torch(
+        torch.cat(input_tensors),
+        dtype=input_dtype,
+        layout=layout,
+        device=mesh_device,
+        memory_config=input_mem_config,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            mesh_device,
+            ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(0)], ttnn.MeshShape(1, num_devices)),
+        ),
+    )
 
     # Run the op
     if trace_mode:
