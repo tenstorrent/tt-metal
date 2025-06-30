@@ -165,13 +165,19 @@ def run_all_gather_impl(
     for i in range(num_iters):
         output_tensor = torch.rand(output_shape).bfloat16()
         output_tensor_goldens_list.append(output_tensor)
-        input_tensors = torch.chunk(output_tensor, num_devices, dim)
-        tt_input_tensors = []
-        for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout))
-            logger.info(f"using device {mesh_device.get_device_ids()[i]}")
-
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
+        input_tensor_mesh = ttnn.from_torch(
+            output_tensor,
+            device=mesh_device,
+            layout=layout,
+            dtype=input_dtype,
+            memory_config=input_mem_config,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                mesh_device,
+                ttnn.MeshMapperConfig(
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+                ),
+            ),
+        )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
