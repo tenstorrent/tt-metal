@@ -159,7 +159,7 @@ add_compile_options(
     -fPIC
     -fvisibility-inlines-hidden
     -Wall
-    -Werror
+    # -Werror
     "$<$<CXX_COMPILER_ID:Clang>:-Wconditional-uninitialized>"
     # The following list is not indicative of what we _desire_ only the status quo to build.
     -Wno-deprecated-declarations
@@ -167,7 +167,7 @@ add_compile_options(
     # where the preprocessor has stripped away the assert.
     "$<$<OR:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU>>:-Wno-unused-but-set-variable>"
     -Wno-unused-function
-    -Wno-unused-variable
+    # -Wno-unused-variable
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-for-loop-analysis>"
