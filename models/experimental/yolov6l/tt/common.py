@@ -59,7 +59,6 @@ class Yolov6l_Conv2D:
             enable_subblock_padding=False,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
-            input_channels_alignment=8 if use_shallow_conv_variant and not auto_shard else 32,
         )
         self.reshape = reshape
         config_override = None
@@ -178,9 +177,6 @@ class Yolov6x_Conv_T_2D:
             dtype=activations_dtype,
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
-            input_channels_alignment=(
-                16 if use_shallow_conv_variant or (self.input_channels == 16 and self.input_height == 115) else 32
-            ),
             deallocate_activation=False,
             enable_act_double_buffer=False,
             enable_split_reader=False,
