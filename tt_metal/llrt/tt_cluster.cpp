@@ -1330,10 +1330,14 @@ tt_cxy_pair Cluster::get_eth_core_for_dispatch_core(
 std::tuple<tt_cxy_pair, tt_cxy_pair> Cluster::get_eth_tunnel_core(
     chip_id_t upstream_chip_id, chip_id_t downstream_chip_id, EthRouterMode mode) const {
     for (const auto &[eth_core, router_mode] : this->device_eth_routing_info_.at(downstream_chip_id)) {
-
+        if (router_mode != mode) {
+            // Skip cores that are not in the requested mode. We might not even have info for some cores going outside
+            // of the cluster.
+            continue;
+        }
       // Check for connected chip id since one chip can be bi directional tunneling to multiple chips
         const auto [tunnel_chip_id, tunnel_eth_core] = this->get_connected_ethernet_core(std::make_tuple(downstream_chip_id, eth_core));
-        if (router_mode == mode and tunnel_chip_id == upstream_chip_id) {
+        if (tunnel_chip_id == upstream_chip_id) {
             return std::make_tuple(tt_cxy_pair(tunnel_chip_id, tunnel_eth_core), tt_cxy_pair(downstream_chip_id, eth_core));
         }
     }
