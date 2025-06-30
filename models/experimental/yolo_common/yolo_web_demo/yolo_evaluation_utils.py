@@ -284,6 +284,8 @@ def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None, padding=True, xyw
 def postprocess(preds, img, orig_imgs, batch=None, names=None):
     args = {"conf": 0.25, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
 
+    ts = time.time()
+
     preds = non_max_suppression(
         preds,
         args["conf"],
@@ -292,9 +294,7 @@ def postprocess(preds, img, orig_imgs, batch=None, names=None):
         max_det=args["max_det"],
         classes=args["classes"],
     )
-    print(len(preds))
-    print(len(preds[0]))
-    print(len(preds[0][0]))
+    t1 = time.time()
 
     results = []
     if batch:
@@ -304,6 +304,11 @@ def postprocess(preds, img, orig_imgs, batch=None, names=None):
     else:
         for pred, orig_img in zip(preds, orig_imgs):
             # pred[:, :4] = scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
-            results.append(Results(orig_img, names=names, boxes=pred))
+            results.append({"boxes": Boxes(pred)})
+            # results.append(Results(orig_img, names=names, boxes=pred))
+    te = time.time()
+    print("NMS time", t1 - ts)
+    print("Result time", te - t1)
+    print("Total time", te - ts)
 
     return results
