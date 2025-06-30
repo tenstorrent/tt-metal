@@ -508,9 +508,6 @@ std::optional<HostRankId> MeshGraph::get_host_rank_for_chip(MeshId mesh_id, chip
         return std::nullopt;
     }
 
-    const auto& mesh_shape = it->second.shape();
-    const auto& host_ranks_container = mesh_host_ranks_[*mesh_id];
-
     // Convert chip_id to mesh coordinates
     MeshCoordinate chip_coord = this->chip_to_coordinate(mesh_id, chip_id);
 

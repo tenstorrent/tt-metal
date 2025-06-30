@@ -55,6 +55,8 @@ def comment_out_unused_variables(log_file, num_variables_to_comment=5, output_lo
         filename=output_log_file, filemode="w", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
     )
     common_variable_types = [
+        "const",
+        "const auto",
         "int",
         "short",
         "long",

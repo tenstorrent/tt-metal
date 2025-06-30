@@ -89,7 +89,6 @@ std::mutex device_mutex;
 
 bool do_sync_on_close = true;
 std::set<chip_id_t> sync_set_devices;
-constexpr CoreCoord SYNC_CORE = {0, 0};
 
 void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
 #if defined(TRACY_ENABLE)

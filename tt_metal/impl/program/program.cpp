@@ -1087,7 +1087,6 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
             }
             const auto& binaries = KernelImpl::from(*kernel).binaries(
                 BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
-            const auto core_type = kernel->get_kernel_programmable_core_type();
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
