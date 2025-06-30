@@ -322,6 +322,7 @@ def gen_pytest_parametrize_args(parameters: dict, invalidate_function: Callable 
                 test_vector = {name: val for name, val in zip(test_argnames, arg_vals)}
                 should_skip, _reason = invalidate_function(test_vector)
                 if should_skip:
+                    logger.debug(f"Invalidate function returned {should_skip} for {test_vector} with reason {_reason}")
                     continue
             id_str = (
                 str(param_name)

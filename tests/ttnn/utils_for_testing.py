@@ -286,7 +286,7 @@ def profile_ttnn_call(device, function: Callable, *args: List[Any], **kwargs: Di
     opPerfData = get_device_data_generate_report(
         PROFILER_LOGS_DIR, outputFolder=None, date=None, nameAppend=None, export_csv=False, cleanup_device_log=True
     )
-    e2e_perf = {"avg_host_time": avg_host_time}
+    e2e_perf = {"AVG_HOST_TIME": avg_host_time}
     if opPerfData:
-        e2e_perf["avg_device_time"] = opPerfData[0]["DEVICE KERNEL DURATION [ns]"]
+        e2e_perf["AVG_DEVICE_TIME"] = opPerfData[0]["DEVICE KERNEL DURATION [ns]"]
     return results, e2e_perf
