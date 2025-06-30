@@ -68,13 +68,13 @@ constexpr uint32_t myRiscID = 0;
 #elif defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 constexpr uint32_t myRiscID = 0;
 #elif defined(COMPILE_FOR_NCRISC)
-constexpr uint32_t myRiscID = 1;
+constexpr uint32_t myRiscID = 0;
 #elif defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
-constexpr uint32_t myRiscID = 2;
+constexpr uint32_t myRiscID = 0;
 #elif defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1
-constexpr uint32_t myRiscID = 3;
+constexpr uint32_t myRiscID = 0;
 #elif defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 2
-constexpr uint32_t myRiscID = 4;
+constexpr uint32_t myRiscID = 0;
 #endif
 
 constexpr uint32_t Hash32_CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261)) {
@@ -429,16 +429,22 @@ struct profileScopeGuaranteed {
     static constexpr uint32_t end_index = (2 * index * PROFILER_L1_MARKER_UINT32_SIZE) + GUARANTEED_MARKER_2_H;
 
     static constexpr uint32_t TRACE_ID_SET_BIT = (1 << 31);
-    static constexpr uint32_t TRACE_STARTED_BIT = (1 << 30);
+    static constexpr uint32_t TRACE_ID_KERNEL_SET_BIT = (1 << 30);
+    static constexpr uint32_t TRACE_STARTED_BIT = (1 << 29);
     static_assert(start_index < CUSTOM_MARKERS);
     static_assert(end_index < CUSTOM_MARKERS);
     inline __attribute__((always_inline)) profileScopeGuaranteed() {
-        if (profiler_control_buffer[CURRENT_TRACE_ID] & TRACE_ID_SET_BIT) {
-            if constexpr (index == 0) {
+        if constexpr (index == 0) {
+            if (profiler_control_buffer[CURRENT_TRACE_ID] & TRACE_ID_SET_BIT) {
                 init_profiler();
+                mark_time_at_index_inlined(start_index, timer_id);
+                profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_ID_KERNEL_SET_BIT;
             }
-            profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_STARTED_BIT;
-            mark_time_at_index_inlined(start_index, timer_id);
+        } else {
+            if (profiler_control_buffer[CURRENT_TRACE_ID] & TRACE_ID_KERNEL_SET_BIT) {
+                mark_time_at_index_inlined(start_index, timer_id);
+                profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_STARTED_BIT;
+            }
         }
     }
     inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
@@ -547,7 +553,10 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScopeGuaranteed<hash, 0> zone = kernel_profiler::profileScopeGuaranteed<hash, 0>();
 
-#define DeviceZoneScopedMainChildN(name)
+#define DeviceZoneScopedMainChildN(name)                                       \
+    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+    kernel_profiler::profileScopeGuaranteed<hash, 1> zone = kernel_profiler::profileScopeGuaranteed<hash, 1>();
 
 #define DeviceZoneScopedSumN1(name)
 
