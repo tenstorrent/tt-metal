@@ -387,23 +387,23 @@ def run_all_to_all_dispatch_test(
         ttnn.synchronize_device(mesh_device)
 
         logger.info("Starting Trace perf test...")
-        profiler.start("reduce-scatter-trace-warmup")
+        profiler.start("all-to-all-dispatch-trace-warmup")
         if warmup_iters > 0:
             ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
             ttnn.release_trace(mesh_device, trace_id_warmup)
             ttnn.synchronize_device(mesh_device)
-        profiler.end("reduce-scatter-trace-warmup")
+        profiler.end("all-to-all-dispatch-trace-warmup")
 
         signpost("start")
-        profiler.start("reduce-scatter-trace")
+        profiler.start("all-to-all-dispatch-trace")
         ttnn.execute_trace(mesh_device, trace_id, blocking=False)
         ttnn.release_trace(mesh_device, trace_id)
         ttnn.synchronize_device(mesh_device)
-        profiler.end("reduce-scatter-trace")
+        profiler.end("all-to-all-dispatch-trace")
         signpost("stop")
 
-        time_taken = profiler.get_duration("reduce-scatter-trace") - profiler.get_duration(
-            "reduce-scatter-trace-warmup"
+        time_taken = profiler.get_duration("all-to-all-dispatch-trace") - profiler.get_duration(
+            "all-to-all-dispatch-trace-warmup"
         )
         logger.info(f"Time taken e2e: {time_taken} s")
     else:
@@ -608,7 +608,7 @@ def test_all_to_all_dispatch_no_trace(
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
-        (128, 3, 2),
+        (128, 10, 5),
         (1, 40, 10),
     ],
     ids=["s128", "s1"],
