@@ -19,7 +19,7 @@ inline void calculate_expm1() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        v = calculate_exponential_body_improved<APPROXIMATION_MODE>(v);
+        v = _sfpu_exp_21f_(v);
         dst_reg[0] = v - 1.0f;
         dst_reg++;
     }
