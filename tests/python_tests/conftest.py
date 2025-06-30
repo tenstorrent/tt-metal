@@ -11,9 +11,13 @@ from pathlib import Path
 import pytest
 import requests
 from requests.exceptions import ConnectionError, RequestException, Timeout
-from ttexalens.tt_exalens_lib import arc_msg
+from ttexalens.tt_exalens_lib import (
+    arc_msg,
+    write_words_to_device,
+)
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.format_arg_mapping import Mailbox
 from helpers.log_utils import _format_log
 
 
@@ -58,6 +62,17 @@ def set_chip_architecture():
         sys.exit(1)
     os.environ["CHIP_ARCH"] = architecture.value
     return architecture
+
+
+@pytest.fixture(autouse=True)
+def reset_mailboxes():
+    """Reset all core mailboxes before each test."""
+    core_loc = "0, 0"
+    reset_value = 0  # Constant - indicates the TRISC kernel run status
+    mailboxes = [Mailbox.Packer, Mailbox.Math, Mailbox.Unpacker]
+    for mailbox in mailboxes:
+        write_words_to_device(core_loc=core_loc, addr=mailbox.value, data=reset_value)
+    yield
 
 
 @pytest.fixture(scope="session", autouse=True)
