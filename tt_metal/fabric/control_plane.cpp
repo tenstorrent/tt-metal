@@ -130,6 +130,65 @@ static void build_golden_link_counts(
         }
     }
 };
+static std::unordered_map<std::uint64_t, std::pair<MeshId, MeshCoordinateRange>> uid_to_fabric_mesh_coord_range_map_;
+
+void ControlPlane::initialize_inter_host_eth_links() {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& inter_host_eth_connections = cluster.get_ethernet_connections_to_remote_mmio_devices();
+    std::cout << "ControlPlane: Inter-host Ethernet links:" << std::endl;
+
+    std::unordered_map<chip_id_t, std::unordered_map<tt_fabric::RoutingDirection, std::vector<tt_fabric::chan_id_t>>>
+        inter_host_eth_links_by_direction;
+    for (const auto& [chip_id, eth_links] : inter_host_eth_connections) {
+        std::cout << "Chip ID: " << chip_id << std::endl;
+        for (const auto& [eth_chan, link_info] : eth_links) {
+            const auto& [remote_chip_id, remote_eth_chan] = link_info;
+            std::cout << "  Eth Channel: " << eth_chan << ", Remote Chip ID: " << remote_chip_id
+                      << ", Remote Eth Channel: " << remote_eth_chan << std::endl;
+        }
+    }
+    auto ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    int world_size = *ctx->size();
+    std::vector<uint64_t> orig_bytes{0x123456789};
+
+    if (*ctx->rank() == 0) {
+        //  tt::stl::Span<uint64_t> view(orig_bytes.data(), orig_bytes.size());
+        ctx->send(
+            tt::stl::as_writable_bytes(tt::stl::Span<uint64_t>{orig_bytes.data(), orig_bytes.size()}),
+            tt::tt_metal::distributed::multihost::Rank{1},
+            tt::tt_metal::distributed::multihost::Tag{0});
+    } else if (*ctx->rank() == 1) {
+        std::vector<uint64_t> bytes(1);
+        ctx->recv(
+            tt::stl::as_writable_bytes(tt::stl::Span<uint64_t>{bytes.data(), bytes.size()}),
+            tt::tt_metal::distributed::multihost::Rank{0},
+            tt::tt_metal::distributed::multihost::Tag{0});
+        std::cout << "ControlPlane: Received bytes: " << std::hex << bytes[0] << std::dec << std::endl;
+    }
+    // TODO: Remove hardcoding
+    auto rank_0_coord_range = this->routing_table_generator_->mesh_graph->get_coord_range(MeshId{0}, HostRankId(0));
+    auto rank_1_coord_range = this->routing_table_generator_->mesh_graph->get_coord_range(MeshId{0}, HostRankId(1));
+    std::pair<MeshId, MeshCoordinateRange> mesh_id_and_coord_range_0{MeshId{0}, rank_0_coord_range};
+    std::pair<MeshId, MeshCoordinateRange> mesh_id_and_coord_range_1{MeshId{0}, rank_1_coord_range};
+    uid_to_fabric_mesh_coord_range_map_ = {
+        {0x43530333030304c, mesh_id_and_coord_range_1},
+        {0x434353130303132, mesh_id_and_coord_range_0},
+        {0x33530333030304c, mesh_id_and_coord_range_1},
+        {0x334353130303132, mesh_id_and_coord_range_0},
+        {0x13530333030304c, mesh_id_and_coord_range_1},
+        {0x234353130303132, mesh_id_and_coord_range_0},
+        {0x23530333030304c, mesh_id_and_coord_range_1},
+        {0x134353130303132, mesh_id_and_coord_range_0},
+        {0x135303330303044, mesh_id_and_coord_range_1},
+        {0x234353130303053, mesh_id_and_coord_range_0},
+        {0x435303330303044,
+         mesh_id_and_coord_range_1,
+         {0x434353130303053, mesh_id_and_coord_range_0},
+         {0x335303330303044, mesh_id_and_coord_range_1},
+         {0x334353130303053, mesh_id_and_coord_range_0},
+         {0x235303330303044, mesh_id_and_coord_range_1},
+         {0x134353130303053, mesh_id_and_coord_range_0}};
+}
 
 void ControlPlane::initialize_dynamic_routing_plane_counts(
     const IntraMeshConnectivity& intra_mesh_connectivity, tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
@@ -1021,6 +1080,48 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(tt_meta
                         add_ethernet_channel_to_router_mapping(MeshId{mesh_id}, chip_id, eth_core, edge.port_direction);
                     }
                 }
+            }
+        }
+    }
+
+    // Initialize mapping of fabric node id, port direction to physical ethernet channels for inter host links
+    for (const auto& [physical_chip_id, connections_to_remote_hosts] :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections_to_remote_mmio_devices()) {
+        // Loop over all connections to remote hosts, these are the ethernet channels that connect to devices controlled
+        // by remote hosts
+        auto local_uid = tt::tt_metal::MetalContext::instance().get_cluster().get_chip_uid(physical_chip_id);
+        const auto& local_mesh_id = uid_to_fabric_mesh_coord_range_map_.at(local_uid).first;
+        const auto& local_mesh_coord_range = uid_to_fabric_mesh_coord_range_map_.at(local_uid).second;
+        for (const auto& [local_eth_chan, remote_uid_eth_chan] : connections_to_remote_hosts) {
+            auto remote_uid = std::get<0>(remote_uid_eth_chan);
+            const auto& remote_mesh_id = uid_to_fabric_mesh_coord_range_map_.at(remote_uid).first;
+            // Connection is intramesh connnection
+            if (local_mesh_id == remote_mesh_id) {
+                const auto& remote_mesh_coord_range = uid_to_fabric_mesh_coord_range_map_.at(remote_uid).second;
+                TT_ASSERT(
+                    (local_mesh_coord_range.dims() == 2) && (remote_mesh_coord_range.dims() == 2),
+                    "Control Plane: Expected local and remote mesh coordinate ranges to be 2D, but got local {} and "
+                    "remote {}",
+                    local_mesh_coord_range,
+                    remote_mesh_coord_range);
+                TT_ASSERT(
+                    local_mesh_coord_range.shape() == remote_mesh_coord_range.shape(),
+                    "Control Plane: Expected local and remote mesh coordinate ranges to have the same shape, but got "
+                    "local {} and remote {}",
+                    local_mesh_coord_range,
+                    remote_mesh_coord_range);
+                add_ethernet_channel_to_router_mapping(
+                    fabric_node_id.mesh_id, fabric_node_id.chip_id, eth_core, RoutingDirection::C);
+            } else {
+                // Connection is intermesh connection
+                auto local_chip_id =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_chip_id_from_eth_chan(local_eth_chan);
+                auto fabric_node_id = FabricNodeId{local_mesh_id, local_chip_id};
+                auto eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_eth_core_for_channel(
+                    physical_chip_id, local_eth_chan, CoordSystem::VIRTUAL);
+                // Connection is intermesh connection
+                add_ethernet_channel_to_router_mapping(
+                    fabric_node_id.mesh_id, fabric_node_id.chip_id, eth_core, RoutingDirection::C);
             }
         }
     }
