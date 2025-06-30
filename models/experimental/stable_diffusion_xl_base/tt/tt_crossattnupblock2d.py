@@ -20,7 +20,6 @@ class TtCrossAttnUpBlock2D(nn.Module):
         num_attn_heads,
         out_dim,
         has_upsample=False,
-        transformer_weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -39,7 +38,6 @@ class TtCrossAttnUpBlock2D(nn.Module):
                     query_dim,
                     num_attn_heads,
                     out_dim,
-                    weights_dtype=transformer_weights_dtype,
                 )
             )
 

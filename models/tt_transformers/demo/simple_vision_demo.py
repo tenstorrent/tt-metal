@@ -245,7 +245,13 @@ def test_multimodal_demo_text(
             prefill_start = time.perf_counter()
             if batch_idx == 0:  # Get compile time for first batch
                 with profiler("compile_prefill", iteration=batch_idx):
-                    batch_logits, batch_xattn_masks, batch_text_masks = generator.prefill_forward(
+                    (
+                        batch_logits,
+                        prefill_batch_xattn_masks,
+                        prefill_batch_text_masks,
+                        decode_batch_xattn_masks,
+                        decode_batch_text_masks,
+                    ) = generator.prefill_forward(
                         vision_images,
                         vision_mask,
                         tokens,
@@ -256,7 +262,13 @@ def test_multimodal_demo_text(
 
             # Get cached prefill time
             with profiler("inference_prefill", iteration=batch_idx):
-                batch_logits, batch_xattn_masks, batch_text_masks = generator.prefill_forward(
+                (
+                    batch_logits,
+                    prefill_batch_xattn_masks,
+                    prefill_batch_text_masks,
+                    decode_batch_xattn_masks,
+                    decode_batch_text_masks,
+                ) = generator.prefill_forward(
                     vision_images,
                     vision_mask,
                     tokens,
@@ -285,8 +297,10 @@ def test_multimodal_demo_text(
                     logits = generator.decode_forward(
                         position_id,
                         next_token_tensor,
-                        batch_xattn_masks,
-                        batch_text_masks,
+                        prefill_batch_xattn_masks,
+                        prefill_batch_text_masks,
+                        decode_batch_xattn_masks,
+                        decode_batch_text_masks,
                         xattn_caches,
                         enable_trace=enable_trace,
                     )
@@ -371,13 +385,13 @@ def test_multimodal_demo_text(
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
         target_prefill_tok_s = {
-            "N300_Llama-3.2-11B": 10.8,
-            "T3K_Llama-3.2-11B": 6.5,
+            "N300_Llama-3.2-11B": 13.2,
+            "T3K_Llama-3.2-11B": 13.2,
             "T3K_Llama-3.2-90B": 3,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s_u = {
-            "N300_Llama-3.2-11B": 20,
+            "N300_Llama-3.2-11B": 21.5,
             "T3K_Llama-3.2-11B": 33,
             "T3K_Llama-3.2-90B": 6,
         }[f"{tt_device_name}_{base_model_name}"]

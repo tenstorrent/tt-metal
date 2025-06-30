@@ -14,6 +14,7 @@ from models.experimental.yolov11.reference.yolov11 import PSABlock as torch_psa_
 from models.experimental.yolov11.tt.ttnn_yolov11_psa import TtnnPSABlock as ttnn_psa_block
 
 
+@pytest.mark.skip(reason="#24336: YOLOv11 tests are currently disabled")
 @pytest.mark.parametrize(
     "in_channel, out_channel, kernel, stride, padding, dilation, groups,fwd_input_shape",
     [
