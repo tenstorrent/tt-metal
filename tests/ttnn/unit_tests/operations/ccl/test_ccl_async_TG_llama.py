@@ -238,7 +238,7 @@ def test_all_gather_tg_llama(
 @pytest.mark.parametrize(
     "num_iters, warmup_iters",
     [
-        (NUM_ITERATIONS, 0),
+        (NUM_ITERATIONS, 10),
     ],
 )
 @pytest.mark.parametrize("trace_mode", [True])

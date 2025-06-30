@@ -162,7 +162,7 @@ void kernel_main() {
                 static_cast<uint16_t>(32),
                 false);
             noc_async_writes_flushed();
-            noc_semaphore_inc(sema_noc_addr, 1);
+            // noc_semaphore_inc(sema_noc_addr, 1);
         } else {
             write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
@@ -188,6 +188,9 @@ void kernel_main() {
         cb_pop_front(cb0_id, num_tiles_to_read_this_core);
     }
 
+    for (uint32_t i = 0; i < core_id; i++) {
+        noc_semaphore_inc(safe_get_noc_addr(core_noc_x[i], core_noc_y[i], out_ready_sem_bank_addr), 1);
+    }
     // 2. mcast output ready semaphore
     /*
     uint64_t out_ready_sem_noc_addr_in_pkt =
