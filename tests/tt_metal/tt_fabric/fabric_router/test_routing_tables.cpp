@@ -34,7 +34,6 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::files
 std::unique_ptr<tt::tt_fabric::GlobalControlPlane> make_global_control_plane(
     const std::filesystem::path& graph_desc,
     const std::map<tt::tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-
     auto global_control_plane = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
         graph_desc.string(), logical_mesh_chip_id_to_physical_chip_id_mapping);
     auto& control_plane = global_control_plane->get_local_node_control_plane();

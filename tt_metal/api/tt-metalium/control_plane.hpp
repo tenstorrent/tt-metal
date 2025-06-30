@@ -5,6 +5,7 @@
 #pragma once
 
 #include <unordered_set>
+#include <functional>
 
 #include <tt_stl/span.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
@@ -29,7 +30,7 @@ public:
     explicit ControlPlane(
         const std::string& mesh_graph_desc_yaml_file,
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
-    ~ControlPlane();
+    virtual ~ControlPlane();
 
     // Printing functions
     void print_routing_tables() const;
@@ -142,6 +143,20 @@ public:
     uint64_t get_asic_id(chip_id_t chip_id) const;
 
 private:
+    // -----------------------------------------------------------------------------
+    // Helper: BFS distance map from a start chip to all reachable chips using the
+    // physical Ethernet topology. Returned distances are expressed in hop count.
+    // -----------------------------------------------------------------------------
+
+    // FIXME: For testing, need to override ----------------------------------------
+    // Virtual method for getting adjacent chips - can be overridden in test classes
+    virtual std::vector<chip_id_t> get_adjacent_chips(chip_id_t chip_id, std::uint32_t num_ports_per_side) const;
+    // Virtual method for getting user exposed chip ids - can be overridden in test classes
+    virtual std::set<chip_id_t> get_user_exposed_chip_ids() const;
+    std::unordered_map<chip_id_t, std::uint32_t> compute_distances(
+        chip_id_t start_chip, std::uint32_t num_ports_per_side) const;
+    // -----------------------------------------------------------------------------
+
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
@@ -169,6 +184,8 @@ private:
     routing_plane_id_t get_routing_plane_id(
         chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const;
 
+    std::vector<chip_id_t> get_mesh_physical_chip_ids(std::uint32_t mesh_ns_size, std::uint32_t mesh_ew_size) const;
+
     std::map<FabricNodeId, chip_id_t> get_logical_chip_to_physical_chip_mapping();
 
     // Tries to get a valid downstream channel from the candidate_target_chans
@@ -189,8 +206,6 @@ private:
 
     void validate_mesh_connections(MeshId mesh_id) const;
     void validate_mesh_connections() const;
-
-    std::vector<chip_id_t> get_mesh_physical_chip_ids(std::uint32_t mesh_ns_size, std::uint32_t mesh_ew_size) const;
 
     std::pair<FabricNodeId, chan_id_t> get_connected_mesh_chip_chan_ids(
         FabricNodeId fabric_node_id, chan_id_t chan_id) const;
