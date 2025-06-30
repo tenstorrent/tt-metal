@@ -457,7 +457,23 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     const auto cb_index_tensor_output =
         tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_output_cb_config);
 
-    constexpr uint32_t physical_core_lookup_table_cb_index = tt::CBIndex::c_6;
+    constexpr uint32_t value_tensor_peer_cb_index = tt::CBIndex::c_6;
+    const tt::tt_metal::CircularBufferConfig value_tensor_peer_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_scale_factor * value_tensor_tile_size, {{value_tensor_peer_cb_index, value_tensor_cb_data_format}})
+            .set_page_size(value_tensor_peer_cb_index, index_tensor_tile_size);
+    const auto cb_value_peer_tensor =
+        tt::tt_metal::CreateCircularBuffer(program, core_range, value_tensor_peer_cb_config);
+
+    constexpr uint32_t index_tensor_peer_cb_index = tt::CBIndex::c_7;
+    const tt::tt_metal::CircularBufferConfig index_tensor_peer_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_scale_factor * index_tensor_tile_size, {{index_tensor_peer_cb_index, index_tensor_cb_data_format}})
+            .set_page_size(index_tensor_peer_cb_index, index_tensor_tile_size);
+    const auto cb_index_tensor_peer =
+        tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_peer_cb_config);
+
+    constexpr uint32_t physical_core_lookup_table_cb_index = tt::CBIndex::c_8;
     const tt::tt_metal::CircularBufferConfig physical_core_lookup_table_cb_config =
         tt::tt_metal::CircularBufferConfig(
             physical_core_lookup_table_tile_size,
@@ -467,14 +483,15 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         tt::tt_metal::CreateCircularBuffer(program, core_range, physical_core_lookup_table_cb_config);
 
     // Semaphores
-    const uint32_t semaphore = CreateSemaphore(program, core_range, 0);  // TODO: change name as needed
-
+    const uint32_t semaphore_exchange_readers = CreateSemaphore(program, core_range, 0);
+    const uint32_t semaphore_exchange_writers = CreateSemaphore(program, core_range, 0);
     // Kernels
     const std::vector<uint32_t> reader_compile_time_args = {
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y,
         input_tensor_cb_index,
         index_tensor_output_cb_index,
+        index_tensor_peer_cb_index,
         physical_core_lookup_table_cb_index,
         input_tensor_is_dram,
         index_tensor_is_dram,
@@ -484,6 +501,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         number_of_tiles_per_core,
         all_core_utilization_count,
         !attributes.descending,
+        semaphore_exchange_readers,
     };
     const std::string reader_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
@@ -502,10 +520,13 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         index_tensor_cb_index,
         value_tensor_cb_index,
         value_tensor_is_dram,
+        value_tensor_peer_cb_index,
+        physical_core_lookup_table_cb_index,
         Wt,
         Ht,
         number_of_tiles_per_core,
         total_number_of_cores,
+        semaphore_exchange_readers,
     };
     const std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
@@ -527,7 +548,10 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         input_tensor_transposed_cb_index,
         index_tensor_transposed_cb_index,
         value_tensor_cb_index,
-        index_tensor_output_cb_index};
+        index_tensor_output_cb_index,
+        value_tensor_peer_cb_index,
+        index_tensor_peer_cb_index,
+    };
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_hybrid.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(

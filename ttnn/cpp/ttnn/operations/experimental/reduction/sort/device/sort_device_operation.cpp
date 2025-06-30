@@ -33,6 +33,7 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
         // Single-core implementation
         return sort::program::SortProgramFactorySingleRowSingleCore{};
     } else if (Wt <= total_number_of_tiles_for_hybrid_approach) {
+        std::cout << "Hybrid Sort" << std::endl;
         // Hybrid implementation
         return sort::program::SortProgramFactoryHybrid{};
     }

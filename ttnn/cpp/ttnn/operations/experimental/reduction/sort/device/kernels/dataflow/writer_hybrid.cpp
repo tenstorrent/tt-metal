@@ -7,6 +7,8 @@
 #include "debug/dprint.h"
 #include "debug/pause.h"
 
+#include "hybrid_common.hpp"
+
 #include <cstdint>
 
 FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
@@ -53,15 +55,25 @@ void kernel_main() {
     constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(1);
     constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(2);
     constexpr uint32_t value_tensor_cb_index = get_compile_time_arg_val(3);
-    constexpr bool value_tensor_is_dram = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t Wt = get_compile_time_arg_val(5);
-    constexpr uint32_t Ht = get_compile_time_arg_val(6);
-    constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(7);
-    constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(8);
+    constexpr uint32_t value_tensor_peer_cb_index = get_compile_time_arg_val(4);
+    constexpr uint32_t physical_core_lookup_table_cb_index = get_compile_time_arg_val(5);  // TODO: Fix
+    constexpr bool value_tensor_is_dram = get_compile_time_arg_val(6) == 1;
+    constexpr uint32_t Wt = get_compile_time_arg_val(7);
+    constexpr uint32_t Ht = get_compile_time_arg_val(8);
+    constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(9);
+    constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(10);
+
+    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(11));  // TODO: Fix
 
     // Constants
     constexpr uint32_t one_tile = 1;
-    const uint32_t core_id = get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
+    const uint16_t core_id = get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
+    const uint16_t global_tile_start = core_id * number_of_tiles_per_core;
+    const uint16_t global_tile_end = global_tile_start + number_of_tiles_per_core;
+
+    const uint16_t number_of_pairs_processed_by_each_core = number_of_tiles_per_core / 2;
+    const uint16_t processing_pair_start = core_id * number_of_pairs_processed_by_each_core;
+    const uint16_t processing_pair_end = processing_pair_start + number_of_pairs_processed_by_each_core;
 
     // Output tensor config
     const uint32_t value_tensor_tile_size_bytes = get_tile_size(value_tensor_cb_index);
@@ -70,6 +82,9 @@ void kernel_main() {
         .bank_base_address = output_tensor_buffer_addr,
         .page_size = value_tensor_tile_size_bytes,
         .data_format = value_tensor_data_format};
+
+    sem_ptr_t sem_self_exchange_ptr = reinterpret_cast<sem_ptr_t>(sem_exchange_addr);
+
     DPRINT << "WRITER: Starting" << ENDL();  // TODO: remove
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
@@ -78,8 +93,45 @@ void kernel_main() {
             // PAUSE(); // TODO: Remove
         }  // w loop
 
-        for () {
-        }
+        uint32_t stages = ilog2(Wt);
+        for (uint32_t stage = 2; stage <= stages; stage++) {
+            for (uint32_t sub = stage; sub > 0; sub--) {
+                uint32_t sub_dist = 1 << (sub - 1);
+                uint16_t pair_id = 0;
+
+                // TOOD: We don't need to check for each tile if it's outside or inside core. We can simply check the
+                // first one
+                //       For a given sub, all tiles are either in-core or outside
+                //       If inside => do nothing
+                //      Otherwise => exchange
+                uint32_t i = processing_pair_start;
+                uint32_t j = i ^ sub_dist;
+                if (pair_id >= processing_pair_start && pair_id < processing_pair_end) {
+                    if (i >= global_tile_start && i < global_tile_end && j >= global_tile_start &&
+                        j < global_tile_end) {
+                        // Nothing
+                    } else {
+                        const uint32_t other_core_id = j / number_of_tiles_per_core;
+                        const std::pair<uint32_t, uint32_t> remote_core_physical =
+                            get_core_physical_coordinates(other_core_id, physical_core_lookup_table_cb_index);
+
+                        sort_noc_exchange_Wt_tiles(
+                            value_tensor_cb_index,
+                            value_tensor_peer_cb_index,
+                            number_of_tiles_per_core,
+                            value_tensor_tile_size_bytes,
+                            remote_core_physical.first,
+                            remote_core_physical.second,
+                            sem_self_exchange_ptr);
+                    }
+                }
+            }  // sub
+
+            // TODO: PUT BARRIER HERE
+
+        }  // stages
+
+        DPRINT << "READER: AFTER LOGIC:" << ENDL();  // TODO: Remove
 
         // Write value tensor to DRAM
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {

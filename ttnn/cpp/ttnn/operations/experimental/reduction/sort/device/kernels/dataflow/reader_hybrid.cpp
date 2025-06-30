@@ -11,25 +11,6 @@
 #include <cstdint>
 #include <utility>
 
-FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
-    const uint32_t core_id, const uint32_t lookup_table_buffer_cb_index, const uint32_t tile_size = 1024) {
-    // Initialize as max to indicate invalid coordinates
-    uint32_t core_x = 0;
-    uint32_t core_y = 0;
-
-    if (2 * core_id >= tile_size) {
-        return {core_x, core_y};  // Invalid core ID
-    }
-
-    const uint32_t l1_read_addr = get_read_ptr(lookup_table_buffer_cb_index);
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr);
-
-    core_x = ptr[core_id * 2];
-    core_y = ptr[core_id * 2 + 1];
-
-    return {core_x, core_y};
-}
-
 void kernel_main() {
     // Runtime args
     const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(0);
@@ -41,17 +22,18 @@ void kernel_main() {
     constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(1);
     constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(2);
     constexpr uint32_t index_tensor_output_cb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t physical_core_lookup_table_cb_index = get_compile_time_arg_val(4);
-    constexpr bool input_tensor_is_dram = get_compile_time_arg_val(5) == 1;
-    constexpr bool index_tensor_output_is_dram = get_compile_time_arg_val(6) == 1;
-    constexpr bool physical_core_lookup_table_is_dram = get_compile_time_arg_val(7) == 1;
-    constexpr uint32_t Ht = get_compile_time_arg_val(8);
-    constexpr uint32_t Wt = get_compile_time_arg_val(9);
-    constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(10);
-    constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(11);
-    constexpr bool ascending = get_compile_time_arg_val(12) == 1;
+    constexpr uint32_t index_tensor_peer_cb_index = get_compile_time_arg_val(4);  // TODO: Fix
+    constexpr uint32_t physical_core_lookup_table_cb_index = get_compile_time_arg_val(5);
+    constexpr bool input_tensor_is_dram = get_compile_time_arg_val(6) == 1;
+    constexpr bool index_tensor_output_is_dram = get_compile_time_arg_val(7) == 1;
+    constexpr bool physical_core_lookup_table_is_dram = get_compile_time_arg_val(8) == 1;
+    constexpr uint32_t Ht = get_compile_time_arg_val(9);
+    constexpr uint32_t Wt = get_compile_time_arg_val(10);
+    constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(11);
+    constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(12);
+    constexpr bool ascending = get_compile_time_arg_val(13) == 1;
 
-    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(13));
+    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(14));
 
     // Constants
     constexpr uint32_t one_tile = 1;
@@ -93,9 +75,10 @@ void kernel_main() {
     uint64_t noc_addr = get_noc_addr(0, physical_core_lookup_table_accessor);
     noc_async_read(noc_addr, physical_core_lookup_table_l1_write_addr, physical_core_lookup_table_tile_size_bytes);
     noc_async_read_barrier();
-    DPRINT << "READER: Starting" << ENDL();  // TODO: Remove
 
     sem_ptr_t sem_self_exchange_ptr = reinterpret_cast<sem_ptr_t>(sem_exchange_addr);
+
+    DPRINT << "READER: Starting" << ENDL();  // TODO: Remove
 
     for (uint32_t h = 0; h < Ht; h++) {
         // Read input value data
@@ -108,49 +91,59 @@ void kernel_main() {
             cb_push_back(input_tensor_cb_index, one_tile);
         }  // w loop
 
-        uint32_t stages = 0;
-        for (uint32_t i = Wt; i > 1; i >>= 1) {
-            stages++;
-        }
+        uint32_t stages = ilog2(Wt);
         for (uint32_t stage = 2; stage <= stages; stage++) {
             for (uint32_t sub = stage; sub > 0; sub--) {
                 uint32_t sub_dist = 1 << (sub - 1);
                 uint16_t pair_id = 0;
-                for (uint32_t i = 0; i < Wt; i++) {
-                    uint32_t j = i ^ sub_dist;
-                    if (j > i) {
-                        if (pair_id >= processing_pair_start && pair_id < processing_pair_end) {
-                            if (i >= global_tile_start && i < global_tile_end && j >= global_tile_start &&
-                                j < global_tile_end) {
-                                // NOTHING
-                            } else {
-                                // TODO: Swapping tiles
-                                // Get second core id
-                                const uint32_t other_core_id = j / number_of_tiles_per_core;
-                                const std::pair<uint32_t, uint32_t> remote_core_physical =
-                                    get_core_physical_coordinates(other_core_id, physical_core_lookup_table_cb_index);
-                            }
-                        }
-                        pair_id++;
-                    }
-                }
+
+                // for (uint32_t i = 0; i < Wt; i++) {
+                //     uint32_t j = i ^ sub_dist;
+                //     if (j > i) {
+                //         if (pair_id >= processing_pair_start && pair_id < processing_pair_end) {
+                //             if (i >= global_tile_start && i < global_tile_end && j >= global_tile_start &&
+                //                 j < global_tile_end) {
+                //                 // NOTHING
+                //             } else {
+                //                 // TODO: Swapping tiles
+                //                 // Get second core id
+                //                 const uint32_t other_core_id = j / number_of_tiles_per_core;
+                //                 const std::pair<uint32_t, uint32_t> remote_core_physical =
+                //                     get_core_physical_coordinates(other_core_id,
+                //                     physical_core_lookup_table_cb_index);
+                //             }
+                //         }
+                //         pair_id++;
+                //     }
+                // }
 
                 // TOOD: We don't need to check for each tile if it's outside or inside core. We can simply check the
                 // first one
                 //       For a given sub, all tiles are either in-core or outside
                 //       If inside => do nothing
                 //      Otherwise => exchange
-                const std::pair<uint32_t, uint32_t> remote_core_physical =
-                    get_core_physical_coordinates(other_core_id, physical_core_lookup_table_cb_index);
 
-                sort_noc_exchange_Wt_tiles(
-                    index_tensor_output_accessor,
-                    input_tensor_peer_cb_index,
-                    number_of_tiles_per_core,
-                    index_tensor_output_tile_size_bytes,
-                    remote_core_physical.first,
-                    remote_core_physical.second,
-                    sem_self_ptr);
+                uint32_t i = processing_pair_start;
+                uint32_t j = i ^ sub_dist;
+                if (pair_id >= processing_pair_start && pair_id < processing_pair_end) {
+                    if (i >= global_tile_start && i < global_tile_end && j >= global_tile_start &&
+                        j < global_tile_end) {
+                        // Nothing
+                    } else {
+                        const uint32_t other_core_id = j / number_of_tiles_per_core;
+                        const std::pair<uint32_t, uint32_t> remote_core_physical =
+                            get_core_physical_coordinates(other_core_id, physical_core_lookup_table_cb_index);
+
+                        sort_noc_exchange_Wt_tiles(
+                            index_tensor_output_cb_index,
+                            index_tensor_peer_cb_index,
+                            number_of_tiles_per_core,
+                            index_tensor_output_tile_size_bytes,
+                            remote_core_physical.first,
+                            remote_core_physical.second,
+                            sem_self_exchange_ptr);
+                    }
+                }
             }  // sub
 
             // TODO: PUT BARRIER HERE
