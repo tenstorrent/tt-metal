@@ -314,7 +314,7 @@ def to_torch(
     dtype: Optional["torch.dtype"] = None,
     *,
     torch_rank: Optional[int] = None,
-    mesh_composer: Optional[ttnn.MeshToTensor] = None,
+    mesh_composer: Optional[ttnn.CppMeshToTensor] = None,
     device: Optional[ttnn.MeshDevice] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> "torch.Tensor":
@@ -329,7 +329,7 @@ def to_torch(
     Keyword Args:
         torch_rank (int, optional): Desired rank of the `torch.Tensor`. Defaults to `None`.
             Will use `torch.squeeze` operation to remove dimensions until the desired rank is reached. If not possible, the operation will raise an error.
-        mesh_composer (ttnn.MeshToTensor, optional): The desired `ttnn` mesh composer. Defaults to `None`.
+        mesh_composer (ttnn.CppMeshToTensor, optional): The desired `ttnn` mesh composer. Defaults to `None`.
         device (ttnn.MeshDevice, optional): The `ttnn` device of the input tensor. Defaults to `None`.
         cq_id (int, optional): The command queue ID to use. Defaults to `0`.
 
@@ -348,10 +348,7 @@ def to_torch(
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
-    if mesh_composer:
-        return mesh_composer.compose(tensor)
-
-    tensor = tensor.to_torch()
+    tensor = tensor.to_torch(mesh_composer=mesh_composer)
 
     if torch_rank is not None:
         while len(tensor.shape) > torch_rank:
