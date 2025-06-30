@@ -14,12 +14,12 @@ TUTORIALS_NOTEBOOK_PATH = Path("ttnn/tutorials/2025_dx_rework")
 TUTORIALS_PYTHON_PATH = Path("ttnn/tutorials/basic_python")
 
 
-def collect_ttnn_tutorials(path: Path, extension: str = ".py"):
+def collect_ttnn_tutorials(path: Path, extension: str = "*.py"):
     for file_name in path.glob(extension):
         yield file_name
 
 
-@pytest.mark.parametrize("notebook_path", collect_ttnn_tutorials(path=TUTORIALS_NOTEBOOK_PATH, extension=".ipynb"))
+@pytest.mark.parametrize("notebook_path", collect_ttnn_tutorials(path=TUTORIALS_NOTEBOOK_PATH, extension="*.ipynb"))
 def test_ttnn_notebook_tutorials(notebook_path):
     with open(notebook_path) as f:
         notebook = nbformat.read(f, as_version=4)
@@ -27,7 +27,7 @@ def test_ttnn_notebook_tutorials(notebook_path):
         ep.preprocess(notebook)
 
 
-@pytest.mark.parametrize("python_path", collect_ttnn_tutorials(path=TUTORIALS_PYTHON_PATH, extension=".py"))
+@pytest.mark.parametrize("python_path", collect_ttnn_tutorials(path=TUTORIALS_PYTHON_PATH, extension="*.py"))
 def test_ttnn_python_tutorials(python_path):
     result = subprocess.run(
         ["python3", str(python_path)],
