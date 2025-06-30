@@ -23,7 +23,7 @@ def nearest_16(x):
 @pytest.mark.parametrize("batch", [1])
 @pytest.mark.parametrize("groups", [4])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
-def test_unet_preprocessing(batch, groups, device, use_program_cache, reset_seeds):
+def test_unet_preprocessing(batch, groups, device, reset_seeds):
     input_memory_config = unet_shallow_ttnn.UNet.input_sharded_memory_config
     torch_input, ttnn_input = create_unet_input_tensors(
         batch, groups, channel_order="first", pad=False, fold=True, device=device, memory_config=input_memory_config

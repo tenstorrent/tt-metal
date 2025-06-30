@@ -1966,7 +1966,6 @@ profile_a_b_shape_pairs = [
 )
 @pytest.mark.parametrize("a_and_b_shape", profile_a_b_shape_pairs)
 def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_config_input):
-    device.enable_program_cache()
     torch.manual_seed(0)
     a_shape, b_shape = a_and_b_shape
 
@@ -2200,7 +2199,7 @@ height_sharded_memory_config_4 = ttnn.create_sharded_memory_config(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_decoder_program_cache(dtype_pt, dtype_tt, device, use_program_cache):
+def test_binary_sharded_decoder_program_cache(dtype_pt, dtype_tt, device):
     compute_grid_size = device.compute_with_storage_grid_size()
     if compute_grid_size.x < 8 or compute_grid_size.y < 8:
         pytest.skip("Test is skipped because the device does not have full coregrid 8x8")

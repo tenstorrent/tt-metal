@@ -165,7 +165,7 @@ def test_moreh_cumsum_backward(input_shape, dim, device):
     ),
     ids=["0", "1"],
 )
-def test_moreh_cumsum_callback(input_shape, dim, device, use_program_cache):
+def test_moreh_cumsum_callback(input_shape, dim, device):
     output_shape = input_shape.copy()
 
     (tt_input, tt_output, torch_input) = get_tensors(input_shape, output_shape, device)
@@ -210,7 +210,7 @@ def test_moreh_cumsum_callback(input_shape, dim, device, use_program_cache):
     ),
     ids=["0", "1"],
 )
-def test_moreh_cumsum_backward_callback(input_shape, dim, device, use_program_cache):
+def test_moreh_cumsum_backward_callback(input_shape, dim, device):
     output_shape = input_shape.copy()
 
     (_, _, torch_input) = get_tensors(input_shape, output_shape, device)

@@ -26,7 +26,6 @@ test_demo_trace_with_imagenet.__test__ = False
 @pytest.mark.parametrize("test_duration_seconds", [24 * 60 * 60, 10], ids=["long", "short"])
 def test_resnet_stability(
     mesh_device,
-    use_program_cache,
     batch_size,
     iterations,
     imagenet_label_dict,
@@ -45,7 +44,6 @@ def test_resnet_stability(
 
         test_demo_trace_with_imagenet(
             mesh_device,
-            use_program_cache,
             batch_size,
             iterations,
             imagenet_label_dict,

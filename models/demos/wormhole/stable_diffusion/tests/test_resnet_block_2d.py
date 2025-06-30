@@ -79,7 +79,6 @@ def test_resnet_block_2d_512x512(
     block_name,
     block_index,
     resnet_index,
-    use_program_cache,
 ):
     load_from_disk = False
     if not load_from_disk:

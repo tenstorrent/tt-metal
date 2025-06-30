@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 
-def run_sub_devices(device, create_fabric_sub_device=False):
+def run_sub_devices(device):
     tensix_cores0 = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
@@ -28,14 +28,8 @@ def run_sub_devices(device, create_fabric_sub_device=False):
     sub_device_2 = ttnn.SubDevice([tensix_cores1])
     sub_devices_1 = [sub_device_1, sub_device_2]
     sub_devices_2 = [sub_device_2]
-    if create_fabric_sub_device:
-        sub_device_manager1, fabric_sub_device_id1 = device.create_sub_device_manager_with_fabric(sub_devices_1, 3200)
-        sub_device_manager2, fabric_sub_device_id2 = device.create_sub_device_manager_with_fabric(sub_devices_2, 3200)
-        assert fabric_sub_device_id1 == ttnn.SubDeviceId(len(sub_devices_1))
-        assert fabric_sub_device_id2 == ttnn.SubDeviceId(len(sub_devices_2))
-    else:
-        sub_device_manager1 = device.create_sub_device_manager(sub_devices_1, 3200)
-        sub_device_manager2 = device.create_sub_device_manager(sub_devices_2, 3200)
+    sub_device_manager1 = device.create_sub_device_manager(sub_devices_1, 3200)
+    sub_device_manager2 = device.create_sub_device_manager(sub_devices_2, 3200)
     device.load_sub_device_manager(sub_device_manager1)
     ttnn.synchronize_device(device, sub_device_ids=[ttnn.SubDeviceId(1)])
     ttnn.synchronize_device(device, sub_device_ids=[ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)])
@@ -50,7 +44,7 @@ def run_sub_devices(device, create_fabric_sub_device=False):
     device.remove_sub_device_manager(sub_device_manager2)
 
 
-def run_sub_devices_program(device, create_fabric_sub_device=False):
+def run_sub_devices_program(device):
     is_mesh_device = isinstance(device, ttnn.MeshDevice)
     if is_mesh_device:
         inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
@@ -79,11 +73,7 @@ def run_sub_devices_program(device, create_fabric_sub_device=False):
     sub_device_1 = ttnn.SubDevice([tensix_cores0])
     sub_device_2 = ttnn.SubDevice([tensix_cores1])
     sub_devices = [sub_device_1, sub_device_2]
-    if create_fabric_sub_device:
-        sub_device_manager, fabric_sub_device_id = device.create_sub_device_manager_with_fabric(sub_devices, 3200)
-        assert fabric_sub_device_id == ttnn.SubDeviceId(len(sub_devices))
-    else:
-        sub_device_manager = device.create_sub_device_manager(sub_devices, 3200)
+    sub_device_manager = device.create_sub_device_manager(sub_devices, 3200)
     device.load_sub_device_manager(sub_device_manager)
 
     x = torch.randn(num_devices, 1, 64, 64, dtype=torch.bfloat16)
@@ -137,21 +127,17 @@ def run_sub_devices_program(device, create_fabric_sub_device=False):
     device.remove_sub_device_manager(sub_device_manager)
 
 
-@pytest.mark.parametrize("create_fabric_sub_device", (False, True))
-def test_sub_devices(device, create_fabric_sub_device):
-    run_sub_devices(device, create_fabric_sub_device)
+def test_sub_devices(device):
+    run_sub_devices(device)
 
 
-@pytest.mark.parametrize("create_fabric_sub_device", (False, True))
-def test_sub_devices_mesh(mesh_device, create_fabric_sub_device):
-    run_sub_devices(mesh_device, create_fabric_sub_device)
+def test_sub_devices_mesh(mesh_device):
+    run_sub_devices(mesh_device)
 
 
-@pytest.mark.parametrize("create_fabric_sub_device", (False, True))
-def test_sub_device_program(device, create_fabric_sub_device):
-    run_sub_devices_program(device, create_fabric_sub_device)
+def test_sub_device_program(device):
+    run_sub_devices_program(device)
 
 
-@pytest.mark.parametrize("create_fabric_sub_device", (False, True))
-def test_sub_device_program_mesh(mesh_device, create_fabric_sub_device):
-    run_sub_devices_program(mesh_device, create_fabric_sub_device)
+def test_sub_device_program_mesh(mesh_device):
+    run_sub_devices_program(mesh_device)

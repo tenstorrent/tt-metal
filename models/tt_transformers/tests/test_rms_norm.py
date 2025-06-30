@@ -39,7 +39,6 @@ def test_rms_norm_inference(
     batch_size,
     mode,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):
