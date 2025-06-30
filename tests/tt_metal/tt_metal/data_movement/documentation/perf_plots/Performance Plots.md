@@ -130,12 +130,15 @@ For more information on this primitive, refer to [README](../../one_from_all/REA
 
 ### All to All Packet Sizes
 
-<!-- ![All to All Packet Sizes](./wormhole_b0) -->
+![All to All Packet Sizes](./wormhole_b0/All%20to%20All%20Packet%20Sizes.png)
+
+For more information on this primitive, refer to [README](../../all_to_all/README.md).
 
 ### All from All Packet Sizes
 
-<!-- ![All from All Packet Sizes](./wormhole_b0) -->
+![All from All Packet Sizes](./wormhole_b0/All%20from%20All%20Packet%20Sizes.png)
 
+For more information on this primitive, refer to [README](../../all_from_all/README.md).
 
 ## Blackhole
 
