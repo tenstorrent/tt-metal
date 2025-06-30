@@ -56,7 +56,7 @@ def main():
 
     logger.info("\n--- Simulated Broadcasting (32x32 + Broadcasted Row Vector) ---")
     broadcast_vector = torch.tensor(np.arange(0, 32), dtype=torch.float32).repeat(32, 1)
-    logger.info(f"Broadcast Vector:\n{broadcast_vector}")
+    logger.info(f"Broadcast Row Vector:\n{broadcast_vector}")
 
     broadcast_tt = to_tt_tile(broadcast_vector)
     broadcast_add_result = ttnn.add(tt_t1, broadcast_tt)
