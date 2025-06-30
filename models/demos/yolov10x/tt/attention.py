@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import math
-from models.experimental.yolov10x.tt.common import Conv
+
+import ttnn
+from models.demos.yolov10x.tt.common import Conv
 
 
 class TtnnAttention:

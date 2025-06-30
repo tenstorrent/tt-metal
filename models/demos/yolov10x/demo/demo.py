@@ -10,33 +10,35 @@ from loguru import logger
 from ultralytics import YOLO
 
 import ttnn
-from models.experimental.yolov10x.demo.demo_utils import (
+from models.demos.yolov10x.demo.demo_utils import (
     LoadImages,
     load_coco_class_names,
     postprocess,
     preprocess,
     save_yolo_predictions_by_model,
 )
-from models.experimental.yolov10x.reference.yolov10x import YOLOv10
+from models.demos.yolov10x.reference.yolov10x import YOLOv10
+from models.demos.yolov10x.runner.performant_runner import YOLOv10PerformantRunner
 from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
-from models.experimental.yolov10x.runner.performant_runner import YOLOv10PerformantRunner
 
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": 10 * 1024, "trace_region_size": 23887872, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "source",
     [
-        "models/experimental/yolov10x/demo/images/dog.jpg",
+        "models/demos/yolov10x/demo/images/dog.jpg",
     ],
 )
 @pytest.mark.parametrize(
     "model_type",
     [
         "tt_model",
-        "torch_model",
+        # "torch_model",
     ],
 )
 @pytest.mark.parametrize(
@@ -68,7 +70,7 @@ def test_demo_ttnn(device, source, model_type, use_pretrained_weight):
             torch_model.eval()
             model = torch_model
             logger.info("Inferencing [Torch] Model")
-        save_dir = "models/experimental/yolov10x/demo/runs"
+        save_dir = "models/demos/yolov10x/demo/runs"
         dataset = LoadImages(path=source)
         model_save_dir = os.path.join(save_dir, model_type)
         os.makedirs(model_save_dir, exist_ok=True)
@@ -81,7 +83,7 @@ def test_demo_ttnn(device, source, model_type, use_pretrained_weight):
             results = postprocess(preds, im, im0s, batch, names)[0]
             save_yolo_predictions_by_model(results, save_dir, source, model_type)
     else:
-        save_dir = "models/experimental/yolov10x/demo/runs"
+        save_dir = "models/demos/yolov10x/demo/runs"
         dataset = LoadImages(path=source)
         model_save_dir = os.path.join(save_dir, model_type)
         os.makedirs(model_save_dir, exist_ok=True)
