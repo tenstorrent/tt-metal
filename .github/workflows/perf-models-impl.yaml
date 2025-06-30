@@ -23,7 +23,7 @@ jobs:
         test-info: [
           {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
         ]
-        model-type: [llm_javelin, cnn_javelin, other]
+        model-type: [llm, cnn, yolo]
     name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
     defaults:
       run:
