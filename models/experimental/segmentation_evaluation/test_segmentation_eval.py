@@ -94,8 +94,8 @@ def evaluation(
             patient_output_path = os.path.join("models/experimental/segmentation_evaluation/pred_image_set", patient_id)
             args = argparse.Namespace(
                 device="cpu",
-                batch_size=batch_size,
-                weights=weights_path,
+                batch_size=1,
+                weights="models/demos/vanilla_unet/unet.pt",
                 images=patient_path,
                 image_size=res,
                 predictions=patient_output_path,
@@ -563,29 +563,56 @@ def evaluation(
         logger.info(f"F1 Score: {np.mean(f1_list):.2f}%")
 
 
-def run_vgg_unet(
-    device, model_type, use_pretrained_weight, res, model_location_generator, reset_seeds, device_batch_size
-):
-    from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
-    from models.demos.vgg_unet.runner.performant_runner import VggUnetTrace2CQ
-    from models.demos.vgg_unet.common import load_torch_model
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+        ("torch_model"),
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": (7 * 8192) + 1730, "trace_region_size": 1605632, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize("res", [(480, 640)])
+def test_vanilla_unet(device, model_type, res, model_location_generator, reset_seeds, batch_size=1):
+    from models.demos.vanilla_unet.reference.unet import UNet
+    from models.demos.vanilla_unet.runner.performant_runner import VanillaUNetPerformantRunner
 
-    disable_persistent_kernel_cache()
+    weights_path = "models/demos/vanilla_unet/unet.pt"
+    if not os.path.exists(weights_path):
+        os.system("bash models/demos/vanilla_unet/weights_download.sh")
 
-    model_seg = UNetVGG19()
-    if use_pretrained_weight:
-        model_seg = load_torch_model(model_seg, model_location_generator)
-    model_seg.eval()
-    batch_size = device_batch_size * device.get_num_devices()
-    if model_type == "tt_model":
-        vgg_unet_trace_2cq = VggUnetTrace2CQ()
+    state_dict = torch.load(weights_path, map_location=torch.device("cpu"))
+    ds_state_dict = {k: v for k, v in state_dict.items()}
 
-        vgg_unet_trace_2cq.initialize_vgg_unet_trace_2cqs_inference(
-            device,
-            model_location_generator=model_location_generator,
-            use_pretrained_weight=use_pretrained_weight,
-            device_batch_size=device_batch_size,
-        )
+    reference_model = UNet()
+
+    new_state_dict = {}
+    keys = [name for name, parameter in reference_model.state_dict().items()]
+    values = [parameter for name, parameter in ds_state_dict.items()]
+    for i in range(len(keys)):
+        new_state_dict[keys[i]] = values[i]
+
+    reference_model.load_state_dict(new_state_dict)
+    reference_model.eval()
+
+    # parameters = preprocess_model_parameters(
+    #     initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(None), device=None
+    # )
+    # ttnn_model = TtUnet(device=device, parameters=parameters, model=reference_model)
+
+    ttnn_model = VanillaUNetPerformantRunner(
+        device,
+        batch_size,
+        act_dtype=ttnn.bfloat8_b,
+        weight_dtype=ttnn.bfloat8_b,
+        model_location_generator=None,
+    )
+
+    if not os.path.exists("models/experimental/segmentation_evaluation/imageset"):
+        os.system("python models/experimental/segmentation_evaluation/dataset_download.py vanilla_unet")
 
     model_name = "vgg_unet"
     input_dtype = ttnn.bfloat16
