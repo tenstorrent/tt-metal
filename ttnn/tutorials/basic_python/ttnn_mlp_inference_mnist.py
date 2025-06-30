@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 import torchvision
 import torchvision.transforms as transforms
 import numpy as np
 import ttnn
-import os
 from loguru import logger
 
 
