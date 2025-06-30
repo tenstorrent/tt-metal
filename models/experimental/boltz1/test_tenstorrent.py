@@ -107,7 +107,7 @@ def test_pairformer(device, seq_len):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
         dtype=ttnn.bfloat16,
-    )
+
     ttnn.deallocate(s)
 
     z_sharded = ttnn.to_memory_config(

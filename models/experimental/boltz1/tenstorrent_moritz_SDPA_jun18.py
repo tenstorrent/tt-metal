@@ -334,6 +334,8 @@ class AttentionPairBias(Module):
             k = ttnn.clone(k, dtype=ttnn.float32)
         a = ttnn.matmul(q, k, compute_kernel_config=self.compute_kernel_config)
         a = ttnn.multiply(a, self.head_dim**-0.5)
+        # do layer normal on DRAM since slicing is not worth it
+
         z = ttnn.layer_norm(
             z,
             weight=self.z_norm_weight,
@@ -341,7 +343,68 @@ class AttentionPairBias(Module):
             epsilon=1e-5,
             compute_kernel_config=self.compute_kernel_config,
         )
-        z = ttnn.linear(z, self.z_weight, compute_kernel_config=self.compute_kernel_config)
+
+        ATTENTION_PAIR_BIAS_CHUNK_SIZE = 256
+        if True:
+            B, H, H, W = z.shape
+            num_cores = 64
+            num_slices = 3
+            height_shard_spec = [int((H * H) // (num_slices * num_cores)), W]
+            TILE_W = 32
+
+            signpost(header="AttentionPairBias Z Linear Mapped to Matmul Sliced Start")
+
+            z_intermediate = ttnn.empty(
+                [1, 768, 768, 16], ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device, ttnn.DRAM_MEMORY_CONFIG
+            )
+
+            for slice_index in range(0, num_slices):
+                z_chunk = ttnn.interleaved_to_sharded_partial(
+                    z,
+                    (8, 8),
+                    height_shard_spec,
+                    num_slices,
+                    slice_index,
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                )
+
+                header_tmp = (
+                    "AttentionPairBias Z Linear Mapped to Matmul Sliced " + str(slice_index + 1) + "/" + str(num_slices)
+                )
+                signpost(header=header_tmp)
+
+                z_chunk = ttnn.linear(
+                    z_chunk,
+                    self.z_weight,
+                    compute_kernel_config=self.compute_kernel_config,
+                    memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+                )
+
+                z_chunk = ttnn.reshape(z_chunk, (B, H // num_slices, H, 16))
+
+                ttnn.sharded_to_interleaved_partial(
+                    z_chunk,
+                    z_intermediate,
+                    num_slices,
+                    slice_index,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+
+            z = z_intermediate
+            ttnn.deallocate(z_chunk)
+            signpost(header="AttentionPairBias Z Linear Mapped to Matmul Sliced End")
+
+        else:
+            signpost(header="AttentionPairBias Z Linear Mapped to Matmul")
+            z = ttnn.linear(
+                z,
+                self.z_weight,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+
+        z = ttnn.clone(z, dtype=ttnn.float32)
+
         z = ttnn.permute(z, (3, 0, 1, 2))
         if not USE_FLOAT32:
             z = ttnn.clone(z, dtype=ttnn.float32)
@@ -668,9 +731,10 @@ class DiffusionTransformerLayer(Module):
         compute_kernel_config: ttnn.DeviceComputeKernelConfig,
     ):
         super().__init__(state_dict, compute_kernel_config)
-        self.adaln = AdaLN(filter_dict(state_dict, "adaln"), compute_kernel_config)
+        self.adaln = AdaLN(device, filter_dict(state_dict, "adaln"), compute_kernel_config)
         self.device = device
         self.attn_pair_bias = AttentionPairBias(
+            device,
             head_dim=dim // n_heads,
             n_heads=n_heads,
             diffusion=True,
@@ -680,6 +744,7 @@ class DiffusionTransformerLayer(Module):
         self.output_projection_weight = self.torch_to_tt("output_projection_linear.weight")
         self.output_projection_bias = self.torch_to_tt("output_projection_linear.bias")
         self.transition = ConditionedTransitionBlock(
+            device,
             filter_dict(state_dict, "transition"),
             compute_kernel_config,
         )
@@ -704,6 +769,7 @@ class DiffusionTransformerLayer(Module):
 class DiffusionTransformer(Module):
     def __init__(
         self,
+        device,
         n_layers: int,
         dim: int,
         n_heads: int,
@@ -713,6 +779,7 @@ class DiffusionTransformer(Module):
         super().__init__(state_dict, compute_kernel_config)
         self.layers = [
             DiffusionTransformerLayer(
+                device,
                 dim,
                 n_heads,
                 filter_dict(state_dict, f"layers.{i}"),
@@ -1075,11 +1142,13 @@ class PairformerModule(TorchWrapper):
 class DiffusionTransformerModule(TorchWrapper):
     def __init__(
         self,
+        device,
         n_layers: int,
         dim: int,
         n_heads: int,
     ):
         super().__init__()
+        self.device = device
         self.n_layers = n_layers
         self.dim = dim
         self.n_heads = n_heads
@@ -1095,6 +1164,7 @@ class DiffusionTransformerModule(TorchWrapper):
         error_msgs,
     ):
         self.module = DiffusionTransformer(
+            self.device,
             self.n_layers,
             self.dim,
             self.n_heads,
