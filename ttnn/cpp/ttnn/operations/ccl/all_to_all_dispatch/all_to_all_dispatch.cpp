@@ -19,10 +19,10 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
-    const std::optional<uint32_t> axis,
+    std::optional<uint32_t> axis,
     const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
-    const uint32_t num_links,
-    const tt::tt_fabric::Topology topology,
+    uint32_t num_links,
+    tt::tt_fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<GlobalSemaphore>& global_semaphore) {
