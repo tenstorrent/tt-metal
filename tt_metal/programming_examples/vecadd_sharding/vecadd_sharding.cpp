@@ -149,12 +149,9 @@ int main(int argc, char** argv) {
     auto a_data = create_random_vector_of_bfloat16_native(test_config.size_bytes, 10, rng());
     auto b_data = create_random_vector_of_bfloat16_native(test_config.size_bytes, 10, rng());
 
-    auto cb_a =
-        MakeCircularBufferBFP16(program, test_config.cores, tt::CBIndex::c_0, test_config.num_tiles_per_core, a);
-    auto cb_b =
-        MakeCircularBufferBFP16(program, test_config.cores, tt::CBIndex::c_1, test_config.num_tiles_per_core, b);
-    auto cb_c =
-        MakeCircularBufferBFP16(program, test_config.cores, tt::CBIndex::c_2, test_config.num_tiles_per_core, c);
+    MakeCircularBufferBFP16(program, test_config.cores, tt::CBIndex::c_0, test_config.num_tiles_per_core, a);
+    MakeCircularBufferBFP16(program, test_config.cores, tt::CBIndex::c_1, test_config.num_tiles_per_core, b);
+    MakeCircularBufferBFP16(program, test_config.cores, tt::CBIndex::c_2, test_config.num_tiles_per_core, c);
 
     auto compute = CreateKernel(
         program,

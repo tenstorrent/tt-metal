@@ -121,7 +121,6 @@ def comment_out_unused_variables(log_file, num_variables_to_comment=5, output_lo
         # C++ Standard Library Types (most common)
         "std::string",  # string class
         "std::wstring",  # wide string class
-        "std::vector",  # dynamic array
         "std::array",  # fixed size array
         "std::list",  # doubly-linked list
         "std::deque",  # double ended queue
@@ -232,7 +231,23 @@ def comment_out_unused_variables(log_file, num_variables_to_comment=5, output_lo
                         continue
 
                     if ";" not in original_line:
-                        logging.info(f"Line {line_number} in {filename}:{line_number} is not a single line. Skipping.")
+                        # Start of a multi-line statement, delete until we find a line with ';'
+                        logging.info(
+                            f"Line {line_number} in {filename}:{line_number} is the start of a multi-line statement. Deleting until ';'."
+                        )
+                        start_idx = line_number - 1
+                        end_idx = start_idx
+                        # Keep moving forward until we find a line with ';'
+                        while end_idx < len(source_lines) and ";" not in source_lines[end_idx]:
+                            end_idx += 1
+                        # Also delete the line containing the ';'
+                        if end_idx < len(source_lines):
+                            end_idx += 1
+                        # Delete the lines
+                        del source_lines[start_idx:end_idx]
+                        # No need to increment line_number, as we've deleted the current line
+                        with open(filename, "w") as source_file:
+                            source_file.writelines(source_lines)
                         continue
 
                     common_type = False
