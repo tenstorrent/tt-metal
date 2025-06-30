@@ -152,7 +152,7 @@ void matmul_single_core(
         Kt,  // Kt
         Nt   // Nt
     };
-    auto matmul_single_core_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/compute/mm.cpp",
         core,

@@ -134,7 +134,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         {"SAMPLE_COUNT", std::to_string(sampleCount)},
     };
 
-    tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         sync_program,
         "tt_metal/tools/profiler/sync/sync_kernel.cpp",
         logical_core,
@@ -394,13 +394,13 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
         Program program_sender;
         Program program_receiver;
 
-        auto local_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program_sender,
             "tt_metal/tools/profiler/sync/sync_device_kernel_sender.cpp",
             eth_sender_core,
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto remote_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program_receiver,
             "tt_metal/tools/profiler/sync/sync_device_kernel_receiver.cpp",
             eth_receiver_core,

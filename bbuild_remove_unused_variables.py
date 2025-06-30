@@ -7,16 +7,14 @@ def remove_inline_comments(text):
     return re.sub(r"//.*", "", text).rstrip()
 
 
-def strip_left_of_namespace(line, namespace="tt_metal::"):
+def strip_left_of_namespace(line, namespace="tt_metal::CreateKernel"):
     """
     Removes everything to the left of the first occurrence of the given namespace,
     preserving leading whitespace.
     """
     match = re.search(rf"^(\s*)[^\n]*?{re.escape(namespace)}", line)
     if match:
-        # Find where the namespace starts
         ns_start = line.find(namespace)
-        # Preserve leading whitespace, return from namespace onward
         return line[: match.end(1)] + line[ns_start:]
     else:
         return line
@@ -183,10 +181,6 @@ def comment_out_unused_variables(log_file, num_variables_to_comment=5, output_lo
                         )
                         continue
 
-                    if ";" not in original_line:
-                        logging.info(f"Line {line_number} in {filename}:{line_number} is not a single line. Skipping.")
-                        continue
-
                     if "CreateCircularBuffer" in original_line:
                         logging.info(
                             f"Line {line_number} in {filename}:{line_number} is a CreateCircularBuffer call. slicing variable definition."
@@ -194,6 +188,24 @@ def comment_out_unused_variables(log_file, num_variables_to_comment=5, output_lo
                         source_lines[line_number - 1] = strip_left_of_namespace(source_lines[line_number - 1])
                         with open(filename, "w") as source_file:
                             source_file.writelines(source_lines)
+                        continue
+
+                    if "CreateKernel" in original_line:
+                        print(
+                            f"Line {line_number} in {filename}:{line_number} is a CreateKernel call. slicing variable definition."
+                        )
+                        logging.info(
+                            f"Line {line_number} in {filename}:{line_number} is a CreateKernel call. slicing variable definition."
+                        )
+                        source_lines[line_number - 1] = strip_left_of_namespace(
+                            source_lines[line_number - 1], namespace="tt_metal::CreateKernel"
+                        )
+                        with open(filename, "w") as source_file:
+                            source_file.writelines(source_lines)
+                        continue
+
+                    if ";" not in original_line:
+                        logging.info(f"Line {line_number} in {filename}:{line_number} is not a single line. Skipping.")
                         continue
 
                     common_type = False

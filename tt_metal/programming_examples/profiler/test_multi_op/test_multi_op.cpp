@@ -16,14 +16,14 @@ void RunCustomCycle(tt_metal::IDevice* device, int fastDispatch) {
     CoreRange all_cores(start_core, end_core);
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/profiler/test_multi_op/kernels/multi_op.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    tt_metal::KernelHandle ncrisc_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/profiler/test_multi_op/kernels/multi_op.cpp",
         all_cores,
@@ -31,7 +31,7 @@ void RunCustomCycle(tt_metal::IDevice* device, int fastDispatch) {
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     std::vector<uint32_t> trisc_kernel_args = {};
-    tt_metal::KernelHandle trisc_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/profiler/test_multi_op/kernels/multi_op_compute.cpp",
         all_cores,

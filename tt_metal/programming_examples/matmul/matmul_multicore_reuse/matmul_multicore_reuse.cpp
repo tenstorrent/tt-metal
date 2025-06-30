@@ -265,7 +265,7 @@ void matmul_multicore_reuse(
             .compile_args = writer_compile_time_args});
 
     // Create compute kernel
-    auto mm_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
