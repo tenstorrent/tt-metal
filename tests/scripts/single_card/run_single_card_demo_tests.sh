@@ -36,6 +36,9 @@ run_sentencebert_func() {
   #SentenceBERT Demo
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference --timeout 600; fail+=$?
 
+  #SentenceBERT eval
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval --timeout 600; fail+=$?
+
 }
 
 run_llama3_func() {
@@ -259,6 +262,12 @@ run_yolov4_perf() {
 run_yolov10x_demo() {
 
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings  models/experimental/yolov10/demo/demo.py --timeout 600
+
+}
+
+run_yolov7_demo() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov7/demo/demo.py --timeout 600
 
 }
 

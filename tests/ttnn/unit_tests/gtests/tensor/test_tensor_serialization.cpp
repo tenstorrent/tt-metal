@@ -5,6 +5,7 @@
 #include <gmock/gmock.h>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tt_metal/distributed/utils.hpp"
 
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -23,36 +24,13 @@ using ::testing::ElementsAre;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 using ::testing::SizeIs;
+using ::tt::tt_metal::distributed::test::utils::TemporaryFile;
 
 using namespace tt::tt_metal;
 
 TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
     return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
 }
-
-// RAII class to create and delete a temporary file.
-class TemporaryFile {
-public:
-    explicit TemporaryFile(const std::string& suffix = ".bin") :
-        path_(std::filesystem::temp_directory_path() / ("test_tensor_" + suffix)) {}
-
-    ~TemporaryFile() {
-        if (std::filesystem::exists(path_)) {
-            std::filesystem::remove(path_);
-        }
-    }
-
-    TemporaryFile(const TemporaryFile&) = delete;
-    TemporaryFile& operator=(const TemporaryFile&) = delete;
-    TemporaryFile(TemporaryFile&&) = delete;
-    TemporaryFile& operator=(TemporaryFile&&) = delete;
-
-    std::string string() const { return path_.string(); }
-    const std::filesystem::path& path() const { return path_; }
-
-private:
-    std::filesystem::path path_;
-};
 
 using TensorSerializationFlatbufferTest = GenericMeshDeviceFixture;
 
