@@ -31,7 +31,7 @@ class DebugToolsFixture : public DispatchFixture {
 // A version of DispatchFixture with DPrint enabled on all cores.
 class DPrintFixture : public DebugToolsFixture {
 public:
-    inline static const string dprint_file_name = "gtest_dprint_log.txt";
+    inline static const std::string dprint_file_name = "gtest_dprint_log.txt";
 
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(IDevice* device, Program& program) {
@@ -125,7 +125,7 @@ protected:
 // A version of DispatchFixture with watcher enabled
 class WatcherFixture : public DebugToolsFixture {
 public:
-    inline static const string log_file_name = "generated/watcher/watcher.log";
+    inline static const std::string log_file_name = "generated/watcher/watcher.log";
     inline static const int interval_ms = 250;
 
     // A function to run a program, according to which dispatch mode is set.

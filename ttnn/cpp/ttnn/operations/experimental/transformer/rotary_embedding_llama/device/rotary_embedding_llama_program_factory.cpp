@@ -149,7 +149,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
             .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    std::map<string, string> kernel_defines;
+    std::map<std::string, std::string> kernel_defines;
     kernel_defines["RELOAD_IMPL"] = use_reload_impl ? "1" : "0";
 
     auto src_buffer = input.buffer();

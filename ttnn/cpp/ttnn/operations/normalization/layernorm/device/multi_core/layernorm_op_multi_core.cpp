@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -314,8 +316,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                                                       (std::uint32_t)block_size};
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    std::map<string, string> reader_defines;
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> compute_defines;
     if (b) {
         reader_defines["FUSE_PRE_ADD"] = "1";
         compute_defines["FUSE_PRE_ADD"] = "1";
@@ -977,8 +979,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_second_stage_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     // reader defines
-    std::map<string, string> reader_mcast_sender_defines;
-    std::map<string, string> reader_mcast_receiver_defines;
+    std::map<std::string, std::string> reader_mcast_sender_defines;
+    std::map<std::string, std::string> reader_mcast_receiver_defines;
     if (b) {
         reader_mcast_sender_defines["FUSE_PRE_ADD"] = "1";
         reader_mcast_receiver_defines["FUSE_PRE_ADD"] = "1";
@@ -1114,7 +1116,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     }
 
     // writer defines
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     if (rms_norm) {
         writer_defines["RMSNORM"] = 1;
     }
@@ -1226,7 +1228,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                 .defines = writer_defines});
     }
     // defines
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (b) {
         compute_defines["FUSE_PRE_ADD"] = "1";
     }

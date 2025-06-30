@@ -232,7 +232,7 @@ void test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
     constexpr uint32_t num_runtime_args0 = 9;
     uint32_t rta_base0 = MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
-    std::map<string, string> dummy_defines0 = {
+    std::map<std::string, std::string> dummy_defines0 = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args0)},
         {"RESULTS_ADDR", std::to_string(rta_base0)}};
@@ -371,15 +371,15 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
     ;
     uint32_t rta_base_dm1 = rta_base_dm0 + num_runtime_args_dm0 * sizeof(uint32_t);
     uint32_t rta_base_compute = rta_base_dm1 + num_runtime_args_dm1 * sizeof(uint32_t);
-    std::map<string, string> dm_defines0 = {
+    std::map<std::string, std::string> dm_defines0 = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_dm0)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm0)}};
-    std::map<string, string> dm_defines1 = {
+    std::map<std::string, std::string> dm_defines1 = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_dm1)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm1)}};
-    std::map<string, string> compute_defines = {
+    std::map<std::string, std::string> compute_defines = {
         {"COMPUTE", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_compute)},
         {"RESULTS_ADDR", std::to_string(rta_base_compute)}};
@@ -483,17 +483,17 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     uint32_t rta_base_dm1 = rta_base_dm0 + 2048 * sizeof(uint32_t);
     uint32_t rta_base_compute = rta_base_dm1 + 4096 * sizeof(uint32_t);
     // Copy max # runtime args in the kernel for simplicity
-    std::map<string, string> dm_defines0 = {
+    std::map<std::string, std::string> dm_defines0 = {
         {"COMMON_RUNTIME_ARGS", "1"},
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(256)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm0)}};
-    std::map<string, string> dm_defines1 = {
+    std::map<std::string, std::string> dm_defines1 = {
         {"COMMON_RUNTIME_ARGS", "1"},
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(256)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm1)}};
-    std::map<string, string> compute_defines = {
+    std::map<std::string, std::string> compute_defines = {
         {"COMMON_RUNTIME_ARGS", "1"},
         {"COMPUTE", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(256)},
@@ -1743,8 +1743,8 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
         programs.push_back(Program());
         Program& program = programs.back();
 
-        std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
-        std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
+        std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
+        std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
 
         // brisc
         uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
@@ -2016,8 +2016,8 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
         programs.push_back(Program());
         Program& program = programs.back();
 
-        std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
-        std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
+        std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
+        std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
 
         // brisc
         uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;

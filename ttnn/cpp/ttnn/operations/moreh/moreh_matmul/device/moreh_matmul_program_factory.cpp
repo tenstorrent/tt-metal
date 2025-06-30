@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include "moreh_matmul_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -298,7 +300,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     std::vector<uint32_t> reader_compile_time_args = {
         static_cast<uint32_t>(is_dram(input)),
         static_cast<uint32_t>(is_dram(other)),
@@ -340,7 +342,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
 
     const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/moreh_matmul.cpp";
     std::vector<uint32_t> compute_args_group_1 = {

@@ -2217,7 +2217,7 @@ void configure_for_single_chip(
             log_info(
                 LogTest, "run prefetch relay mux at x={},y={}", prefetch_relay_mux_core.x, prefetch_relay_mux_core.y);
 
-            std::map<string, string> defines = {
+            std::map<std::string, std::string> defines = {
                 {"FD_CORE_TYPE", std::to_string(0)},  // todo, support dispatch on eth
             };
 
@@ -2525,7 +2525,7 @@ void configure_for_single_chip(
             log_info(
                 LogTest, "run dispatch relay mux at x={},y={}", dispatch_relay_mux_core.x, dispatch_relay_mux_core.y);
 
-            std::map<string, string> defines = {
+            std::map<std::string, std::string> defines = {
                 {"FD_CORE_TYPE", std::to_string(0)},  // todo, support dispatch on eth
             };
 
@@ -2970,7 +2970,7 @@ void configure_for_multi_chip(
             log_info(
                 LogTest, "run prefetch relay mux at x={},y={}", prefetch_relay_mux_core.x, prefetch_relay_mux_core.y);
 
-            std::map<string, string> defines = {
+            std::map<std::string, std::string> defines = {
                 {"FD_CORE_TYPE", std::to_string(0)},  // todo, support dispatch on eth
             };
 
@@ -3402,7 +3402,7 @@ void configure_for_multi_chip(
             log_info(
                 LogTest, "run dispatch relay mux at x={},y={}", dispatch_relay_mux_core.x, dispatch_relay_mux_core.y);
 
-            std::map<string, string> defines = {
+            std::map<std::string, std::string> defines = {
                 {"FD_CORE_TYPE", std::to_string(0)},  // todo, support dispatch on eth
             };
 

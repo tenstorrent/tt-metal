@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
@@ -123,7 +125,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     if (in_sharded) {
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
-        std::map<string, string> reader_defines;
+        std::map<std::string, std::string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
         reader_kernel_id = tt_metal::CreateKernel(
             program,
@@ -136,7 +138,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         std::vector<uint32_t> reader_compile_time_args = {
             (std::uint32_t)src0_is_dram, Ht, Wt, HtWt, chunk_size, packed_scaler_value};
 
-        std::map<string, string> reader_defines;
+        std::map<std::string, std::string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
 
         reader_kernel_id = tt_metal::CreateKernel(
@@ -169,7 +171,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
-    std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H);
+    std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H);
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         Ht,                         // Ht
         num_cols_per_core_group_1,  // Wt

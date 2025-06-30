@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <tuple>
 
 #include "conv2d_utils.hpp"
@@ -757,7 +758,7 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     OptimizedConvParallelizationConfig conv_parallelization_config,
     OptimizedConvBlockConfig conv_blocking_config,
     bool height_sharded,
-    const string& activation,
+    const std::string& activation,
     bool transpose_mcast,
     uint32_t grid_size_along_c) {
     if (height_sharded) {

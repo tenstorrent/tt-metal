@@ -30,7 +30,6 @@
 #include <set>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -48,7 +47,6 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
 #include "dprint_server.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
@@ -67,7 +65,6 @@
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "sub_device_types.hpp"
-#include "dispatch/system_memory_manager.hpp"
 #include "tile.hpp"
 #include "tt_backend_api_types.hpp"
 #include "tt_memory.h"
@@ -144,7 +141,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     // configuration (necessary for dispatch kernels).
     // Also account for watcher/dprint enabled in hash because they enable additional code to
     // be compiled into the kernel.
-    string compile_hash_str = fmt::format(
+    std::string compile_hash_str = fmt::format(
         "{}_{}_{}_{}",
         build_key,
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),

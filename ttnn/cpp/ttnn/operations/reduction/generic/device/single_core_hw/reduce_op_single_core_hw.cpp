@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -82,7 +84,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index, (std::uint32_t)dst_is_dram};
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,

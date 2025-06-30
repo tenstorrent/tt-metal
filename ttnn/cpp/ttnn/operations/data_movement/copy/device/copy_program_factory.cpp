@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
             (std::uint32_t)dst_stick_size_is_power_of_two,
             (std::uint32_t)dst_log2_stick_size};
     }
-    std::map<string, string> kernel_defines;
+    std::map<std::string, std::string> kernel_defines;
     if (sharded) {
         kernel_defines["SHARDED"] = "1";
         shard_builder::extend_sharding_compile_time_args(input, writer_compile_time_args);

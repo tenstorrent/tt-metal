@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include "create_qkv_heads_device_operation.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -130,7 +132,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
         (std::uint32_t)num_tiles_per_group[2] * single_tile_size,  // size of V tiles in each group, in bytes
     };
 
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     if (transpose_k) {
         reader_defines["TRANSPOSE_K_HEADS"] = "1";
     }

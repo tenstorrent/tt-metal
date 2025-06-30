@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include "moreh_layer_norm_backward_input_grad_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -169,7 +171,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
 
     const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
-    std::map<string, string> reader_defines{};
+    std::map<std::string, std::string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     if (is_lastdim_layer_norm) {

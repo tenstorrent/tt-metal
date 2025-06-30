@@ -12,13 +12,10 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <iterator>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
-#include <type_traits>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -278,7 +275,7 @@ bool matmul_large_block(
         N * in0_block_w * single_tile_size};  // input 1 block bytes
 
     std::vector<uint32_t> writer_rt_args;
-    string writer_kernel;
+    std::string writer_kernel;
     if (output_rm) {
         writer_kernel = "tt_metal/kernels/dataflow/writer_unary.cpp";
         writer_rt_args = {dst_dram_buffer->address(), 0, uint(M * N)};
@@ -357,7 +354,7 @@ bool matmul_large_block(
         uint(activations_rm),
         uint(output_rm)};
 
-    string compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block.cpp";
+    std::string compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block.cpp";
 
     auto mm_kernel = tt_metal::CreateKernel(
         program,

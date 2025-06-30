@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdio>
-
 #include "moreh_dot_backward_device_operation.hpp"
 #include <tt-metalium/util.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -102,7 +100,7 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
 
     std::vector<uint32_t> compute_kernel_args = {};
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
 
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/moreh_dot_backward.cpp";

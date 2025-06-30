@@ -17,7 +17,6 @@
 #include <memory>
 #include <string>
 #include <tuple>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -50,7 +49,7 @@ using namespace tt::test_utils;
 
 namespace unit_tests::sfpu_util {
 
-const map<string, std::map<string, string>> sfpu_op_to_op_name = {
+const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = {
     // FIXME: #1157
     {"relu", {{"SFPU_OP_CHAIN_0", "relu_tile_init(); relu_tile(0);"}}},
     {"exponential", {{"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}},
@@ -62,7 +61,7 @@ const map<string, std::map<string, string>> sfpu_op_to_op_name = {
     {"tanh", {{"SFPU_OP_CHAIN_0", "tanh_tile_init(); tanh_tile(0);"}}},
 };
 
-bfloat16 sfpu_function(const string& op_name, const bfloat16& input) {
+bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
     if (op_name == "relu") {
         return bfloat16(fmaxf(input.to_float(), 0.0f));
     } else if (op_name == "exponential") {
@@ -90,7 +89,7 @@ bfloat16 sfpu_function(const string& op_name, const bfloat16& input) {
         return bfloat16(0.0f);
     }
 }
-vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const string& op_name, const int seed) {
+vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std::string& op_name, const int seed) {
     if ((op_name == "sqrt") or (op_name == "log")) {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(0.0001f, 4.0f, numel, seed);
     } else if ((op_name == "exponential") or (op_name == "gelu") or (op_name == "reciprocal")) {
@@ -102,7 +101,7 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const stri
 }
 
 bool is_close_packed_sfpu_output(
-    const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const string& op_name) {
+    const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const std::string& op_name) {
     if (op_name == "tanh") {
         return is_close_packed_vectors<bfloat16, uint32_t>(
             vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.175f, 0.1f); });
@@ -206,7 +205,7 @@ bool run_sfpu_all_same_buffer(CommandQueue& cq, const SfpuConfig& test_config) {
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-        std::map<string, string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
+        std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
 
         sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
@@ -247,12 +246,13 @@ bool run_sfpu_all_same_buffer(CommandQueue& cq, const SfpuConfig& test_config) {
 }
 
 }  // namespace unit_tests::compute::sfpu
-class SingleCoreSingleCardSfpuParameterizedFixture : public CommandQueueSingleCardFixture,
-                                                     public testing::WithParamInterface<std::tuple<size_t, string>> {};
+class SingleCoreSingleCardSfpuParameterizedFixture
+    : public CommandQueueSingleCardFixture,
+      public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 TEST_P(SingleCoreSingleCardSfpuParameterizedFixture, TensixSfpuCompute) {
     for (IDevice* device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
-        string sfpu_op = std::get<1>(GetParam());
+        std::string sfpu_op = std::get<1>(GetParam());
 
         if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") {
             GTEST_SKIP() << "log has very high abs and relative diff";
@@ -295,12 +295,12 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "tanh")));
 class SingleCoreSingleCardSfpuParameterizedApproxFixture
     : public CommandQueueSingleCardFixture,
-      public testing::WithParamInterface<std::tuple<size_t, string>> {};
+      public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
 TEST_P(SingleCoreSingleCardSfpuParameterizedApproxFixture, TensixSfpuCompute) {
     for (IDevice* device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
-        string sfpu_op = std::get<1>(GetParam());
+        std::string sfpu_op = std::get<1>(GetParam());
 
         if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") {
             GTEST_SKIP() << "log has very high abs and relative diff";
@@ -343,12 +343,12 @@ INSTANTIATE_TEST_SUITE_P(
 
 class MultiCoreSingleCardSfpuParameterizedApproxFixture
     : public CommandQueueSingleCardFixture,
-      public testing::WithParamInterface<std::tuple<size_t, string>> {};
+      public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
 TEST_P(MultiCoreSingleCardSfpuParameterizedApproxFixture, TensixAllCoreMultiTileSfpuApproxCompute) {
     for (IDevice* device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
-        string sfpu_op = std::get<1>(GetParam());
+        std::string sfpu_op = std::get<1>(GetParam());
 
         if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") {
             GTEST_SKIP() << "log has very high abs and relative diff";

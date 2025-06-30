@@ -181,7 +181,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             dynamic_alternate,     // alternate
         };
     }
-    std::map<string, string> kernel_defines;
+    std::map<std::string, std::string> kernel_defines;
     if (sharded) {
         kernel_defines["SHARDED"] = "1";
         shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);

@@ -635,7 +635,7 @@ static ReduceScatterKernelHandles build_line_reduce_scatter_worker_ct(
     std::vector<uint32_t> compute_kernel_args = {};
     constexpr bool fp32_dest_acc_en = false;
     constexpr bool math_approx_mode = false;
-    std::map<string, string> eltwise_defines = ttnn::operations::binary::utils::get_defines(reduce_op);
+    std::map<std::string, std::string> eltwise_defines = ttnn::operations::binary::utils::get_defines(reduce_op);
     auto math_kernel_id = tt::tt_metal::CreateKernel(
         program,
         reduce_kernel_path,

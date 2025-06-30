@@ -13,7 +13,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -64,8 +63,8 @@ bool reader_cb_writer(IDevice* device, const BankedConfig& cfg, const bool banke
     ////////////////////////////////////////////////////////////////////////////
     Program program = CreateProgram();
 
-    string reader_kernel_name = "";
-    string writer_kernel_name = "";
+    std::string reader_kernel_name = "";
+    std::string writer_kernel_name = "";
     size_t input_page_size_bytes = 0;
     size_t output_page_size_bytes = 0;
     std::vector<uint32_t> reader_runtime_args = {};

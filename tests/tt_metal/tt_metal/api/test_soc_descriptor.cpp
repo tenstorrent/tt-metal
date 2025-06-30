@@ -33,8 +33,8 @@ std::unordered_set<int> get_harvested_rows(chip_id_t device_id) {
     std::unordered_set<int> harvested_rows;
     int row_coordinate = 0;
     int tmp = harvested_rows_mask;
-    string delim = "";
-    string harvested_row_str;
+    std::string delim = "";
+    std::string harvested_row_str;
     while (tmp) {
         if (tmp & 1) {
             harvested_rows.insert(row_coordinate);

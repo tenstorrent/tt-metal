@@ -502,12 +502,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
 
-    std::map<string, string> mm_kernel_defines;
-    std::map<string, string> mm_kernel_in0_sender_sharded_defines;
-    std::map<string, string> mm_kernel_in0_sender_interleaved_defines;
-    std::map<string, string> mm_kernel_in1_sender_writer_defines;
-    std::map<string, string> mm_kernel_in1_receiver_writer_defines;
-    std::map<string, string> mm_kernel_in1_receiver_writer_other_noc_setup_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_in0_sender_sharded_defines;
+    std::map<std::string, std::string> mm_kernel_in0_sender_interleaved_defines;
+    std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+    std::map<std::string, std::string> mm_kernel_in1_receiver_writer_defines;
+    std::map<std::string, std::string> mm_kernel_in1_receiver_writer_other_noc_setup_defines;
     if (bias_buffer != nullptr) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";

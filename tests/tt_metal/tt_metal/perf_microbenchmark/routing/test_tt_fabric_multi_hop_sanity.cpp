@@ -258,7 +258,7 @@ int main(int argc, char** argv) {
 
     CoreCoord gk_core = {gk_x, gk_y};
 
-    std::map<string, string> defines;
+    std::map<std::string, std::string> defines;
 
     try {
         const std::filesystem::path tg_mesh_graph_desc_path =

@@ -11,7 +11,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <exception>
@@ -21,7 +20,6 @@
 #include <optional>
 #include <string>
 #include <tuple>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -544,7 +542,7 @@ int main(int argc, char** argv) {
     //                      Initial Runtime Args Parse
     ////////////////////////////////////////////////////////////////////////////
     std::vector<std::string> input_args(argv, argv + argc);
-    string arch_name = "";
+    std::string arch_name = "";
     try {
         std::tie(arch_name, input_args) =
             test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");

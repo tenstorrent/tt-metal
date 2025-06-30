@@ -84,9 +84,9 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     ////////////////////////////////////////////////////////////////////////////
     //                         Kernels defines
     ////////////////////////////////////////////////////////////////////////////
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
+    std::map<std::string, std::string> compute_defines;
 
     if (weight_decay != 0) {
         reader_defines["WEIGHT_DECAY"] = 1;

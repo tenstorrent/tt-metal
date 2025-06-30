@@ -564,10 +564,10 @@ void validate_bias_tensor(const ttnn::Tensor& bias_tensor) {
 
 void validate_weights_format(const std::string& weights_format) {
     TT_FATAL(weights_format.size() == 4, "weights_format must have exactly 4 characters");
-    TT_FATAL(weights_format.find("O") != string::npos, "weights_format must contain \"O\"");
-    TT_FATAL(weights_format.find("I") != string::npos, "weights_format must contain \"I\"");
-    TT_FATAL(weights_format.find("H") != string::npos, "weights_format must contain \"H\"");
-    TT_FATAL(weights_format.find("W") != string::npos, "weights_format must contain \"W\"");
+    TT_FATAL(weights_format.find("O") != std::string::npos, "weights_format must contain \"O\"");
+    TT_FATAL(weights_format.find("I") != std::string::npos, "weights_format must contain \"I\"");
+    TT_FATAL(weights_format.find("H") != std::string::npos, "weights_format must contain \"H\"");
+    TT_FATAL(weights_format.find("W") != std::string::npos, "weights_format must contain \"W\"");
     TT_FATAL(weights_format == "OIHW", "Conv2d weights format must be \"OIHW\"");
 }
 

@@ -44,7 +44,6 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
-#include "utils.hpp"
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -1567,7 +1566,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
         router_channels_mask += 0x1 << (uint32_t)router_chan;
     }
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
     const auto topology = fabric_context.get_fabric_topology();
     if (topology == tt::tt_fabric::Topology::Mesh) {
         defines["FABRIC_2D"] = "";

@@ -210,7 +210,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
         static_cast<uint32_t>(rstd_has_value),
         block_size};
 
-    std::map<string, string> reader_defines{};
+    std::map<std::string, std::string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};
     if (gamma_has_value) {
         reader_defines["GAMMA_HAS_VALUE"] = "1";

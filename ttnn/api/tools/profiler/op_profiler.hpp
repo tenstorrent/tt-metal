@@ -163,7 +163,8 @@ private:
 
 inline ProgramHashToOpName program_hash_to_opname_{};
 
-inline void start_tracy_zone(const string& source, const string& functName, uint32_t lineNum, uint32_t color = 0) {
+inline void start_tracy_zone(
+    const std::string& source, const std::string& functName, uint32_t lineNum, uint32_t color = 0) {
 #if defined(TRACY_ENABLE)
     auto tracySrcLoc =
         ___tracy_alloc_srcloc(lineNum, source.c_str(), source.length(), functName.c_str(), functName.length());
@@ -176,7 +177,7 @@ inline void start_tracy_zone(const string& source, const string& functName, uint
 #endif
 }
 
-inline bool stop_tracy_zone(const string& name = "", uint32_t color = 0) {
+inline bool stop_tracy_zone(const std::string& name = "", uint32_t color = 0) {
     bool callStackWasEmpty = true;
 #if defined(TRACY_ENABLE)
     if (!call_stack.empty()) {

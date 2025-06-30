@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
-#include <memory>
 #include <set>
 #include <string_view>
 #include <type_traits>
@@ -20,7 +19,6 @@
 
 #include "assert.hpp"
 #include "data_types.hpp"
-#include "hal.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"
@@ -135,21 +133,22 @@ void Kernel::add_defines(const std::map<std::string, std::string>& defines) {
     this->defines_.insert(defines.begin(), defines.end());
 }
 
-void KernelImpl::process_defines(const std::function<void(const string& define, const string& value)> callback) const {
+void KernelImpl::process_defines(
+    const std::function<void(const std::string& define, const std::string& value)> callback) const {
     for (const auto &[define, value] : this->defines_) {
         callback(define, value);
     }
 }
 
 void DataMovementKernel::process_defines(
-    const std::function<void(const string &define, const string &value)> callback) const {
+    const std::function<void(const std::string& define, const std::string& value)> callback) const {
     KernelImpl::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
     callback("NOC_MODE", std::to_string(this->config_.noc_mode));
 }
 
 void ComputeKernel::process_defines(
-    const std::function<void(const string &define, const string &value)> callback) const {
+    const std::function<void(const std::string& define, const std::string& value)> callback) const {
     for (const auto &[define, value] : this->defines_) {
         callback(define, value);
     }
@@ -158,7 +157,7 @@ void ComputeKernel::process_defines(
 }
 
 void EthernetKernel::process_defines(
-    const std::function<void(const string &define, const string &value)> callback) const {
+    const std::function<void(const std::string& define, const std::string& value)> callback) const {
     KernelImpl::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
     // pass default noc mode as eth does not need it, just for compile to pass
@@ -443,7 +442,7 @@ bool DataMovementKernel::binaries_exist_on_disk(const IDevice* device) const {
     const int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
-    const string build_success_marker_path =
+    const std::string build_success_marker_path =
         build_state.get_out_path() + this->get_full_kernel_name() + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
     return std::filesystem::exists(build_success_marker_path);
 }
@@ -488,7 +487,7 @@ bool EthernetKernel::binaries_exist_on_disk(const IDevice* device) const {
     const int erisc_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), erisc_core_type, dm_class_idx, erisc_id);
-    const string build_success_marker_path =
+    const std::string build_success_marker_path =
         build_state.get_out_path() + this->get_full_kernel_name() + "/" + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
     return std::filesystem::exists(build_success_marker_path);
 }
@@ -546,12 +545,12 @@ bool ComputeKernel::binaries_exist_on_disk(const IDevice* device) const {
     const JitBuildStateSubset& build_states = BuildEnvManager::get_instance().get_kernel_build_states(
         device->build_id(), tensix_core_type, compute_class_idx);
 
-    const string output_path = build_states.build_ptr[0]->get_out_path();
+    const std::string output_path = build_states.build_ptr[0]->get_out_path();
     for (uint32_t i = 0; i < build_states.size; i++) {
         TT_ASSERT(build_states.build_ptr[i]->get_out_path() == output_path);
     }
 
-    const string build_success_marker_path =
+    const std::string build_success_marker_path =
         output_path + this->get_full_kernel_name() + "/" + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
     return std::filesystem::exists(build_success_marker_path);
 }

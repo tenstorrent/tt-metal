@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
 #include <optional>
+#include <string>
 #include <variant>
 
 #include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
@@ -294,8 +294,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
                                                       (std::uint32_t)block_size};
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    std::map<string, string> reader_defines;
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> compute_defines;
     if (gamma.has_value()) {
         reader_defines["FUSE_GAMMA"] = "1";
     }

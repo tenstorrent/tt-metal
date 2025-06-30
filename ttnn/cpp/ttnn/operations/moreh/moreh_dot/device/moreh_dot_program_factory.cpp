@@ -78,7 +78,7 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
 
     std::vector<uint32_t> compute_kernel_args = {};
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 

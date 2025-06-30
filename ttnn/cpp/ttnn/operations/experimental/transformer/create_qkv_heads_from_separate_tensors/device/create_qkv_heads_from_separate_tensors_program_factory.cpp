@@ -60,7 +60,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_qkv_separate(
         (std::uint32_t)head_dim / TILE_WIDTH,  // tiles per head
     };
 
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     if (transpose_k) {
         reader_defines["TRANSPOSE_K_HEADS"] = "1";
     }

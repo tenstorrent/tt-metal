@@ -12,12 +12,8 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include "device/device_impl.hpp"
-#include "mesh_graph.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include <umd/device/tt_xy_pair.h>
-#include "utils.hpp"
 
 enum class CoreType;
 
@@ -52,7 +48,7 @@ struct TerminationInfo {
     uint32_t val;            // Termination signal value
 };
 
-static std::vector<string> dispatch_kernel_file_names = {
+static std::vector<std::string> dispatch_kernel_file_names = {
     "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH
     "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH_HD
     "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH_H
@@ -154,9 +150,9 @@ protected:
     };
 
     [[maybe_unused]] KernelHandle configure_kernel_variant(
-        const string& path,
+        const std::string& path,
         const std::vector<uint32_t>& compile_args,
-        std::map<string, string> defines_in,
+        std::map<std::string, std::string> defines_in,
         bool is_active_eth_core,
         bool send_to_brisc,
         bool force_watcher_no_inline,

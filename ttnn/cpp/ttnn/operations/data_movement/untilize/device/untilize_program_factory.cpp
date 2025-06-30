@@ -1047,7 +1047,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     }
 
     // Writer compute defines
-    std::map<string, string> writer_compute_defines;
+    std::map<std::string, std::string> writer_compute_defines;
     if (output_is_sharded) {
         writer_compute_defines["SHARDED"] = "1";
     }
@@ -1380,13 +1380,13 @@ operation::ProgramWithCallbacks untilize_single_core(
         tt::CBIndex::c_16, program, core, output_single_tile_size, output_cb_num_tiles, output_cb_data_format);
 
     // Reader compute defines
-    std::map<string, string> reader_compute_defines;
+    std::map<std::string, std::string> reader_compute_defines;
     if (input_is_sharded) {
         reader_compute_defines["SHARDED"] = "1";
     }
 
     // Writer compute defines
-    std::map<string, string> writer_compute_defines;
+    std::map<std::string, std::string> writer_compute_defines;
     if (output_is_sharded) {
         writer_compute_defines["SHARDED"] = "1";
     }

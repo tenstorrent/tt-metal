@@ -29,7 +29,6 @@
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
 #include "dispatch/system_memory_manager.hpp"
-#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -490,7 +489,7 @@ void PrefetchKernel::CreateKernel() {
     auto downstream_s_virtual_noc_coords =
         device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_s_virtual_core);
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
         {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
         {"UPSTREAM_NOC_INDEX", std::to_string(noc_selection_.upstream_noc)},  // Unused, remove later

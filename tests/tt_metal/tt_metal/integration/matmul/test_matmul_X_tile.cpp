@@ -12,13 +12,10 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
-#include <initializer_list>
-#include <iterator>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -73,8 +70,8 @@ struct MatmulTileConfig {
     bool fp32_dest_acc_en = false;
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
-    string reader_kernel;
-    string compute_kernel;
+    std::string reader_kernel;
+    std::string compute_kernel;
     vector<uint32_t> compute_kernel_args;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 };
@@ -264,7 +261,7 @@ void matmul_tile(
             1 * single_tile_size_bfp16b};
     }
 
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
 
     compute_defines["WITH_DT"] = cfg.with_dt ? "1" : "0";
     compute_defines["TEST_INIT_SHORT"] = cfg.test_init_short ? "1" : "0";

@@ -137,7 +137,7 @@ std::tuple<GeluBackwardDeviceOperation::operation_attributes_t, GeluBackwardDevi
 GeluBackwardDeviceOperation::invoke(
     const Tensor& grad_output,
     const Tensor& input,
-    const string& approximate,
+    const std::string& approximate,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& preallocated_output) {
