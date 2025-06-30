@@ -124,8 +124,9 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
 def test_vit(device, batch_size, is_single_card_n300):
     # Test is ran either on n300 or n150
     # If it's n300, there's a problem with eth dispatch, hence lower perf
+    # Issue: #23173
     if is_single_card_n300:
-        expected_samples_per_sec = 1255
+        expected_samples_per_sec = 1329
     else:  # n150
         expected_samples_per_sec = 1460
     torch.manual_seed(0)
