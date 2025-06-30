@@ -23,7 +23,7 @@ def _get_experts_on_device(num_experts, expert_mapping, device):
     return [e for e in range(num_experts) if expert_mapping[0, 0, e, device] == 1]
 
 
-def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping):
+def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping, apply_fake_expert=True):
     # sparse tokens is [devices, batch, 1, hidden_size]
     # desired expert contributions tensor is [devices, experts/devices, batch, hidden_size]
     # we'll multiply the tokens by the index of their assigned expert to mock expert application.
@@ -53,9 +53,9 @@ def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping):
                 local_expert_idx = experts_on_device.index(expert_idx)
 
                 # multiply by expert index to mock application of expert
-                input_contribs_tensor[d, local_expert_idx, b, :] = sparse_tokens[d, b, 0, :] * (
-                    -1 if expert_idx == 0 else expert_idx
-                )
+                input_contribs_tensor[d, local_expert_idx, b, :] = sparse_tokens[d, b, 0, :]
+                if apply_fake_expert:
+                    input_contribs_tensor[d, local_expert_idx, b, :] *= -1 if expert_idx == 0 else expert_idx
                 token_expert_count += 1
 
     assert token_expert_count == batch * selected_experts_k
@@ -88,7 +88,7 @@ def get_output_combined_contribs(sparse_contribs, expert_indices, expert_mapping
     assert experts % devices == 0
     experts_per_device = experts // devices
 
-    output_combined_contribs_tensor = torch.ones(selected_experts_k, batch * replication_dim, 1, hidden) * 7
+    output_combined_contribs_tensor = torch.zeros(selected_experts_k, batch * replication_dim, 1, hidden)
     real_data_map = torch.zeros(output_combined_contribs_tensor.shape[:-2])
 
     def _rep_idx(m0, m1, b):
