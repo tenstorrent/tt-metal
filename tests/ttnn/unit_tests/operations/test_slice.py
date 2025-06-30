@@ -205,7 +205,6 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
         )
         this_ttnn_input = ttnn.reshape(this_ttnn_input, this_ttnn_input.padded_shape)
         this_ttnn_input = ttnn.reshape(this_ttnn_input, [1, 1, -1, this_ttnn_input.padded_shape[-1]])
-        print(this_torch_input.shape)
         memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             this_ttnn_input.shape,
             parallel_config,
@@ -1176,6 +1175,7 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         [[2, 64, 64, 256], 32, 4, 4],
         [[2, 64, 64, 512], 16, 4, 4],
         [[2, 16, 16, 1024], 4, 4, 4],
+        [[2, 128, 128, 256], 32, 8, 4],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
