@@ -18,7 +18,6 @@ void disable_erisc_app();
 
 // Pointer to exit routine, (so it may be called from a kernel).
 [[gnu::noreturn]] extern void (*erisc_exit)();
-
 #endif
 
 inline uint32_t debug_get_which_riscv() {
