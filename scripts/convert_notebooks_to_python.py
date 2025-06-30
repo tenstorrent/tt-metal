@@ -110,6 +110,7 @@ def main() -> None:
     # Stage new or changed files
     files_to_add = new_files + updated_files
     if files_to_add:
+        subprocess.run(["black"] + [str(f) for f in files_to_add])
         subprocess.run(["git", "add"] + [str(f) for f in files_to_add], check=True)
         print("🟢 Staged files:")
         for f in files_to_add:
