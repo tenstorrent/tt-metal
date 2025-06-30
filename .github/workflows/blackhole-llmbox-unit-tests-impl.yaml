@@ -31,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {name: fabric 1D unit tests, cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*" },
+          {name: fabric 1D unit tests, cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*" },
           {name: fabric 2D fixture unit tests, cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*" },
           {name: fabric system health tests, cmd: ./build/test/tt_metal/tt_fabric/test_system_health },
           {name: cpp unit tests eth, cmd: ./build/test/tt_metal/unit_tests_eth },
