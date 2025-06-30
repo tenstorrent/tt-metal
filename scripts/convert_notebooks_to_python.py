@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
 """
 This script is intended to be used as a Git pre-commit hook for maintaining Jupyter notebooks tutorials
 in a 'notebooks/' directory that require synchronized Python script exports in a 'python/' directory.
