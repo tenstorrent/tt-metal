@@ -173,23 +173,23 @@ class TtDetect:
         self.ones_tensor = parameters.ones_tensor
 
     def __call__(self, input_list):
-        stems_0 = self.stem_0(input_list[0])  # 0.9997389200968582
+        stems_0 = self.stem_0(input_list[0])
         stems_1 = self.stem_1(input_list[1])
         stems_2 = self.stem_2(input_list[2])
 
-        cls_feat_0 = self.cls_convs_0(stems_0)  # 0.9997921782741845
+        cls_feat_0 = self.cls_convs_0(stems_0)
         cls_feat_1 = self.cls_convs_1(stems_1)
         cls_feat_2 = self.cls_convs_2(stems_2)
 
-        cls_output_0 = self.cls_preds_0(cls_feat_0)  # 0.9991740648633347
+        cls_output_0 = self.cls_preds_0(cls_feat_0)
         cls_output_1 = self.cls_preds_1(cls_feat_1)
         cls_output_2 = self.cls_preds_2(cls_feat_2)
 
-        reg_feat_0 = self.reg_convs_0(stems_0)  # 0.9994888125544774
+        reg_feat_0 = self.reg_convs_0(stems_0)
         reg_feat_1 = self.reg_convs_1(stems_1)
         reg_feat_2 = self.reg_convs_2(stems_2)
 
-        reg_output_0 = self.reg_preds_0(reg_feat_0)  # 0.9996698228867917
+        reg_output_0 = self.reg_preds_0(reg_feat_0)
         reg_output_1 = self.reg_preds_1(reg_feat_1)
         reg_output_2 = self.reg_preds_2(reg_feat_2)
 
@@ -213,7 +213,7 @@ class TtDetect:
         reg_output_0 = ttnn.to_layout(reg_output_0, ttnn.TILE_LAYOUT)
         reg_output_1 = ttnn.to_layout(reg_output_1, ttnn.TILE_LAYOUT)
         reg_output_2 = ttnn.to_layout(reg_output_2, ttnn.TILE_LAYOUT)
-        reg_output_0 = ttnn.softmax(reg_output_0, 1)  # 0.9991807435119049
+        reg_output_0 = ttnn.softmax(reg_output_0, 1)
         reg_output_1 = ttnn.softmax(reg_output_1, 1)
         reg_output_2 = ttnn.softmax(reg_output_2, 1)
 
@@ -221,21 +221,19 @@ class TtDetect:
         reg_output_1 = ttnn.permute(reg_output_1, (0, 2, 3, 1))
         reg_output_2 = ttnn.permute(reg_output_2, (0, 2, 3, 1))
 
-        reg_output_0 = self.proj_conv(reg_output_0)  # 0.999489687472359
+        reg_output_0 = self.proj_conv(reg_output_0)
         reg_output_1 = self.proj_conv(reg_output_1)
         reg_output_2 = self.proj_conv(reg_output_2)
 
         cls_output_0 = ttnn.to_layout(cls_output_0, ttnn.TILE_LAYOUT)
         cls_output_1 = ttnn.to_layout(cls_output_1, ttnn.TILE_LAYOUT)
         cls_output_2 = ttnn.to_layout(cls_output_2, ttnn.TILE_LAYOUT)
-        cls_output_0 = ttnn.sigmoid_accurate(cls_output_0)  # 0.9988012614164754
+        cls_output_0 = ttnn.sigmoid_accurate(cls_output_0)
         cls_output_1 = ttnn.sigmoid_accurate(cls_output_1)
         cls_output_2 = ttnn.sigmoid_accurate(cls_output_2)
 
         cls_output_0 = ttnn.permute(cls_output_0, (0, 3, 1, 2))
-        cls_output_0 = ttnn.reshape(
-            cls_output_0, (1, 80, cls_output_0.shape[2] * cls_output_0.shape[3])
-        )  # 0.9988012614164754
+        cls_output_0 = ttnn.reshape(cls_output_0, (1, 80, cls_output_0.shape[2] * cls_output_0.shape[3]))
 
         cls_output_1 = ttnn.permute(cls_output_1, (0, 3, 1, 2))
         cls_output_1 = ttnn.reshape(cls_output_1, (1, 80, cls_output_1.shape[2] * cls_output_1.shape[3]))
@@ -244,7 +242,7 @@ class TtDetect:
         cls_output_2 = ttnn.reshape(cls_output_2, (1, 80, cls_output_2.shape[2] * cls_output_2.shape[3]))
 
         reg_output_0 = ttnn.permute(reg_output_0, (0, 3, 1, 2))
-        reg_output_0 = ttnn.reshape(reg_output_0, (1, 4, reg_output_0.shape[3]))  # 0.9994905204673834
+        reg_output_0 = ttnn.reshape(reg_output_0, (1, 4, reg_output_0.shape[3]))
 
         reg_output_1 = ttnn.permute(reg_output_1, (0, 3, 1, 2))
         reg_output_1 = ttnn.reshape(reg_output_1, (1, 4, reg_output_1.shape[3]))
@@ -253,14 +251,12 @@ class TtDetect:
         reg_output_2 = ttnn.reshape(reg_output_2, (1, 4, reg_output_2.shape[3]))
 
         cls_score_list = ttnn.concat([cls_output_0, cls_output_1, cls_output_2], dim=-1)
-        cls_score_list = ttnn.permute(cls_score_list, (0, 2, 1))  # 0.9991715983465246
-        # print("cls_score_list: ", cls_score_list.shape)
+        cls_score_list = ttnn.permute(cls_score_list, (0, 2, 1))
 
         reg_dist_list = ttnn.concat([reg_output_0, reg_output_1, reg_output_2], dim=-1)
-        reg_dist_list = ttnn.permute(reg_dist_list, (0, 2, 1))  # 0.9994794266027146
-        # print("reg_dist_list: ", reg_dist_list.shape)
+        reg_dist_list = ttnn.permute(reg_dist_list, (0, 2, 1))
 
-        c1, c2 = reg_dist_list[:, :, :2], reg_dist_list[:, :, 2:4]  # c1: 0.9993869273605248, c2: 0.9995389026118358
+        c1, c2 = reg_dist_list[:, :, :2], reg_dist_list[:, :, 2:4]
         c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT)
         c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT)
         x1y1 = self.anchors - c1
@@ -269,10 +265,10 @@ class TtDetect:
         c_xy = x1y1 + x2y2
         c_xy = ttnn.div(c_xy, 2)
         wh = x2y2 - x1y1
-        bbox = ttnn.concat([c_xy, wh], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 0.9999729864547064
+        bbox = ttnn.concat([c_xy, wh], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        bbox = ttnn.multiply(bbox, self.strides)  # 0.9999609121870366
+        bbox = ttnn.multiply(bbox, self.strides)
 
         output = ttnn.concat([bbox, self.ones_tensor, cls_score_list], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        return output  # 0.9999822426296433
+        return output

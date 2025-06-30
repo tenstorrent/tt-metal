@@ -264,8 +264,6 @@ class CSPBepBackbone(nn.Module):
         )
 
     def forward(self, x):
-        print("CSPBepBackbone")
-
         outputs = []
         x = self.stem(x)
         x = self.ERBlock_2(x)
@@ -639,7 +637,6 @@ class Detect(nn.Module):
         )
 
     def forward(self, x):
-        print("meeeeeeeeeeeee")
         if self.training:
             cls_score_list = []
             reg_distri_list = []

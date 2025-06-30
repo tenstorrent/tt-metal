@@ -1,18 +1,34 @@
 # Yolov6l
 
-## How to run
+### Platforms:
 
-To run the inference, make sure to build the project, activate the environment, and set the appropriate environment variables.
-For more information, refer to the [installation and build guide](https://docs.tenstorrent.com/tt-metalium/latest/get_started/get_started.html#install-and-build).
+Wormhole N150, N300
 
-If running on Wormhole N300, the following environment variable needs to be set:
+**Note:** On N300, make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
 
-```sh
+Or, make sure to set the following environment variable in the terminal:
+```
 export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 ```
 
-Command to run the inference pipeline with random tensor of resolution 640x480:
+To obtain the perf reports through profiler, please build with following command:
 ```
-pytest tests/ttnn/integration_tests/yolov6l/test_ttnn_yolov6l.py
+./build_metal.sh -p
 ```
-Note: Model runs only with pretrained weights, which are auto-downloaded.
+
+### Introduction:
+YOLOv6-L is a large variant of the YOLOv6 family—an advanced real-time object detection model developed by Meituan. YOLOv6 is designed to offer high performance in both accuracy and speed, making it suitable for industrial applications like autonomous driving, surveillance, and robotics.
+
+Resource link - [source](https://github.com/meituan/YOLOv6)
+
+### Details:
+- The entry point to yolov6l model is TtYolov6l in `models/experimental/yolov6l/tt/ttnn_yolov6l.py`.
+- Batch size :1
+- Supported Input Resolution - (640,640) (Height,Width)
+
+### How to Run:
+
+Use the following command to run the model :
+```
+pytest --disable-warnings tests/ttnn/integration_tests/yolov6l/test_ttnn_yolov6l.py
+```

@@ -24,14 +24,12 @@ def test_yolov6l_bifusion(device, reset_seeds):
     stride = int(model.stride.max())
 
     model = model.neck.Bifusion0
-    # print("Model:", model)
 
     torch_input_0 = torch.randn(1, 256, 20, 15)
     torch_input_1 = torch.randn(1, 512, 40, 30)
     torch_input_2 = torch.randn(1, 256, 80, 60)
 
     parameters = create_yolov6l_model_parameters(model, [torch_input_0, torch_input_1, torch_input_2], device)
-    # print("parameters: ", parameters)
 
     ttnn_model = TtBiFusion(device, parameters, parameters.model_args)
 
@@ -65,4 +63,4 @@ def test_yolov6l_bifusion(device, reset_seeds):
 
     output = ttnn.to_torch(output)
     output = output.permute(0, 3, 1, 2)
-    assert_with_pcc(torch_output, output, pcc=0.99)  # 0.9995782952298082
+    assert_with_pcc(torch_output, output, pcc=0.99)

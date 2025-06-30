@@ -45,4 +45,4 @@ def test_yolov6l_sppf(device, reset_seeds):
 
     output = ttnn.to_torch(output)
     output = output.permute(0, 3, 1, 2)
-    assert_with_pcc(torch_output, output, pcc=0.99)  # 0.9980581202603553
+    assert_with_pcc(torch_output, output, pcc=0.99)

@@ -65,26 +65,22 @@ class TtCSPRepBiFPANNeck:
     def __call__(self, input_list):
         (input_tensor_3, input_tensor_2, input_tensor_1, input_tensor_0) = input_list
 
-        fpn_out0 = self.reduce_layer0(input_tensor_0)  # 0.999878667684729
-        f_concat_layer0 = self.Bifusion0([fpn_out0, input_tensor_1, input_tensor_2])  # 0.9993895364128311
-        f_out0 = self.Rep_p4(f_concat_layer0)  # 0.998799638155911
+        fpn_out0 = self.reduce_layer0(input_tensor_0)
+        f_concat_layer0 = self.Bifusion0([fpn_out0, input_tensor_1, input_tensor_2])
+        f_out0 = self.Rep_p4(f_concat_layer0)
 
-        fpn_out1 = self.reduce_layer1(f_out0)  # 0.9988461081975012
-        f_concat_layer1 = self.Bifusion1([fpn_out1, input_tensor_2, input_tensor_3])  # 0.9995457655913254
-        pan_out2 = self.Rep_p3(f_concat_layer1)  # 0.992003386118465
+        fpn_out1 = self.reduce_layer1(f_out0)
+        f_concat_layer1 = self.Bifusion1([fpn_out1, input_tensor_2, input_tensor_3])
+        pan_out2 = self.Rep_p3(f_concat_layer1)
 
-        down_feat1 = self.downsample2(pan_out2)  # 0.9756114398037503
-        p_concat_layer1 = ttnn.concat(
-            [down_feat1, fpn_out1], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG
-        )  # 0.9898480027706477
-        pan_out1 = self.Rep_n3(p_concat_layer1)  # 0.9938682383574283
+        down_feat1 = self.downsample2(pan_out2)
+        p_concat_layer1 = ttnn.concat([down_feat1, fpn_out1], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pan_out1 = self.Rep_n3(p_concat_layer1)
         pan_out_1 = ttnn.clone(pan_out1)
 
-        down_feat0 = self.downsample1(pan_out1)  # 0.9923168621259163
-        p_concat_layer2 = ttnn.concat(
-            [down_feat0, fpn_out0], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG
-        )  # 0.9991588783563563
-        pan_out0 = self.Rep_n4(p_concat_layer2)  # 0.9980490227242041
+        down_feat0 = self.downsample1(pan_out1)
+        p_concat_layer2 = ttnn.concat([down_feat0, fpn_out0], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pan_out0 = self.Rep_n4(p_concat_layer2)
 
         outputs = [pan_out2, pan_out_1, pan_out0]
 

@@ -59,12 +59,10 @@ class TtBiFusion:
         )
 
     def __call__(self, x):
-        conv_t = self.upsample(x[0])  # 0.9995941267948735
-        conv1 = self.cv1(x[1])  # 0.9998716115293327
-        conv2 = self.cv2(x[2])  # 0.9998482469451077
-        downsample = self.downsample(conv2)  # 0.9994702238930427
-        output = ttnn.concat(
-            [conv_t, conv1, downsample], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG
-        )  # 0.9998203040852289
-        output = self.cv3(output)  # 0.9995782952298082
+        conv_t = self.upsample(x[0])
+        conv1 = self.cv1(x[1])
+        conv2 = self.cv2(x[2])
+        downsample = self.downsample(conv2)
+        output = ttnn.concat([conv_t, conv1, downsample], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output = self.cv3(output)
         return output

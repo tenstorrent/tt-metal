@@ -24,14 +24,12 @@ def test_detect(device, reset_seeds):
     stride = int(model.stride.max())
 
     model = model.detect
-    # print(model)
 
     torch_input_0 = torch.randn(1, 128, 80, 60)
     torch_input_1 = torch.randn(1, 256, 40, 30)
     torch_input_2 = torch.randn(1, 512, 20, 15)
 
     parameters = create_yolov6l_model_parameters_detect(model, [torch_input_0, torch_input_1, torch_input_2], device)
-    # print(parameters)
 
     ttnn_model = TtDetect(device, parameters, parameters.model_args)
 
@@ -65,4 +63,4 @@ def test_detect(device, reset_seeds):
     torch_output = model([torch_input_0, torch_input_1, torch_input_2])
 
     output = ttnn.to_torch(output)
-    assert_with_pcc(torch_output, output, pcc=0.99)  # 0.9999822426296433
+    assert_with_pcc(torch_output, output, pcc=0.99)

@@ -93,8 +93,6 @@ class CSPBepBackbone(nn.Module):
         )
 
     def forward(self, x):
-        # print("CSPBepBackbone^^^^")
-
         outputs = []
         x = self.stem(x)
         x = self.ERBlock_2(x)

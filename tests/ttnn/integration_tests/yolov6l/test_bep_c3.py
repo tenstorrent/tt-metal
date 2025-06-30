@@ -45,6 +45,4 @@ def test_yolov6l_bepc3(device, reset_seeds):
 
     output = ttnn.to_torch(output)
     output = output.permute(0, 3, 1, 2)
-    assert_with_pcc(
-        torch_output, output, pcc=0.99
-    )  # 0.997888137211529 # 0.9992650890703259 for ERBlock_2, 0.00023885248473996893 for ERBlock_3, 0.9992280392898779 for ERBlock_4, 0.9994297556913778 for ERBlock_5
+    assert_with_pcc(torch_output, output, pcc=0.99)

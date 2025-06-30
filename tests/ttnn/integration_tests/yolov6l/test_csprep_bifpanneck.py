@@ -24,7 +24,6 @@ def test_yolov6l_csprep_bifpanneck(device, reset_seeds):
     stride = int(model.stride.max())
 
     model = model.neck
-    # print(model)
 
     torch_input_0 = torch.randn(1, 128, 160, 120)
     torch_input_1 = torch.randn(1, 256, 80, 60)
@@ -34,7 +33,6 @@ def test_yolov6l_csprep_bifpanneck(device, reset_seeds):
     parameters = create_yolov6l_model_parameters(
         model, [torch_input_0, torch_input_1, torch_input_2, torch_input_3], device
     )
-    # print(parameters)
 
     ttnn_model = TtCSPRepBiFPANNeck(device, parameters, parameters.model_args)
 
@@ -77,15 +75,12 @@ def test_yolov6l_csprep_bifpanneck(device, reset_seeds):
 
     output_0 = ttnn.to_torch(output[0])
     output_0 = output_0.permute(0, 3, 1, 2)
-    pcc_passed, pcc_message = comp_pcc(torch_output[0], output_0, pcc=0.99)  # 0.998155129694973
-    print("output_0: ", pcc_passed, pcc_message)
+    assert_with_pcc(torch_output[0], output_0, pcc=0.99)
 
     output_1 = ttnn.to_torch(output[1])
     output_1 = output_1.permute(0, 3, 1, 2)
-    pcc_passed, pcc_message = comp_pcc(torch_output[1], output_1, pcc=0.99)  # 0.9985567746709203
-    print("output_1: ", pcc_passed, pcc_message)
+    assert_with_pcc(torch_output[1], output_1, pcc=0.99)
 
     output_2 = ttnn.to_torch(output[2])
     output_2 = output_2.permute(0, 3, 1, 2)
-    pcc_passed, pcc_message = comp_pcc(torch_output[2], output_2, pcc=0.99)  # 0.9991956207065126
-    print("output_2: ", pcc_passed, pcc_message)
+    assert_with_pcc(torch_output[2], output_2, pcc=0.99)

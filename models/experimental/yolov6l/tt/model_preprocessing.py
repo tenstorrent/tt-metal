@@ -72,8 +72,6 @@ def create_yolov6l_model_parameters(model: Model, torch_input: torch.Tensor, dev
     feats = [(80, 60), (40, 30), (20, 15)]
     strides = torch.tensor([8.0, 16.0, 32.0])
     anchor_points, stride_tensor = generate_anchors(device, feats, strides)
-    # parameters["anchors"] = anchor_points
-    # parameters["strides"] = stride_tensor
 
     ones_tensor = torch.ones((1, 6300, 1), dtype=torch.float32)
     ones_tensor = ttnn.from_torch(ones_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)

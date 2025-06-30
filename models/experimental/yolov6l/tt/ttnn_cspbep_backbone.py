@@ -74,22 +74,22 @@ class TtCSPBepBackbone:
 
     def __call__(self, x):
         outputs = []
-        stem = self.stem(x)  # 0.9998324299933435
-        erblock2_0 = self.erblock2_0(stem)  # 0.9995408313699374
-        erblock2_1 = self.erblock2_1(erblock2_0)  # 0.9973235311581851
+        stem = self.stem(x)
+        erblock2_0 = self.erblock2_0(stem)
+        erblock2_1 = self.erblock2_1(erblock2_0)
         outputs.append(erblock2_1)
 
-        erblock3_0 = self.erblock3_0(erblock2_1)  # 0.9980346895595409
-        erblock3_1 = self.erblock3_1(erblock3_0)  # 0.9659582791446282
+        erblock3_0 = self.erblock3_0(erblock2_1)
+        erblock3_1 = self.erblock3_1(erblock3_0)
         outputs.append(erblock3_1)
 
-        erblock4_0 = self.erblock4_0(erblock3_1)  # 0.9683885830291584
-        erblock4_1 = self.erblock4_1(erblock4_0)  # 0.9733628369619753
+        erblock4_0 = self.erblock4_0(erblock3_1)
+        erblock4_1 = self.erblock4_1(erblock4_0)
         erblock4 = ttnn.clone(erblock4_1)
         outputs.append(erblock4)
 
-        erblock5_0 = self.erblock5_0(erblock4_1)  # 0.9761851206152861
-        erblock5_1 = self.erblock5_1(erblock5_0)  # 0.9824179477964243
-        erblock5_2 = self.erblock5_2(erblock5_1)  # 0.9840913142957943
+        erblock5_0 = self.erblock5_0(erblock4_1)
+        erblock5_1 = self.erblock5_1(erblock5_0)
+        erblock5_2 = self.erblock5_2(erblock5_1)
         outputs.append(erblock5_2)
         return tuple(outputs)
