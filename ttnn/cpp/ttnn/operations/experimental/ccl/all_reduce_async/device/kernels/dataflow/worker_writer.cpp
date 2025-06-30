@@ -30,17 +30,6 @@ constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_target
 constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
 
 void kernel_main() {
-    /*
-    DPRINT << "writer kernel start \n";
-    DPRINT << "my_chip_id: " << my_chip_id << "\n";
-    DPRINT << "reserved_packet_header_cb_id: " << reserved_packet_header_cb_id << "\n";
-    DPRINT << "num_packet_headers_storable: " << num_packet_headers_storable << "\n";
-    DPRINT << "cb0_id: " << cb0_id << "\n";
-    DPRINT << "packet_size_in_pages: " << packet_size_in_pages << "\n";
-    DPRINT << "tensor0_page_size: " << tensor0_page_size << "\n";
-    DPRINT << "num_targets_forward_direction: " << num_targets_forward_direction << "\n";
-    DPRINT << "num_targets_backward_direction: " << num_targets_backward_direction << "\n";
-    */
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -123,7 +112,6 @@ void kernel_main() {
         uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
         num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
         cb_wait_front(cb0_id, num_tiles_to_read_this_core);
-        // DPRINT << "num_tiles_to_read_this_core: " << num_tiles_to_read_this_core << "\n";
         size_t l1_read_addr = get_read_ptr(cb0_id);
 
         uint64_t noc0_dest_noc_addr =
