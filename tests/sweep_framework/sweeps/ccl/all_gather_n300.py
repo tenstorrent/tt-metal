@@ -95,12 +95,21 @@ def run(
 
     input_tensor = torch.rand(input_shape).bfloat16()
 
-    input_tensors = torch.chunk(input_tensor, num_devices, dim)
-    tt_input_tensors = []
-    for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(tensor=t, data_type=input_dtype, tile=ttnn.Tile(tile)).to(layout))
+    input_tensor_mesh = ttnn.from_torch(
+        input_tensor,
+        device=device,
+        layout=layout,
+        dtype=input_dtype,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            device,
+            ttnn.MeshMapperConfig(
+                [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+            ),
+        ),
+        tile=ttnn.Tile(tile),
+    )
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(device, mem_config)
     for i in range(num_iters):
         start_time = start_measuring_time()
         tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
