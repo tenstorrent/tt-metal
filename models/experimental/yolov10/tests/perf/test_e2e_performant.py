@@ -15,7 +15,7 @@ from models.utility_functions import run_for_wormhole_b0
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 19104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype",
@@ -35,6 +35,8 @@ def test_e2e_performant(
     model_location_generator,
     resolution,
 ):
+    device.enable_program_cache()
+
     performant_runner = YOLOv10PerformantRunner(
         device,
         batch_size,
@@ -46,7 +48,7 @@ def test_e2e_performant(
 
     inference_times = []
     for _ in range(10):
-        input_shape = (1, *resolution, 3)
+        input_shape = (1, 3, *resolution)
         torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
         t0 = time.time()
