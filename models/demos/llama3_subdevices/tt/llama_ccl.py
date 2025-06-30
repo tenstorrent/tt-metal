@@ -457,6 +457,7 @@ class TT_CCL:
         lm_head=False,
         buffer_key=None,
         use_noc1_only=False,
+        use_custom_worker_core_placement=False,
     ):
         if self.mode == "decode":
             if lm_head:
@@ -478,6 +479,7 @@ class TT_CCL:
                 topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
                 subdevice_id=self.worker_sub_device_id,
                 use_noc1_only=use_noc1_only,
+                use_custom_worker_core_placement=use_custom_worker_core_placement,
             )
 
             if lm_head:

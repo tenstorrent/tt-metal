@@ -387,6 +387,7 @@ class TtLlamaAttention(LightweightModule):
             cluster_axis=0,
             num_links=4 if is_RING_6U else 3,
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+            use_custom_worker_core_placement=True,
         )
         ttnn.deallocate(dense_out_ttnn)
 
