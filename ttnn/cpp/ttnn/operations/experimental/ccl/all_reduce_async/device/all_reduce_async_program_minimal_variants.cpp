@@ -453,7 +453,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         std::vector<uint32_t> reduction_reader_rt_args = {
             has_work,
             reduction_semaphore_ids[link],  // reduction_semaphore_id
-            semaphore.address(),            // gloabal semaphore_address
+            semaphore.address(),            // global semaphore_address
             out_ready_sem_wait_value,       // out_ready_sem_wait_value
         };
         tt::tt_metal::SetRuntimeArgs(
