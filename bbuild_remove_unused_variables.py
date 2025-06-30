@@ -56,6 +56,7 @@ def comment_out_unused_variables(log_file, num_variables_to_comment=5, output_lo
     )
     common_variable_types = [
         "const",
+        "IDevice*",
         "const auto",
         "int",
         "short",
@@ -227,9 +228,9 @@ def comment_out_unused_variables(log_file, num_variables_to_comment=5, output_lo
                         )
                         continue
 
-                    if "tt_metal" in original_line.strip():
-                        logging.info(f"Line {line_number} in {filename}:{line_number} contains tt_metal. Skipping.")
-                        continue
+                    # if "tt_metal" in original_line.strip():
+                    #     logging.info(f"Line {line_number} in {filename}:{line_number} contains tt_metal. Skipping.")
+                    #     continue
 
                     # Add comment to the line
                     source_lines[line_number - 1] = (
