@@ -10,7 +10,7 @@ fi
 run_perf_models_other() {
     local tt_arch=$1
     local test_marker=$2
-    fail=0
+    local fail=0
 
     if [ "$tt_arch" == "grayskull" ]; then
         env pytest models/demos/grayskull/resnet50/tests/test_perf_e2e_resnet50.py -m $test_marker; ((fail+=$?));
