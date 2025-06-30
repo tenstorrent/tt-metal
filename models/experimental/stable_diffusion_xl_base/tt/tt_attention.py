@@ -75,6 +75,11 @@ class TtAttention(nn.Module):
             self.tt_q_weights, _ = prepare_linear_params(device, q_weights, None, model_config.attention_weights_dtype)
             self.tt_k_weights, _ = prepare_linear_params(device, k_weights, None, model_config.attention_weights_dtype)
             self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, model_config.attention_weights_dtype)
+
+            self.k_program_config = model_config.get_matmul_config(f"{module_path}.to_k")
+            self.v_program_config = model_config.get_matmul_config(f"{module_path}.to_v")
+            assert self.k_program_config is not None, "k_program_config should not be None"
+            assert self.v_program_config is not None, "v_program_config should not be None"
         self.q_program_config = model_config.get_matmul_config(f"{module_path}.to_q")
         self.q_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_q")
 
@@ -106,6 +111,9 @@ class TtAttention(nn.Module):
                     use_height_and_width_as_shard_shape=True,
                 )
 
+            seq_len = hidden_states.shape[-2]
+            print(f"QKV matmul, seq_len: {seq_len}")
+
             qkv_fused = ttnn.matmul(
                 hidden_states,
                 self.tt_qkv_weights,
@@ -125,6 +133,7 @@ class TtAttention(nn.Module):
             )
             ttnn.deallocate(qkv_fused)
         else:
+            print(f"Q matmul, seq_len: {hidden_states.shape[-2]}")
             q_heads = ttnn.matmul(
                 hidden_states,
                 self.tt_q_weights,
@@ -132,15 +141,21 @@ class TtAttention(nn.Module):
                 compute_kernel_config=self.q_compute_kernel_config,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
+            print(f"K matmul, seq_len: {encoder_hidden_states.shape[-2]}")
             k_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_k_weights,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.default_compute_kernel_config,
+                program_config=self.k_program_config,
             )
+            print(f"V matmul, seq_len: {encoder_hidden_states.shape[-2]}")
             v_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_v_weights,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.default_compute_kernel_config,
+                program_config=self.v_program_config,
             )
 
             q_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -178,6 +193,7 @@ class TtAttention(nn.Module):
         )
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+        print(f"DO matmul, seq_len: {hidden_states.shape[-2]}")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_out_weights,
