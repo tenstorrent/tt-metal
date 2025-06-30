@@ -174,7 +174,7 @@ The ``InterleavedAddrGenFast`` object handles bank addressing and page size auto
   .. code-block:: cpp
 
     constexpr std::uint32_t num_dram_banks = 6; // Number of DRAM banks on Wormhole
-    for (uin32_t i = 0; i < num_tiles; i++) {
+    for (uint32_t i = 0; i < num_tiles; i++) {
         // Round-robin bank selection
         uint32_t bank_id = i % num_dram_banks;
         // Offset within the bank for the current tile
