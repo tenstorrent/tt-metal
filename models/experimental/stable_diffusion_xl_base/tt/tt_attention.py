@@ -21,7 +21,6 @@ class TtAttention(nn.Module):
         out_dim: int = None,
         kv_heads=None,
         dim_head: int = 64,
-        weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
         self.device = device
@@ -70,16 +69,18 @@ class TtAttention(nn.Module):
                 dim=-1,
             )
             self.tt_qkv_weights = ttnn.from_torch(
-                fused_qkv_weights, weights_dtype, device=device, layout=ttnn.TILE_LAYOUT
+                fused_qkv_weights, model_config.attention_weights_dtype, device=device, layout=ttnn.TILE_LAYOUT
             )
         else:
-            self.tt_q_weights, _ = prepare_linear_params(device, q_weights, None, weights_dtype)
-            self.tt_k_weights, _ = prepare_linear_params(device, k_weights, None, weights_dtype)
-            self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, weights_dtype)
+            self.tt_q_weights, _ = prepare_linear_params(device, q_weights, None, model_config.attention_weights_dtype)
+            self.tt_k_weights, _ = prepare_linear_params(device, k_weights, None, model_config.attention_weights_dtype)
+            self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, model_config.attention_weights_dtype)
         self.q_program_config = model_config.get_matmul_config(f"{module_path}.to_q")
         self.q_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_q")
 
-        self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, weights_dtype)
+        self.tt_out_weights, self.tt_out_bias = prepare_linear_params(
+            device, out_weights, out_bias, model_config.attention_weights_dtype
+        )
         self.dense_out_program_config = model_config.get_matmul_config(f"{module_path}.to_out")
         self.default_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_out")
         assert self.dense_out_program_config is not None, "dense_out_program_config should not be None"
