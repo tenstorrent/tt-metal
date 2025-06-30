@@ -159,7 +159,7 @@ The ``InterleavedAddrGenFast`` object handles bank addressing and page size auto
             .data_format = DataFormat::Float16_b,
         };
 
-        for(uin32_t i=0;i<num_tiles;i++) {
+        for(uint32_t i=0;i<num_tiles;i++) {
             noc_async_read_tile(i, in0, l1_buffer_addr);
             noc_async_read_barrier();
 
