@@ -43,7 +43,7 @@ from tracy import signpost
 PACKET_WORKER_CRS = ttnn.CoreRangeSet(
     [
         ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 2)),
-        ttnn.CoreRange(ttnn.CoreCoord(5, 3), ttnn.CoreCoord(6, 3)),
+        ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(2, 3)),
     ]
 )
 
@@ -631,7 +631,7 @@ def run_multi_core_matmul_1d(
     "device_params",
     [
         {
-            "trace_region_size": 1075200,
+            "trace_region_size": 1173504,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }

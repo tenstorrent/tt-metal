@@ -25,7 +25,7 @@ from tracy import signpost
 PACKET_WORKER_CRS = ttnn.CoreRangeSet(
     [
         ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 2)),
-        ttnn.CoreRange(ttnn.CoreCoord(5, 3), ttnn.CoreCoord(6, 3)),
+        ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(2, 3)),
     ]
 )
 

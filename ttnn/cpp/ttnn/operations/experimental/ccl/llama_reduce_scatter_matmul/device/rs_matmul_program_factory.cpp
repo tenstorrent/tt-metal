@@ -40,8 +40,11 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
     tt::tt_metal::Program program{};
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
     tt::tt_metal::SubDeviceId sub_device_id = operation_attributes.rs_op.subdevice_id.value();
-    CoreRangeSet rs_cores =
-        CoreRangeSet(std::set{::CoreRange{{1, 1}, {3, 2}}, ::CoreRange{{1, 3}, {2, 3}}, ::CoreRange{{1, 6}, {2, 7}}});
+    CoreRangeSet rs_cores = CoreRangeSet(std::set{
+        ::CoreRange{{1, 1}, {3, 2}},
+        ::CoreRange{{1, 3}, {2, 3}},
+        ::CoreRange{{2, 8}, {3, 8}},
+        ::CoreRange{{5, 3}, {6, 3}}});
     std::optional<CoreRangeSet> optional_core_range = rs_cores;
     return {
         std::move(program),
