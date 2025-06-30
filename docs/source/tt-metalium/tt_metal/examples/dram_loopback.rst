@@ -169,11 +169,25 @@ The ``InterleavedAddrGenFast`` object handles bank addressing and page size auto
     }
 
 .. note::
-    ``InterleavedAddrGenFast`` is a helper class that simplifies the generation of addresses for interleaved buffers. It is feasable and sometimes needed to calculate addresses manually, espicially for complex data disctibution schemes. Without the use of the ``InterleavedAddrGenFast`` class. The kernel would look like this:
+  ``InterleavedAddrGenFast`` is a helper class that simplifies the generation of addresses for interleaved buffers. It is feasable and sometimes needed to calculate addresses manually, espicially for complex data disctibution schemes. Without the use of the ``InterleavedAddrGenFast`` class. The kernel would look like this:
 
-    .. code-block:: cpp
+  .. code-block:: cpp
+    constexpr std::uint32_t num_dram_banks = 6; // Number of DRAM banks on Wormhole
+    for (uin32_t i = 0; i < num_tiles; i++) {
+        // Round-robin bank selection
+        uint32_t bank_id = i % num_dram_banks;
+        // Offset within the bank for the current tile
+        uint32_t offset_within_bank = i / num_dram_banks * tile_size_bytes;
+        std::uint64_t dram_buffer_src_noc_addr =
+            get_noc_addr_from_bank_id</*dram=*/true>(bank_id, dram_buffer_src_addr + offset_within_bank);
+        std::uint64_t dram_buffer_dst_noc_addr =
+            get_noc_addr_from_bank_id</*dram=*/true>(bank_id, dram_buffer_dst_addr + offset_within_bank);
 
-        // STUB: fill this in
+        noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, tile_size_bytes);
+        noc_async_read_barrier();
+        noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, tile_size_bytes);
+        noc_async_write_barrier();
+    }
 
 
 Setting runtime arguments for the data movement kernel
