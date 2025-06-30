@@ -788,6 +788,8 @@ TEST_F(Fabric2DFixture, TestUnicastRaw) {
 
 TEST_F(Fabric2DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 
+TEST_F(Fabric2DFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
+
 TEST_F(Fabric2DFixture, TestUnicastConnAPIRandom) {
     for (uint32_t i = 0; i < 10; i++) {
         RunTestUnicastConnAPIRandom(this);
@@ -890,6 +892,8 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
 
 TEST_F(Fabric2DDynamicFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
+
+TEST_F(Fabric2DDynamicFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
 
 // 2D Dynamic Routing Unidirectional mcast tests (no turns)
 TEST_F(Fabric2DDynamicFixture, TestLineMcastE1Hop) {
