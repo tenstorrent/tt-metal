@@ -87,7 +87,7 @@ run_perf_models_other() {
 run_perf_models_llm_javelin() {
     local tt_arch=$1
     local test_marker=$2
-    fail=0
+    local fail=0
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
         export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
