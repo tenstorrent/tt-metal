@@ -15,7 +15,6 @@ from models.experimental.yolov11.reference.yolov11 import Attention as torch_att
 from models.experimental.yolov11.tt.ttnn_yolov11_attention import TtnnAttention as ttnn_attention
 
 
-@pytest.mark.skip(reason="YOLOv11 tests are currently disabled")
 @pytest.mark.parametrize(
     "in_channel, out_channel, kernel, stride, padding, dilation, groups,fwd_input_shape",
     [
@@ -25,7 +24,6 @@ from models.experimental.yolov11.tt.ttnn_yolov11_attention import TtnnAttention 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolo_v11_attention(
     device,
-    use_program_cache,
     reset_seeds,
     in_channel,
     out_channel,
