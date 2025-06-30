@@ -119,10 +119,15 @@ jobs:
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} > workflow.json
           echo "[Info] Workflow run attempt jobs"
           # Try the original --paginate approach first, fall back to manual pagination if it fails
-          if gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate | jq -s '{total_count: .[0].total_count, jobs: map(.jobs) | add}' > workflow_jobs.json; then
+          paginated_output=$(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate 2>&1)
+          paginate_exit_code=$?
+
+          if [ $paginate_exit_code -eq 0 ]; then
             echo "Successfully fetched jobs using --paginate"
+            echo "$paginated_output" | jq -s '{total_count: .[0].total_count, jobs: map(.jobs) | add}' > workflow_jobs.json
           else
-            echo "--paginate failed, falling back to manual pagination"
+            echo "--paginate failed (exit code: $paginate_exit_code), falling back to manual pagination"
+            echo "Error output: $paginated_output"
             # Manual pagination to avoid 502 errors with --paginate
             # Get first page to determine total count
             first_page=$(gh api "/repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs?per_page=50&page=1")
