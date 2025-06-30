@@ -265,6 +265,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
     if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
+        ZoneScopedN("EARLY_RETURN");
         return;
     }
 
@@ -291,6 +292,7 @@ void DeviceProfiler::readRiscProfilerResults(
     }
 
     for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
+        ZoneScopedN("RISC_LOOP");
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
         if (data_source == ProfilerDataBufferSource::L1) {
             // Just grab the device end index
@@ -309,7 +311,6 @@ void DeviceProfiler::readRiscProfilerResults(
                 bufferRiscShift = riscEndIndex * kernel_profiler::PROFILER_L1_VECTOR_SIZE;
             }
             if ((control_buffer[kernel_profiler::DROPPED_ZONES] >> riscEndIndex) & 1) {
-                std::cout << "MOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO" << std::endl;
                 std::string warningMsg = fmt::format(
                     "Profiler DRAM buffers were full, markers were dropped! device {}, worker core {}, {}, Risc "
                     "{},  "
@@ -335,6 +336,7 @@ void DeviceProfiler::readRiscProfilerResults(
             std::string opname;
             for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
+                ZoneScopedN("BUFFER_LOOP");
                 if (!newRunStart && data_buffer.at(index) == 0 && data_buffer.at(index + 1) == 0) {
                     newRunStart = true;
                     opTime_H = 0;
@@ -1238,8 +1240,10 @@ void DeviceProfiler::dumpResults(
                     if (useSlowDispatchForReading(device, state)) {
                         core_l1_data_buffer = issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
                     } else {
-                        core_l1_data_buffer = issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
+                        core_l1_data_buffer = issueFastDispatchReadFromL1DataBuffer(device, worker_core);
                     }
+                } else {
+                    core_l1_data_buffer = issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
                 }
 
                 readRiscProfilerResults(
