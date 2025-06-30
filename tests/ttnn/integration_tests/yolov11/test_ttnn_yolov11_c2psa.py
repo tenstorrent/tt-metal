@@ -32,7 +32,6 @@ from models.experimental.yolov11.tt.ttnn_yolov11_c2psa import TtnnC2PSA as ttnn_
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolo_v11_c2psa_block(
     device,
-    use_program_cache,
     reset_seeds,
     in_channel,
     out_channel,

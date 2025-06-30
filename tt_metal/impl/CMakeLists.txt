@@ -97,11 +97,13 @@ set(FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/program_types.fbs
 )
 
+set(GENERATED_HEADERS)
 foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
     GENERATE_FBS_HEADER(${FBS_FILE})
-    list(APPEND IMPL_SRC ${FBS_GENERATED_HEADER_FILE})
+    list(APPEND GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
 endforeach()
 
+list(APPEND IMPL_SRC ${GENERATED_HEADERS})
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
