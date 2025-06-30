@@ -111,7 +111,7 @@ run_perf_models_llm_javelin() {
 run_perf_models_cnn_javelin() {
     local tt_arch=$1
     local test_marker=$2
-    fail=0
+    local fail=0
 
     # Run tests
     env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_unet/tests -m $test_marker; ((fail+=$?));
