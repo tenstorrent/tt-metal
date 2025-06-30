@@ -2,20 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
 import time
 
 import pytest
 import torch
 from loguru import logger
-import sys
 
+import models.demos.yolov7.reference.yolov7_model as yolov7_model
+import models.demos.yolov7.reference.yolov7_utils as yolov7_utils
 import ttnn
-
-from models.experimental.yolov7.runner.performant_runner import YOLOv7PerformantRunner
+from models.demos.yolov7.runner.performant_runner import YOLOv7PerformantRunner
 from models.utility_functions import run_for_wormhole_b0
-
-import models.experimental.yolov7.reference.yolov7_utils as yolov7_utils
-import models.experimental.yolov7.reference.yolov7_model as yolov7_model
 
 sys.modules["models.common"] = yolov7_utils
 sys.modules["models.yolo"] = yolov7_model

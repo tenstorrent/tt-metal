@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.yolov7.runner.performant_runner_infra import YOLOv7PerformanceRunnerInfra
+from models.demos.yolov7.runner.performant_runner_infra import YOLOv7PerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
