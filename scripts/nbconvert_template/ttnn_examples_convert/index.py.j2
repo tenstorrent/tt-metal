@@ -1,0 +1,11 @@
+{%- extends 'python/index.py.j2' -%}
+
+{% block header %}
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+{% endblock header %}
+
+{% block codecell %}
+{{ cell.source | ipython2python }}
+{% endblock codecell %}
