@@ -154,8 +154,6 @@ void DispatchKernel::GenerateStaticConfigs() {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
-        uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.dispatch_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;

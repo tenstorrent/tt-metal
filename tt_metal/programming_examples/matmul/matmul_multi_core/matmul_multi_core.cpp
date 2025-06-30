@@ -284,7 +284,6 @@ int main() {
 
         // Calculate matrix dimensions in tiles for the accelerator
         uint32_t Mt = M / TILE_HEIGHT;
-        uint32_t Kt = K / TILE_WIDTH;
         uint32_t Nt = N / TILE_WIDTH;
 
         // Calculate buffer sizes needed for each matrix in bytes
