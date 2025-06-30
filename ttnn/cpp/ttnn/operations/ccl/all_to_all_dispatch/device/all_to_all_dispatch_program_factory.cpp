@@ -25,6 +25,7 @@ namespace ttnn::operations::ccl {
 
 namespace detail {
 
+// Utilities to code-gen variadic length containers for kernels
 std::string stringify_vector(const std::vector<uint32_t>& vec) {
     std::string result = "{";
     for (const auto& elem : vec) {
@@ -490,6 +491,10 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
+    // Code-gen a mesh-position to fabric chip ID array for the writer kernel
+    // Code-gen a mesh-position to mesh-id array for the writer kernel
+    // Code-gen a direction array that is set to true when a direction has a valid connection (when a neighbor exists or
+    // if it's along a valid cluster axis)
     std::map<std::string, std::string> writer_defines = {
         {"DEST_CHIP_ID", detail::stringify_vector(dest_chip_id)},
         {"DEST_MESH_ID", detail::stringify_vector(dest_mesh_id)},
