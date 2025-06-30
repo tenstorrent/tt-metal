@@ -270,8 +270,11 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreShardedOptimized::override_
     uint32_t ncores = shard_spec.num_cores();
     uint32_t Wt = 0, Ht = 0;
     const auto ashape = input_tensor_a.padded_shape();
-    uint32_t N = ashape[0], C = ashape[1], H = ashape[2], W = ashape[3];
-    uint32_t bN = input_tensor_b->padded_shape()[0];
+    uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
+    uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
+    uint32_t H = ashape[-2];
+    uint32_t W = ashape[-1];
+    uint32_t bN = input_tensor_b->padded_shape().rank() >= 4 ? input_tensor_b->padded_shape()[-4] : 1;
     uint32_t NC = N * C;
     if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         Wt = shard_spec.shape[1] / TILE_WIDTH;
