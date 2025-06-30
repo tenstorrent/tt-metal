@@ -1163,6 +1163,14 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
                     break;
                 }
 
+                if (num_reserved_cores == num_cores_to_reserve - 1 && rtoptions_.get_fd_fabric() &&
+                    chip_id != get_associated_mmio_device(connnected_chip_id)) {
+                    // Last link reserved for dispatch
+                    // Only need fabric routers in the same tunnel
+                    num_reserved_cores++;
+                    break;
+                }
+
                 const auto eth_core = cores[i];
                 const auto connected_core =
                     std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core)));
