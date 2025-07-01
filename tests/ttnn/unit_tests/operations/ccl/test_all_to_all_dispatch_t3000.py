@@ -41,7 +41,7 @@ def gen_tokens(batch, hidden_size, seq_len, mesh_shape, devices, scheme="random"
     factor = 0
     for _ in range(batch):
         for _ in range(seq_len):
-            if scheme == "random":
+            if scheme == "random" or scheme == "worst_perf":
                 tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=dtype))
             elif scheme == "sequential":
                 tokens.append(torch.ones(1, 1, 1, hidden_size, dtype=dtype) * factor)
@@ -55,7 +55,7 @@ def gen_tokens(batch, hidden_size, seq_len, mesh_shape, devices, scheme="random"
 def gen_expert_mapping(experts, devices, scheme="random"):
     expert_mapping = torch.zeros(1, 1, experts, devices, dtype=torch.int16)
     for i in range(experts):
-        if scheme == "sequential":
+        if scheme == "sequential" or scheme == "worst_perf":
             device_id = i // devices
             expert_mapping[0, 0, i, device_id] = 1
         elif scheme == "random":
@@ -90,6 +90,10 @@ def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, 
                     current_expert += 1 + (k % 2)
                 elif scheme == "random":
                     expert_indices[b, 0, s, k] = torch.randint(0, experts, (1,))
+                elif scheme == "worst_perf":  # worst perf is when the expert index is always on the last device
+                    expert_indices[b, 0, s, k] = (
+                        experts - 1
+                    )  # technically each expert index should be different, but we're sending to the same device regardless
                 else:
                     raise ValueError(f"Invalid scheme: {scheme}")
     return expert_indices
@@ -160,7 +164,7 @@ def log_statistics(
         return
     if input_tokens.shape[3] != 7168:
         return
-    if input_tokens.shape[0] * input_tokens.shape[2] > 1000:
+    if input_tokens.shape[0] // mesh_shape[cluster_axis] * input_tokens.shape[2] > 1088:
         return
     # based on the cluster_axis, mesh_shape, topology, num_links, log the statistics of the input_tokens, expert_indices, expert_mapping, output_tensor, metadata_tensor
     # first print the number of devices along the cluster_axis
@@ -209,15 +213,23 @@ def log_statistics(
                     i, j
                 ] = 0  # no metadata packets sent to self or to devices that are not on the same row
 
-    logger.info(f"Token packet sending matrix: {total_token_packets_sent}")
-    logger.info(f"Metadata packet sending matrix: {total_metadata_packets_sent}")
-    logger.info(f"Unique token packets sent: {total_unique_packets_sent}")
-    logger.info(f"Unique metadata packets sent: {total_unique_metadata_packets_sent}")
+    # logger.info(f"Token packet sending matrix: {total_token_packets_sent}")
+    # logger.info(f"Metadata packet sending matrix: {total_metadata_packets_sent}")
+    # logger.info(f"Unique token packets sent: {total_unique_packets_sent}")
+    # logger.info(f"Unique metadata packets sent: {total_unique_metadata_packets_sent}")
 
     logger.info(f"Total token packets received: {torch.sum(total_token_packets_sent, dim=0)}")
     logger.info(f"Total metadata packets received: {torch.sum(total_metadata_packets_sent, dim=0)}")
     logger.info(f"Total unique token packets sent: {torch.sum(total_unique_packets_sent, dim=0)}")
     logger.info(f"Total unique metadata packets sent: {torch.sum(total_unique_metadata_packets_sent, dim=0)}")
+
+    total_packets_sent = torch.sum(total_token_packets_sent, dim=0) + torch.sum(total_metadata_packets_sent, dim=0)
+    total_unique_packets_sent = torch.sum(total_unique_packets_sent, dim=0) + torch.sum(
+        total_unique_metadata_packets_sent, dim=0
+    )
+    logger.info(f"All packets sent: {total_packets_sent}")
+    logger.info(f"All unique packets sent: {total_unique_packets_sent}")
+    logger.info(f"Percentage of unique packets sent: {total_unique_packets_sent / total_packets_sent}")
 
 
 def compare_results(
@@ -586,7 +598,7 @@ def run_all_to_all_dispatch_test(
                     break
             if not passed:
                 break
-        torch.set_printoptions(threshold=1000)
+
     logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
     assert (
         mesh_device.num_program_cache_entries() == 1
@@ -792,4 +804,162 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
         metadata_tensor,
         expert_mapping,
         mesh_shape,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize(
+    "seq_len, num_iters, warmup_iters",
+    [
+        (1, 40, 10),
+    ],
+    ids=["s1"],
+)
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_decode_perf(
+    mesh_device,
+    trace_mode,
+    mesh_shape,
+    cluster_axis,
+    batches_per_device,
+    experts_per_device,
+    select_experts_k,
+    hidden_size,
+    seq_len,
+    num_iters,
+    warmup_iters,
+    num_links,
+    topology,
+    dtype,
+    input_memory_config,
+    output_memory_config,
+):
+    if cluster_axis is None:
+        dispatch_devices = mesh_shape[0] * mesh_shape[1]
+    else:
+        dispatch_devices = mesh_shape[cluster_axis]
+
+    batch = batches_per_device * dispatch_devices
+    experts = experts_per_device * dispatch_devices
+
+    run_all_to_all_dispatch_test(
+        mesh_device,
+        mesh_shape,
+        batch,
+        experts,
+        select_experts_k,
+        hidden_size,
+        seq_len,
+        num_iters,
+        warmup_iters,
+        trace_mode,
+        num_links=num_links,
+        scheme="worst_perf",
+        topology=topology,
+        input_memory_config=input_memory_config,
+        output_memory_config=output_memory_config,
+        dtype=dtype,
+        cluster_axis=cluster_axis,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize(
+    "seq_len, num_iters, warmup_iters",
+    [
+        (128, 10, 5),
+    ],
+    ids=["s128"],
+)
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_prefill_perf(
+    mesh_device,
+    trace_mode,
+    mesh_shape,
+    cluster_axis,
+    batches_per_device,
+    experts_per_device,
+    select_experts_k,
+    hidden_size,
+    seq_len,
+    num_iters,
+    warmup_iters,
+    num_links,
+    topology,
+    dtype,
+    input_memory_config,
+    output_memory_config,
+):
+    if cluster_axis is None:
+        dispatch_devices = mesh_shape[0] * mesh_shape[1]
+    else:
+        dispatch_devices = mesh_shape[cluster_axis]
+
+    batch = batches_per_device * dispatch_devices
+    experts = experts_per_device * dispatch_devices
+
+    run_all_to_all_dispatch_test(
+        mesh_device,
+        mesh_shape,
+        batch,
+        experts,
+        select_experts_k,
+        hidden_size,
+        seq_len,
+        num_iters,
+        warmup_iters,
+        trace_mode,
+        num_links=num_links,
+        scheme="worst_perf",
+        topology=topology,
+        input_memory_config=input_memory_config,
+        output_memory_config=output_memory_config,
+        dtype=dtype,
+        cluster_axis=cluster_axis,
     )
