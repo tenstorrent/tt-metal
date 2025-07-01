@@ -49,7 +49,7 @@ jobs:
       - name: Enable Performance mode
         run: sudo cpupower frequency-set -g performance
       - name: Run sentence_bert tests
-        if: ${{ matrix.model-type == 'llm_javelin' && !cancelled()}}
+        if: ${{ matrix.model-type == 'llm_javelin' && !cancelled() }}
         timeout-minutes: 70
         uses: ./.github/actions/docker-run
         env:
