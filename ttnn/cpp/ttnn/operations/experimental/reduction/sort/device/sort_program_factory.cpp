@@ -334,8 +334,12 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     const auto device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
-    const uint32_t number_of_tiles_per_core =
+    uint32_t number_of_tiles_per_core =
         get_number_of_tiles_per_core(tensor_args.input_tensor.dtype(), output_tensors.at(1).dtype());
+
+    // DEBUG:
+    number_of_tiles_per_core = std::min(number_of_tiles_per_core, Wt);
+    ;
 
     // Calculate the number of cores utilized based on the input tensor shape
     const uint32_t all_core_utilization_count = (Wt + number_of_tiles_per_core - 1) / number_of_tiles_per_core;
@@ -457,7 +461,25 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     const auto cb_index_tensor_output =
         tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_output_cb_config);
 
-    constexpr uint32_t value_tensor_peer_cb_index = tt::CBIndex::c_6;
+    constexpr uint32_t value_tensor_intermediate_cb_index = tt::CBIndex::c_6;
+    const tt::tt_metal::CircularBufferConfig value_tensor_intermediate_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_scale_factor * value_tensor_tile_size,
+            {{value_tensor_intermediate_cb_index, value_tensor_cb_data_format}})
+            .set_page_size(value_tensor_intermediate_cb_index, index_tensor_tile_size);
+    const auto cb_value_intermediate_tensor =
+        tt::tt_metal::CreateCircularBuffer(program, core_range, value_tensor_intermediate_cb_config);
+
+    constexpr uint32_t index_tensor_intermediate_cb_index = tt::CBIndex::c_7;
+    const tt::tt_metal::CircularBufferConfig index_tensor_intermediate_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_scale_factor * index_tensor_tile_size,
+            {{index_tensor_intermediate_cb_index, index_tensor_cb_data_format}})
+            .set_page_size(index_tensor_intermediate_cb_index, index_tensor_tile_size);
+    const auto cb_index_tensor_intermediate =
+        tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_intermediate_cb_config);
+
+    constexpr uint32_t value_tensor_peer_cb_index = tt::CBIndex::c_8;
     const tt::tt_metal::CircularBufferConfig value_tensor_peer_cb_config =
         tt::tt_metal::CircularBufferConfig(
             cb_scale_factor * value_tensor_tile_size, {{value_tensor_peer_cb_index, value_tensor_cb_data_format}})
@@ -465,7 +487,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     const auto cb_value_peer_tensor =
         tt::tt_metal::CreateCircularBuffer(program, core_range, value_tensor_peer_cb_config);
 
-    constexpr uint32_t index_tensor_peer_cb_index = tt::CBIndex::c_7;
+    constexpr uint32_t index_tensor_peer_cb_index = tt::CBIndex::c_9;
     const tt::tt_metal::CircularBufferConfig index_tensor_peer_cb_config =
         tt::tt_metal::CircularBufferConfig(
             cb_scale_factor * index_tensor_tile_size, {{index_tensor_peer_cb_index, index_tensor_cb_data_format}})
@@ -473,7 +495,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     const auto cb_index_tensor_peer =
         tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_peer_cb_config);
 
-    constexpr uint32_t physical_core_lookup_table_cb_index = tt::CBIndex::c_8;
+    constexpr uint32_t physical_core_lookup_table_cb_index = tt::CBIndex::c_10;
     const tt::tt_metal::CircularBufferConfig physical_core_lookup_table_cb_config =
         tt::tt_metal::CircularBufferConfig(
             physical_core_lookup_table_tile_size,
@@ -491,6 +513,9 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         compute_with_storage_grid_size.y,
         input_tensor_cb_index,
         index_tensor_output_cb_index,
+        value_tensor_intermediate_cb_index,
+        index_tensor_intermediate_cb_index,
+        value_tensor_peer_cb_index,
         index_tensor_peer_cb_index,
         physical_core_lookup_table_cb_index,
         input_tensor_is_dram,
@@ -519,9 +544,9 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         compute_with_storage_grid_size.y,
         index_tensor_cb_index,
         value_tensor_cb_index,
-        value_tensor_is_dram,
         value_tensor_peer_cb_index,
         physical_core_lookup_table_cb_index,
+        value_tensor_is_dram,
         Wt,
         Ht,
         number_of_tiles_per_core,
@@ -549,6 +574,8 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         index_tensor_transposed_cb_index,
         value_tensor_cb_index,
         index_tensor_output_cb_index,
+        value_tensor_intermediate_cb_index,
+        index_tensor_intermediate_cb_index,
         value_tensor_peer_cb_index,
         index_tensor_peer_cb_index,
     };
@@ -599,9 +626,9 @@ uint32_t SortProgramFactoryHybrid::get_number_of_tiles_per_core(
     const DataType& input_dtype, const DataType& index_dtype) {
     if (input_dtype == DataType::FLOAT32 || input_dtype == DataType::UINT32 || input_dtype == DataType::INT32 ||
         index_dtype == DataType::INT32 || index_dtype == DataType::UINT32) {
-        return 64;
+        return 2;
     }
-    return 128;
+    return 2;
 }
 
 // Single row - multi core

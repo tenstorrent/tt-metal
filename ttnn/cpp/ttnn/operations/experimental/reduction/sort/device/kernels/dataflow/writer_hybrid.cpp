@@ -75,6 +75,16 @@ void kernel_main() {
     const uint16_t processing_pair_start = core_id * number_of_pairs_processed_by_each_core;
     const uint16_t processing_pair_end = processing_pair_start + number_of_pairs_processed_by_each_core;
 
+    DPRINT << "WRITER: "
+           << "core id: " << core_id << " output_tensor_buffer_addr: " << output_tensor_buffer_addr
+           << " grid_x: " << compute_with_storage_grid_size_x << " grid_y: " << compute_with_storage_grid_size_y
+           << " input_cb_index: " << index_tensor_cb_index << " output value_cb_index: " << value_tensor_cb_index
+           << " index_tensor_peer_cb_index: " << value_tensor_peer_cb_index
+           << " physical_core_lookup_table_cb_index: " << physical_core_lookup_table_cb_index << " Ht: " << Ht
+           << " Wt: " << Wt << " number_of_tiles_per_core: " << number_of_tiles_per_core
+           << " number_of_cores_used: " << number_of_cores_used << " sem_exchange_addr: " << sem_exchange_addr
+           << ENDL();
+
     // Output tensor config
     const uint32_t value_tensor_tile_size_bytes = get_tile_size(value_tensor_cb_index);
     const DataFormat value_tensor_data_format = get_dataformat(value_tensor_cb_index);
@@ -93,56 +103,21 @@ void kernel_main() {
             // PAUSE(); // TODO: Remove
         }  // w loop
 
-        uint32_t stages = ilog2(Wt);
-        for (uint32_t stage = 2; stage <= stages; stage++) {
-            for (uint32_t sub = stage; sub > 0; sub--) {
-                uint32_t sub_dist = 1 << (sub - 1);
-                uint16_t pair_id = 0;
-
-                // TOOD: We don't need to check for each tile if it's outside or inside core. We can simply check the
-                // first one
-                //       For a given sub, all tiles are either in-core or outside
-                //       If inside => do nothing
-                //      Otherwise => exchange
-                uint32_t i = processing_pair_start;
-                uint32_t j = i ^ sub_dist;
-                if (pair_id >= processing_pair_start && pair_id < processing_pair_end) {
-                    if (i >= global_tile_start && i < global_tile_end && j >= global_tile_start &&
-                        j < global_tile_end) {
-                        // Nothing
-                    } else {
-                        const uint32_t other_core_id = j / number_of_tiles_per_core;
-                        const std::pair<uint32_t, uint32_t> remote_core_physical =
-                            get_core_physical_coordinates(other_core_id, physical_core_lookup_table_cb_index);
-
-                        sort_noc_exchange_Wt_tiles(
-                            value_tensor_cb_index,
-                            value_tensor_peer_cb_index,
-                            number_of_tiles_per_core,
-                            value_tensor_tile_size_bytes,
-                            remote_core_physical.first,
-                            remote_core_physical.second,
-                            sem_self_exchange_ptr);
-                    }
-                }
-            }  // sub
-
-            // TODO: PUT BARRIER HERE
-
-        }  // stages
-
-        DPRINT << "READER: AFTER LOGIC:" << ENDL();  // TODO: Remove
+        DPRINT << "WRITER: AFTER LOGIC:" << ENDL();  // TODO: Remove
 
         // Write value tensor to DRAM
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
             cb_wait_front(value_tensor_cb_index, one_tile);
-            DPRINT << "WRITER: Writing tile: " << w << " at h: " << h << ENDL();  // TODO: remove
             const uint32_t l1_write_addr_val = get_read_ptr(value_tensor_cb_index);
             const uint32_t tile_offset = h * Wt + core_id * number_of_tiles_per_core + w;
+            DPRINT << "WRITER: Writing tile: " << w << " at h: " << h << ", at offset = " << tile_offset
+                   << ENDL();  // TODO: remove
             noc_async_write_tile(tile_offset, output_tensor_accessor, l1_write_addr_val);
             noc_async_write_barrier();
             cb_pop_front(value_tensor_cb_index, one_tile);
         }  // Wt loop
     }  // h loop
+    cb_push_back(physical_core_lookup_table_cb_index, one_tile);
+
     DPRINT << "WRITER: Finished reading and sorting tiles." << ENDL();  // TODO: remove
 }
