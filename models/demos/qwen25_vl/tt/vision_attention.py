@@ -182,7 +182,7 @@ class VisionAttention(LightweightModule):
                 qkv_bias,
                 device=self.mesh_device,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=cache_name("wqkv_bias_prefill_sharded"),
@@ -235,7 +235,7 @@ class VisionAttention(LightweightModule):
 
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
-            dtype=self.wqkv_dtype,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
