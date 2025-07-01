@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <string>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"

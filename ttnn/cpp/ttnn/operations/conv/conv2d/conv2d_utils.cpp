@@ -5,7 +5,6 @@
 #include <sys/types.h>
 #include <cstdint>
 #include <optional>
-#include <string>
 #include <tuple>
 
 #include "conv2d_utils.hpp"
