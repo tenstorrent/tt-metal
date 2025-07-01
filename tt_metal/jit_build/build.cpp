@@ -355,8 +355,8 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid data movement processor");
     this->lflags_ = env.lflags_;
     this->cflags_ = env.cflags_;
-    this->default_compile_opt_level_ = "Os";
-    this->default_linker_opt_level_ = "Os";
+    this->default_compile_opt_level_ = "O2";
+    this->default_linker_opt_level_ = "O2";
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
     this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
 
