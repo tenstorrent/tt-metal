@@ -48,7 +48,7 @@ jobs:
           name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
         run: sudo cpupower frequency-set -g performance
-      - name: Run sentence_bert tests
+      - name: Run falcon7b_common tests
         if: ${{ matrix.model-type == 'llm_javelin' && !cancelled() }}
         timeout-minutes: 70
         uses: ./.github/actions/docker-run
@@ -66,7 +66,50 @@ jobs:
             -e GITHUB_ACTIONS=true
           install_wheel: true
           run_args: |
-            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/sentence_bert/tests -m models_performance_bare_metal
+            export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+            env pytest -n auto models/demos/falcon7b_common/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py
+      - name: Run qwen tests
+        if: ${{ matrix.model-type == 'llm_javelin' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+            env QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct FAKE_DEVICE=N150 pytest -n auto models/demos/qwen/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py
+      - name: Run mamba tests
+        if: ${{ matrix.model-type == 'llm_javelin' && !cancelled() }}
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+            env pytest -n auto models/demos/wormhole/mamba/tests -m models_performance_bare_metal
             env python3 models/perf/merge_perf_results.py
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
