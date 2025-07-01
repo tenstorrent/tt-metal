@@ -88,7 +88,7 @@ FORCE_INLINE void read_window_with_top_left_index(
                             cb_wait_front(compute_sync_cb_id, 2);
                             // skip the first row where we are accumulating
                             fill_with_val(
-                                get_write_ptr(interm_cb_id) + TILE_WIDTH * in_cb_ntiles * 2,
+                                get_write_ptr(interm_cb_id) + TILE_WIDTH * in_cb_ntiles * BYTES_PER_ELEM,
                                 (TILE_HEIGHT - 1) * TILE_WIDTH * in_cb_ntiles,
                                 bf16_init_value);
                             cb_pop_front(compute_sync_cb_id, 2);
