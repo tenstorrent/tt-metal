@@ -343,7 +343,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_scalar_cb_id_0 = next_cb_index++;
     const uint32_t in_scalar_cb_pagesize = tile_size(in_df);
     const uint32_t in_scalar_cb_npages = 1 * multi_buffering_factor;
-    TT_FATAL(in_scalar_cb_npages == 2, "Kernel logic relys on scalar cb page number being 2");
+    TT_FATAL(in_scalar_cb_npages <= 2, "Kernel logic relys on scalar cb page number being 2");
     tt::tt_metal::create_cb(in_scalar_cb_id_0, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_0, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
@@ -639,7 +639,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     // modified 3: write back to output cb
     std::vector<uint32_t> cb_copy_args = {
-        tmp_out_cb_id, out_cb_id, out_nhw_per_core / nblocks, output_shape[3] / num_shards_c};
+        tmp_out_cb_id,
+        out_cb_id,
+        out_nhw_per_core / nblocks,
+        output_shape[3] / num_shards_c,
+        in_nblocks_c,
+        in_ntiles_c};
 
     std::string cb_coppy_kernel_fname =
         "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
