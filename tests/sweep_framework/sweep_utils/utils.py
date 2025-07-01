@@ -354,6 +354,7 @@ def profile_ttnn_call(device, function: Callable, *args: List[Any], **kwargs: Di
         for _ in range(IGNORE_RUNS):
             _results = function(*args, **kwargs)
 
+    ttnn.synchronize_device(device)
     start_time = start_measuring_time()
     for _ in range(REPEAT_RUNS):
         results = function(*args, **kwargs)
@@ -362,7 +363,6 @@ def profile_ttnn_call(device, function: Callable, *args: List[Any], **kwargs: Di
 
     # If this is called from pytest, get device time from profiler logs.
     if os.environ.get("PYTEST_CURRENT_TEST"):
-        ttnn.synchronize_device(device)
         ttnn.DumpDeviceProfiler(device)
         opPerfData = get_device_data_generate_report(
             PROFILER_LOGS_DIR, outputFolder=None, date=None, nameAppend=None, export_csv=False, cleanup_device_log=True
