@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cpp/ttnn/operations/experimental/reduction/cumsum/cumsum.hpp>
 #include "moreh_cumsum.hpp"
 namespace ttnn::operations::moreh::moreh_cumsum {
 Tensor MorehCumsum::invoke(
@@ -10,7 +11,8 @@ Tensor MorehCumsum::invoke(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return ttnn::prim::moreh_cumsum(input, dim, output, false, memory_config, compute_kernel_config);
+    return ttnn::experimental::cumsum(
+        input, dim, input.dtype(), output, false, memory_config.has_value() ? *memory_config : input.memory_config());
 }
 
 Tensor MorehCumsumBackward::invoke(
@@ -19,6 +21,12 @@ Tensor MorehCumsumBackward::invoke(
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return ttnn::prim::moreh_cumsum(output_grad, dim, input_grad, true, memory_config, compute_kernel_config);
+    return ttnn::experimental::cumsum(
+        output_grad,
+        dim,
+        output_grad.dtype(),
+        input_grad,
+        true,
+        memory_config.has_value() ? *memory_config : output_grad.memory_config());
 }
 }  // namespace ttnn::operations::moreh::moreh_cumsum
