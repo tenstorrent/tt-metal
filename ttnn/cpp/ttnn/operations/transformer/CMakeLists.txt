@@ -9,8 +9,11 @@ target_sources(
     PRIVATE
         attention_softmax/attention_softmax.cpp
         concatenate_heads/concatenate_heads.cpp
+        sdpa/device/ring_fusion.cpp
         sdpa/device/joint_sdpa_op.cpp
         sdpa/device/joint_sdpa_program_factory.cpp
+        sdpa/device/ring_joint_sdpa_op.cpp
+        sdpa/device/ring_joint_sdpa_program_factory.cpp
         sdpa/device/sdpa_op.cpp
         sdpa/device/sdpa_program_factory.cpp
         sdpa/sdpa.cpp
