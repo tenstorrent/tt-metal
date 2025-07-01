@@ -729,7 +729,7 @@ def run_llama3_demo(
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+            # fabric_config is configured in local conftest.py
         }
     ],
     indirect=True,
