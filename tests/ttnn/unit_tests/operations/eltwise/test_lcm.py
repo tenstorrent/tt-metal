@@ -211,7 +211,7 @@ def test_binary_lcm_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    tt_result = ttnn.lcm(tt_in_a, tt_in_b, use_legacy=False)
+    tt_result = ttnn.lcm(tt_in_a, tt_in_b, use_legacy=None)
     output_tensor = ttnn.to_torch(tt_result)
     assert torch.equal(golden, output_tensor)
 
