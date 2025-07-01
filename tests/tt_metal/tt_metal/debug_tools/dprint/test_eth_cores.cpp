@@ -15,7 +15,6 @@
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include <tt-metalium/device.hpp>
-#include "dprint_server.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -94,7 +93,7 @@ void RunTest(
         );
 
         // Clear the log file for the next core's test
-        DPrintServerClearLogFile();
+        MetalContext::instance().dprint_server()->clear_log_file();
     }
 }
 }

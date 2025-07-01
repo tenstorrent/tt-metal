@@ -47,7 +47,6 @@
 #include "dev_msgs.h"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
-#include "dprint_server.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
@@ -1389,7 +1388,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     bool profile_kernel = getDeviceProfilerState();
     std::vector<std::shared_future<void>> events;
-    DprintServerSetProfilerState(profile_kernel);
 
     auto sync_events = [&events] {
         for (auto& event : events) {

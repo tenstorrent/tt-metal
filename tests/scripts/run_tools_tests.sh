@@ -17,7 +17,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     echo "Running watcher dump tool tests..."
 
     # Run a test that populates basic fields but not watcher fields
-    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*PrintHanging
+    TT_METAL_WATCHER_KEEP_ERRORS=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*PrintHanging
 
     # Run dump tool w/ minimum data - no error expected.
     ./build/tools/watcher_dump -d=0 -w -c
