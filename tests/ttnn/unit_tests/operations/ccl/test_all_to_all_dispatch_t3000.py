@@ -141,6 +141,85 @@ def gen_tensors(
     return input_tokens, expert_indices, expert_mapping, output_tensor, metadata_tensor
 
 
+def log_statistics(
+    input_tokens,
+    expert_indices,
+    expert_mapping,
+    output_tensor,
+    metadata_tensor,
+    cluster_axis,
+    mesh_shape,
+    topology,
+    num_links,
+):
+    if cluster_axis is None:
+        return
+    if num_links != 1:
+        return
+    if topology != ttnn.Topology.Linear:
+        return
+    if input_tokens.shape[3] != 7168:
+        return
+    if input_tokens.shape[0] * input_tokens.shape[2] > 1000:
+        return
+    # based on the cluster_axis, mesh_shape, topology, num_links, log the statistics of the input_tokens, expert_indices, expert_mapping, output_tensor, metadata_tensor
+    # first print the number of devices along the cluster_axis
+    dispatch_devices = mesh_shape[cluster_axis]
+    duplicated_devices = mesh_shape[1 - cluster_axis]
+    total_devices = mesh_shape[0] * mesh_shape[1]
+
+    # [duplicated_devices * tokens, devices tensor]
+    # count all device to device sends
+    #
+    total_token_packets_sent = torch.zeros(total_devices, total_devices, dtype=torch.int32)
+    total_unique_packets_sent = torch.zeros(total_devices, total_devices, dtype=torch.int32)
+    was_token_sent = torch.zeros(input_tokens.shape[0], input_tokens.shape[2], total_devices, dtype=torch.int32)
+    for b in range(expert_indices.shape[0]):
+        for s in range(expert_indices.shape[2]):
+            for k in range(expert_indices.shape[3]):
+                expert_id = expert_indices[b, 0, s, k]
+
+                # this is all the devices the expert is assigned to
+                token_initial_device = b // (
+                    input_tokens.shape[0] // dispatch_devices
+                )  # this is the column device the token starts on all rows of duplicated
+                for device_assignment in range(total_devices):
+                    if expert_mapping[0, 0, expert_id, device_assignment] == 0:
+                        continue
+
+                    non_dispatch_device_idx = device_assignment // dispatch_devices
+
+                    starting_device_idx = non_dispatch_device_idx * dispatch_devices + token_initial_device
+                    if starting_device_idx != device_assignment:
+                        if was_token_sent[b, s, device_assignment] == 0:
+                            total_unique_packets_sent[starting_device_idx, device_assignment] += 7
+                        was_token_sent[b, s, device_assignment] = 1
+                        total_token_packets_sent[starting_device_idx, device_assignment] += 7  # 7 packets per token
+
+    # currently we also send batch extra
+    total_metadata_packets_sent = torch.zeros(total_devices, total_devices, dtype=torch.int32)
+    total_unique_metadata_packets_sent = torch.zeros(total_devices, total_devices, dtype=torch.int32)
+    for i in range(total_devices):
+        for j in range(total_devices):
+            if i != j and i // dispatch_devices == j // dispatch_devices:
+                total_metadata_packets_sent[i, j] = (input_tokens.shape[0] // dispatch_devices) * input_tokens.shape[2]
+                total_unique_metadata_packets_sent[i, j] = 1
+            else:
+                total_metadata_packets_sent[
+                    i, j
+                ] = 0  # no metadata packets sent to self or to devices that are not on the same row
+
+    logger.info(f"Token packet sending matrix: {total_token_packets_sent}")
+    logger.info(f"Metadata packet sending matrix: {total_metadata_packets_sent}")
+    logger.info(f"Unique token packets sent: {total_unique_packets_sent}")
+    logger.info(f"Unique metadata packets sent: {total_unique_metadata_packets_sent}")
+
+    logger.info(f"Total token packets received: {torch.sum(total_token_packets_sent, dim=0)}")
+    logger.info(f"Total metadata packets received: {torch.sum(total_metadata_packets_sent, dim=0)}")
+    logger.info(f"Total unique token packets sent: {torch.sum(total_unique_packets_sent, dim=0)}")
+    logger.info(f"Total unique metadata packets sent: {torch.sum(total_unique_metadata_packets_sent, dim=0)}")
+
+
 def compare_results(
     tt_sparse_output_token_tensor,
     tt_metadata_tensor,
@@ -247,6 +326,18 @@ def run_all_to_all_dispatch_test(
             scheme=scheme,
             dtype=tt_to_torch_dtype(dtype),
         )
+        if iter == 0:
+            log_statistics(
+                input_tokens,
+                expert_indices,
+                expert_mapping,
+                sparse_output_token_tensor,
+                metadata_tensor,
+                cluster_axis,
+                mesh_shape,
+                topology,
+                num_links,
+            )
         preallocated_output_tensor = torch.zeros((devices, batch, seq_len, hidden_size), dtype=tt_to_torch_dtype(dtype))
         preallocated_metadata_tensor = torch.zeros((devices, batch, seq_len, select_experts_k), dtype=torch.int32)
 
