@@ -71,6 +71,8 @@ class TtResnetBlock2D(nn.Module):
                 self.device, self.norm_weights_2.shape[0], self.norm_groups, self.norm_core_grid_2.y
             )
 
+        self.conv1_slice_config = get_DRAM_conv_config(module_path, 1)
+        self.conv1_config = model_config.get_conv_config(conv_path=f"{module_path}.conv1")
         (
             self.compute1_config,
             self.tt_conv1_weights,
@@ -80,13 +82,13 @@ class TtResnetBlock2D(nn.Module):
             device,
             conv_weights_1,
             conv_bias_1,
-            model_config.conv_w_dtype,
+            self.conv1_config.weights_dtype,
             fp32_dest_acc_en=True,
             math_fidelity=ttnn.MathFidelity.LoFi,
         )
-        self.conv1_slice_config = get_DRAM_conv_config(module_path, 1)
-        self.conv1_config = model_config.get_conv_config(conv_path=f"{module_path}.conv1")
 
+        self.conv2_slice_config = get_DRAM_conv_config(module_path, 2)
+        self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
         (
             self.compute2_config,
             self.tt_conv2_weights,
@@ -96,12 +98,10 @@ class TtResnetBlock2D(nn.Module):
             device,
             conv_weights_2,
             conv_bias_2,
-            model_config.conv_w_dtype,
+            self.conv2_config.weights_dtype,
             fp32_dest_acc_en=True,
             math_fidelity=ttnn.MathFidelity.LoFi,
         )
-        self.conv2_slice_config = get_DRAM_conv_config(module_path, 2)
-        self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
 
         if conv_shortcut:
             self.tt_conv3_weights, self.tt_conv3_bias = prepare_linear_params(

@@ -36,16 +36,17 @@ class TtUpsample2D(nn.Module):
         weights = state_dict[f"{module_path}.conv.weight"]
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
+        self.conv_slice_config = get_DRAM_conv_config(module_path, 1)
+        self.conv_config = model_config.get_conv_config(conv_path=module_path)
+
         self.compute_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
             device,
             weights,
             bias,
-            model_config.conv_w_dtype,
+            self.conv_config.weights_dtype,
             fp32_dest_acc_en=True,
             math_fidelity=ttnn.MathFidelity.LoFi,
         )
-        self.conv_slice_config = get_DRAM_conv_config(module_path, 1)
-        self.conv_config = model_config.get_conv_config(conv_path=module_path)
 
     def interpolate(self, hidden_states):
         hidden_states = ttnn.upsample(hidden_states, (self.scale_factor, self.scale_factor))
