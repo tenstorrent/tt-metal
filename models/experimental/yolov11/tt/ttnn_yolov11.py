@@ -41,7 +41,13 @@ class TtnnYoloV11:
         )
         self.detect = TtnnDetect(device, parameters.model_args.model[23], parameters.model[23])
 
-    def __call__(self, x):
+    def __call__(self, input, min_channels=8):
+        n, c, h, w = input.shape
+        channel_padding_needed = min_channels - c
+        x = ttnn.pad(input, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        ttnn.deallocate(input)
+        x = ttnn.permute(x, (0, 2, 3, 1))
+        x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
         x = self.conv1(self.device, x)
         x = self.conv2(self.device, x)
         x = self.c3k2_1(self.device, x)
