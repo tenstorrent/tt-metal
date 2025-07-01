@@ -72,17 +72,6 @@ async def shutdown():
     model.release()
 
 
-def process_output(output):
-    outs = []
-    output = output
-    cnt = 0
-    for item in output:
-        cnt = cnt + 1
-        output_i = [element.item() for element in item]
-        outs.append(output_i)
-    return outs
-
-
 @app.post("/objdetection_v2")
 async def objdetection_v2(file: UploadFile = File(...)):
     contents = await file.read()
@@ -108,7 +97,6 @@ async def objdetection_v2(file: UploadFile = File(...)):
     nms_thresh = 0.5
 
     output = []
-    # print(results["boxes"]["xyxy"])
     for i in range(len(results["boxes"]["xyxy"])):
         output.append(
             torch.concat(
@@ -123,14 +111,5 @@ async def objdetection_v2(file: UploadFile = File(...)):
             .numpy()
             .tolist()
         )
-    # boxes = post_processing(image, conf_thresh, nms_thresh, response)
-    # output = boxes[0]
-    # output = boxes
-    # try:
-    #    #output = process_output(output)
-    # except Exception as E:
-    #    print("the Exception is: ", E)
-    #    print("No objects detected!")
-    #    return []
     t3 = time.time()
     return output
