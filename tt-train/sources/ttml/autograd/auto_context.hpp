@@ -71,7 +71,7 @@ private:
 
     std::shared_ptr<DistributedContext> m_distributed_context;
 
-    friend class tt::stl::Indestructible<AutoContext>;
+    friend class ttsl::Indestructible<AutoContext>;
 };
 
 inline auto& ctx() {
