@@ -1468,8 +1468,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                         GenerateBinaries(device, build_options, kernel);
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }
-                    while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
-                    }
+                    detail::HashLookup::inst().wait_for_bin_generated(kernel_hash);
 
                     Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                 },
