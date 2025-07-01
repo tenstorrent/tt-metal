@@ -10,6 +10,7 @@
 
 constexpr uint32_t ONE_PAGE = 1;
 
+// choose the right C++ POD type at compile-time
 template <DataFormat df>
 struct df_to_std {
     using std_type = void;
@@ -73,10 +74,10 @@ struct ScatterCTAs {
     const uint32_t index_stick_size_bytes_log2;
     const uint32_t source_stick_size_bytes_log2;
     const uint32_t output_stick_size_bytes_log2;
-    const bool is_input_stick_size_bytes_pow2_min_32;
-    const bool is_index_stick_size_bytes_pow2_min_32;
-    const bool is_source_stick_size_bytes_pow2_min_32;
-    const bool is_output_stick_size_bytes_pow2_min_32;
+    const bool is_input_stick_size_bytes_pow2_min_32;   // necessary for InterleavedAddrGen
+    const bool is_index_stick_size_bytes_pow2_min_32;   // necessary for InterleavedAddrGen
+    const bool is_source_stick_size_bytes_pow2_min_32;  // necessary for InterleavedAddrGen
+    const bool is_output_stick_size_bytes_pow2_min_32;  // necessary for InterleavedAddrGen
 };
 
 FORCE_INLINE constexpr ScatterCTAs get_ctas() {
