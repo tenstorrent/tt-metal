@@ -130,6 +130,7 @@ jobs:
           install_wheel: true
           run_args: |
             env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_unet/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py >> output.txt 2>&1
       - name: Run stable_diffusion tests
         if: ${{ matrix.model-type == 'cnn_javelin' && !cancelled() }}
         timeout-minutes: 70
@@ -149,6 +150,7 @@ jobs:
           install_wheel: true
           run_args: |
             env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/stable_diffusion/tests -m models_performance_bare_metal --timeout=480
+            env python3 models/perf/merge_perf_results.py >> output.txt 2>&1
       - name: Run sentence_bert tests
         if: ${{ matrix.model-type == 'other' && !cancelled() }}
         timeout-minutes: 70
