@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 #include "reader_pool2d_sharded_common.hpp"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -29,6 +29,8 @@ template <
     uint32_t in_nbytes_c>
 FORCE_INLINE void read_window_with_top_left_index(
     uint64_t clear_value_addr, uint64_t in_l1_read_base_addr, uint64_t ind) {
+    DPRINT << "READER in_nbytes_c:" << in_nbytes_c << ENDL();
+
     if constexpr (is_wide_reduction) {
         for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
             cb_reserve_back(in_cb_id, npages_to_reserve);
@@ -52,7 +54,6 @@ FORCE_INLINE void read_window_with_top_left_index(
                 }
             }
             noc_async_read_barrier();  // At this line, read is complete.
-
             cb_push_back(in_cb_id, npages_to_reserve);
         }
     } else {
@@ -66,6 +67,10 @@ FORCE_INLINE void read_window_with_top_left_index(
             out_l1_write_addr += in_nbytes_c * window_w;
         }
         noc_async_read_barrier();
+        // DPRINT << "COMPUTE INPUT (READER OUTPUT):" << ENDL();
+        //  we print 64 rows here because multibuffering factor is 2 so we actually have 2 tile rows in the CB
+        //  if shape of tensor is changed we need to update the number of tiles we're prinitng here
+        // tt::data_movement::common ::print_bf16_pages(get_read_ptr(in_cb_id), 32 * 1, 64);
         cb_push_back(in_cb_id, npages_to_reserve);
     }
 }
@@ -112,6 +117,7 @@ FORCE_INLINE void fill_scalar(
  */
 void kernel_main() {
     constexpr uint32_t reader_nindices = get_compile_time_arg_val(0);
+    DPRINT << "reader_nindices:" << reader_nindices << ENDL();
     constexpr uint32_t window_h = get_compile_time_arg_val(1);
     constexpr uint32_t window_w = get_compile_time_arg_val(2);
 
@@ -233,7 +239,8 @@ void kernel_main() {
             first_row_value = true;
         }
 
-        for (uint16_t ind = start; ind <= end; ind += 2 * stride_w) {
+        constexpr uint32_t stride_multiple = split_reader ? 2 : 1;
+        for (uint16_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
             if constexpr (!one_scalar_per_core) {
                 fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, split_reader, TILE_WIDTH>(
                     scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);

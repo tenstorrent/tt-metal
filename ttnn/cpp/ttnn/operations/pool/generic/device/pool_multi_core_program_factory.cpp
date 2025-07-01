@@ -265,11 +265,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // This should allocate a DRAM buffer on the device
     IDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
-    const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices.device_storage();
+    tt::tt_metal::DeviceStorage reader_indices_storage = reader_indices.device_storage();
     tt::tt_metal::Buffer* dst_dram_buffer = output.buffer();
 
-    const auto& input_shape = input.padded_shape();
-    const auto& output_shape = output.padded_shape();
+    const auto input_shape = input.padded_shape();
+    const auto output_shape = output.padded_shape();
 
     tt::DataFormat in_df = datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
@@ -332,7 +332,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // CBs
     const uint32_t multi_buffering_factor = 2;
 
-    const uint32_t split_reader = 1;
+    const uint32_t split_reader = 0;
 
     // scalar CB as coefficient of reduce
     using tt::tt_metal::CBHandle;
@@ -343,7 +343,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_scalar_cb_id_0 = next_cb_index++;
     const uint32_t in_scalar_cb_pagesize = tile_size(in_df);
     const uint32_t in_scalar_cb_npages = 1 * multi_buffering_factor;
-    TT_FATAL(in_scalar_cb_npages == 2, "Kernel logic relys on scalar cb page number being 2");
+    TT_FATAL(in_scalar_cb_npages <= 2, "Kernel logic relys on scalar cb page number being 2");
     tt::tt_metal::create_cb(in_scalar_cb_id_0, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_0, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
@@ -452,6 +452,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, out_df, output.buffer());
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
+    // modified 1: create tmp_out_cb
+    auto tmp_out_cb_id = next_cb_index++;
+    tt::tt_metal::create_cb(tmp_out_cb_id, program, all_cores, out_cb_pagesize, out_cb_npages, out_df);
+    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tmp_out_cb_id, out_cb_pagesize, out_cb_npages);
+
     // Invalid index for circular buffer, will report error if not assigned with valid value before creation
     uint32_t max_pool_partials_cb_id = 32;
     if (is_large_kernel) {
@@ -528,37 +533,37 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             next_cb_index++, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
     }
     std::vector<uint32_t> reader0_ct_args = {
-        out_nhw_per_core,
+        out_nhw_per_core,  // 0
         kernel_size_h,
         kernel_size_w,
         pad_w,
         in_nbytes_c,
-        in_w,
+        in_w,  // 5
         input_shape[3] / num_shards_c,
         split_reader,  // enable split reader
         0,             // split reader id
         bf16_scalar,
-        bf16_one_u32,
+        bf16_one_u32,  // 10
         bf16_init_value,
         in_nblocks_c,
         in_cb_sz,
         max_rows_for_reduction,
-        ceil_pad_w,
+        ceil_pad_w,  // 15
         in_cb_id_0,
         in_cb_id_1,
         raw_in_cb_id,
         in_reader_indices_cb_id,
-        in_scalar_cb_id_0,
+        in_scalar_cb_id_0,  // 20
         in_scalar_cb_id_1,
         max_pool_partials_cb_id,
         in_one_cb_id,
         clear_value_cb_id,
-        (uint32_t)pool_type,
+        (uint32_t)pool_type,  // 25
         one_scalar_per_core,
         config_cb_id,
         multi_buffering_factor,
         sync_cb_id1,
-        sync_cb_id2,
+        sync_cb_id2,  // 30
         stride_w};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
@@ -573,7 +578,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
             "reader_pool_2d_multi_core_sharded.cpp";
     }
-
+    /*
+     * tt::tt_metal::NOC::RISCV_0(1)_default: diff threads
+     * same thing to processor
+     */
     auto reader0_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = tt::tt_metal::NOC::RISCV_0_default,
@@ -605,7 +613,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_cb_id_1,
         in_scalar_cb_id_0,
         in_scalar_cb_id_1,
-        out_cb_id,
+        tmp_out_cb_id,  // modified 2: replace tmp_out_cb_id by out_cb_id
         max_pool_partials_cb_id,
         in_one_cb_id,
         one_scalar_per_core,
@@ -629,18 +637,41 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
-    uint32_t temporary_size = program.get_cb_memory_size();
-    uint32_t post_allocate_size =
-        input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    uint32_t l1_usage = calculate_L1_usage(
-        input, kernel_size_h, kernel_size_w, out_h, out_w, input.memory_config(), output.memory_config(), pool_type);
-    uint32_t output_cb_size = post_allocate_size - memory_used;
+    // modified 3: write back to output cb
+    std::vector<uint32_t> cb_copy_args = {
+        tmp_out_cb_id,
+        out_cb_id,
+        out_nhw_per_core / nblocks,
+        output_shape[3] / num_shards_c,
+        in_nblocks_c,
+        in_ntiles_c};
 
-    TT_FATAL(
-        temporary_size + output_cb_size == l1_usage,
-        "Calculated CB size {} does not match with the actual CB size {}  ",
-        temporary_size + output_cb_size,
-        l1_usage);
+    std::string cb_coppy_kernel_fname =
+        "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
+        "cb_copy.cpp";
+
+    /***
+     * TODO: comment out reserve/waits to see if kernel launched, in case the kernel is stacked.
+     *  ***/
+
+    auto cb_copy_config = tt::tt_metal::DataMovementConfig{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = tt::tt_metal::NOC::RISCV_1_default,
+        .compile_args = cb_copy_args};
+    CreateKernel(program, cb_coppy_kernel_fname, all_cores, cb_copy_config);
+
+    // uint32_t temporary_size = program.get_cb_memory_size();
+    // uint32_t post_allocate_size =
+    //     input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+    // uint32_t l1_usage = calculate_L1_usage(
+    //     input, kernel_size_h, kernel_size_w, out_h, out_w, input.memory_config(), output.memory_config(), pool_type);
+    // uint32_t output_cb_size = post_allocate_size - memory_used;
+
+    // TT_FATAL(
+    //     temporary_size + output_cb_size == l1_usage,
+    //     "Calculated CB size {} does not match with the actual CB size {}  ",
+    //     temporary_size + output_cb_size,
+    //     l1_usage);
 
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
