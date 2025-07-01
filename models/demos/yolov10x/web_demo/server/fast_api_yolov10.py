@@ -13,7 +13,8 @@ from PIL import Image
 
 import ttnn
 from models.demos.yolov10x.runner.performant_runner import YOLOv10PerformantRunner
-from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
+
+# from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
 
 app = FastAPI(
     title="YOLOv10 object detection",
@@ -92,96 +93,121 @@ def process_output(output):
     return outs
 
 
-def post_processing(img, conf_thresh, nms_thresh, output):
-    box_array = output[0]
-    confs = output[1]
+def postprocess(preds, img, orig_img):
+    nc = 80
+    max_det = 300
+    args = {"conf": 0.5, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
+    preds = preds.permute(0, 2, 1)
+    batch_size, anchors, _ = preds.shape
+    boxes, scores = preds.split([4, nc], dim=-1)
+    index = scores.amax(dim=-1).topk(min(max_det, anchors))[1].unsqueeze(-1)
+    boxes = boxes.gather(dim=1, index=index.repeat(1, 1, 4))
+    scores = scores.gather(dim=1, index=index.repeat(1, 1, nc))
+    scores, index = scores.flatten(1).topk(min(max_det, anchors))
+    i = torch.arange(batch_size)[..., None]
+    preds = torch.cat([boxes[i, index // nc], scores[..., None], (index % nc)[..., None].float()], dim=-1)
+    preds = non_max_suppression(
+        preds,
+        args["conf"],
+        args["iou"],
+        agnostic=args["agnostic_nms"],
+        max_det=args["max_det"],
+        classes=args["classes"],
+    )
 
-    box_array = np.array(box_array.to(torch.float32))
-    confs = np.array(confs.to(torch.float32))
+    results = []
+    for pred in preds:
+        # pred[:, :4] = scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
+        results.append({"boxes": {"xyxy": pred[:, :4], "conf": pred[:, -2], "cls": pred[:, -1]}})
 
-    num_classes = confs.shape[2]
-
-    # [batch, num, 4]
-    box_array = box_array[:, :, 0]
-
-    # [batch, num, num_classes] --> [batch, num]
-    max_conf = np.max(confs, axis=2)
-    max_id = np.argmax(confs, axis=2)
-
-    bboxes_batch = []
-    for i in range(box_array.shape[0]):
-        argwhere = max_conf[i] > conf_thresh
-        l_box_array = box_array[i, argwhere, :]
-        l_max_conf = max_conf[i, argwhere]
-        l_max_id = max_id[i, argwhere]
-
-        bboxes = []
-        # nms for each class
-        for j in range(num_classes):
-            cls_argwhere = l_max_id == j
-            ll_box_array = l_box_array[cls_argwhere, :]
-            ll_max_conf = l_max_conf[cls_argwhere]
-            ll_max_id = l_max_id[cls_argwhere]
-
-            keep = nms_cpu(ll_box_array, ll_max_conf, nms_thresh)
-
-            if keep.size > 0:
-                ll_box_array = ll_box_array[keep, :]
-                ll_max_conf = ll_max_conf[keep]
-                ll_max_id = ll_max_id[keep]
-
-                for k in range(ll_box_array.shape[0]):
-                    bboxes.append(
-                        [
-                            ll_box_array[k, 0],
-                            ll_box_array[k, 1],
-                            ll_box_array[k, 2],
-                            ll_box_array[k, 3],
-                            ll_max_conf[k],
-                            ll_max_conf[k],
-                            ll_max_id[k],
-                        ]
-                    )
-
-        bboxes_batch.append(bboxes)
-
-    return bboxes_batch
+    return results
 
 
-def nms_cpu(boxes, confs, nms_thresh=0.5, min_mode=False):
-    x1 = boxes[:, 0]
-    y1 = boxes[:, 1]
-    x2 = boxes[:, 2]
-    y2 = boxes[:, 3]
+def non_max_suppression(
+    prediction,
+    conf_thres=0.25,
+    iou_thres=0.45,
+    classes=None,
+    agnostic=False,
+    multi_label=False,
+    labels=(),
+    max_det=300,
+    nc=0,
+    max_time_img=0.05,
+    max_nms=30000,
+    max_wh=7680,
+    in_place=True,
+    rotated=False,
+):
+    assert 0 <= conf_thres <= 1, f"Invalid Confidence threshold {conf_thres}, valid values are between 0.0 and 1.0"
+    assert 0 <= iou_thres <= 1, f"Invalid IoU {iou_thres}, valid values are between 0.0 and 1.0"
 
-    areas = (x2 - x1) * (y2 - y1)
-    order = confs.argsort()[::-1]
+    if isinstance(prediction, (list, tuple)):
+        prediction = prediction[0]
+    if classes is not None:
+        classes = torch.tensor(classes, device=prediction.device)
 
-    keep = []
-    while order.size > 0:
-        idx_self = order[0]
-        idx_other = order[1:]
+    if prediction.shape[-1] == 6:
+        output = [pred[pred[:, 4] > conf_thres][:max_det] for pred in prediction]
+        if classes is not None:
+            output = [pred[(pred[:, 5:6] == classes).any(1)] for pred in output]
+        return output
 
-        keep.append(idx_self)
+    bs = prediction.shape[0]
+    nc = nc or (prediction.shape[1] - 4)
+    nm = prediction.shape[1] - nc - 4
+    mi = 4 + nc
+    xc = prediction[:, 4:mi].amax(1) > conf_thres
 
-        xx1 = np.maximum(x1[idx_self], x1[idx_other])
-        yy1 = np.maximum(y1[idx_self], y1[idx_other])
-        xx2 = np.minimum(x2[idx_self], x2[idx_other])
-        yy2 = np.minimum(y2[idx_self], y2[idx_other])
+    time_limit = 2.0 + max_time_img * bs
+    multi_label &= nc > 1
 
-        w = np.maximum(0.0, xx2 - xx1)
-        h = np.maximum(0.0, yy2 - yy1)
-        inter = w * h
-
-        if min_mode:
-            over = inter / np.minimum(areas[order[0]], areas[order[1:]])
+    prediction = prediction.transpose(-1, -2)
+    if not rotated:
+        if in_place:
+            prediction[..., :4] = xywh2xyxy(prediction[..., :4])
         else:
-            over = inter / (areas[order[0]] + areas[order[1:]] - inter)
+            prediction = torch.cat((xywh2xyxy(prediction[..., :4]), prediction[..., 4:]), dim=-1)
 
-        inds = np.where(over <= nms_thresh)[0]
-        order = order[inds + 1]
+    t = time.time()
+    output = [torch.zeros((0, 6 + nm), device=prediction.device)] * bs
+    for xi, x in enumerate(prediction):
+        x = x[xc[xi]]
 
-    return np.array(keep)
+        if not x.shape[0]:
+            continue
+
+        box, cls, mask = x.split((4, nc, nm), 1)
+
+        if multi_label:
+            i, j = torch.where(cls > conf_thres)
+            x = torch.cat((box[i], x[i, 4 + j, None], j[:, None].float(), mask[i]), 1)
+        else:
+            conf, j = cls.max(1, keepdim=True)
+            x = torch.cat((box, conf, j.float(), mask), 1)[conf.view(-1) > conf_thres]
+
+        if classes is not None:
+            x = x[(x[:, 5:6] == classes).any(1)]
+
+        n = x.shape[0]
+        if not n:
+            continue
+        if n > max_nms:
+            x = x[x[:, 4].argsort(descending=True)[:max_nms]]
+
+        c = x[:, 5:6] * (0 if agnostic else max_wh)
+        scores = x[:, 4]
+
+        boxes = x[:, :4] + c
+        i = torchvision.ops.nms(boxes, scores, iou_thres)
+        i = i[:max_det]
+
+        output[xi] = x[i]
+        if (time.time() - t) > time_limit:
+            logger.warning(f"WARNING ⚠️ NMS time limit {time_limit:.3f}s exceeded")
+            break
+
+    return output
 
 
 @app.post("/objdetection_v2")
@@ -199,9 +225,11 @@ async def objdetection_v2(file: UploadFile = File(...)):
         exit(-1)
 
     t1 = time.time()
+    image = torch.permute(image, (0, 3, 1, 2))
     response = model.run(image)
     # print("response", response)
-    r = ttnn.to_torch(response[0])
+    r = ttnn.to_torch(response)
+    print(r.shape)
     # names = load_coco_class_names()
     results = postprocess(r, image, image1)[0]
     t2 = time.time()
