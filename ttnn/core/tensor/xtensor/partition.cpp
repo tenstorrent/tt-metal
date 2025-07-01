@@ -183,11 +183,12 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
 
         if (can_use_memcpy) {
             DataType* result_ptr = result.data().data();
+            const size_t chunk_size =
+                std::accumulate(expected_shape.begin(), expected_shape.end(), 1, std::multiplies<size_t>());
             size_t offset = 0;
-            const size_t expr_size = expected_shape.size();
             for (const auto& expr : expressions) {
-                std::memcpy(result_ptr + offset, expr.data(), expr_size * sizeof(DataType));
-                offset += expr_size;
+                std::memcpy(result_ptr + offset, expr.data(), chunk_size * sizeof(DataType));
+                offset += chunk_size;
             }
             return result;
         }
