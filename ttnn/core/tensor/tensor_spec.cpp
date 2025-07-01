@@ -144,6 +144,7 @@ TensorSpec TensorSpec::with_memory_config(MemoryConfig memory_config) const {
 void TensorSpec::populate_sharding_specs() {
     if (memory_config().created_with_nd_shard_spec()) {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
+            log_info(tt::LogAlways, "Updating memory config {} -> {}", *memory_config().shard_spec(), *upd_mem_config);
             tensor_layout_ = tensor_layout_.with_memory_config(std::move(*upd_mem_config));
         }
     } else if (memory_config().shard_spec() && memory_config().shard_spec()->mode == ShardMode::PHYSICAL) {
