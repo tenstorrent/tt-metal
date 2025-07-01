@@ -10,9 +10,9 @@ from attr import dataclass
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3.utils.abstract_module import AbstractModule, InferenceMode
 from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherConfig,
-    AllReduceConfig,
     LinearConfig,
     MeshDeviceStub,
     ModelConfig,
@@ -35,7 +35,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
 from models.utility_functions import is_blackhole
 
 
-class MLP1D(AbstractModel):
+class MLP1D(AbstractModule):
     """Example MLP module with 1D tensor parallelism based on TTT code.
 
     THIS IS NOT THE MLP WE WILL USE FOR DEEPSEEK-R1.
@@ -164,7 +164,7 @@ class MLP1D(AbstractModel):
     @staticmethod
     def is_device_supported(mesh_device: ttnn.Device) -> bool:
         """
-        Check if the device is supported for MLP operations.
+        As we only support 1D tensor parallelism, we only support 1D mesh devices.
 
         Args:
             mesh_device: The mesh device to check.
@@ -172,7 +172,7 @@ class MLP1D(AbstractModel):
         Returns:
             True if the device is supported, False otherwise.
         """
-        return tuple(mesh_device.shape) == (1, 8)
+        return tuple(mesh_device.shape)[0] == 1
 
     @classmethod
     def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelConfig:
@@ -190,7 +190,7 @@ class MLP1D(AbstractModel):
         hidden_dim = hf_config.intermediate_size
         num_devices = mesh_device.get_num_devices()
 
-        config: ModelConfig = {"mode": "prefill"}
+        config: ModelConfig = {"mode": InferenceMode.PREFILL}
 
         # Maximum rows to process at once in prefill mode
         config["max_rows"] = 512 if is_blackhole() else 1024
@@ -207,16 +207,16 @@ class MLP1D(AbstractModel):
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
         )
 
-        config["all_reduce"] = AllReduceConfig(
-            cluster_axis=0,
-            dim=3,
-            num_reduce_scatter_links=1,
-            num_all_gather_links=1,
-            topology=ttnn.Topology.Ring,
-            dtype=ttnn.bfloat8_b,
-            use_composite=dim >= 8192,  # Use composite for larger models
-            mesh_device=MeshDeviceStub(tuple(mesh_device.shape)),
-        )
+        # config["reduce_scatter"] = ReduceScatterConfig(
+        #     cluster_axis=0,
+        #     dim=3,
+        #     num_reduce_scatter_links=1,
+        #     num_all_gather_links=1,
+        #     topology=ttnn.Topology.Ring,
+        #     dtype=ttnn.bfloat8_b,
+        #     use_composite=dim >= 8192,  # Use composite for larger models
+        #     mesh_device=MeshDeviceStub(tuple(mesh_device.shape)),
+        # )
 
         config["pc_gen"] = MLP1D.MLPProgramConfigData(dim=dim, hidden_dim=hidden_dim, num_devices=num_devices)
 
@@ -238,7 +238,7 @@ class MLP1D(AbstractModel):
         hidden_dim = hf_config.intermediate_size
         num_devices = mesh_device.get_num_devices()
 
-        config: ModelConfig = {"mode": "decode"}
+        config: ModelConfig = {"mode": InferenceMode.DECODE}
 
         # Decode mode configurations
         config["w1"] = config["w3"] = LinearConfig(
@@ -274,19 +274,19 @@ class MLP1D(AbstractModel):
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
         )
 
-        # All-reduce configuration for multi-device synchronization
-        config["all_reduce"] = AllReduceConfig(
-            cluster_axis=0,
-            dim=3,
-            num_reduce_scatter_links=1,
-            num_all_gather_links=1,
-            topology=ttnn.Topology.Ring if num_devices == 8 else ttnn.Topology.Linear,
-            dtype=ttnn.bfloat8_b,
-            # FIXME: From tt_transformers/tt/mlp.py, surely >= and not ==?
-            # FIXME: Why this value and not e.g. 7*1024?
-            use_composite=dim == 8192,  # Use composite for larger models
-            mesh_device=MeshDeviceStub(tuple(mesh_device.shape)),
-        )
+        # Reduce-scatter configuration for multi-device synchronization
+        # config["reduce_scatter"] = ReduceScatterConfig(
+        #     cluster_axis=0,
+        #     dim=3,
+        #     num_reduce_scatter_links=1,
+        #     num_all_gather_links=1,
+        #     topology=ttnn.Topology.Ring if num_devices == 8 else ttnn.Topology.Linear,
+        #     dtype=ttnn.bfloat8_b,
+        #     # FIXME: From tt_transformers/tt/mlp.py, surely >= and not ==?
+        #     # FIXME: Why this value and not e.g. 7*1024?
+        #     use_composite=dim == 8192,  # Use composite for larger models
+        #     mesh_device=MeshDeviceStub(tuple(mesh_device.shape)),
+        # )
 
         config["pc_gen"] = MLP1D.MLPProgramConfigData(dim=dim, hidden_dim=hidden_dim, num_devices=num_devices)
 
@@ -360,8 +360,8 @@ class MLP1D(AbstractModel):
         output = ttnn.linear(activated, program_config=cls._get_w2_pc(current_seq_len, **cfg["pc_gen"]), **cfg["w2"])
         ttnn.deallocate(activated)
 
-        # All-reduce across devices to sum partial results
-        output = ttnn.all_reduce(output, **cfg["all_reduce"])
+        # Reduce-scatter across devices to sum partial results
+        # output = ttnn.reduce_scatter(output, **cfg["reduce_scatter"])
 
         # Reshape output to expected format if we reshaped the input
         if original_shape is not None:
@@ -389,5 +389,7 @@ class MLP1D(AbstractModel):
         output = ttnn.linear(activated, **cfg["w2"])
         ttnn.deallocate(activated)
 
+        return output
+
         # All-reduce across devices to sum partial results
-        return ttnn.all_reduce(output, **cfg["all_reduce"])
+        # return ttnn.reduce_scatter(output, **cfg["reduce_scatter"])

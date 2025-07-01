@@ -125,7 +125,7 @@ def merge_config_containers(
 
     if is_op_config(cfg_a):
         op_config_dict = {f.name: getattr(cfg_a, f.name) for f in fields(cfg_a)}  # type: ignore
-        return cfg_a.__class__(**_merge_configs(op_config_dict, cfg_b, mesh_device))  # type: ignore
+        return cfg_a.__class__(**merge_config_containers(op_config_dict, cfg_b, merge_config_specific_items, mesh_device))  # type: ignore
 
     # If both configs are lists/tuples of the same length or one of them is None, merge them as a list/tuple.
     if isinstance(cfg_a, (list, tuple, NoneType)) and isinstance(cfg_b, (list, tuple, NoneType)):

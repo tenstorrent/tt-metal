@@ -9,7 +9,13 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import EmbeddingConfig, ModelConfig, WeightConfig, WeightStub
+from models.demos.deepseek_v3.utils.config_dataclass import (
+    EmbeddingConfig,
+    ModelConfig,
+    TensorStub,
+    WeightConfig,
+    WeightStub,
+)
 
 
 class Embedding1D(AbstractModule):
@@ -56,7 +62,7 @@ class Embedding1D(AbstractModule):
     @classmethod
     def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, **kwargs) -> ModelConfig:
         """Prefill model config for an embedding with 1D tensor parallelism.
-        Same as decode.
+        Same as decode. Does not specify a mode because we override forward to handle both.
 
         Returns:
             Dict containing operator configurations for prefill mode
@@ -67,7 +73,7 @@ class Embedding1D(AbstractModule):
     @classmethod
     def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, **kwargs) -> ModelConfig:
         """Generate decode operator configuration for this embedding layer.
-        Same as prefill.
+        Same as prefill. Does not specify a mode because we override forward to handle both.
 
         Returns:
             Dict containing operator configurations for decode mode
@@ -78,13 +84,14 @@ class Embedding1D(AbstractModule):
     def _embedding_config(mesh_device: ttnn.MeshDevice) -> ModelConfig:
         """Config for the Embedding1D module."""
         return EmbeddingConfig(
+            weight=TensorStub(),  # matched to the WeightStub in the WeightConfig
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
 
     @classmethod
     def forward(cls, x, cfg):
-        """Forward pass of the embedding.
+        """Unified forward pass of the embedding,
 
         Args:
             x: Input tensor (token indices)

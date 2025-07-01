@@ -29,7 +29,8 @@ def temp_dir():
 @pytest.fixture
 def hf_config():
     """Load DeepSeek config for testing."""
-    config = AutoConfig.from_pretrained("/proj_sw/user_dev/deepseek-ai", trust_remote_code=True)
+    path = os.getenv("HF_MODEL", "/proj_sw/user_dev/deepseek-ai")
+    config = AutoConfig.from_pretrained(path, trust_remote_code=True)
     return config
 
 
