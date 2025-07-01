@@ -95,6 +95,34 @@ operations_dict = {
         None,
         "deg2rad",
     ),
+    "exp": (
+        torch.exp,
+        ttnn.exp,
+        None,
+        None,
+        "exp",
+    ),
+    "expm1": (
+        torch.special.expm1,
+        ttnn.expm1,
+        None,
+        None,
+        "expm1",
+    ),
+    "elu": (
+        torch.nn.functional.elu,
+        ttnn.elu,
+        None,
+        [0.5, 1.0],
+        "elu",
+    ),
+    "selu": (
+        torch.nn.functional.selu,
+        ttnn.selu,
+        None,
+        None,  # Default values to be used for now
+        "selu",
+    ),
 }
 
 
@@ -258,16 +286,16 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
             ttnn_value = ttnn.from_torch(torch_tensor, device=device, dtype=TTNN_TYPE, layout=ttnn.TILE_LAYOUT)
             # check of optional output tensor support is provided for the op
             if scalar is not None:
-                ttnn_output = ttnn_unary(ttnn_value, scalar, output_tensor=ttnn_output)
+                ttnn_output = ttnn_unary(ttnn_value, scalar)
             else:
-                ttnn_output = ttnn_unary(ttnn_value, output_tensor=ttnn_output)
+                ttnn_output = ttnn_unary(ttnn_value)
             return ttnn.to_torch(ttnn_output)
 
         # Run reference and actual operations
         if scalar is not None:
-            torch_golden_f64 = torch_unary_op(torch_input_f64, scalar, out=torch_output_ref)
+            torch_golden_f64 = torch_unary_op(torch_input_f64, scalar)
         else:
-            torch_golden_f64 = torch_unary_op(torch_input_f64, out=torch_output_ref)
+            torch_golden_f64 = torch_unary_op(torch_input_f64)
 
         torch_ttnn_output_bf16 = launch_ttnn_op(torch_input_bf16, scalar, ttnn_unary_op, ttnn_output)
 
@@ -465,6 +493,10 @@ def main(args):
 
     all_operations = [
         "deg2rad",
+        "exp",
+        "expm1",
+        "elu",
+        "selu",
     ]
 
     highres_operations = [
