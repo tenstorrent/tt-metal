@@ -672,7 +672,7 @@ jobs:
             env pytest -n auto models/demos/roberta/tests/test_performance.py -m models_performance_bare_metal
             env python3 models/perf/merge_perf_results.py
       - name: Merge Perf Results
-        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        if: ${{ !cancelled() }}
         timeout-minutes: 70
         uses: ./.github/actions/docker-run
         env:
