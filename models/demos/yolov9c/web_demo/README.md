@@ -19,13 +19,13 @@
   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
   ```
 
-– Run the following command on the server to execute the Yolov9c model for the Detection task:
+– Run the following command on the server to execute the Yolov9c model for the DETECTION task:
   ```
-  source models/demos/yolov9c/web_demo/server/run_uvicorn.sh
+  source models/demos/yolov9c/web_demo/server/run_uvicorn_detection.sh
   ```
 
 – Run the following command on the server to execute the Yolov9c model for the
-segmentation task:
+SEGMENTATION task:
 
   ```
   source models/demos/yolov9c/web_demo/server/run_uvicorn_segmentation.sh
@@ -40,15 +40,15 @@ segmentation task:
 - you may create a python virtual env and pip install the client side requirements.
 
   ```
-  pip install -r models/demos/yolov9c/web_demo/client/requirements.txt
+  pip install -r requirements.txt
   ```
 
-- Run the following command on the client to execute the Yolov9c model for the Detection task:
+- Run the following command on the client to execute the Yolov9c model for the DETECTION task:
   ```
-  source run_on_client_YOLOv9c_Metal --api-url http://IP.ADDRESS:7000
+  source run_on_client_YOLOv9c_Detection_Metal --api-url http://IP.ADDRESS:7000
   ```
 
-  Run the following command on the client to execute the Yolov9c model for the Segmentation task:
+  Run the following command on the client to execute the Yolov9c model for the SEGMENTATION task:
   ```
   source run_on_client_YOLOv9c_Segmentation_Metal --api-url http://IP.ADDRESS:7000
   ```
