@@ -38,33 +38,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     return y;
 }
 
-sfpi_inline sfpi::vFloat _sfpu_exp_21f_alt_(sfpi::vFloat val) {
-    // sfpi::vFloat val_debiased = val * sfpi::vConstFloatPrgm2;
-    // val_debiased = addexp(val_debiased, 127);
-    // sfpi::vInt z = sfpu::_float_to_int32_(val_debiased);
-    // return val;
-
-    sfpi::vFloat val_debiased = val * sfpi::vConstFloatPrgm2 + sfpi::vFloat(0x3f800000);
-    // val_debiased = addexp(val_debiased, 127);
-    sfpi::vInt z = sfpu::_float_to_int32_(val_debiased);
-
-    sfpi::vInt zii = z & 0x7f800000;
-    sfpi::vInt zif = z & sfpi::vInt(0x007fffff);  // extra mantissa
-
-    sfpi::vFloat d1 = sfpi::s2vFloat16b(0.4027970135211944580078125e-7);
-
-    sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0xf94ee7) + zif);
-    sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x560) + zif);
-    d2 = d1 * d2;
-    zif = sfpu::_float_to_int32_(d2 * d3);
-
-    zii |= zif;  // restore exponent
-
-    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(zii);
-
-    return y;
-}
-
 template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
@@ -78,14 +51,6 @@ void calculate_exponential(const uint iterations = ITERATIONS, const uint exp_ba
             sfpi::vFloat val = sfpi::dst_reg[0];
             sfpi::vFloat result = _sfpu_exp_21f_(val);
             // sfpi::vFloat result = 5.0;
-            sfpi::dst_reg[0] = result;
-            sfpi::dst_reg++;
-        }
-    } else if constexpr (!ACCURATE) {
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat val = sfpi::dst_reg[0];
-            sfpi::vFloat result = _sfpu_exp_21f_alt_(val);
-            // sfpi::vFloat result = 3.0;
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
         }
@@ -149,13 +114,7 @@ sfpi_inline vFloat calculate_exponential_body_improved(vFloat val) {
 
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool ACCURATE, uint32_t scale = 0x3F800000>
 void exp_init() {
-    if constexpr (!ACCURATE) {
-        sfpi::vConstFloatPrgm0 = 1.442695f;  // ln2_recip
-        sfpi::vConstFloatPrgm1 = 2.0f;
-        sfpi::vConstFloatPrgm2 = 0x00b8aa3b;
-    } else {
-        _init_exponential_<APPROXIMATION_MODE, FAST_APPROX, scale>();
-    }
+    _init_exponential_<APPROXIMATION_MODE, FAST_APPROX, scale>();
 }
 
 }  // namespace sfpu
