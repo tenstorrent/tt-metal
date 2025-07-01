@@ -891,6 +891,7 @@ def tt_sharded_distributed_rmsnorm(
     tt_ccl=None,
     output_mem_config=None,
     use_noc1_only=False,
+    ccl_topology=None,
 ):
     # inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
@@ -904,7 +905,7 @@ def tt_sharded_distributed_rmsnorm(
         cluster_axis,
         tt_ccl.mesh_device,
         semaphore,
-        topology=self.model_config["CCL_TOPOLOGY"],
+        topology=ccl_topology,
         residual_input_tensor=res,
         num_links=1,
         epsilon=epsilon,
