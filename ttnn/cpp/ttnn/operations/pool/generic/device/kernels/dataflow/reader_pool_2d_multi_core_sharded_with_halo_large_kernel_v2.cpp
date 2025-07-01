@@ -88,13 +88,13 @@ FORCE_INLINE void read_window_with_top_left_index(
                         // cur_reduction = (total_rows % 32) / 31 - 2
                         uint32_t max_rows_interm_remainder = chunk % (max_rows_for_reduction - 1);
                         if (max_rows_interm_remainder == max_rows_for_reduction - 2) {
-                            cb_wait_front(compute_sync_cb_id, 2);
+                            cb_wait_front(compute_sync_cb_id, 1);
                             // skip the first row where we are accumulating
                             fill_with_val(
                                 get_write_ptr(interm_cb_id) + TILE_WIDTH * in_cb_ntiles * BYTES_PER_ELEM,
                                 (TILE_HEIGHT - 1) * TILE_WIDTH * in_cb_ntiles,
                                 bf16_init_value);
-                            cb_pop_front(compute_sync_cb_id, 2);
+                            cb_pop_front(compute_sync_cb_id, 1);
                         }
                     }
                     chunk++;
@@ -103,7 +103,7 @@ FORCE_INLINE void read_window_with_top_left_index(
         }
 
         // wait for compute to finish final reduction
-        cb_wait_front(compute_sync_cb_id, 2);
+        cb_wait_front(compute_sync_cb_id, 1);
         // write the first row from the interm buffer
         noc_async_read(get_noc_addr(get_read_ptr(interm_cb_id)), out_l1_write_addr, read_bytes);
         noc_async_read_barrier();
@@ -111,7 +111,7 @@ FORCE_INLINE void read_window_with_top_left_index(
         fill_with_val(get_read_ptr(interm_cb_id), TILE_WIDTH * in_cb_ntiles, bf16_init_value);
         out_l1_write_addr += read_bytes;
         // signal to compute that output has been written
-        cb_pop_front(compute_sync_cb_id, 2);
+        cb_pop_front(compute_sync_cb_id, 1);
     }
 }
 
@@ -189,10 +189,14 @@ void kernel_main() {
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(26);
     constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
     constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(28);
-    constexpr uint32_t sync_cb_id1 = get_compile_time_arg_val(29);
-    constexpr uint32_t sync_cb_id2 = get_compile_time_arg_val(30);
-    constexpr uint32_t sync_cb_id3 = get_compile_time_arg_val(31);
-    constexpr uint32_t sync_cb_id4 = get_compile_time_arg_val(32);
+    constexpr uint32_t sync_cb_id1 =
+        get_compile_time_arg_val(29);  // signal to compute and reader 1 that reader 0 is done initializing
+    constexpr uint32_t sync_cb_id2 =
+        get_compile_time_arg_val(30);  // signal to compute and reader 0 that reader 1 is done initializing
+    constexpr uint32_t sync_cb_id3 =
+        get_compile_time_arg_val(31);  // wait for compute to signal for reader 0 to reset CBs or write output
+    constexpr uint32_t sync_cb_id4 =
+        get_compile_time_arg_val(32);  // wait for compute to signal for reader 1 to reset CBs or write output
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(33);
 
     constexpr uint32_t in_scalar_cb_id =
@@ -320,7 +324,8 @@ void kernel_main() {
             first_row_value = true;
         }
 
-        for (uint16_t ind = start; ind <= end; ind += (split_reader ? 2 : 1) * stride_w) {
+        constexpr uint32_t stride_multiple = split_reader ? 2 : 1;
+        for (uint16_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
             if constexpr (!one_scalar_per_core) {
                 fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, split_reader>(
                     scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);

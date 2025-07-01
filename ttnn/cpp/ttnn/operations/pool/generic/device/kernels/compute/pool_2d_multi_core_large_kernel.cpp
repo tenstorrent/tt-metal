@@ -77,11 +77,16 @@ void MAIN {
     constexpr uint32_t interm_cb_id = get_compile_time_arg_val(15);
     constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(16);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(17);
-    constexpr uint32_t sync_cb_id1 = get_compile_time_arg_val(18);
-    constexpr uint32_t sync_cb_id2 = get_compile_time_arg_val(19);
-    constexpr uint32_t sync_cb_id3 = get_compile_time_arg_val(20);
-    constexpr uint32_t sync_cb_id4 = get_compile_time_arg_val(21);
-    constexpr uint32_t sync_cb_id5 = get_compile_time_arg_val(22);
+    constexpr uint32_t sync_cb_id1 =
+        get_compile_time_arg_val(18);  // wait for reader 0 to signal that it is done initializing
+    constexpr uint32_t sync_cb_id2 =
+        get_compile_time_arg_val(19);  // wait for reader 1 to signal that it is done initializing
+    constexpr uint32_t sync_cb_id3 =
+        get_compile_time_arg_val(20);  // signal to reader 0 that compute needs CBs reset or to output written
+    constexpr uint32_t sync_cb_id4 =
+        get_compile_time_arg_val(21);  // signal to reader 1 that compute needs CBs reset or to output written
+    constexpr uint32_t sync_cb_id5 =
+        get_compile_time_arg_val(22);  // sync PACK and UNPACK threads between intermediate and final reduction
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -147,10 +152,10 @@ void MAIN {
 
                 if (max_rows_interm_remainder == max_rows_for_reduction - 2 || chunk == interm_reduction_chunks - 1) {
                     // sync PACK and UNPACK so intermediate reduction gets packed before the final reduction is unpacked
-                    cb_reserve_back(sync_cb_id5, 2);
-                    cb_push_back(sync_cb_id5, 2);
-                    cb_wait_front(sync_cb_id5, 2);
-                    cb_pop_front(sync_cb_id5, 2);
+                    cb_reserve_back(sync_cb_id5, 1);
+                    cb_push_back(sync_cb_id5, 1);
+                    cb_wait_front(sync_cb_id5, 1);
+                    cb_pop_front(sync_cb_id5, 1);
 
                     // perform the final reduction over the first N - 1 whole chunks // Reduction of final 2 sticks.
                     reduce_h_fused<
@@ -167,9 +172,9 @@ void MAIN {
 
                     // either write output stick or for avg pool notify the reader that we need the interm CB cleared
                     if (chunk == interm_reduction_chunks - 1 || is_avg_pool) {
-                        cb_push_back(curr_sync_cb_id, 2);
+                        cb_push_back(curr_sync_cb_id, 1);
                         // wait for reader to finish task before continuing
-                        cb_reserve_back(curr_sync_cb_id, 2);
+                        cb_reserve_back(curr_sync_cb_id, 1);
                     }
                 }
             }
