@@ -19,9 +19,16 @@
   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
   ```
 
-- From the server run:
+– Run the following command on the server to execute the Yolov9c model for the Detection task:
   ```
   source models/demos/yolov9c/web_demo/server/run_uvicorn.sh
+  ```
+
+– Run the following command on the server to execute the Yolov9c model for the
+segmentation task:
+
+  ```
+  source models/demos/yolov9c/web_demo/server/run_uvicorn_segmentation.sh
   ```
 
 ### Client side:
@@ -35,8 +42,15 @@
   ```
   pip install -r models/demos/yolov9c/web_demo/client/requirements.txt
   ```
-- on the client side run:
+
+- Run the following command on the client to execute the Yolov9c model for the Detection task:
   ```
   source run_on_client_YOLOv9c_Metal --api-url http://IP.ADDRESS:7000
   ```
+
+  Run the following command on the client to execute the Yolov9c model for the Segmentation task:
+  ```
+  source run_on_client_YOLOv9c_Segmentation_Metal --api-url http://IP.ADDRESS:7000
+  ```
+
 - a browser should automatically open and you will see the live object detection demo using your local camera.
