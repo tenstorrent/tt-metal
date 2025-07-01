@@ -284,7 +284,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         output_cores_all,
         reduction_reader_kernel_config);
     if (output_cores_unused.size() > 0) {
-        tt::tt_metal::SetRuntimeArgs(program, reduction_reader_kernel_id, output_cores_unused, {!has_work, 0});
+        tt::tt_metal::SetRuntimeArgs(program, reduction_reader_kernel_id, output_cores_unused, {!has_work, 0, 0, 0});
     }
 
     // Create reduction dataflow kernel
@@ -471,13 +471,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         std::vector<uint32_t> reduction_reader_rt_args = {
             has_work,
             reduction_semaphore_ids[link],  // reduction_semaphore_id
+            semaphore.address(),            // global semaphore_address
+            out_ready_sem_wait_value,       // out_ready_sem_wait_value
         };
         tt::tt_metal::SetRuntimeArgs(
             program, reduction_reader_kernel_id, output_corerangeset_per_link[link], reduction_reader_rt_args);
     }
 
     auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, sender_worker_cores, cb_out, cb_reduction](
+        [worker_sender_reader_kernel_id,
+         worker_sender_writer_kernel_id,
+         reduction_reader_kernel_id,
+         sender_worker_cores,
+         output_tensor_cores,
+         cb_out,
+         cb_reduction](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -492,6 +500,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
             auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id);
+            auto& reduction_reader_runtime_args_by_core = GetRuntimeArgs(program, reduction_reader_kernel_id);
             for (const auto& core : sender_worker_cores) {
                 // reader
                 auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
@@ -502,6 +511,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             }
             UpdateDynamicCircularBufferAddress(program, cb_out, *output.buffer());
             UpdateDynamicCircularBufferAddress(program, cb_reduction, *buffer_tensor.buffer());
+            for (const auto& cr : output_tensor_cores.ranges()) {
+                for (const auto& core : corerange_to_cores(cr, std::nullopt, true)) {
+                    auto& reduction_reader_runtime_args = reduction_reader_runtime_args_by_core[core.x][core.y];
+                    reduction_reader_runtime_args[2] = semaphore.address();
+                }
+            }
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
