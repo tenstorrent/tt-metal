@@ -282,7 +282,7 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
-            True,  # token_accuracy
+            False,  # token_accuracy
         ),
         (  # Long-context 64k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -375,7 +375,7 @@ def prepare_generator_args(
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
-            True,  # token_accuracy
+            False,  # token_accuracy
         ),
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -420,7 +420,7 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             4,  # data_parallel
-            True,  # token_accuracy
+            False,  # token_accuracy
         ),
         (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -797,7 +797,7 @@ def test_demo_text(
                 profiler.start(f"compile_decode", iteration=batch_idx)
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
-
+            # below the collect method also applies teacher forcing which necessary for exact token matching
             if token_accuracy:
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
