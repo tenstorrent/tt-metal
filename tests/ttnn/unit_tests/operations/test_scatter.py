@@ -24,12 +24,28 @@ def select_torch_dtype(ttnn_dtype):
         )  # !!! there is a strict requirement for the index tensor in Torch to be int64, and there is no int64 in ttnn
 
 
+def make_random_permuted_last_dim_tensor(shape):
+    assert len(shape) >= 1, "Shape must have at least one dimension"
+    A = shape[-1]
+    batch_shape = shape[:-1]
+    total = 1
+    for dim in batch_shape:
+        total *= dim
+
+    # Generate all permutations at once
+    perms = torch.stack([torch.randperm(A) for _ in range(total)], dim=0)
+
+    # Reshape to desired shape
+    result = perms.reshape(*batch_shape, A)
+    return result
+
+
 @pytest.mark.parametrize(
     "input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout",
     [
-        ([100], -1, [80], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
+        ([100], 0, [80], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
         ([2, 30, 200], -1, [2, 30, 200], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
-        ([1, 1, 20, 20, 200], -1, [1, 1, 20, 20, 20], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
+        ([1, 1, 20, 20, 200], -1, [1, 1, 20, 20, 20], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
         ([2, 2, 2, 2, 2, 2, 2, 2], -1, [2, 2, 2, 2, 2, 2, 2, 2], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
         ([10, 1, 10, 1, 10], 0, [10, 1, 10, 1, 10], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
         ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR),
@@ -52,9 +68,7 @@ def select_torch_dtype(ttnn_dtype):
         # ([2, 10, 151936], -1, [2, 10, 151936], ttnn.float32, ttnn.uint32, ttnn.Layout.TILE),
     ],
 )
-def test_scatter_normal(
-    input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, device, use_program_cache
-):
+def test_scatter_spec(input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, device):
     torch.manual_seed(0)
     torch_dtype = select_torch_dtype(input_dtype)
     torch_index_dtype = select_torch_dtype(index_dtype)
@@ -63,6 +77,57 @@ def test_scatter_normal(
     ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
 
     torch_index = torch.randint(0, input_shape[dim], index_and_source_shape, dtype=torch_index_dtype)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
+
+    torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
+
+    for _ in range(2):
+        torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
+        ttnn_result = ttnn.experimental.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+
+        torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+        assert torch_result_from_ttnn.shape == torch_result.shape
+        assert torch_result_from_ttnn.dtype == torch_result.dtype
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout",
+    [
+        ([100], -1, [80], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
+        ([2, 30, 200], -1, [2, 30, 200], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
+        ([1, 1, 20, 20, 200], -1, [1, 1, 20, 20, 20], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
+        ([2, 2, 2, 2, 2, 2, 2, 2], -1, [2, 2, 2, 2, 2, 2, 2, 2], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
+        ([10, 1, 10, 1, 10], 0, [10, 1, 10, 1, 10], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
+        ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR),
+        ##################
+        # these cases fail due to the int32 transpose issue
+        # ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        # ([10, 50, 10, 50, 100], 0, [10, 50, 10, 50, 100], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        # ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        ##################
+        # these cases fail due to the to_layout precision issue (fp32 tiled <-> row-major) : #23405
+        # ([10, 50, 10, 50, 100], -1, [10, 50, 10, 50, 100], ttnn.float32, ttnn.uint16, ttnn.Layout.TILE),
+        # ([2, 30, 200], -1, [2, 30, 200], ttnn.float32, ttnn.uint16, ttnn.Layout.TILE),
+        ##################
+        # these cases fail due to the to_layout integer issue (integer dtype size>256 tiled -> row-major): #23407
+        # ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        # ([100, 151936], -1, [100, 151936], ttnn.float32, ttnn.int32, ttnn.Layout.TILE),
+        # ([2, 10, 151936], -1, [2, 10, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
+        # ([1, 151936], -1, [1, 151936], ttnn.float32, ttnn.uint32, ttnn.Layout.TILE),
+        # ([100, 151936], -1, [100, 151936], ttnn.bfloat16, ttnn.uint32, ttnn.Layout.TILE),
+        # ([2, 10, 151936], -1, [2, 10, 151936], ttnn.float32, ttnn.uint32, ttnn.Layout.TILE),
+    ],
+)
+def test_scatter_normal(input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, device):
+    torch.manual_seed(0)
+    torch_dtype = select_torch_dtype(input_dtype)
+    torch_index_dtype = select_torch_dtype(index_dtype)
+    ##
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
+
+    torch_index = make_random_permuted_last_dim_tensor(index_and_source_shape)
     ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
 
     torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
@@ -163,7 +228,6 @@ def test_scatter_failing_cases(
     index_dtype,
     source_dtype,
     device,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     torch_index_dtype = select_torch_dtype(index_dtype)

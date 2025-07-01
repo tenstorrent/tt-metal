@@ -69,8 +69,8 @@ void bind_reduction_cumprod_operation(py::module& module) {
                std::optional<DataType>& dtype,
                std::optional<Tensor> optional_out,
                const std::optional<MemoryConfig>& memory_config,
-               const QueueId& queue_id = DefaultQueueId) {
-                return self(input_tensor, dim, dtype, optional_out, memory_config, queue_id);
+               const QueueId& queue_id = DefaultQueueId) -> Tensor {
+                return self(queue_id, input_tensor, dim, dtype, optional_out, memory_config);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim"),

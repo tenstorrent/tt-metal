@@ -22,12 +22,12 @@
 namespace ttnn::operations::reduction {
 
 Tensor CumprodOperation::invoke(
+    const QueueId& queue_id,
     const Tensor& input_tensor,
     const int32_t& dim,
     std::optional<DataType>& dtype,
     std::optional<Tensor> optional_out,
-    const std::optional<MemoryConfig>& memory_config,
-    const QueueId& queue_id) {
+    const std::optional<MemoryConfig>& memory_config) {
     const auto& input_shape = input_tensor.logical_shape();
     int tensor_rank = input_shape.rank();
 
