@@ -23,6 +23,7 @@ struct ExecuteTopK {
         bool sorted,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<CoreRangeSet>& sub_core_grids,
+        const std::optional<Tensor>& indices_tensor,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors = std::nullopt);
 };
 
