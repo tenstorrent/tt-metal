@@ -70,6 +70,7 @@ Tensor post_tosa_scatter_transform_tensor(
     return processed_tensor;
 }
 
+// input tensors must follow conditions as described at https://www.mlplatform.org/tosa/tosa_spec.html#_scatter
 void validate_tensors(const Shape& input_shape, const Shape& index_shape, const Shape& source_shape) {
     TT_FATAL(
         input_shape.rank() == INPUT_RANK_CONSTRAINT,

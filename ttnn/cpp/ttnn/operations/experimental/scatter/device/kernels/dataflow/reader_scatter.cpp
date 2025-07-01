@@ -10,6 +10,7 @@
 
 namespace {
 
+// this function is supposed to load either a whole stick or part of it (76800 elements)
 template <bool is_dram, typename AddrGen>
 FORCE_INLINE void load_to_cb(
     const uint32_t& cb, const AddrGen& addr_gtor, const uint32_t& offset_bytes, const uint32_t& chunk_size_bytes, const uint32_t& stick_id) {
@@ -23,6 +24,7 @@ FORCE_INLINE void load_to_cb(
     cb_push_back(cb, ONE_PAGE);
 }
 
+// copies source stick to destination stick (first phase of scatter)
 template <typename number_type>
 FORCE_INLINE void copy_input_to_output(
     const uint32_t& input_cb, const uint32_t& output_cb, const uint32_t& input_chunk_size) {
@@ -37,6 +39,7 @@ FORCE_INLINE void copy_input_to_output(
     }
 }
 
+// performs scatter on data loaded to cb with load_to_cb
 template <typename number_type, typename index_type>
 FORCE_INLINE void scatter_along_chunk(
     const uint32_t& input_cb,
@@ -60,6 +63,9 @@ FORCE_INLINE void scatter_along_chunk(
     volatile tt_l1_ptr number_type* output_l1_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr number_type*>(output_l1_write_addr);
 
+    // each index from the index chunk is checked whether it points
+    // to any of the elements in the current output range (defined by
+    // partial stick length and offset)
     for (uint32_t index_in_index_chunk = 0; index_in_index_chunk < index_chunk_size; ++index_in_index_chunk) {
         volatile index_type& index_value = index_l1_read_ptr[index_in_index_chunk];
         if (index_value < input_offset || index_value >= input_offset + input_chunk_size) {
@@ -88,7 +94,10 @@ void kernel_main() {
     const uint32_t source_buffer_address = get_arg_val<uint32_t>(2);
     const uint32_t start_stick_id = get_arg_val<uint32_t>(3);
     const uint32_t sticks_for_core = get_arg_val<uint32_t>(4);
+    // for the outer input/output loop (DRAM accesses per stick: input_row_elem_num / 76800)
     const uint32_t input_and_output_chunk_size = get_arg_val<uint32_t>(5);
+    // for the inner index/source loop (DRAM accesses per stick per single input/output loop: index_row_elem_num /
+    // 76800)
     const uint32_t index_and_source_chunk_size = get_arg_val<uint32_t>(6);
 
     const auto input_addr_gtor{
@@ -114,6 +123,7 @@ void kernel_main() {
             const uint32_t input_chunk_length =
                 std::min(ctas.input_stick_size - input_offset, input_and_output_chunk_size);
 
+            // first phase: copy input data to output
             load_to_cb<ctas.input_tensor_is_dram, input_addr_gtor_type>(
                 ctas.input_cb,
                 input_addr_gtor,
@@ -125,8 +135,10 @@ void kernel_main() {
 
             copy_input_to_output<input_std_type>(ctas.input_cb, ctas.output_cb, input_chunk_length);
 
+            // second phase: load index and source data chunk-by-chunk and scatter
             for (uint32_t index_offset = 0; index_offset < ctas.index_stick_size;
                  index_offset += index_and_source_chunk_size) {
+                // if stick is chunked, the last chunk is usually smaller
                 const uint32_t index_chunk_length =
                     std::min(ctas.index_stick_size - index_offset, index_and_source_chunk_size);
                 load_to_cb<ctas.index_tensor_is_dram, index_addr_gtor_type>(
@@ -156,6 +168,7 @@ void kernel_main() {
                 cb_pop_front(ctas.index_cb, ONE_PAGE);
             }
 
+            // third phase: push to the output cb
             cb_push_back(ctas.output_cb, ONE_PAGE);
             cb_pop_front(ctas.input_cb, ONE_PAGE);
         }
