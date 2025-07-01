@@ -121,4 +121,8 @@ void SingleHostContext::revoke_and_shrink() {
     TT_THROW("method revoke_and_shrink is unsupported for single-host distributed contexts.");
 }
 
+std::size_t SingleHostContext::snoop_incoming_msg_size(Rank source, Tag tag) const {
+    TT_THROW("method snoop_incoming_msg_size is unsupported for single-host distributed contexts.");
+}
+
 }  // namespace tt::tt_metal::distributed::multihost
