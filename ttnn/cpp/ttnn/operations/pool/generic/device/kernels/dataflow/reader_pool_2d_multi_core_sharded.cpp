@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 #include "reader_pool2d_sharded_common.hpp"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -112,6 +112,7 @@ FORCE_INLINE void fill_scalar(
  */
 void kernel_main() {
     constexpr uint32_t reader_nindices = get_compile_time_arg_val(0);
+    DPRINT << "reader_nindices:" << reader_nindices << ENDL();
     constexpr uint32_t window_h = get_compile_time_arg_val(1);
     constexpr uint32_t window_w = get_compile_time_arg_val(2);
 
