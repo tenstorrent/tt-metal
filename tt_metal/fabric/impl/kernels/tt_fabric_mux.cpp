@@ -119,8 +119,7 @@ void kernel_main() {
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
 
     size_t rt_args_idx = 0;
-    auto eth_channel = get_arg_val<uint32_t>(rt_args_idx++);
-    auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx, eth_channel);
+    auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
 
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
         full_size_channels;
