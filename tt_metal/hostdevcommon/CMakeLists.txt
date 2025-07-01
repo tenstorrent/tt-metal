@@ -12,6 +12,8 @@ target_sources(
             api/hostdevcommon/dprint_common.h
             api/hostdevcommon/kernel_structs.h
             api/hostdevcommon/profiler_common.h
+            api/hostdevcommon/flags.hpp
+            api/hostdevcommon/tensor_accessor/arg_config.hpp
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS api
@@ -20,6 +22,8 @@ target_sources(
             api/hostdevcommon/dprint_common.h
             api/hostdevcommon/kernel_structs.h
             api/hostdevcommon/profiler_common.h
+            api/hostdevcommon/flags.hpp
+            api/hostdevcommon/tensor_accessor/arg_config.hpp
 )
 
 target_include_directories(ttmetalium_hostdevcommon INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>")
