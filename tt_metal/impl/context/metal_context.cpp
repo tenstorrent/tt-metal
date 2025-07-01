@@ -180,7 +180,6 @@ void MetalContext::initialize(
         std::atexit([]() { MetalContext::instance().teardown(); });
         teardown_registered_ = true;
     }
-
 }
 
 void MetalContext::teardown() {
@@ -384,7 +383,8 @@ void MetalContext::set_fabric_config(
     const tt_metal::FabricConfig fabric_config,
     tt_metal::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes) {
-    // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch config, not through this function exposed in the detail API.
+    // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
+    // config, not through this function exposed in the detail API.
     force_reinit_ = true;
     if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED || fabric_config == tt_metal::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
@@ -446,9 +446,7 @@ void MetalContext::initialize_fabric_config() {
         this->fabric_config_, this->fabric_reliability_mode_);
 }
 
-tt_metal::FabricConfig MetalContext::get_fabric_config() const {
-    return fabric_config_;
-}
+tt_metal::FabricConfig MetalContext::get_fabric_config() const { return fabric_config_; }
 
 void MetalContext::initialize_control_plane() {
     // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
@@ -480,8 +478,7 @@ void MetalContext::initialize_control_plane() {
     const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
                                                        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
 
-    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
-        mesh_graph_desc_path.string());
+    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(mesh_graph_desc_path.string());
 }
 
 void MetalContext::reset_cores(chip_id_t device_id) {
@@ -855,17 +852,14 @@ void MetalContext::initialize_firmware(
         tt_cxy_pair(device_id, virtual_core),
         jit_build_config.fw_launch_addr);
 
-    // Initialize each entry in the launch_msg ring buffer with the correct dispatch mode - Cores that don't get a valid
-    // launch_message during program execution need to at least have the correct dispatch mode.
-    // When using Fast Dispatch on Tensix:
-    // dispatch cores (Tensix) configured with DISPATCH_MODE_HOST
-    // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
-    // Idle Eth cores configured with DISPATCH_MODE_HOST but not used
-    // When using Fast Dispatch on Idle Eth:
-    // dispatch cores (Idle Eth) configured with DISPATCH_MODE_HOST
-    // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
-    // When using Slow Dispatch, all cores initialized with DISPATCH_MODE_HOST
-    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, *launch_msg);
+    // Initialize each entry in the launch_msg ring buffer with DISPATCH_MODE_NONE during firmware initialization.
+    // At this time, specifying the actual dispatch mode is misleading since the launch message is not needed
+    // for the workers during firmware initialization. The actual dispatch mode will be set later when needed.
+    // Create a temporary message for initializing the buffer with DISPATCH_MODE_NONE
+    launch_msg_t initial_buffer_msg = *launch_msg;
+    initial_buffer_msg.kernel_config.mode = DISPATCH_MODE_NONE;
+    // Initialize the buffer using the temporary message
+    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, initial_buffer_msg);
     auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
     cluster_->write_core(
         init_launch_msg_data.data(),
