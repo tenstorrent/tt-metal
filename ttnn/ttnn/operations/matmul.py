@@ -84,6 +84,17 @@ ttnn.attach_golden_function(
 )
 
 
+def _golden_function(input_tensor, mat1_tensor, mat2_tensor, alpha=1.0, beta=1.0, out_tensor=None, **kwargs):
+    import torch
+
+    return torch.addmm(input_tensor, mat1_tensor, mat2_tensor, alpha=alpha, beta=beta, out=out_tensor)
+
+
+ttnn.attach_golden_function(
+    ttnn.addmm,
+    golden_function=_golden_function,
+)
+
 ttnn.Tensor.__matmul__ = lambda self, *args, **kwargs: ttnn.matmul(self, *args, **kwargs)
 
 
