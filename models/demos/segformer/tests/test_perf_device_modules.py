@@ -7,7 +7,6 @@ import pytest
 import models.perf.device_perf_utils as perf_utils
 
 
-@pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "module, filter, num_iterations, expected_perf",
     [
