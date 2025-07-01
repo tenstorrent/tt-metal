@@ -7,6 +7,7 @@
 #include "debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
@@ -22,6 +23,9 @@ constexpr size_t connection_handshake_address = get_compile_time_arg_val(5);
 constexpr size_t sender_flow_control_address = get_compile_time_arg_val(6);
 constexpr size_t channel_base_address = get_compile_time_arg_val(7);
 
+constexpr size_t memory_map_start_address = get_compile_time_arg_val(8);
+constexpr size_t memory_map_end_address = get_compile_time_arg_val(9);
+
 namespace tt::tt_fabric {
 using DrainerChannelBuffer = EthChannelBuffer<NUM_BUFFERS>;
 using DrainerChannelClientLocationInfo = EDMChannelWorkerLocationInfo;
@@ -30,6 +34,11 @@ using DrainerStatus = EDMStatus;
 }  // namespace tt::tt_fabric
 
 void kernel_main() {
+    // clear out memory map
+    zero_l1_buf(
+        reinterpret_cast<tt_l1_ptr uint32_t*>(memory_map_start_address),
+        memory_map_end_address - memory_map_start_address);
+
     auto status_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::DrainerStatus::STARTED;
 

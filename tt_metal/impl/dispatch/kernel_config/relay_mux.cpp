@@ -7,7 +7,6 @@
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
 #include "fabric/fabric_host_utils.hpp"
-#include "fabric/fabric_mux_config.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"
 #include <bit>
@@ -83,9 +82,8 @@ void RelayMux::GenerateStaticConfigs() {
         mux_config_core);
     mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args();
 
-    uint32_t mux_buffer_end =
-        mux_kernel_config_->get_start_address_to_clear() + mux_kernel_config_->get_num_bytes_to_clear();
-    TT_FATAL(mux_buffer_end < l1_size, "RelayMux Buffer End {} Exceeds Max L1 {}", mux_buffer_end, l1_size);
+    uint32_t mux_buffer_end = mux_kernel_config_->get_memory_map_end_address();
+    TT_ASSERT(mux_buffer_end < l1_size, "RelayMux Buffer End {} Exceeds Max L1 {}", mux_buffer_end, l1_size);
 
     mux_rt_args_.clear();
     int destination_device_id = -1;
@@ -163,12 +161,7 @@ void RelayMux::CreateKernel() {
     tt::tt_metal::SetRuntimeArgs(*program_, mux_kernel, logical_core_, mux_rt_args_);
 }
 
-void RelayMux::ConfigureCore() {
-    // TODO: Only need to clear the read/write pointers to 0
-    std::vector<uint32_t> mux_zero_vec((mux_kernel_config_->get_num_bytes_to_clear() / sizeof(uint32_t)), 0);
-    tt::tt_metal::detail::WriteToDeviceL1(
-        device_, logical_core_, mux_kernel_config_->get_start_address_to_clear(), mux_zero_vec, GetCoreType());
-}
+void RelayMux::ConfigureCore() {}
 
 int RelayMux::GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChannelType channel_type) const {
     const auto& kernels = channel_type == tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL ? upstream_kernels_
@@ -192,9 +185,7 @@ void assemble_fabric_mux_client_config_args(
     const CoreCoord& fabric_mux_core = fabric_mux->GetVirtualCore();
     config.virtual_x = fabric_mux_core.x;
     config.virtual_y = fabric_mux_core.y;
-    config.num_buffers_per_channel = ch_type == tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL
-                                         ? fabric_mux->GetMuxKernelConfig()->num_buffers_header_only_channel
-                                         : fabric_mux->GetMuxKernelConfig()->num_buffers_full_size_channel;
+    config.num_buffers_per_channel = fabric_mux->GetMuxKernelConfig()->get_num_buffers(ch_type);
     config.channel_buffer_size_bytes = fabric_mux->GetMuxKernelConfig()->get_buffer_size_bytes(ch_type);
     config.channel_base_address = fabric_mux->GetMuxKernelConfig()->get_channel_base_address(ch_type, ch_index);
     config.connection_info_address = fabric_mux->GetMuxKernelConfig()->get_connection_info_address(ch_type, ch_index);
