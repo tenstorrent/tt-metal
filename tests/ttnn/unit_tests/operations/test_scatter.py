@@ -43,6 +43,7 @@ def make_random_permuted_last_dim_tensor(shape):
 @pytest.mark.parametrize(
     "input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout",
     [
+        ([1], 0, [1], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
         ([100], 0, [80], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
         ([2, 30, 200], -1, [2, 30, 200], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
         ([1, 1, 20, 20, 200], -1, [1, 1, 20, 20, 20], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),

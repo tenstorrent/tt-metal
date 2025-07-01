@@ -15,12 +15,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "shape",
     [
+        [],
+        [1],
         [2000],
         [1000, 32, 32],
         [5, 5, 5, 5, 1, 1, 1],
     ],
 )
-def test_cumprod_normal(dim, shape, device, use_program_cache):
+def test_cumprod_normal(dim, shape, device):
     torch.manual_seed(0)
     if dim < len(shape) and -len(shape) <= dim:
         for _ in range(2):
@@ -46,12 +48,14 @@ def test_cumprod_normal(dim, shape, device, use_program_cache):
 @pytest.mark.parametrize(
     "shape",
     [
+        [],
+        [1],
         [2000],
         [1000, 32, 32],
         [5, 5, 5, 5, 1, 1, 1],
     ],
 )
-def test_cumprod_preallocated(dim, shape, device, use_program_cache):
+def test_cumprod_preallocated(dim, shape, device):
     torch.manual_seed(0)
     if dim < len(shape) and -len(shape) <= dim:
         for _ in range(2):
@@ -163,7 +167,6 @@ def test_cumprod_failing_cases(
     memory_config,
     layout,
     device,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     torch_input_tensor = torch.randn(input_shape, dtype=torch_dtype)
