@@ -111,9 +111,6 @@ class TtAttention(nn.Module):
                     use_height_and_width_as_shard_shape=True,
                 )
 
-            seq_len = hidden_states.shape[-2]
-            print(f"QKV matmul, seq_len: {seq_len}")
-
             qkv_fused = ttnn.matmul(
                 hidden_states,
                 self.tt_qkv_weights,
@@ -133,7 +130,6 @@ class TtAttention(nn.Module):
             )
             ttnn.deallocate(qkv_fused)
         else:
-            print(f"Q matmul, seq_len: {hidden_states.shape[-2]}")
             q_heads = ttnn.matmul(
                 hidden_states,
                 self.tt_q_weights,
@@ -141,7 +137,6 @@ class TtAttention(nn.Module):
                 compute_kernel_config=self.q_compute_kernel_config,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            print(f"K matmul, seq_len: {encoder_hidden_states.shape[-2]}")
             k_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_k_weights,
@@ -149,7 +144,6 @@ class TtAttention(nn.Module):
                 compute_kernel_config=self.default_compute_kernel_config,
                 program_config=self.k_program_config,
             )
-            print(f"V matmul, seq_len: {encoder_hidden_states.shape[-2]}")
             v_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_v_weights,
@@ -193,7 +187,6 @@ class TtAttention(nn.Module):
         )
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        print(f"DO matmul, seq_len: {hidden_states.shape[-2]}")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_out_weights,
