@@ -415,7 +415,8 @@ configure_hugepages() {
     TEMP_DIR=$(mktemp -d)
     wget -P $TEMP_DIR $TT_TOOLS_LINK
     apt-get install -y --no-install-recommends $TEMP_DIR/$TT_TOOLS_NAME
-    systemctl enable --now tenstorrent-hugepages.service
+    sudo systemctl enable --now 'dev-hugepages\x2d1G.mount'
+    sudo systemctl enable --now tenstorrent-hugepages.service
     rm -rf "$TEMP_DIR"
 }
 
