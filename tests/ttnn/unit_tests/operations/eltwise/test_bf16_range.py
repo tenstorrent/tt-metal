@@ -12,7 +12,7 @@ import sys
 import os
 import traceback
 import scipy
-import utils
+import models.utility_functions as util
 import matplotlib.pyplot as plt
 import random
 
@@ -145,7 +145,9 @@ def measure_op_accuracy_bf16_eq_only(operation_name, dest_dir):
 
         torch_output_actual = launch_ttnn_op(torch_input_bf16)
 
-        match_mask = torch.eq(torch_output_ref, torch_output_actual)
+        match_mask = torch.eq(torch_output_ref, torch_output_actual) | (
+            torch.isnan(torch_output_ref) & torch.isnan(torch_output_actual)
+        )
         percent_match = 100.0 * match_mask.sum().item() / match_mask.numel()
         print(f"\t Match % for scalar {scalar}: {percent_match:.2f}%")
 
@@ -166,22 +168,30 @@ def measure_op_accuracy_bf16_eq_only(operation_name, dest_dir):
         scalar_labels.append(str(scalar))
         match_percentages.append(percent_match)
 
-    # Plot bar graph of scalar vs match %
-    plt.figure(figsize=(10, 6))
-    plt.bar(scalar_labels, match_percentages, color="skyblue")
-    plt.title(f"{operation_name} - Equality Match % per Scalar (bfloat16)")
-    plt.xlabel("Scalar")
-    plt.ylabel("Match Percentage (%)")
-    plt.xticks(rotation=45)
-    plt.grid(True, axis="y")
+    # Plot bar graph of scalar vs mistmatch %
+    mismatch_percentages = [100.0 - match for match in match_percentages]
 
+    plt.figure(figsize=(10, 6))
+    bars = plt.bar(scalar_labels, mismatch_percentages, color="salmon")
+    plt.yscale("log")  # Using log scale to emphasize small mismatches
+
+    plt.title(f"{operation_name} - Mismatch % per Scalar (bfloat16)")
+    plt.xlabel("Scalar")
+    plt.ylabel("Mismatch Percentage (%)")
+    plt.xticks(rotation=45, ha="right")
+    plt.grid(True, axis="y", which="both", linestyle="--", linewidth=0.5)
+    for bar, mismatch in zip(bars, mismatch_percentages):
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width() / 2, height, f"{mismatch:.2f}%", ha="center", va="bottom", fontsize=8)
+
+    # Save plot
     plot_dir = os.path.join(os.path.dirname(dest_dir.rstrip("/")), "plots")
     os.makedirs(plot_dir, exist_ok=True)
-    plot_path = os.path.join(plot_dir, f"{operation_name}-bfloat16-eq-barplot.png")
+    plot_path = os.path.join(plot_dir, f"{operation_name}-bfloat16-eq-barplot-mismatch.png")
     plt.tight_layout()
     plt.savefig(plot_path)
     plt.close()
-    print(f"----> Overall result : Bar plot saved to: {plot_path}")
+    print(f"----> Overall result : Histogram plot saved to: {plot_path}")
 
 
 def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
@@ -269,7 +279,7 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         np_ttnn_output_f64 = torch_ttnn_output_f64.flatten().numpy()
         np_diff = np.abs(np_golden_f64 - np_ttnn_output_f64)
 
-        torch_ulp_value = utils.ulp_bf16(torch_golden_bf16).to(torch.float64)
+        torch_ulp_value = util.ulp(torch_golden_bf16).to(torch.float64)
         torch_eps = torch.full(torch_input_bf16.size(), EPSILON, dtype=torch.float64)
         np_eps = np.full(2**16, EPSILON)
 
@@ -403,9 +413,22 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         print(f"{operation_name} [bfloat16] PCC = {pcc[0]}, Duration = {elapsed_s:.4f}s")
 
         # Single plot
+        print(f"Plotting max ULP for {operation_name}, x in [-360, 360], y in [0, 20]")
         plot_df = pd.read_csv(csv_path)
+
         label = f"scalar={scalar}" if scalar is not None else operation_name
-        plt.plot(plot_df["base_x"], plot_df["mean_ulp_error"], label=label)
+        plt.plot(plot_df["base_x"], plot_df["max_ulp_error"], label=label)
+
+        plt.title(f"TTNN vs PyTorch: Max ULP Error for {operation_name} (bfloat16)")
+        plt.xlabel("Input Value (base_x)")
+        plt.ylabel("Max ULP Error")
+        plt.ylim(0, 20)
+        if operation_name == "deg2rad":
+            plt.xlim(-360, 360)
+
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
 
     plt.title(f"TTNN vs PyTorch: Mean ULP Error for {operation_name} (bfloat16)")
     plt.xlabel("Input Value (base_x)")
