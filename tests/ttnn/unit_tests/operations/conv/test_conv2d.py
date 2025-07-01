@@ -124,6 +124,7 @@ SliceWidth = ttnn.Conv2dSliceWidth
         (1, 64,   128,  992,   992,   SliceWidth,   64,  ttnn.bfloat8_b, ttnn.bfloat16, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 4,  ttnn.MathFidelity.LoFi  ),
 
         # Test fails due to limitation in Tensor Infra to accurately represent padded shapes.
+        # https://github.com/tenstorrent/tt-metal/issues/24425
         # (1, 2904, 2904,  48,    48,   SliceWidth,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ),
         (1, 2944, 2944,  48,    48,   SliceWidth,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ),
     )
