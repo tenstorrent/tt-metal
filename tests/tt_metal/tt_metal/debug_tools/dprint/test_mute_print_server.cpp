@@ -13,7 +13,6 @@
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include "dprint_server.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -65,11 +64,11 @@ void RunTest(DPrintFixture* fixture, IDevice* device) {
     run_program(0);
 
     // Disable the printing and run the program again.
-    DprintServerSetMute(true);
+    MetalContext::instance().dprint_server()->set_mute(true);
     run_program(1);
 
     // Re-enable prints and run the program one more time.
-    DprintServerSetMute(false);
+    MetalContext::instance().dprint_server()->set_mute(false);
     run_program(2);
 
     // Check the print log against golden output.

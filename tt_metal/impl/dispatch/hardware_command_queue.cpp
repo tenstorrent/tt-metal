@@ -29,7 +29,6 @@
 #include "dispatch_settings.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/host_runtime_commands.hpp"
-#include "dprint_server.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -722,7 +721,8 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     this->enqueue_record_event(event, sub_device_ids);
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
         while (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
-            if (DPrintServerHangDetected()) {
+            if (MetalContext::instance().dprint_server() and
+                MetalContext::instance().dprint_server()->hang_detected()) {
                 // DPrint Server hang, early exit. We're in test mode, so main thread will assert.
                 this->set_exit_condition();
                 return;

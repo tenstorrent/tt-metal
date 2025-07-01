@@ -51,7 +51,6 @@
 #include "trace/trace.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "dprint_server.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"

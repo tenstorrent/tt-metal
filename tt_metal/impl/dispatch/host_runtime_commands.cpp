@@ -26,7 +26,6 @@
 #include "device.hpp"
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
-#include "dprint_server.hpp"
 #include "hal_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "tt-metalium/program.hpp"
@@ -342,7 +341,7 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     // If in testing mode, don't need to check dprint/watcher errors, since the tests will induce/handle them.
     if (!MetalContext::instance().rtoptions().get_test_mode_enabled()) {
         TT_FATAL(
-            !(DPrintServerHangDetected()),
+            !(MetalContext::instance().dprint_server() and MetalContext::instance().dprint_server()->hang_detected()),
             "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
         TT_FATAL(
             !(tt::watcher_server_killed_due_to_error()),
