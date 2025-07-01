@@ -22,6 +22,7 @@ from models.utility_functions import run_for_wormhole_b0
     "batch_size",
     ((1),),
 )
+@pytest.mark.models_performance_bare_metal
 def test_run_segformer_trace_2cqs_inference(
     device,
     batch_size,

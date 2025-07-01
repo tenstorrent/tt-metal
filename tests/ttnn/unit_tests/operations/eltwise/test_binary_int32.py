@@ -133,7 +133,7 @@ def test_binary_int32_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, ttnn
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=False)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=None)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
@@ -207,7 +207,7 @@ def test_binary_logical_int32_sharded(a_shape, b_shape, sharded_config, ttnn_fn,
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=False)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=None)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)

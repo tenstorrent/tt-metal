@@ -206,15 +206,15 @@ TEST_P(NdShardingOpCompatTests, TestAdd) {
     CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{params.grid_size.x - 1, params.grid_size.y - 1}));
     NdShardSpec nd_shard_spec{params.shard_shape, cores, ShardOrientation::ROW_MAJOR};
     MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
-    TensorLayout tensor_layout(DataType::UINT32, PageConfig(Layout::TILE), memory_config);
+    // NOTE: currently binary op does not support interger data types with uneven shard size, so we use float32
+    TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::TILE), memory_config);
     TensorSpec tensor_spec(params.shape, tensor_layout);
 
     size_t volume = params.shape.volume();
-    std::vector<uint32_t> data(volume);
+    std::vector<float> data(volume);
     for (size_t i = 0; i < volume; i++) {
-        data[i] = static_cast<uint32_t>(i);
+        data[i] = static_cast<float>(i);
     }
-
     auto tensor_a = Tensor::from_vector(data, tensor_spec, device_);
     for (auto& elem : data) {
         elem *= 2;
@@ -223,9 +223,9 @@ TEST_P(NdShardingOpCompatTests, TestAdd) {
 
     auto sum_tensor = ttnn::add(tensor_a, tensor_b);
 
-    auto sum_vector = sum_tensor.to_vector<uint32_t>();
+    auto sum_vector = sum_tensor.to_vector<float>();
     for (size_t i = 0; i < volume; i++) {
-        ASSERT_EQ(sum_vector[i], i * 3);
+        EXPECT_FLOAT_EQ(sum_vector[i], static_cast<float>(i * 3));
     }
 }
 
