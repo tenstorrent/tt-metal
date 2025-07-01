@@ -50,6 +50,11 @@ struct TerminationInfo {
     CoreType core_type;      // Core Type
     uint32_t address;        // Termination signal address in L1
     uint32_t val;            // Termination signal value
+
+    bool operator==(const TerminationInfo& other) const {
+        return logical_core == other.logical_core && core_type == other.core_type && address == other.address &&
+               val == other.val;
+    }
 };
 
 static std::vector<string> dispatch_kernel_file_names = {
@@ -195,3 +200,17 @@ protected:
 
 }  // namespace tt_metal
 }  // namespace tt
+
+namespace std {
+template <>
+struct hash<tt::tt_metal::TerminationInfo> {
+    std::size_t operator()(const tt::tt_metal::TerminationInfo& info) const {
+        size_t hash = 0;
+        tt::utils::hash_combine(hash, info.logical_core);
+        tt::utils::hash_combine(hash, info.core_type);
+        tt::utils::hash_combine(hash, info.address);
+        tt::utils::hash_combine(hash, info.val);
+        return hash;
+    }
+};
+}  // namespace std

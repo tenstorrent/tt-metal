@@ -750,7 +750,7 @@ std::unordered_map<chip_id_t, std::unique_ptr<Program>> command_queue_pgms;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> dispatch_cores;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> routing_cores;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> empty_cores;
-std::unordered_map<chip_id_t, std::vector<TerminationInfo>> termination_info;
+std::unordered_map<chip_id_t, std::unordered_set<TerminationInfo>> termination_info;
 
 // Helper function to automatically generate dispatch nodes given devices + num hw CQs + detection of card type.
 std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
@@ -1167,7 +1167,7 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
 
         const auto& info = node_and_kernel->GetTerminationInfo();
         if (info.has_value()) {
-            termination_info[device->id()].push_back(info.value());
+            termination_info[device->id()].insert(info.value());
         }
     }
 
@@ -1662,11 +1662,21 @@ const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(chip_id_
     return routing_cores[dev_id];
 }
 
-const std::vector<TerminationInfo>& get_registered_termination_cores(chip_id_t dev_id) {
+const std::unordered_set<TerminationInfo>& get_registered_termination_cores(chip_id_t dev_id) {
     if (!termination_info.contains(dev_id)) {
         termination_info[dev_id] = {};
     }
-    return termination_info[dev_id];
+    return termination_info.at(dev_id);
 }
+
+void teardown_topology_state() {
+    node_id_to_kernel.clear();
+    command_queue_pgms.clear();
+    dispatch_cores.clear();
+    routing_cores.clear();
+    empty_cores.clear();
+    termination_info.clear();
+}
+
 
 }  // namespace tt::tt_metal

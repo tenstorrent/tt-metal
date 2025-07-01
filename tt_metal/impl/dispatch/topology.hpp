@@ -65,6 +65,6 @@ const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(chip_id_t dev_id
 const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(chip_id_t dev_id);
 
 // Return the list of termination targets that were registered for this device
-const std::vector<tt::tt_metal::TerminationInfo>& get_registered_termination_cores(chip_id_t dev_id);
+const std::unordered_set<tt::tt_metal::TerminationInfo>& get_registered_termination_cores(chip_id_t dev_id);
 
 }  // namespace tt::tt_metal
