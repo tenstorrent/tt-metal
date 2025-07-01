@@ -191,7 +191,7 @@ def test_llama_TG_perf_device(
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size, has_signposts=True)
     profiler.end(step_name)
     profiler.end("run")
 
