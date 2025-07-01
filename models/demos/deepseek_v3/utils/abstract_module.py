@@ -90,8 +90,8 @@ class AbstractModule(ABC):
     def __init__(self, *args, **kwargs):
         raise NotImplementedError("Model state should be created with the _new_state method, not the constructor.")
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         """Forward pass for prefill mode.
         Subclasses must reimplement this method to handle the prefill logic.
@@ -105,8 +105,8 @@ class AbstractModule(ABC):
         """
         raise NotImplementedError(f"Subclasses of {AbstractModule.__name__} must implement the forward_prefill method")
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         """Forward pass for decode mode.
         Subclasses must reimplement this method to handle the decode logic.

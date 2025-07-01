@@ -11,6 +11,7 @@ import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     EmbeddingConfig,
+    FromWeightConfig,
     ModelDecodeConfig,
     ModelPrefillConfig,
     WeightConfig,
@@ -88,7 +89,7 @@ class Embedding1D(AbstractModule):
     def _embedding_config(mesh_device: ttnn.MeshDevice) -> EmbeddingConfig:
         """Config for the Embedding1D module."""
         return EmbeddingConfig(
-            weight=TensorStub(),  # matched to the WeightStub in the WeightConfig
+            weight=FromWeightConfig(),  # matched to the WeightStub in the WeightConfig
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
