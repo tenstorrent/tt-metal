@@ -90,11 +90,9 @@ void append_fabric_connection_rt_args(
     CoreType core_type) {
     TT_FATAL(
         src_fabric_node_id != dst_fabric_node_id,
-        "Expected different src and dst chip ids but got same, src:  (M {} D {}), dst:  (M {} D {})",
-        src_fabric_node_id.mesh_id,
-        src_fabric_node_id.chip_id,
-        dst_fabric_node_id.mesh_id,
-        dst_fabric_node_id.chip_id);
+        "Expected different src and dst chip ids but got same, Src: {}, Dst: {}",
+        src_fabric_node_id,
+        dst_fabric_node_id);
 
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -107,9 +105,9 @@ void append_fabric_connection_rt_args(
     if (!is_2d_fabric && !is_TG_gateway_connection(src_fabric_node_id, dst_fabric_node_id)) {
         TT_FATAL(
             src_fabric_node_id.mesh_id == dst_fabric_node_id.mesh_id,
-            "Currently only the chips on the same mesh are supported for 1D fabric. Src mesh id: {}, Dst mesh id: {}",
-            src_fabric_node_id.mesh_id,
-            dst_fabric_node_id.mesh_id);
+            "Currently only the chips on the same mesh are supported for 1D fabric. Src: {}, Dst: {}",
+            src_fabric_node_id,
+            dst_fabric_node_id);
     }
 
     // get the direction in which the data will be forwarded from the src_fabric_node_id
@@ -138,7 +136,7 @@ void append_fabric_connection_rt_args(
     }
     TT_FATAL(
         forwarding_direction.has_value(),
-        "Could not find any forwarding direction from source {} to destination {}",
+        "Could not find any forwarding direction from src {} to dst {}",
         src_fabric_node_id,
         dst_fabric_node_id);
 
@@ -146,7 +144,7 @@ void append_fabric_connection_rt_args(
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
     TT_FATAL(
         link_idx < candidate_eth_chans.size(),
-        "Requested link index {} is out of bounds. {} ethernet channels available to forward b/w source {} and destination {}",
+        "Requested link index {} is out of bounds. {} ethernet channels available to forward b/w src {} and dst {}",
         link_idx,
         candidate_eth_chans.size(),
         src_fabric_node_id,
@@ -156,7 +154,7 @@ void append_fabric_connection_rt_args(
         get_forwarding_link_indices_in_direction(src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
     TT_FATAL(
         std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
-        "Requested link index {} cannot be used for forwarding b/w source {} and destination {}. Valid forwarding links are {}",
+        "Requested link index {} cannot be used for forwarding b/w src {} and dst {}. Valid forwarding links are {}",
         link_idx,
         src_fabric_node_id,
         dst_fabric_node_id,
