@@ -366,10 +366,6 @@ Result conv2d_DRAM(
 
         Tensor sliced_input_tensor;
         if (conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
-            TT_FATAL(
-                conv_config.output_layout != Layout::TILE,
-                "Conv2D DRAM Slicing with Width Sharded layout is not supported with TILE layout. "
-                "Please use ROW_MAJOR layout.");
             sliced_input_tensor = ttnn::slice(
                 queue_id,
                 input_tensor_on_device,
@@ -429,8 +425,12 @@ Result conv2d_DRAM(
                 conv_config_l1,
                 compute_config_,
                 memory_config_);
+
+        // slice_write supports all sharding layouts for tiled inputs. For row major, height & block sharding are
+        // supported.
         if (sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED &&
-            sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED) {
+            sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED &&
+            dram_output_tensor.layout() == Layout::ROW_MAJOR) {
             sliced_output_tensor = ttnn::to_memory_config(
                 sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         }

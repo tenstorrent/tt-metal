@@ -527,6 +527,8 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+
     uint32_t num_cores_channels = 1;
     auto total_cores = shard_spec.grid;
     if (is_block_sharded) {
@@ -535,6 +537,8 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         } else {
             num_cores_channels = total_cores.bounding_box().grid_size().y;
         }
+    } else if (is_width_sharded) {
+        num_cores_channels = input_cores.num_cores();
     }
 
     uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
@@ -642,6 +646,9 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         if (is_block_sharded) {
             core_w_index = rm_orientation ? core.x : core.y;
             core_h_index = rm_orientation ? core.y : core.x;
+        } else if (is_width_sharded) {
+            core_h_index = 0;
+            core_w_index = core_index;
         }
 
         const uint32_t num_sticks_read = core_h_index * num_tiles_nhw_per_core;
@@ -650,27 +657,27 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         id_per_dim[0] = 0;
         uint32_t unpadded_written = num_sticks_read;
         uint32_t start_id = id_per_dim[0] + start_offset + width_offset;
-        uint32_t max_num_sticks_this_core = 0;
+        uint32_t max_num_tiles_this_core = 0;
 
         for (uint32_t j = 1; j < num_dims; j++) {
             id_per_dim[j] = unpadded_written % num_input_tiles_per_dim[j];
             unpadded_written = unpadded_written / num_input_tiles_per_dim[j];
             start_id += id_per_dim[j] * accumulated_total_tiles_per_dim[j - 1];
             size_till_end[j] = num_input_tiles_per_dim[j] - id_per_dim[j] - ((j == 1) ? 0 : 1);
-            max_num_sticks_this_core += size_till_end[j] * accumulated_input_total_tiles_per_dim[j - 1];
+            max_num_tiles_this_core += size_till_end[j] * accumulated_input_total_tiles_per_dim[j - 1];
         }
         std::vector<uint32_t> writer_kernel_args = common_writer_kernel_args;
 
         uint32_t num_tiles_this_core =
-            std::min(num_tiles_nhw_per_core * num_tiles_per_channel, max_num_sticks_this_core);
+            std::min(num_tiles_nhw_per_core * num_tiles_per_channel, max_num_tiles_this_core);
 
-        log_trace(
+        log_debug(
             tt::LogOp,
-            "Start ID: {}, Start ID per dim : {} , Size till end : {}, Max Sticks: {}, Num Sticks: {} for Core: {}",
+            "Start ID: {}, Start ID per dim : {} , Size till end : {}, Max Tiles: {}, Num Tiles: {} for Core: {}",
             start_id,
             id_per_dim,
             size_till_end,
-            max_num_sticks_this_core,
+            max_num_tiles_this_core,
             num_tiles_this_core,
             core);
         uint32_t addr_offset = 5;  // output buffer addr, output_row_size_bytes, input_row_size_bytes, num_dims
@@ -732,13 +739,11 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
         output.layout());
 
     TT_FATAL(input.shard_spec().has_value(), "Input tensor should be sharded");
-    TT_FATAL(
-        input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
-            input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
-        "Input tensor should be height or block sharded");
 
     bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    bool is_width_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+
     auto shard_spec = input.shard_spec().value();
     auto input_cores = shard_spec.grid;
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
@@ -769,6 +774,8 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
         } else {
             num_cores_channels = input_cores.bounding_box().grid_size().y;
         }
+    } else if (is_width_sharded) {
+        num_cores_channels = input_cores.num_cores();
     }
 
     TT_FATAL(

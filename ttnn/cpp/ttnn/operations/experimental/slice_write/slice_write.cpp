@@ -46,13 +46,6 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     if (rm_only) {
         input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
     }
-    TT_FATAL(
-        (!input_tensor.is_sharded()) ||
-            (input_tensor.is_sharded() &&
-             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) ||
-            (input_tensor.is_sharded() &&
-             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED),
-        "Slice Write currently supports Interleaved or Height & Block Sharding for input tensors.");
 
     TT_FATAL(!output_tensor.is_sharded(), "Slice Write currently doesn't support sharded output tensors.");
     const bool tiled = input.layout() == Layout::TILE;
