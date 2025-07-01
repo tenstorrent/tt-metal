@@ -17,28 +17,21 @@
 
 template <
     uint32_t num_output_tiles,
-    bool is_partial_tile,
-    uint32_t max_rows_for_reduction,
-    uint32_t split_reader,
+    uint32_t num_faces_in_input_tile,
+    uint32_t num_faces_in_output_tile,
     uint32_t unpA_face_r_dim,
     bool neginf_srca_maxpool,
     bool zero_srca_avgpool>
-inline void reduce_h_fused_interm(
-    const uint32_t in_cb_id_0,
-    const uint32_t in_cb_id_1,
+inline void reduce_h_fused(
+    const uint32_t interm_cb_id,
     const uint32_t in_scalar_cb_id,
-    const uint32_t in_stick_index,
-    const uint32_t interm_index,
-    const uint32_t interm_cb_id) {
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : max_rows_for_reduction < 32 ? 2 : 4;
-    constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
+    const uint32_t output_row_index,
+    const uint32_t out_cb_id) {
     constexpr uint32_t num_out_rows = 1;
-
-    const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
 
     tile_regs_acquire();
     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-        curr_in_cb_id,
+        interm_cb_id,
         in_scalar_cb_id,
         num_output_tiles,
         0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
@@ -50,41 +43,11 @@ inline void reduce_h_fused_interm(
     tile_regs_wait();
     tile_regs_commit();
     pack_untilize_dst<num_output_tiles>(
-        interm_cb_id,
+        out_cb_id,
         1 /*out_subblock_h*/,
-        interm_index + 1,  // skip the first row where running total is stored
+        output_row_index,
         num_out_rows,
         num_faces_in_output_tile); /* pack 1 row (1x16 or 1x32) */
-    tile_regs_release();
-}
-
-template <
-    uint32_t num_output_tiles,
-    bool is_partial_tile,
-    uint32_t max_rows_for_reduction,
-    uint32_t unpA_face_r_dim,
-    bool neginf_srca_maxpool,
-    bool zero_srca_avgpool>
-inline void reduce_h_fused(const uint32_t interm_cb_id, const uint32_t in_scalar_cb_id, const uint32_t out_cb_id) {
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : max_rows_for_reduction < 32 ? 2 : 4;
-    constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
-    constexpr uint32_t num_out_rows = 1;
-
-    tile_regs_acquire();
-    unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-        interm_cb_id,
-        in_scalar_cb_id,
-        num_output_tiles,
-        0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-        num_faces_in_input_tile /* unpack 1 or 2 faces ) */,
-        unpA_face_r_dim);
-    for (uint32_t c_i = 0; c_i < num_output_tiles; ++c_i) {
-        reduce_tile_math(c_i, num_faces_in_input_tile /* reduce 1 or 2 faces */);
-    }
-    tile_regs_wait();
-    tile_regs_commit();
-    pack_untilize_dst<num_output_tiles>(
-        out_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_faces_in_output_tile); /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
 }
 
@@ -169,19 +132,16 @@ void MAIN {
                     chunk % (max_rows_for_reduction - 1);  // reduce 31 interm rows at a time
 
                 cb_wait_front(curr_in_cb_id, 1);
-                reduce_h_fused_interm<
+                reduce_h_fused<
                     max_tiles_per_iter,
-                    is_partial_tile,
-                    max_rows_for_reduction,
-                    split_reader,
+                    num_faces_in_input_tile,
+                    num_faces_in_output_tile,
                     face_r_dim,
                     neginf_srca_maxpool,
                     zero_srca_avgpool>(
-                    in_cb_id_0,
-                    in_cb_id_1,
+                    curr_in_cb_id,
                     is_avg_pool ? in_one_cb_id : curr_scalar_cb_id,
-                    n,
-                    max_rows_interm_remainder,
+                    max_rows_interm_remainder + 1,  // skip the first row where we are accumulating
                     interm_cb_id);
                 cb_pop_front(curr_in_cb_id, 1);
 
@@ -195,13 +155,14 @@ void MAIN {
                     // perform the final reduction over the first N - 1 whole chunks // Reduction of final 2 sticks.
                     reduce_h_fused<
                         max_tiles_per_iter,
-                        is_partial_tile,
-                        max_rows_for_reduction,
+                        num_faces_in_input_tile,
+                        num_faces_in_output_tile,
                         face_r_dim,
                         neginf_srca_maxpool,
                         zero_srca_avgpool>(
                         interm_cb_id,
                         !is_avg_pool || (chunk == interm_reduction_chunks - 1) ? curr_scalar_cb_id : in_one_cb_id,
+                        0,
                         interm_cb_id);
 
                     // either write output stick or for avg pool notify the reader that we need the interm CB cleared
