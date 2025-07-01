@@ -1,0 +1,72 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "flip_pybind.hpp"
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "ttnn-pybind/decorators.hpp"
+
+#include "flip.hpp"
+
+namespace ttnn::operations::data_movement::detail {
+namespace py = pybind11;
+
+void bind_flip(py::module& module) {
+    auto doc =
+        R"doc(flip(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
+
+            Reverse the order of an n-D tensor along given axis in dims.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                dim (number): tthe permutation of the dimensions of the input tensor.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
+
+           Returns:
+               List of ttnn.Tensor: the output tensor.
+
+            Example:
+
+                >>> x = ttnn.to_device(ttnn.from_torch(torch.arrange(8).view(2, 2, 2), dtype=torch.bfloat16)), device)
+                >>> x
+                tensor([[[ 0,  1],
+                         [ 2,  3]],
+
+                        [[ 4,  5],
+                         [ 6,  7]]])
+                >>> flipped_x = ttnn.flip(x, (0, 1))
+                >>> flipped_x
+                tensor([[[ 6,  7],
+                         [ 4,  5]],
+
+                        [[ 2,  3],
+                         [ 0,  1]]]))doc";
+
+    using OperationType = decltype(ttnn::flip);
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::flip,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::SmallVector<int64_t>& dims,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               QueueId queue_id) {
+                return self(queue_id, input_tensor, dims, memory_config);
+            },
+            py::arg("input_tensor").noconvert(),
+            py::arg("dims"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId,
+        });
+}
+
+}  // namespace ttnn::operations::data_movement::detail
