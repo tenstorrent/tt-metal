@@ -399,7 +399,7 @@ def test_binary_relational_scalar_ttnn(device, input_shapes, scalar, ttnn_functi
     in_data = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn_function(input_tensor, scalar, use_legacy=False)
+    output_tensor = ttnn_function(input_tensor, scalar, use_legacy=None)
     output_tensor = ttnn.to_torch(output_tensor)
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data, scalar)
