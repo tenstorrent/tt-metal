@@ -27,11 +27,11 @@ using ccl::EriscDatamoverBuilder;
 
 struct RingAttentionAllGatherAsync {
     std::vector<IDevice*> devices;
-    const uint32_t dim;
-    const uint32_t num_links;
-    const uint32_t ring_size;
-    const MemoryConfig output_mem_config;
-    const ccl::Topology topology;
+    uint32_t dim;
+    uint32_t num_links;
+    uint32_t ring_size;
+    MemoryConfig output_mem_config;
+    ccl::Topology topology;
     const std::vector<GlobalSemaphore> semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
@@ -94,10 +94,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     std::vector<Tensor>& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
@@ -108,15 +108,15 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     std::vector<Tensor>& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
-    const CoreCoord core_grid_offset = CoreCoord(0, 0));
+    CoreCoord core_grid_offset = CoreCoord(0, 0));
 
 namespace operations {
 namespace experimental {
@@ -125,12 +125,12 @@ namespace ccl {
 std::vector<Tensor> ring_attention_all_gather_async(
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& persistent_output_buffer,
-    const int32_t dim,
+    int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const uint32_t cluster_axis,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const ttnn::ccl::Topology topology,
-    const uint32_t num_links = 1,
+    ttnn::ccl::Topology topology,
+    uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 

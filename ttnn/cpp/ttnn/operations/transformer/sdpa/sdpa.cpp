@@ -216,7 +216,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
      * Create RingAttentionAllGatherAsync struct.
      * It will be a member of the RingJointScaledDotProductAttention struct.
      */
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),
         "all-gather invoked with cluster_axis API withou 2D mesh, which is currently unsupported");

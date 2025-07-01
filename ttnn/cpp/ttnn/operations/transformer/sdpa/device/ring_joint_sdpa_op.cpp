@@ -68,12 +68,12 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
     }
 
     // Get shapes
-    const auto q_shape = input_tensor_q.get_logical_shape();
-    const auto k_shape = persistent_output_buffer_k.get_logical_shape();
-    const auto v_shape = persistent_output_buffer_v.get_logical_shape();
-    const auto joint_q_shape = joint_tensor_q.get_logical_shape();
-    const auto joint_k_shape = joint_tensor_k.get_logical_shape();
-    const auto joint_v_shape = joint_tensor_v.get_logical_shape();
+    const auto& q_shape = input_tensor_q.get_logical_shape();
+    const auto& k_shape = persistent_output_buffer_k.get_logical_shape();
+    const auto& v_shape = persistent_output_buffer_v.get_logical_shape();
+    const auto& joint_q_shape = joint_tensor_q.get_logical_shape();
+    const auto& joint_k_shape = joint_tensor_k.get_logical_shape();
+    const auto& joint_v_shape = joint_tensor_v.get_logical_shape();
 
     // Validate storage types and buffers
     for (auto& tensor : sdpa_input_tensors) {
@@ -199,8 +199,8 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
 
     // Validate padding: Only the sequence dimension may be padded
     auto validate_padding = [](const Tensor& tensor) {
-        auto logical_shape = tensor.get_logical_shape();
-        auto padded_shape = tensor.get_padded_shape();
+        const auto& logical_shape = tensor.get_logical_shape();
+        const auto& padded_shape = tensor.get_padded_shape();
         TT_FATAL(logical_shape[0] == padded_shape[0], "Padding is not supported on the batch dimension");
         TT_FATAL(logical_shape[1] == padded_shape[1], "Padding is not supported on the num_heads dimension");
         TT_FATAL(logical_shape[3] == padded_shape[3], "Padding is not supported on the head_dim dimension");

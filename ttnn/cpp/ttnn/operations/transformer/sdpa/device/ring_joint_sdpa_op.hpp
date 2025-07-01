@@ -54,7 +54,7 @@ struct RingJointScaledDotProductAttention {
         "program_config",
         "compute_kernel_config",
         "ccl_core_grid_offset");
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::forward_as_tuple(
             this->joint_strategy,
             this->scale,

@@ -53,9 +53,9 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     may be less than padded length. K, V are gathered, so logical_n tells the true length of K and V.
     */
 
-    const auto q_shape = input_tensor_q.get_logical_shape();
-    const auto k_shape = gathered_input_tensor_k.get_logical_shape();
-    const auto joint_q_shape = joint_tensor_q.get_logical_shape();
+    const auto& q_shape = input_tensor_q.get_logical_shape();
+    const auto& k_shape = gathered_input_tensor_k.get_logical_shape();
+    const auto& joint_q_shape = joint_tensor_q.get_logical_shape();
     const uint32_t B = q_shape[0], NH = q_shape[1], local_N = q_shape[2], DH = q_shape[3];
     const uint32_t global_N = k_shape[2];
     const uint32_t L = joint_q_shape[2];

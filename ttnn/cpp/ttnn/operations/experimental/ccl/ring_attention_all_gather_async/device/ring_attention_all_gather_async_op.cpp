@@ -20,7 +20,7 @@ void RingAttentionAllGatherAsync::validate_with_output_tensors(
     const auto& layout = first_input_tensor.get_layout();
     const auto& dtype = first_input_tensor.get_dtype();
     const auto& memory_config = first_input_tensor.memory_config();
-    const auto input_shape = first_input_tensor.get_logical_shape();
+    const auto& input_shape = first_input_tensor.get_logical_shape();
 
     // Validate all input tensors
     for (size_t i = 0; i < input_tensors.size(); ++i) {
@@ -211,7 +211,7 @@ std::vector<Tensor> ring_attention_all_gather_async_impl(
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),
         "all-gather invoked with cluster_axis API withou 2D mesh, which is currently unsupported");
