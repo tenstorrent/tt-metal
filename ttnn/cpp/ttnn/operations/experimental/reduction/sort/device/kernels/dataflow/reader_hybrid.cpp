@@ -22,18 +22,34 @@ void kernel_main() {
     constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(1);
     constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(2);
     constexpr uint32_t index_tensor_output_cb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t index_tensor_peer_cb_index = get_compile_time_arg_val(4);
-    constexpr uint32_t physical_core_lookup_table_cb_index = get_compile_time_arg_val(5);
-    constexpr bool input_tensor_is_dram = get_compile_time_arg_val(6) == 1;
-    constexpr bool index_tensor_output_is_dram = get_compile_time_arg_val(7) == 1;
-    constexpr bool physical_core_lookup_table_is_dram = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t Ht = get_compile_time_arg_val(9);
-    constexpr uint32_t Wt = get_compile_time_arg_val(10);
-    constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(11);
-    constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(12);
-    constexpr bool ascending = get_compile_time_arg_val(13) == 1;
+    constexpr uint32_t value_tensor_intermediate_cb_index = get_compile_time_arg_val(4);
+    constexpr uint32_t index_tensor_intermediate_cb_index = get_compile_time_arg_val(5);
+    constexpr uint32_t value_tensor_peer_cb_index = get_compile_time_arg_val(6);
+    constexpr uint32_t index_tensor_peer_cb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t physical_core_lookup_table_cb_index = get_compile_time_arg_val(8);
 
-    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(14));
+    constexpr bool input_tensor_is_dram = get_compile_time_arg_val(9) == 1;
+    constexpr bool index_tensor_output_is_dram = get_compile_time_arg_val(10) == 1;
+    constexpr bool physical_core_lookup_table_is_dram = get_compile_time_arg_val(11) == 1;
+    constexpr uint32_t Ht = get_compile_time_arg_val(12);
+    constexpr uint32_t Wt = get_compile_time_arg_val(13);
+    constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(14);
+    constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(15);
+    constexpr bool ascending = get_compile_time_arg_val(16) == 1;
+
+    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(17));
+
+    DPRINT << "READER: "
+           << " grid_x: " << compute_with_storage_grid_size_x << " grid_y: " << compute_with_storage_grid_size_y
+           << " input_cb_index: " << input_tensor_cb_index << " index_output_cb_index: " << index_tensor_output_cb_index
+           << " value_intermediate = " << value_tensor_intermediate_cb_index
+           << " index_intermediate = " << index_tensor_intermediate_cb_index
+           << " value_peer_cb_index: " << value_tensor_peer_cb_index
+           << " index_peer_cb_index: " << index_tensor_peer_cb_index
+           << " physical_core_lookup_table_cb_index: " << physical_core_lookup_table_cb_index << " Ht: " << Ht
+           << " Wt: " << Wt << " number_of_tiles_per_core: " << number_of_tiles_per_core
+           << " number_of_cores_used: " << number_of_cores_used << " ascending: " << (uint32_t)ascending
+           << " sem_exchange_addr: " << sem_exchange_addr << ENDL();
 
     // Constants
     constexpr uint32_t one_tile = 1;
@@ -41,9 +57,9 @@ void kernel_main() {
     const uint16_t global_tile_start = core_id * number_of_tiles_per_core;
     const uint16_t global_tile_end = global_tile_start + number_of_tiles_per_core;
 
-    const uint16_t number_of_pairs_processed_by_each_core = number_of_tiles_per_core / 2;
-    const uint16_t processing_pair_start = core_id * number_of_pairs_processed_by_each_core;
-    const uint16_t processing_pair_end = processing_pair_start + number_of_pairs_processed_by_each_core;
+    // const uint16_t number_of_pairs_processed_by_each_core = number_of_tiles_per_core / 2;
+    const uint16_t processing_tile_start = core_id * number_of_tiles_per_core;
+    const uint16_t processing_tile_end = processing_tile_start + number_of_tiles_per_core;
 
     // Input tensor config
     constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
@@ -69,6 +85,7 @@ void kernel_main() {
         .page_size = physical_core_lookup_table_tile_size_bytes,
         .data_format = physical_core_lookup_table_data_format};
 
+    DPRINT << "READER: Generating core LUT" << ENDL();
     // Read lookup table for physical core IDs
     cb_reserve_back(physical_core_lookup_table_cb_index, one_tile);
     const uint32_t physical_core_lookup_table_l1_write_addr = get_write_ptr(physical_core_lookup_table_cb_index);
@@ -91,7 +108,9 @@ void kernel_main() {
             cb_push_back(input_tensor_cb_index, one_tile);
         }  // w loop
 
+        DPRINT << "READER: LOGIC" << ENDL();
         uint32_t stages = ilog2(Wt);
+        DPRINT << "READER: stages = " << stages << ENDL();
         for (uint32_t stage = 2; stage <= stages; stage++) {
             for (uint32_t sub = stage; sub > 0; sub--) {
                 uint32_t sub_dist = 1 << (sub - 1);
@@ -123,27 +142,36 @@ void kernel_main() {
                 //       If inside => do nothing
                 //      Otherwise => exchange
 
-                uint32_t i = processing_pair_start;
+                uint32_t i = processing_tile_start;
                 uint32_t j = i ^ sub_dist;
-                if (pair_id >= processing_pair_start && pair_id < processing_pair_end) {
-                    if (i >= global_tile_start && i < global_tile_end && j >= global_tile_start &&
-                        j < global_tile_end) {
-                        // Nothing
-                    } else {
-                        const uint32_t other_core_id = j / number_of_tiles_per_core;
-                        const std::pair<uint32_t, uint32_t> remote_core_physical =
-                            get_core_physical_coordinates(other_core_id, physical_core_lookup_table_cb_index);
+                DPRINT << "READER: i = " << i << ", j = " << j << ", processing pair start = " << processing_tile_start
+                       << ", pair end = " << processing_tile_end << ENDL();
+                // if (pair_id >= processing_tile_start && pair_id < processing_tile_end) {
+                if (i >= global_tile_start && i < global_tile_end && j >= global_tile_start && j < global_tile_end) {
+                    // Nothing
+                } else {
+                    const uint32_t other_core_id = j / number_of_tiles_per_core;
+                    const std::pair<uint32_t, uint32_t> remote_core_physical =
+                        get_core_physical_coordinates(other_core_id, physical_core_lookup_table_cb_index);
 
-                        sort_noc_exchange_Wt_tiles(
-                            index_tensor_output_cb_index,
-                            index_tensor_peer_cb_index,
-                            number_of_tiles_per_core,
-                            index_tensor_output_tile_size_bytes,
-                            remote_core_physical.first,
-                            remote_core_physical.second,
-                            sem_self_exchange_ptr);
-                    }
+                    DPRINT << "READER: Exchanging tile with " << other_core_id << " (" << remote_core_physical.first
+                           << ", " << remote_core_physical.second << ")" << ENDL();
+
+                    sort_noc_exchange_Wt_tiles(
+                        value_tensor_intermediate_cb_index,
+                        index_tensor_intermediate_cb_index,
+                        value_tensor_peer_cb_index,
+                        index_tensor_peer_cb_index,
+                        number_of_tiles_per_core,
+                        input_tensor_tile_size_bytes,
+                        index_tensor_output_tile_size_bytes,
+                        remote_core_physical.first,
+                        remote_core_physical.second,
+                        sem_self_exchange_ptr);
+
+                    DPRINT << "READER: Tiles have been exchanged" << ENDL();
                 }
+                // }
             }  // sub
 
             // TODO: PUT BARRIER HERE
@@ -153,6 +181,7 @@ void kernel_main() {
         DPRINT << "READER: AFTER LOGIC:" << ENDL();  // TODO: Remove
         // Write output index data
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
+            DPRINT << "WRITER: Writing tile: " << w << " at h: " << h << ENDL();  // TODO: remove
             cb_wait_front(index_tensor_output_cb_index, one_tile);
             const uint32_t l1_write_addr_index = get_read_ptr(index_tensor_output_cb_index);
             const uint32_t tile_offset = h * Wt + core_id * number_of_tiles_per_core + w;
@@ -162,5 +191,7 @@ void kernel_main() {
         }  // Wt loop
 
     }  // h loop
+    cb_push_back(physical_core_lookup_table_cb_index, one_tile);
+
     DPRINT << "READER: Finished reading and sorting tiles." << ENDL();  // TODO: Remove
 }

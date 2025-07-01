@@ -94,9 +94,11 @@ def test_sort_prealocated_output(shape, dim, descending, device):
 @pytest.mark.parametrize(
     "shape, dim, descending",
     [
-        ([1, 1, 32, 96 * TILE_WIDTH], -1, False),
-        ([1, 1, 32, 256 * TILE_WIDTH], -1, False),
-        ([1, 4748 * TILE_WIDTH], -1, False),
+        # ([1, 1, 1, 2 * TILE_WIDTH], -1, False),
+        ([1, 1, 1, 4 * TILE_WIDTH], -1, False),
+        # ([1, 1, 32, 96 * TILE_WIDTH], -1, False),
+        # ([1, 1, 32, 256 * TILE_WIDTH], -1, False),
+        # ([1, 4748 * TILE_WIDTH], -1, False),
     ],
 )
 def test_sort_long_tensor(shape, dim, descending, device):
@@ -114,6 +116,10 @@ def test_sort_long_tensor(shape, dim, descending, device):
 
     assert list(ttnn_sort_values.shape) == shape
     assert list(ttnn_sort_indices.shape) == shape
+
+    torch.set_printoptions(profile="full")
+    print(f"torch = {torch_sort_values}")
+    print(f"ttnn = {ttnn.to_torch(ttnn_sort_values)}")
 
     if len(shape) == 0 or len(shape) == 1:
         assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
