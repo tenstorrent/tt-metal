@@ -271,6 +271,14 @@ struct Tanh {
         bool accuracy = false);
 };
 
+struct I0 {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 }  // namespace unary
 }  // namespace operations
 
@@ -321,7 +329,7 @@ REGISTER_UNARY_OPERATION(exp2, EXP2);
 REGISTER_UNARY_OPERATION(expm1, EXPM1);
 REGISTER_UNARY_OPERATION(gez, GEZ);
 REGISTER_UNARY_OPERATION(gtz, GTZ);
-REGISTER_UNARY_OPERATION(i0, I0);
+// REGISTER_UNARY_OPERATION(i0, I0);
 REGISTER_UNARY_OPERATION(i1, I1);
 REGISTER_UNARY_OPERATION(isfinite, ISFINITE);
 REGISTER_UNARY_OPERATION(isinf, ISINF);
@@ -393,6 +401,7 @@ constexpr auto deg2rad = ttnn::register_operation<"ttnn::deg2rad", ttnn::operati
 constexpr auto rad2deg = ttnn::register_operation<"ttnn::rad2deg", ttnn::operations::unary::Rad2Deg>();
 constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::operations::unary::Softplus>();
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
+constexpr auto i0 = ttnn::register_operation<"ttnn::i0", ttnn::operations::unary::I0>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
 
 constexpr auto sigmoid_accurate =
