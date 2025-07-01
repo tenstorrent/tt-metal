@@ -22,7 +22,8 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     std::optional<CoreGrid> core_grid,
     std::optional<bool> inplace,
     std::optional<ttnn::Layout> output_layout,
-    std::optional<int> num_out_blocks) {
+    std::optional<int> num_out_blocks,
+    const std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
             !inplace.value(),
@@ -84,10 +85,29 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     const MemoryConfig& output_mem_config = memory_config.value_or(dram_memory_config);
 
+    // Initialize compute kernel config
+    TT_FATAL(
+        input_tensor.storage_type() == StorageType::DEVICE,
+        "Invalid input tensor storage type: Input tensor must be on device. (storage type={})",
+        input_tensor.storage_type());
+    const auto arch = input_tensor.device()->arch();
+    const auto default_math_fidelity = MathFidelity::HiFi4;
+    const auto default_approx_mode = true;
+    const auto default_fp32_acc = false;
+    const auto default_l1_acc = false;
+    const auto default_dst_full_sync_en = false;
+    auto kernel_config_val = init_device_compute_kernel_config(
+        arch,
+        compute_kernel_config,
+        default_math_fidelity,
+        default_approx_mode,
+        default_fp32_acc,
+        default_l1_acc,
+        default_dst_full_sync_en);
+
     if (input_tensor.is_sharded()) {
         const ttnn::operations::normalization::GroupNormShardedMultiCoreProgramConfig& program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-            .math_fidelity = MathFidelity::HiFi4,
             .im_data_format = DataType::BFLOAT16,
             .out_data_format = DataType::BFLOAT16,
             .inplace = inplace.value_or(false),
@@ -97,14 +117,14 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
                        .eps = epsilon,
                        .num_groups = static_cast<uint32_t>(num_groups),
                        .output_mem_config = output_mem_config,
-                       .program_config = program_config},
+                       .program_config = program_config,
+                       .compute_kernel_config = kernel_config_val},
                    {input_tensor},
                    {gamma, beta, input_mask})
             .at(0);
     } else {
         const ttnn::operations::normalization::GroupNormMultiCoreProgramConfig& program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-            .math_fidelity = MathFidelity::HiFi4,
             .im_data_format = DataType::BFLOAT16,
             .out_data_format = DataType::BFLOAT16,
             .inplace = inplace.value_or(false),
@@ -115,7 +135,8 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
                        .eps = epsilon,
                        .num_groups = static_cast<uint32_t>(num_groups),
                        .output_mem_config = output_mem_config,
-                       .program_config = program_config},
+                       .program_config = program_config,
+                       .compute_kernel_config = kernel_config_val},
                    {input_tensor},
                    {gamma, beta, input_mask})
             .at(0);
