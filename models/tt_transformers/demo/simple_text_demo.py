@@ -40,7 +40,7 @@ class TokenAccuracy:
         self.input_prompt = self.reference_tokens[0, :split_point]
         self.gt_tokens = self.reference_tokens[0, split_point:]
         self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
-        self.maxindex = len(self.gt_tokens) -1
+        self.maxindex = len(self.gt_tokens)-1
 
     def prepare_ref_tokens(self, tokenizer):
         text_data = tokenizer.decode(self.input_prompt.tolist())
