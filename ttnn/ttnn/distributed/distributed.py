@@ -6,7 +6,6 @@ import contextlib
 import functools
 
 from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable, Union, List
-from deprecated import deprecated
 
 import ttnn
 
@@ -210,23 +209,23 @@ class ReplicateTensorToMeshWrapper:
         return self._mapper
 
 
-@deprecated(reason="Use `ttnn.replicate_tensor_to_mesh_mapper` directly.")
+# Deprecated. Use `ttnn.replicate_tensor_to_mesh_mapper` directly.
 def ReplicateTensorToMesh(mesh_device: MeshDevice):
     mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
     return ReplicateTensorToMeshWrapper(mapper)
 
 
-@deprecated(reason="Use `ttnn.shard_tensor_to_mesh_mapper` directly.")
+# Deprecated. Use `ttnn.shard_tensor_to_mesh_mapper` directly.
 def ShardTensorToMesh(mesh_device: MeshDevice, dim: int):
     return ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim)
 
 
-@deprecated(reason="Use `ttnn.concat_mesh_to_tensor_composer` directly.")
+# Deprecated. Use `ttnn.concat_mesh_to_tensor_composer` directly.
 def ConcatMeshToTensor(mesh_device: MeshDevice, dim: int):
     return ttnn.concat_mesh_to_tensor_composer(mesh_device, dim)
 
 
-@deprecated(reason="Use `ttnn.create_mesh_mapper` directly.")
+# Deprecated. Use `ttnn.create_mesh_mapper` directly.
 def ShardTensor2dMesh(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[Optional[int], Optional[int]]):
     return ttnn.create_mesh_mapper(
         mesh_device,
@@ -240,7 +239,7 @@ def ShardTensor2dMesh(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims
     )
 
 
-@deprecated(reason="Use `ttnn.create_mesh_composer` directly.")
+# Deprecated. Use `ttnn.create_mesh_composer` directly.
 def ConcatMesh2dToTensor(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[int, int]):
     return ttnn.create_mesh_composer(
         mesh_device,
