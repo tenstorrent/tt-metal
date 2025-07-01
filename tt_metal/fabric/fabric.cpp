@@ -148,15 +148,20 @@ void append_fabric_connection_rt_args(
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
     TT_FATAL(
         link_idx < candidate_eth_chans.size(),
-        "requested link idx {}, out of bounds, max available {}",
+        "requested link idx {}, out of bounds, max available {}, cannot be used for forwarding b/w src (M {} D {}) and "
+        "dst (M {} D {})",
         link_idx,
-        candidate_eth_chans.size());
+        candidate_eth_chans.size(),
+        src_fabric_node_id.mesh_id,
+        src_fabric_node_id.chip_id,
+        dst_fabric_node_id.mesh_id,
+        dst_fabric_node_id.chip_id);
 
     const auto forwarding_links =
         get_forwarding_link_indices_in_direction(src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
     TT_FATAL(
         std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
-        "requested link idx {}, cannot be used for forwarding b/w src (M {} D {}) and dst  (M {} D {})",
+        "requested link idx {}, cannot be used for forwarding b/w src (M {} D {}) and dst (M {} D {})",
         link_idx,
         src_fabric_node_id.mesh_id,
         src_fabric_node_id.chip_id,
