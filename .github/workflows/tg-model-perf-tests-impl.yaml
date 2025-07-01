@@ -61,9 +61,54 @@ jobs:
             owner_id: U03PUAKE719 # Miguel Tairum
           },
           {
-            name: "Galaxy Llama 70B prefill perf tests [4096]",
+            name: "Galaxy Llama 70B prefill perf tests [4K]",
             arch: wormhole_b0,
             cmd: "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device[4096]",
+            timeout: 100,
+            tracy: true,
+            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            owner_id: U03PUAKE719 # Miguel Tairum
+          },
+          {
+            name: "Galaxy Llama 70B prefill perf tests [8K]",
+            arch: wormhole_b0,
+            cmd: "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device[8192]",
+            timeout: 100,
+            tracy: true,
+            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            owner_id: U03PUAKE719 # Miguel Tairum
+          },
+          {
+            name: "Galaxy Llama 70B prefill perf tests [16K]",
+            arch: wormhole_b0,
+            cmd: "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device[16384]",
+            timeout: 100,
+            tracy: true,
+            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            owner_id: U03PUAKE719 # Miguel Tairum
+          },
+          {
+            name: "Galaxy Llama 70B prefill perf tests [32K]",
+            arch: wormhole_b0,
+            cmd: "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device[32768]",
+            timeout: 100,
+            tracy: true,
+            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            owner_id: U03PUAKE719 # Miguel Tairum
+          },
+          {
+            name: "Galaxy Llama 70B prefill perf tests [64K]",
+            arch: wormhole_b0,
+            cmd: "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device[65536]",
+            timeout: 100,
+            tracy: true,
+            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            owner_id: U03PUAKE719 # Miguel Tairum
+          },
+          {
+            name: "Galaxy Llama 70B prefill perf tests [128K]",
+            arch: wormhole_b0,
+            cmd: "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device[131072]",
             timeout: 100,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
