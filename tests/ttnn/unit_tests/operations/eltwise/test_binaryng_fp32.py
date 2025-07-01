@@ -15,7 +15,7 @@ def test_sub_fp32(device):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_sub = ttnn.sub(x_tt, y_tt, use_legacy=False)
+    z_tt_sub = ttnn.sub(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_sub)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
@@ -29,7 +29,7 @@ def test_rsub_fp32(device):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_sub = ttnn.rsub(x_tt, y_tt, use_legacy=False)
+    z_tt_sub = ttnn.rsub(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_sub)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
@@ -43,7 +43,7 @@ def test_add_fp32(device):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_add = ttnn.add(x_tt, y_tt, use_legacy=False)
+    z_tt_add = ttnn.add(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_add)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
@@ -57,7 +57,7 @@ def test_add_int32(device):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_add = ttnn.add(x_tt, y_tt, use_legacy=False)
+    z_tt_add = ttnn.add(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_add)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
@@ -71,7 +71,7 @@ def test_mul_fp32(device):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.multiply(x_tt, y_tt, use_legacy=False)
+    z_tt_out = ttnn.multiply(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
@@ -91,7 +91,7 @@ def test_div_fp32(device):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_div = ttnn.divide(x_tt, y_tt, use_legacy=False)
+    z_tt_div = ttnn.divide(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_div)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
@@ -142,7 +142,7 @@ def test_div_bf16(device):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_div = ttnn.divide(x_tt, y_tt, use_legacy=False)  # bf16 runs FPU
+    z_tt_div = ttnn.divide(x_tt, y_tt, use_legacy=None)  # bf16 runs FPU
     tt_out = ttnn.to_torch(z_tt_div)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
@@ -169,7 +169,7 @@ def test_add_fp32_activ(device):
     z_torch = torch.square(x_torch + y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_add = ttnn.add(x_tt, y_tt, activations=[ttnn.UnaryOpType.SQUARE], use_legacy=False)
+    z_tt_add = ttnn.add(x_tt, y_tt, activations=[ttnn.UnaryOpType.SQUARE], use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_add)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
@@ -196,7 +196,7 @@ def test_add_fp32_input_activ(device, shape):
         y_tt,
         input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
         activations=[ttnn.UnaryOpType.SQUARE],
-        use_legacy=False,
+        use_legacy=None,
     )
     tt_out = ttnn.to_torch(z_tt_add)
 
@@ -211,7 +211,7 @@ def test_logaddexp_fp32(device):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.logaddexp(x_tt, y_tt, use_legacy=False)
+    z_tt_out = ttnn.logaddexp(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
@@ -225,7 +225,7 @@ def test_logaddexp2_fp32(device):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.logaddexp2(x_tt, y_tt, use_legacy=False)
+    z_tt_out = ttnn.logaddexp2(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
@@ -239,7 +239,7 @@ def test_ldexp_fp32(device):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.ldexp(x_tt, y_tt, use_legacy=False)
+    z_tt_out = ttnn.ldexp(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
@@ -253,7 +253,7 @@ def test_bias_gelu_fp32(device):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.bias_gelu(x_tt, y_tt, use_legacy=False)
+    z_tt_out = ttnn.bias_gelu(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
@@ -267,7 +267,7 @@ def test_squared_difference_fp32(device):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.squared_difference(x_tt, y_tt, use_legacy=False)
+    z_tt_out = ttnn.squared_difference(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
@@ -289,7 +289,7 @@ def test_logical_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=False)
+    z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
@@ -314,7 +314,7 @@ def test_relational_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=False)
+    z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
@@ -336,7 +336,7 @@ def test_bitwise(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=False)
+    z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.9999
@@ -350,7 +350,7 @@ def test_bitwise_left_shift(device):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.bitwise_left_shift(x_tt, y_tt, use_legacy=False)
+    z_tt_out = ttnn.bitwise_left_shift(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
@@ -364,7 +364,7 @@ def test_bitwise_right_shift(device):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.bitwise_right_shift(x_tt, y_tt, use_legacy=False)
+    z_tt_out = ttnn.bitwise_right_shift(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
@@ -388,7 +388,7 @@ def test_ng_scalar_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = y_torch
-    z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=False)
+    z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
