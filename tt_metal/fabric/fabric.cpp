@@ -138,35 +138,29 @@ void append_fabric_connection_rt_args(
     }
     TT_FATAL(
         forwarding_direction.has_value(),
-        "Could not find any forwarding direction from src  (M {} D {}) to dst  (M {} D {})",
-        src_fabric_node_id.mesh_id,
-        src_fabric_node_id.chip_id,
-        dst_fabric_node_id.mesh_id,
-        dst_fabric_node_id.chip_id);
+        "Could not find any forwarding direction from source {} to destination {}",
+        src_fabric_node_id,
+        dst_fabric_node_id);
 
     const auto candidate_eth_chans =
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
     TT_FATAL(
         link_idx < candidate_eth_chans.size(),
-        "requested link idx {}, out of bounds, max available {}, cannot be used for forwarding b/w src (M {} D {}) and "
-        "dst (M {} D {})",
+        "Requested link index {} is out of bounds. {} ethernet channels available to forward b/w source {} and destination {}",
         link_idx,
         candidate_eth_chans.size(),
-        src_fabric_node_id.mesh_id,
-        src_fabric_node_id.chip_id,
-        dst_fabric_node_id.mesh_id,
-        dst_fabric_node_id.chip_id);
+        src_fabric_node_id,
+        dst_fabric_node_id);
 
     const auto forwarding_links =
         get_forwarding_link_indices_in_direction(src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
     TT_FATAL(
         std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
-        "requested link idx {}, cannot be used for forwarding b/w src (M {} D {}) and dst (M {} D {})",
+        "Requested link index {} cannot be used for forwarding b/w source {} and destination {}. Valid forwarding links are {}",
         link_idx,
-        src_fabric_node_id.mesh_id,
-        src_fabric_node_id.chip_id,
-        dst_fabric_node_id.mesh_id,
-        dst_fabric_node_id.chip_id);
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        forwarding_links);
 
     const auto fabric_router_channel = candidate_eth_chans[link_idx];
     const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
