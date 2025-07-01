@@ -1762,14 +1762,14 @@ TEST_F(UnitMeshCommandQueueFixture, TestLogicalCoordinatesEth) {
 }
 
 // Ensure the data movement core can access their own logical coordinate. Same binary enqueued to multiple cores.
-// TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesDataMovement) {
-//     for (IDevice* device : devices_) {
-//         local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC);
-//         local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC, 1);
-//         local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC);
-//         local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC, 1);
-//     }
-// }
+TEST_F(UnitMeshMultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesDataMovement) {
+    // for (const auto& device : devices_) {
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::BRISC);
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::BRISC, 1);
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::NCRISC);
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::NCRISC, 1);
+    //}
+}
 
 // // Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
 // TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesCompute) {

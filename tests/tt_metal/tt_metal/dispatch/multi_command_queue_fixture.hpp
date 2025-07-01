@@ -81,6 +81,62 @@ protected:
     uint8_t num_cqs_;
 };
 
+class UnitMeshMultiCommandQueueSingleDeviceFixture : public DispatchFixture {
+protected:
+    void SetUp() override {
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+
+        this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
+
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+
+        const chip_id_t device_id = 0;
+        const DispatchCoreType dispatch_core_type = this->get_dispatch_core_type();
+        this->create_device(device_id, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+    }
+
+    void TearDown() override { device_.reset(); }
+
+    bool validate_dispatch_mode() {
+        this->slow_dispatch_ = false;
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch) {
+            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            this->slow_dispatch_ = true;
+            return false;
+        }
+        return true;
+    }
+
+    DispatchCoreType get_dispatch_core_type() {
+        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
+        if (this->arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
+            if (!tt::tt_metal::IsGalaxyCluster()) {
+                log_warning(
+                    tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in SetUp()");
+                dispatch_core_type = DispatchCoreType::ETH;
+            }
+        }
+        return dispatch_core_type;
+    }
+
+    void create_device(
+        const chip_id_t device_id,
+        const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        const DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER) {
+        this->device_ = distributed::MeshDevice::create_unit_mesh(
+            device_id, DEFAULT_L1_SMALL_SIZE, trace_region_size, this->num_cqs_, dispatch_core_type);
+    }
+
+    std::shared_ptr<distributed::MeshDevice> device_;
+    tt::ARCH arch_;
+    uint8_t num_cqs_;
+};
+
+class UnitMeshMultiCommandQueueSingleDeviceProgramFixture : public UnitMeshMultiCommandQueueSingleDeviceFixture {};
+
 class MultiCommandQueueSingleDeviceEventFixture : public MultiCommandQueueSingleDeviceFixture {};
 
 class MultiCommandQueueSingleDeviceBufferFixture : public MultiCommandQueueSingleDeviceFixture {};
