@@ -1,6 +1,6 @@
 import itertools
 from dataclasses import dataclass, fields, is_dataclass
-from pathlib import Path
+from enum import Enum
 from types import NoneType
 from typing import Any, Callable, Union
 
@@ -16,25 +16,9 @@ ProgramConfig = Union[
 
 
 @dataclass(frozen=True)
-class TensorStub:
-    """A stub in ModelConfig that gets replaced with a real ttnn.Tensor when creating the RunConfig.
-    Needs a matching WeightStub in the WeightConfig"""
-
-
-@dataclass(eq=True)
-class WeightStub:
-    filepath: str
-
-    @classmethod
-    def from_weight(cls, tensor: ttnn.Tensor, filepath: Path) -> "WeightStub":
-        """Save a weight tensor and create a stub from it."""
-        assert tensor.storage_type() != ttnn.StorageType.HOST, "Weight tensor must be allocated on device"
-        ttnn.dump_tensor(filepath, tensor)
-        return cls(filepath=str(filepath))
-
-    def to_weight(self, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
-        """Load the weight tensor from the file and return it as a ttnn.Tensor."""
-        return ttnn.load_tensor(self.filepath, device=mesh_device)
+class FromWeightConfig:
+    """A stub in a model config that gets replaced with a real ttnn.Tensor when creating the RunConfig.
+    Needs a matching entry in the WeightConfig"""
 
 
 @dataclass(frozen=True, eq=True)
@@ -48,7 +32,7 @@ class MeshDeviceStub:
 
 
 ConfigDevice = ttnn.MeshDevice | MeshDeviceStub
-ConfigTensor = ttnn.Tensor | TensorStub
+ConfigWeight = ttnn.Tensor | FromWeightConfig
 
 
 @dataclass
@@ -64,7 +48,7 @@ class OpConfigBase:
 class LinearConfig(OpConfigBase):
     """Common parameters for a ttnn.linear op, weights are in input_tensor_b"""
 
-    input_tensor_b: ConfigTensor
+    input_tensor_b: ConfigWeight
     memory_config: ttnn.MemoryConfig | None = None
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
     program_config: ProgramConfig = None
@@ -74,7 +58,7 @@ class LinearConfig(OpConfigBase):
 class EmbeddingConfig(OpConfigBase):
     """Common parameters for a ttnn.embedding op"""
 
-    weight: ConfigTensor
+    weight: ConfigWeight
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
     layout: ttnn.Layout = ttnn.TILE_LAYOUT
 
@@ -154,9 +138,12 @@ def is_op_config(obj: Any) -> bool:
     return issubclass(type(obj), OpConfigBase) and is_dataclass(obj)
 
 
-_PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None
-ModelConfig = (
-    dict[str, "ModelConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
-)  # In general, we require ModelConfig to be deepcopyable
-WeightConfig = dict[str, "WeightConfig | WeightStub"]
-RunConfig = dict[str, "RunConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
+WeightConfig = dict[str, "WeightConfig | str"]
+
+_PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None | Enum
+# In general, we require ModelConfig to be deepcopyable
+ModelPrefillConfig = dict[str, "ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
+ModelDecodeConfig = dict[str, "ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
+
+RunPrefillConfig = dict[str, "RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
+RunDecodeConfig = dict[str, "RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase

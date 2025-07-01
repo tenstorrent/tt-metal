@@ -510,3 +510,10 @@ def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Seque
 def sub_state_dict(state_dict, prefix):
     """Get a subset of the state dict with a given prefix."""
     return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
+
+
+def save_and_get_path(path, tensor):
+    """Save a tensor to a file and return the path."""
+    ttnn.dump_tensor(path, tensor)
+    ttnn.deallocate(tensor)
+    return str(path)

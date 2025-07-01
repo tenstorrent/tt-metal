@@ -11,11 +11,11 @@ import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     EmbeddingConfig,
-    ModelConfig,
-    TensorStub,
+    ModelDecodeConfig,
+    ModelPrefillConfig,
     WeightConfig,
-    WeightStub,
 )
+from models.demos.deepseek_v3.utils.config_helpers import save_and_get_path
 
 
 class Embedding1D(AbstractModule):
@@ -57,10 +57,12 @@ class Embedding1D(AbstractModule):
 
         # Save to disk with standard naming - "embedding" must match the op name used in the model config
         # so that RunConfig can populate it with the actual weight tensors at runtime
-        return {"weight": WeightStub.from_weight(ttnn_weight, output_path / "embedding.weight")}
+        return {"weight": save_and_get_path(output_path / "embedding.weight", ttnn_weight)}
 
     @classmethod
-    def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, **kwargs) -> ModelConfig:
+    def prefill_model_config(
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, **kwargs
+    ) -> ModelPrefillConfig:
         """Prefill model config for an embedding with 1D tensor parallelism.
         Same as decode. Does not specify a mode because we override forward to handle both.
 
@@ -71,7 +73,9 @@ class Embedding1D(AbstractModule):
         return Embedding1D._embedding_config(mesh_device)
 
     @classmethod
-    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, **kwargs) -> ModelConfig:
+    def decode_model_config(
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, **kwargs
+    ) -> ModelDecodeConfig:
         """Generate decode operator configuration for this embedding layer.
         Same as prefill. Does not specify a mode because we override forward to handle both.
 
@@ -81,7 +85,7 @@ class Embedding1D(AbstractModule):
         return Embedding1D._embedding_config(mesh_device)
 
     @staticmethod
-    def _embedding_config(mesh_device: ttnn.MeshDevice) -> ModelConfig:
+    def _embedding_config(mesh_device: ttnn.MeshDevice) -> EmbeddingConfig:
         """Config for the Embedding1D module."""
         return EmbeddingConfig(
             weight=TensorStub(),  # matched to the WeightStub in the WeightConfig
@@ -90,8 +94,21 @@ class Embedding1D(AbstractModule):
         )
 
     @classmethod
-    def forward(cls, x, cfg):
-        """Unified forward pass of the embedding,
+    def forward_prefill(cls, x, cfg):
+        """Prefill forward pass of the embedding.
+
+        Args:
+            x: Input tensor (token indices)
+            cfg: RunConfig containing weights and op configurations
+
+        Returns:
+            Output tensor after embedding lookup
+        """
+        return ttnn.embedding(x, **cfg)
+
+    @classmethod
+    def forward_decode(cls, x, cfg):
+        """Decode forward pass of the embedding.
 
         Args:
             x: Input tensor (token indices)

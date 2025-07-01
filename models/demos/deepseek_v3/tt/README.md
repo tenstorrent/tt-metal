@@ -3,7 +3,8 @@
 This codebase separates model execution into three distinct stages, each of which can be run independently:
 1. Convert PyTorch weights to TTNN tensor files and generate the WeightConfig
 2. Generate ModelConfigs for prefill and decode modes
-3. Load TTNN tensor files using WeightConfig and add them to ModelConfig to create a RunConfig and execute the model
+3. Load TTNN tensor files using WeightConfig and merge them with ModelPrefillConfig and ModelDecodeConfig to create a RunPrefillConfig and RunDecodeConfig
+4. Execute the model using either of the model configs
 
 The modules are not instantiated directly, but rather used as a namespace for the methods that define the model's behavior in prefill and decode. This is to make it easy to separate the stateful and stateless parts of the model, and allow for easy re-use of the methods.
 
@@ -57,20 +58,12 @@ prefill_config = MLP1D.prefill_model_config(hf_config, mesh_device)
 decode_config = MLP1D.decode_model_config(hf_config, mesh_device)
 
 # Stage 3: Runtime execution
-model_config = decode_config  # or prefill_config
-run_cfg = MLP1D.run_config(model_config, weight_config, mesh_device)
-output = MLP1D.forward(input_tensor, run_cfg)
+run_prefill_config, run_decode_config = MLP1D.run_config(prefill_config, decode_config, weight_config, mesh_device)
+output = MLP1D.forward_prefill(input_tensor, run_prefill_config) # or forward_decode(input_tensor, run_decode_config)
 ```
 
 ## Module Requirements
 Since the module classes are meant to only exist as namespaces for the module-specific behavior, each method to reimplement for a module is a `classmethod`. Each module should implement:
-
-
-- either `forward` or both `_forward_prefill` and `_forward_decode` - these define the forward pass for the module.
-- `prefill_model_config` - generates the model configuration for prefill mode.
-- `decode_model_config` - generates the model configuration for decode mode.
-- `convert_weights` - converts PyTorch weights to TTNN format and saves them to the specified path.
-- `_new_state` - creates a new state for the module, which is used to store persistent model state.
 
 ### `convert_weights(hf_config: transformers.PretrainedConfig, state_dict: dict[str, torch.Tensor], output_path: Path, mesh_device: ttnn.Device) -> WeightConfig`
 - Converts PyTorch weights to TTNN format using a standard configuration:
@@ -79,35 +72,34 @@ Since the module classes are meant to only exist as namespaces for the module-sp
   - memory_config: `ttnn.DRAM_MEMORY_CONFIG`
 - Saves them to disk at the specified path (e.g., `w1.weight` or `w2.input_tensor_b` if you prefer)
 - Handles sharding across devices appropriately (typically column sharding for projections, row sharding for down projections)
-- Returns a `WeightConfig` dict mapping operation names to their TTNN weight file paths saved and stored in the `WeightStub` - this MUST match the TTNN argument name, e.g. use ["w1"]["input_tensor_b"] and not ["w1"]["weight"]. See the [API docs](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/api/ttnn.linear.html#ttnn-linear) for more details.
+- Returns a `WeightConfig` dict mapping operation keyword parameters to their TTNN weight file paths saved using `save_and_get_path` - this MUST match the TTNN argument name, e.g. use ["w1"]["input_tensor_b"] and not ["w1"]["weight"]. See the [API docs](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/api/ttnn.linear.html#ttnn-linear) for more details.
 
-### `prefill_model_config(hf_config: PretrainedConfig, **kwargs) -> ModelConfig` and `decode_model_config(hf_config: PretrainedConfig, **kwargs) -> ModelConfig`
-- Generates static operator configurations for prefill/decode mode using dataclasses
+### `prefill_model_config(hf_config: PretrainedConfig, **kwargs) -> ModelPrefillConfig` and `decode_model_config(hf_config: PretrainedConfig, **kwargs) -> ModelDecodeConfig`
+- Generate static operator configurations for prefill/decode mode using dataclasses
 - Returns a nested dict with dataclass instances (LinearConfig, MulConfig, etc.) containing TTNN objects
 - Can use helper functions like `find_prefill_grid`, `dram_shard_core_grid_for_k`
 - Should generate configs that match the standard weight format used by `convert_weights`
-- Should use the `WeightStub` and `MeshDeviceStub` for loading the weight tensors and providing the mesh device used in the `forward` function (see [the section on `run_config`](#runconfig-creation) for details)
+- Should use the `FromWeightStub` and `MeshDeviceStub` for indicating the weight tensors and providing the mesh device used in the `forward` function (see [the section on `run_config`](#runconfig-creation) for details)
 
-### either `forward(x: ttnn.Tensor, cfg: RunConfig) -> ttnn.Tensor` or `_forward_prefill(x: ttnn.Tensor, cfg: RunConfig) -> ttnn.Tensor` and `_forward_decode(x: ttnn.Tensor, cfg: RunConfig) -> ttnn.Tensor`
+### `_forward_prefill(x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor` and `_forward_decode(x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor`
 - Executes the layer using the provided RunConfig
-- If `forward` is kept, the mode `InferenceMode.PREFILL` or `InferenceMode.DECODE` (taken from `cfg["mode"]`) is used to pick `_forward_prefill` or `_forward_decode`
 - Uses clean dict expansion: `ttnn.linear(x, **cfg["w1"])`
 - For dynamic configs, overrides with keyword arguments: `ttnn.linear(x, program_config=self.w1_pc(**cfg["w1_pc"]), **cfg["w1"])`
 - Handles memory management (deallocations)
 
-### (optionally) `_new_state(stateless_run_config: StatelessRunConfig, mesh_device: ttnn.Device) -> Any`
-- Takes the merged `ModelConfig` and `WeightConfig` and the mesh_device as parameters
+### (optionally) `_new_state(stateless_run_prefill_config: StatelessRunPrefillConfig, stateless_run_decode_config: StatelessRunDecodeConfig,, mesh_device: ttnn.Device) -> Any`
+- Takes the model configs merged with `WeightConfig`, and the mesh_device as parameters
 - Good place for setting up non-weight tensors like kv_cache or dynamic program configs
 
 ## `RunConfig` Creation
-By default, the `run_config(model_config: ModelConfig, weight_config: WeightConfig, **kwargs) -> RunConfig` method performs hierarchical merges over the structures of the `model_config`, `weight_config` and the `ModelState` returned by the `_new_state` method. For given config items:
+By default, the `run_config(model_prefill_config: ModelPrefillConfig, model_decode_config: ModelDecodeConfig, weight_config: WeightConfig, **kwargs) -> RunConfig` method merges each model config hierarchically over its structure with the `weight_config` and the `ModelState` returned by the `_new_state` method. For given config items:
 - if all of them are either the same container (list, tuple, dict) or a None, these containers are unified, and the matching items in these containers are merged using the same procedure
   - if the container type is a dict, the containers are merged by keys
   - if the container type is a list or a tuple, the containers have to be the same length
   - `OpConfigBase` subclasses are treated as dicts here, and re-wrapped in the same dataclass for `RunConfig`
 - if the items are not containers, then it is required that only one of them is not None.
-- an exception to the above is when the items in the `ModelConfig` and `WeightConfig` are a `TensorStub` and `WeightStub` respectively. In that case, a tensor is loaded from the path stored in the `WeightStub` onto the `ttnn.Device` provided as an argument to `run_config(model_config, weight_config, mesh_device)`.
-- finally, if the `ModelConfig` item is a `MeshDeviceStub`, it is replaced with the `ttnn.Device` provided as an argument to `run_config(model_config, weight_config, mesh_device)`. This is primarily used for the ops that produce a tensor and require a `device` or a `mesh_device` argument.
+- an exception to the above is when the items in the model config and `WeightConfig` are a `FromWeightConfig` and `WeightStub` respectively. In that case, a tensor is loaded from the path stored in the `WeightStub` onto the `ttnn.Device` provided as an argument to `run_config(model_config, weight_config, mesh_device)`.
+- finally, if the model config item is a `MeshDeviceStub`, it is replaced with the `ttnn.Device` provided as an argument to `run_config(model_prefill_config, model_decode_config, weight_config, mesh_device)`. This is primarily used for the ops that produce a tensor and require a `device` or a `mesh_device` argument.
 
 ### Reimplementing `run_config`
 Modules might require operating on several mesh devices, e.g. when running MLPs on several submeshes simultaneously. In that case, it is necessary to reimplement the `run_config`, which only takes a single `mesh_device` as an argument and loads the tensors into it without any device selection (same goes for the `MeshDeviceStub`s). In that case, it is recommended that the base `run_config` implementation is used for merging the levels of a config that span a single `ttnn.Device`, and only the higher levels of the config that require dispatching the submodules to different devices are customized.
@@ -121,7 +113,7 @@ Modules might require operating on several mesh devices, e.g. when running MLPs 
 - Modules should be specific rather than overly general. Different architectures or sharding strategies warrant different module implementations
 - Validation happens when creating runtime config - ensuring weights exist where expected
 - Use dataclasses from `config_dataclass.py` for type safety and better IDE support
-- Use the `_new_state` sparingly, e.g. for storing the KV-cache. Putting more model configuration into `ModelConfig` allows for more easily interpreting and modifying the model behavior.
+- Use the `_new_state` sparingly, e.g. for storing the KV-cache. Putting more model configuration into the model configs allows for more easily interpreting and modifying the model behavior.
 
 ## Design Benefits
 
@@ -132,6 +124,5 @@ Modules might require operating on several mesh devices, e.g. when running MLPs 
 5. **Direct Memory Usage**: No object conversion overhead - configs use TTNN objects directly
 6. **Minimal Boilerplate**: Clean forward functions with `**cfg["op"]` expansion
 7. **Explicit Weight Mapping**: `WeightConfig` makes it clear which operations have weights and where they're stored
-8. **Shared Reference Safety**: `RunConfig` creates new dataclass instances to prevent accidental weight sharing
+8. **Shared Reference Safety**: `RunPrefillConfig` and `RunDecodeConfig` create new dataclass instances to prevent accidental weight sharing
 9. **Better Documentation**: Dataclass fields are self-documenting with type hints
-10. **Modular Abstraction Design** the abstraction can be modified freely at different levels, either by reusing simpler configuration infrastructure, like `_forward_prefill` and `_forward_decode`, or by implementing entirely custom dispatch, like `forward`; the same applies to `_new_state` vs `run_config`.
