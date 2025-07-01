@@ -288,6 +288,14 @@ void DevicePool::initialize(
     std::unordered_set<chip_id_t> device_ids_set{device_ids.begin(), device_ids.end()};
     bool all_devices_open = true;
     bool any_remote_devices = false;
+    // Inserting all device IDs to the check below because Fabric requires all devices to be open even though dispatch
+    // only needs tunnels
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+        for (int tg_gateway_mmio_id : {0, 1, 2, 3}) {
+            device_ids_set.insert(tg_gateway_mmio_id);
+        }
+    }
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
         for (int dev_id = 0; dev_id < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
              ++dev_id) {
@@ -325,10 +333,7 @@ void DevicePool::initialize(
                 std::cerr << fmt::format("Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs);
             }
         } else if (any_remote_devices) {
-            fallback_to_tunneling();
-            log_info(
-                tt::LogMetal,
-                "Cannot launch Dispatch on Fabric without all physical devices activated. Using tunneling.");
+            TT_THROW("All devices must be opened if there are any remote devices opened when using Dispatch on Fabric");
         }
     }
 
