@@ -165,7 +165,7 @@ def is_collective_op(op_code):
 # If all looks good, update the expected_kernel_times_dict and expected_dispatch_times_dict with the new average values
 # If the op list changed (new ops, less ops, fused ops), then update mapping_op_code_to_name and give the new ops meaningful names
 # Run at least once again to verify the new expected values are correct and margins hold
-@pytest.mark.parametrize("seqlen", [4096, 128])
+@pytest.mark.parametrize("seqlen", [128, 4096, 8192, 16384, 32768, 65536, 131072])
 def test_llama_TG_perf_device(
     seqlen,
     reset_seeds,
@@ -182,7 +182,12 @@ def test_llama_TG_perf_device(
     with open(f"models/demos/llama3_subdevices/tests/perf_targets/prefill_{seqlen}.json", "r") as f:
         perf_targets = json.load(f)
 
-    command = f"pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_decoder_prefill.py -k {seqlen}"
+    # Grab the correct input prompts file name based on the seqlen
+    if seqlen < 1024:
+        seqlen_file = f"input_data_questions_prefill_{seqlen}.json"
+    else:
+        seqlen_file = f"input_data_long_{seqlen // 1024}k.json"
+    command = f"pytest models/demos/llama3_subdevices/demo/text_demo.py -k prefill-profile --input_prompts models/demos/llama3_subdevices/demo/sample_prompts/{seqlen_file}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)
