@@ -64,7 +64,7 @@ void generate_ccl_command_stream_to_kernel_args(
  * @return the runtime args
  */
 std::vector<uint32_t> generate_edm_connection_rt_args(
-    const tt::tt_fabric::SenderWorkerAdapterSpec& connection_info, tt::tt_fabric::chan_id_t channel, tt::tt_metal::Program& program, CoreRangeSet worker_cores);
+    const tt::tt_fabric::SenderWorkerAdapterSpec& connection_info, const chip_id_t chip_id, tt::tt_metal::Program& program, CoreRangeSet worker_cores);
 
 // TODO: eventually take a fabric handle
 void generate_multi_input_command_stream_kernel_rt_args(
@@ -78,9 +78,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
     std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> const& ccl_command_stream0,
     std::optional<std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>> const& ccl_command_stream1,
     std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    std::optional<tt::tt_fabric::chan_id_t> const& fwd_eth_channel,
     std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& backward_fabric_connections,
-    std::optional<tt::tt_fabric::chan_id_t> const& bwd_eth_channel,
     std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override = std::nullopt,
     std::optional<std::vector<size_t>> const& tensor_indices = std::nullopt,
     ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider = nullptr);

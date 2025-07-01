@@ -201,6 +201,7 @@ void append_fabric_connection_rt_args(
 
         append_worker_to_fabric_edm_sender_rt_args(
             edm_connection,
+            src_chip_id,
             worker_flow_control_semaphore_id,
             worker_teardown_semaphore_id,
             worker_buffer_index_semaphore_id,

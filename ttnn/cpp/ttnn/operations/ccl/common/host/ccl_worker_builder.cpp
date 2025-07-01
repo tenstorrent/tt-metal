@@ -1033,7 +1033,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
 
 std::vector<uint32_t> generate_edm_connection_rt_args(
     const tt::tt_fabric::SenderWorkerAdapterSpec& connection_info,
-    tt::tt_fabric::chan_id_t eth_channel, // TODO: delete
+    const chip_id_t chip_id,
     Program &program,
     CoreRangeSet worker_cores) {
     std::vector<uint32_t> new_rt_args;
@@ -1042,6 +1042,7 @@ std::vector<uint32_t> generate_edm_connection_rt_args(
     auto worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_cores, 0);
     tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
         connection_info,
+        chip_id,
         worker_flow_control_semaphore_id,
         worker_teardown_semaphore_id,
         worker_buffer_index_semaphore_id,
@@ -1061,9 +1062,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
     ttnn::ccl::cmd::CclHostLowLevelCommandSequence const& ccl_command_stream0,
     std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> const& ccl_command_stream1,
     std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    std::optional<tt::tt_fabric::chan_id_t> const& fwd_eth_channel,
     std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& backward_fabric_connections,
-    std::optional<tt::tt_fabric::chan_id_t> const& bwd_eth_channel,
     std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override,
     std::optional<std::vector<size_t>> const& tensor_indices,
     ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider) {
@@ -1162,13 +1161,13 @@ void generate_multi_input_command_stream_kernel_rt_args(
     rt_args.push_back(forward_fabric_connections.has_value());
     if (forward_fabric_connections.has_value()) {
         const auto new_rt_args =
-            generate_edm_connection_rt_args(*forward_fabric_connections, *fwd_eth_channel, program, worker_core_range);
+            generate_edm_connection_rt_args(*forward_fabric_connections, device->id(), program, worker_core_range);
         std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args));
     }
     rt_args.push_back(backward_fabric_connections.has_value());
     if (backward_fabric_connections.has_value()) {
         const auto new_rt_args =
-            generate_edm_connection_rt_args(*backward_fabric_connections, *bwd_eth_channel, program, worker_core_range);
+            generate_edm_connection_rt_args(*backward_fabric_connections, device->id(), program, worker_core_range);
         std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args));
     }
 

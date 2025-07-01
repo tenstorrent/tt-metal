@@ -465,8 +465,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     }
 }
 
-std::tuple<tt::tt_fabric::SenderWorkerAdapterSpec, tt::tt_fabric::chan_id_t>
-EdmLineFabricOpInterface::uniquely_connect_worker(tt::tt_metal::IDevice* device, Direction direction) {
+tt::tt_fabric::SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(
+    tt::tt_metal::IDevice* device, Direction direction) {
     TT_FATAL(
         (direction == FORWARD)
             ? edm_builders_forward_direction.find(device->id()) != edm_builders_forward_direction.end()
@@ -484,7 +484,7 @@ EdmLineFabricOpInterface::uniquely_connect_worker(tt::tt_metal::IDevice* device,
     TT_FATAL(edm_builders.size() > 0, "No EDM builders found for device {}", device->id());
     TT_FATAL(
         next_link < edm_builders.size(), "Next link index {} is out of bounds for device {}", next_link, device->id());
-    return std::make_tuple(edm_builders.at(next_link).build_connection_to_worker_channel(), next_link);
+    return edm_builders.at(next_link).build_connection_to_worker_channel();
 }
 
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(

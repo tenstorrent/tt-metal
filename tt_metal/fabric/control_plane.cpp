@@ -1525,7 +1525,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
             edm_config.sender_channels_buffer_index_semaphore_address[sender_channel];
 
         // Mark this connection as valid for fabric communication
-        fabric_connections.valid_connections_mask |= (1u << eth_endpoint_idx);
+        fabric_connections.valid_connections_mask |= (1u << eth_channel_id);
         eth_endpoint_idx++;
     }
 
