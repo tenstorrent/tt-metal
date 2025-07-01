@@ -13,7 +13,6 @@ namespace ttnn::operations::normalization {
 
 struct GroupNormMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    MathFidelity math_fidelity;
     DataType im_data_format;
     DataType out_data_format;
     bool inplace;
@@ -22,7 +21,6 @@ struct GroupNormMultiCoreProgramConfig {
 };
 struct GroupNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    MathFidelity math_fidelity;
     DataType im_data_format;
     DataType out_data_format;
     bool inplace;
