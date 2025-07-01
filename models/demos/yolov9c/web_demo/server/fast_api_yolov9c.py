@@ -12,7 +12,6 @@ from fastapi import FastAPI, File, UploadFile
 from PIL import Image
 
 import ttnn
-from models.demos.yolov9c.demo.demo_utils import load_coco_class_names
 from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
 from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
 
@@ -190,19 +189,17 @@ async def objdetection_v2(file: UploadFile = File(...)):
         print("unknow image type")
         exit(-1)
 
+    image = torch.permute(image, (0, 3, 1, 2))
     t1 = time.time()
     response = model.run(image)
-    print("response", response)
     r = ttnn.to_torch(response[0])
-    names = load_coco_class_names()
-    results = postprocess(r, image, image1, names=names)[0]
+    results = postprocess(r, image, image1)[0]
     t2 = time.time()
     logging.info("The inference on the sever side took: %.3f seconds", t2 - t1)
     conf_thresh = 0.6
     nms_thresh = 0.5
 
     output = []
-    # print(results["boxes"]["xyxy"])
     for i in range(len(results["boxes"]["xyxy"])):
         output.append(
             torch.concat(
@@ -217,16 +214,6 @@ async def objdetection_v2(file: UploadFile = File(...)):
             .numpy()
             .tolist()
         )
-    print(output)
-    # boxes = post_processing(image, conf_thresh, nms_thresh, response)
-    # output = boxes[0]
-    # output = boxes
-    # try:
-    #    #output = process_output(output)
-    # except Exception as E:
-    #    print("the Exception is: ", E)
-    #    print("No objects detected!")
-    #    return []
     t3 = time.time()
     logging.info("The post-processing to get the boxes took: %.3f seconds", t3 - t2)
 

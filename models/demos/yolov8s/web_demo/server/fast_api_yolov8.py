@@ -13,7 +13,6 @@ from PIL import Image
 
 import ttnn
 from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
-from models.demos.yolov9c.demo.demo_utils import load_coco_class_names
 from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
 
 app = FastAPI(
@@ -194,15 +193,13 @@ async def objdetection_v2(file: UploadFile = File(...)):
     t1 = time.time()
     response = model.run(image)
     response = ttnn.to_torch(response)
-    names = load_coco_class_names()
-    results = postprocess(response, image, image1, names=names)[0]
+    results = postprocess(response, image, image1)[0]
     t2 = time.time()
     logging.info("The inference on the sever side took: %.3f seconds", t2 - t1)
     conf_thresh = 0.6
     nms_thresh = 0.5
 
     output = []
-    # print(results["boxes"]["xyxy"])
     for i in range(len(results["boxes"]["xyxy"])):
         output.append(
             torch.concat(
@@ -217,16 +214,6 @@ async def objdetection_v2(file: UploadFile = File(...)):
             .numpy()
             .tolist()
         )
-    print(output)
-    # boxes = post_processing(image, conf_thresh, nms_thresh, response)
-    # output = boxes[0]
-    # output = boxes
-    # try:
-    #    #output = process_output(output)
-    # except Exception as E:
-    #    print("the Exception is: ", E)
-    #    print("No objects detected!")
-    #    return []
     t3 = time.time()
     logging.info("The post-processing to get the boxes took: %.3f seconds", t3 - t2)
 

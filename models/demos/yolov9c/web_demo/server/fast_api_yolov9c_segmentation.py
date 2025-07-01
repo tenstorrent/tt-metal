@@ -120,6 +120,7 @@ async def segmentation(file: UploadFile = File(...)):
         print("unknown image type")
         return {"error": "Invalid image format"}
 
+    image = torch.permute(image, (0, 3, 1, 2))
     t1 = time.time()
     response = model.run(image)
     t2 = time.time()
