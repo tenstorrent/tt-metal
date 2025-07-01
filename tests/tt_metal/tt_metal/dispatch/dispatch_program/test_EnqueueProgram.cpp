@@ -1005,18 +1005,12 @@ void test_my_coordinates(
     size_t cq_id = 0,
     bool idle_eth = false) {
     const std::string k_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates.cpp";
-    auto device = mesh_device->get_devices()[0];
     // All logical cores
     CoreRangeSet cr{CoreRange{{2, 2}, {6, 6}}};
-    if (processor_class == tt::RISCV::ERISC) {
-        const auto eth_cores =
-            idle_eth ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
-        cr = CoreRangeSet{std::set<CoreRange>{eth_cores.begin(), eth_cores.end()}};
-    }
 
-    uint32_t cb_addr = processor_class == tt::RISCV::ERISC
-                           ? hal::get_erisc_l1_unreserved_base()
-                           : mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    auto device = mesh_device->get_devices()[0];
+
+    uint32_t cb_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     std::vector<uint32_t> compile_args{
         cb_addr,
     };
@@ -1107,8 +1101,8 @@ namespace basic_tests {
 
 namespace compiler_workaround_hardware_bug_tests {
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestArbiterDoesNotHang) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TensixTestArbiterDoesNotHang) {
+    for (const auto& device : devices_) {
         distributed::MeshWorkload workload;
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -1132,7 +1126,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestArbiterDoesNotHang) {
 }  // namespace compiler_workaround_hardware_bug_tests
 namespace single_core_tests {
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleCbConfigCorrectlySentSingleCore) {
+TEST_F(UnitMeshCQFixture, TensixTestSingleCbConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1146,7 +1140,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleCbConfigCorrectlySentSingleC
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbSeqConfigCorrectlySentSingleCore) {
+TEST_F(UnitMeshCQFixture, TensixTestMultiCbSeqConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1164,7 +1158,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbSeqConfigCorrectlySentSingl
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbRandomConfigCorrectlySentSingleCore) {
+TEST_F(UnitMeshCQFixture, TensixTestMultiCbRandomConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1182,7 +1176,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbRandomConfigCorrectlySentSi
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
+TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1199,7 +1193,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCBSharedAddressSpaceSentSingl
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     CoreCoord core_coord(0, 0);
 
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         distributed::MeshWorkload workload;
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -1244,7 +1238,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCBSharedAddressSpaceSentSingl
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
+TEST_F(UnitMeshCQFixture, TensixTestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1258,7 +1252,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleCbConfigCorrectlyUpdateSizeS
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleSemaphoreConfigCorrectlySentSingleCore) {
+TEST_F(UnitMeshCQFixture, TensixTestSingleSemaphoreConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1270,8 +1264,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleSemaphoreConfigCorrectlySent
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
+    for (const auto& device : devices_) {
         distributed::MeshWorkload workload;
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -1295,11 +1289,11 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAutoInsertedBlankBriscKernelInDevi
 }
 
 // Sanity test for setting and verifying common and unique runtime args to a single core, the simplest case.
-TEST_F(UnitMeshCommandQueueFixture, TensixIncrementRuntimeArgsSanitySingleCoreCompute) {
+TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanitySingleCoreCompute) {
     CoreRange cr0({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr0});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 8, 8, tt::RISCV::COMPUTE));
     }
@@ -1308,7 +1302,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixIncrementRuntimeArgsSanitySingleCoreCo
 // Test setting common runtime args across multiple kernel in the same program
 // This test will ensure a multicast (or unicast for eth) gets created for each time the
 // user calls SetCommonRuntimeArgs.
-TEST_F(UnitMeshCommandQueueFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
+TEST_F(UnitMeshCQFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
     const CoreRange core_range_0(CoreCoord(1, 1), CoreCoord(2, 2));
     const CoreRange core_range_1(CoreCoord(3, 3), CoreCoord(4, 4));
 
@@ -1320,13 +1314,13 @@ TEST_F(UnitMeshCommandQueueFixture, TensixSetCommonRuntimeArgsMultipleCreateKern
         {.cr_set = core_range_set_1},
     };
 
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         EXPECT_TRUE(
             local_test_functions::test_increment_runtime_args_sanity(device, configs, 8, 8, tt::RISCV::COMPUTE));
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, ActiveEthEnqueueDummyProgram) {
+TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
             local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, eth_core);
@@ -1336,8 +1330,8 @@ TEST_F(UnitMeshCommandQueueFixture, ActiveEthEnqueueDummyProgram) {
 
 // Sanity test for setting and verifying common and unique runtime args to single cores via ERISC. Some arch may return
 // 0 active eth cores, that's okay.
-TEST_F(UnitMeshCommandQueueFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementErisc) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementErisc) {
+    for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
@@ -1352,8 +1346,8 @@ TEST_F(UnitMeshCommandQueueFixture, ActiveEthIncrementRuntimeArgsSanitySingleCor
 // Sanity test for setting and verifying common and unique runtime args to single cores via ERISC(IDLE). Some arch may
 // return 0 active eth cores, that's okay.
 // FIXME - Re-enable when FD-on-idle-eth is supported
-TEST_F(UnitMeshCommandQueueFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
+    for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
@@ -1368,8 +1362,8 @@ TEST_F(UnitMeshCommandQueueFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanity
 // Sanity test for setting and verifying common and unique runtime args to single cores via inactive ERISC cores. Some
 // arch may return 0 active eth cores, that's okay.
 // FIXME - Re-enable when FD-on-idle-eth is supported
-TEST_F(UnitMeshCommandQueueFixture, DISABLED_IdleEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, DISABLED_IdleEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
+    for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_devices()[0]->get_inactive_ethernet_cores()) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
@@ -1382,7 +1376,7 @@ TEST_F(UnitMeshCommandQueueFixture, DISABLED_IdleEthIncrementRuntimeArgsSanitySi
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestRuntimeArgsCorrectlySentSingleCore) {
+TEST_F(UnitMeshCQFixture, TensixTestRuntimeArgsCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1393,28 +1387,25 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestRuntimeArgsCorrectlySentSingleCore
     }
 }
 
-auto CommandQueueFabricConfigsToTest = ::testing::Values(
-    tt::tt_fabric::FabricConfig::FABRIC_1D,
-    tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
-    tt::tt_fabric::FabricConfig::FABRIC_2D,
-    tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+auto CQFabricConfigsToTest = ::testing::Values(
+    tt::tt_metal::FabricConfig::FABRIC_1D,
+    tt::tt_metal::FabricConfig::FABRIC_1D_RING,
+    tt::tt_metal::FabricConfig::FABRIC_2D,
+    tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
+
+INSTANTIATE_TEST_SUITE_P(CommandQueueMultiDevice, DISABLED_CQMultiDeviceOnFabricFixture, CQFabricConfigsToTest);
 
 INSTANTIATE_TEST_SUITE_P(
-    CommandQueueMultiDevice, DISABLED_CommandQueueMultiDeviceOnFabricFixture, CommandQueueFabricConfigsToTest);
+    MultiCommandQueueMultiDevice, DISABLED_MultiCQMultiDeviceOnFabricFixture, CQFabricConfigsToTest);
 
-INSTANTIATE_TEST_SUITE_P(
-    MultiCommandQueueMultiDevice,
-    DISABLED_MultiCommandQueueMultiDeviceOnFabricFixture,
-    CommandQueueFabricConfigsToTest);
-
-TEST_P(DISABLED_CommandQueueMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
-    for (IDevice* device : devices_) {
+TEST_P(DISABLED_CQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
+    for (const auto& device : devices_) {
         local_test_functions::test_basic_dispatch_functions(device, 0);
     }
 }
 
-TEST_P(DISABLED_MultiCommandQueueMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
-    for (IDevice* device : devices_) {
+TEST_P(DISABLED_MultiCQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
+    for (const auto& device : devices_) {
         for (int cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
             local_test_functions::test_basic_dispatch_functions(device, cq_id);
         }
@@ -1424,7 +1415,7 @@ TEST_P(DISABLED_MultiCommandQueueMultiDeviceOnFabricFixture, TensixTestBasicDisp
 }  // end namespace single_core_tests
 
 namespace multicore_tests {
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
+TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -1445,7 +1436,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentMultiCore
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
+TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -1466,7 +1457,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentUpdateSiz
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
+TEST_F(UnitMeshCQFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -1487,7 +1478,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbConfigsCorrectlySentUpdateS
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges) {
+TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -1511,7 +1502,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentMultipleC
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
+TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -1535,7 +1526,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentUpdateSiz
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
+TEST_F(UnitMeshCQFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -1559,7 +1550,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbConfigsCorrectlySentUpdateS
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllSemConfigsCorrectlySentMultiCore) {
+TEST_F(UnitMeshCQFixture, TensixTestAllSemConfigsCorrectlySentMultiCore) {
     for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
@@ -1572,7 +1563,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllSemConfigsCorrectlySentMultiCor
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCoreRanges) {
+TEST_F(UnitMeshCQFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCoreRanges) {
     for (const auto& device : devices_) {
         CoreRange first_cr({0, 0}, {1, 1});
 
@@ -1614,8 +1605,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllSemaphoreConfigsCorrectlySentMu
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore) {
+    for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -1627,8 +1618,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCo
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore_255_PerKernel) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore_255_PerKernel) {
+    for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -1640,8 +1631,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCo
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestSendRuntimeArgsMultiCoreRange) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TensixTestSendRuntimeArgsMultiCoreRange) {
+    for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
@@ -1654,9 +1645,9 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestSendRuntimeArgsMultiCoreRange) {
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestSendRuntimeArgsMultiNonOverlappingCoreRange) {
+TEST_F(UnitMeshCQFixture, TensixTestSendRuntimeArgsMultiNonOverlappingCoreRange) {
     // Core ranges get merged in kernel groups, this one does not
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
@@ -1669,8 +1660,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestSendRuntimeArgsMultiNonOverlapping
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestUpdateRuntimeArgsMultiCoreRange) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TensixTestUpdateRuntimeArgsMultiCoreRange) {
+    for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
@@ -1684,392 +1675,374 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestUpdateRuntimeArgsMultiCoreRange) {
 }
 
 // Sanity test for setting and verifying common and unique runtime args to multiple cores.
-TEST_F(UnitMeshCommandQueueFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute) {
+TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 16, 16, tt::RISCV::COMPUTE));
     }
 }
 
 // Max number of 255 unique RT args.
-TEST_F(UnitMeshCommandQueueFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_255_UniqueArgs) {
+TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_255_UniqueArgs) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 255, 0, tt::RISCV::COMPUTE));
     }
 }
 
 // Max number of 255 common RT args.
-TEST_F(UnitMeshCommandQueueFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_255_CommonArgs) {
+TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_255_CommonArgs) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 0, 255, tt::RISCV::COMPUTE));
     }
 }
 
 // Sanity test for setting and verifying common and unique runtime args to multiple cores via BRISC.
-TEST_F(UnitMeshCommandQueueFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementBrisc) {
+TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementBrisc) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 16, 16, tt::RISCV::BRISC));
     }
 }
 
 // Sanity test for setting and verifying common and unique runtime args to multiple cores via NCRISC.
-TEST_F(UnitMeshCommandQueueFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementNcrisc) {
+TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementNcrisc) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 16, 16, tt::RISCV::NCRISC));
     }
 }
 
 // Ensure the data movement core can access their own logical coordinate. Same binary enqueued to multiple cores.
-TEST_F(UnitMeshCommandQueueFixture, TestLogicalCoordinatesDataMovement) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesDataMovement) {
+    for (const auto& device : devices_) {
         local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC);
         local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC);
     }
 }
 
 // Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
-TEST_F(UnitMeshCommandQueueFixture, TestLogicalCoordinatesCompute) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesCompute) {
+    for (const auto& device : devices_) {
         local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
     }
 }
 
-// Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
-TEST_F(UnitMeshCommandQueueFixture, TestLogicalCoordinatesEth) {
-    for (auto device : devices_) {
-        if (!does_device_have_active_eth_cores(device->get_devices()[0])) {
-            GTEST_SKIP() << "Skipping test because device " << device->id()
-                         << " does not have any active ethernet cores";
-        }
-        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC);
+// Ensure the data movement core can access their own logical coordinate. Same binary enqueued to multiple cores.
+TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesDataMovement) {
+    for (const auto& device : devices_) {
+        local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC, 1);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC, 1);
     }
 }
 
-// Ensure the data movement core can access their own logical coordinate. Same binary enqueued to multiple cores.
-// TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesDataMovement) {
-//     for (IDevice* device : devices_) {
-//         local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC);
-//         local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC, 1);
-//         local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC);
-//         local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC, 1);
-//     }
-// }
-
-// // Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
-// TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesCompute) {
-//     for (IDevice* device : devices_) {
-//         local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
-//         local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE, 1);
-//     }
-// }
-
-// // Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
-// TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesEth) {
-//     for (IDevice* device : devices_) {
-//         if (!does_device_have_active_eth_cores(device)) {
-//             GTEST_SKIP() << "Skipping test because device " << device->id()
-//                          << " does not have any active ethernet cores";
-//         }
-//         local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC, 0);
-//         local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC, 1);
-//     }
-// }
+// Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
+TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesCompute) {
+    for (const auto& device : devices_) {
+        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE, 1);
+    }
+}
 
 }  // end namespace multicore_tests
 }  // namespace basic_tests
 
 namespace stress_tests {
 
-// TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
-//     uint32_t NUM_PROGRAMS = 100;
-//     uint32_t MAX_LOOP = 100;
-//     uint32_t page_size = 1024;
+TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
+    uint32_t NUM_PROGRAMS = 100;
+    uint32_t MAX_LOOP = 100;
+    uint32_t page_size = 1024;
 
-//     if (this->arch_ == tt::ARCH::BLACKHOLE) {
-//         GTEST_SKIP();  // Running on second CQ is hanging on CI
-//     }
+    if (this->arch_ == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP();  // Running on second CQ is hanging on CI
+    }
 
-//     // Make random
-//     auto random_seed = 0;  // (unsigned int)time(NULL);
-//     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-//     log_info(tt::LogTest, "Using Test Seed: {}", seed);
-//     srand(seed);
+    // Make random
+    auto random_seed = 0;  // (unsigned int)time(NULL);
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
+    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    srand(seed);
 
-//     CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
-//     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-//     CoreRangeSet cr_set({cr});
+    auto device = this->devices_.at(0);
 
-//     log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
+    CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+    CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+    CoreRangeSet cr_set({cr});
 
-//     vector<Program> programs;
-//     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-//         programs.push_back(Program());
-//         Program& program = programs.back();
+    log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
-//         std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
-//         std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
+    vector<distributed::MeshWorkload> workloads;
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        workloads.push_back(distributed::MeshWorkload());
+        distributed::MeshWorkload& workload = workloads.back();
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-//         // brisc
-//         uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
-//         bool USE_MAX_RT_ARGS;
+        Program program;
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
 
-//         if (i == 0) {
-//             // Ensures that we get at least one compilation with the max amount to
-//             // ensure it compiles and runs
-//             BRISC_OUTER_LOOP = MAX_LOOP;
-//             BRISC_MIDDLE_LOOP = MAX_LOOP;
-//             BRISC_INNER_LOOP = MAX_LOOP;
-//             NUM_CBS = NUM_CIRCULAR_BUFFERS;
-//             NUM_SEMS = NUM_SEMAPHORES;
-//             USE_MAX_RT_ARGS = true;
-//         } else {
-//             BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
-//             BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
-//             BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-//             NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
-//             NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
-//             USE_MAX_RT_ARGS = false;
-//         }
+        std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
+        std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
 
-//         log_debug(
-//             tt::LogTest,
-//             "Compiling program {}/{} w/ BRISC_OUTER_LOOP: {} BRISC_MIDDLE_LOOP: {} BRISC_INNER_LOOP: {} NUM_CBS: {} "
-//             "NUM_SEMS: {} USE_MAX_RT_ARGS: {}",
-//             i + 1,
-//             NUM_PROGRAMS,
-//             BRISC_OUTER_LOOP,
-//             BRISC_MIDDLE_LOOP,
-//             BRISC_INNER_LOOP,
-//             NUM_CBS,
-//             NUM_SEMS,
-//             USE_MAX_RT_ARGS);
+        // brisc
+        uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
+        bool USE_MAX_RT_ARGS;
 
-//         for (uint32_t j = 0; j < NUM_CBS; j++) {
-//             CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j,
-//             tt::DataFormat::Float16_b}})
-//                                                  .set_page_size(j, page_size * (j + 1));
-//             auto cb = CreateCircularBuffer(program, cr_set, cb_config);
-//         }
+        if (i == 0) {
+            // Ensures that we get at least one compilation with the max amount to
+            // ensure it compiles and runs
+            BRISC_OUTER_LOOP = MAX_LOOP;
+            BRISC_MIDDLE_LOOP = MAX_LOOP;
+            BRISC_INNER_LOOP = MAX_LOOP;
+            NUM_CBS = NUM_CIRCULAR_BUFFERS;
+            NUM_SEMS = NUM_SEMAPHORES;
+            USE_MAX_RT_ARGS = true;
+        } else {
+            BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
+            BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
+            BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
+            NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
+            NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
+            USE_MAX_RT_ARGS = false;
+        }
 
-//         for (uint32_t j = 0; j < NUM_SEMS; j++) {
-//             CreateSemaphore(program, cr_set, j + 1);
-//         }
+        log_debug(
+            tt::LogTest,
+            "Compiling program {}/{} w/ BRISC_OUTER_LOOP: {} BRISC_MIDDLE_LOOP: {} BRISC_INNER_LOOP: {} NUM_CBS: {} "
+            "NUM_SEMS: {} USE_MAX_RT_ARGS: {}",
+            i + 1,
+            NUM_PROGRAMS,
+            BRISC_OUTER_LOOP,
+            BRISC_MIDDLE_LOOP,
+            BRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            USE_MAX_RT_ARGS);
 
-//         auto [brisc_unique_rtargs, brisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
-//         uint32_t num_brisc_unique_rtargs = brisc_unique_rtargs.size();
-//         uint32_t num_brisc_common_rtargs = brisc_common_rtargs.size();
-//         vector<uint32_t> brisc_compile_args = {
-//             BRISC_OUTER_LOOP,
-//             BRISC_MIDDLE_LOOP,
-//             BRISC_INNER_LOOP,
-//             NUM_CBS,
-//             NUM_SEMS,
-//             num_brisc_unique_rtargs,
-//             num_brisc_common_rtargs,
-//             page_size};
+        for (uint32_t j = 0; j < NUM_CBS; j++) {
+            CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}})
+                                                 .set_page_size(j, page_size * (j + 1));
+            auto cb = CreateCircularBuffer(program_, cr_set, cb_config);
+        }
 
-//         // ncrisc
-//         uint32_t NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP;
-//         if (i == 0) {
-//             NCRISC_OUTER_LOOP = MAX_LOOP;
-//             NCRISC_MIDDLE_LOOP = MAX_LOOP;
-//             NCRISC_INNER_LOOP = MAX_LOOP;
-//         } else {
-//             NCRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
-//             NCRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
-//             NCRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-//         }
+        for (uint32_t j = 0; j < NUM_SEMS; j++) {
+            CreateSemaphore(program_, cr_set, j + 1);
+        }
 
-//         auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
-//         uint32_t num_ncrisc_unique_rtargs = ncrisc_unique_rtargs.size();
-//         uint32_t num_ncrisc_common_rtargs = ncrisc_common_rtargs.size();
-//         vector<uint32_t> ncrisc_compile_args = {
-//             NCRISC_OUTER_LOOP,
-//             NCRISC_MIDDLE_LOOP,
-//             NCRISC_INNER_LOOP,
-//             NUM_CBS,
-//             NUM_SEMS,
-//             num_ncrisc_unique_rtargs,
-//             num_ncrisc_common_rtargs,
-//             page_size};
+        auto [brisc_unique_rtargs, brisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
+        uint32_t num_brisc_unique_rtargs = brisc_unique_rtargs.size();
+        uint32_t num_brisc_common_rtargs = brisc_common_rtargs.size();
+        vector<uint32_t> brisc_compile_args = {
+            BRISC_OUTER_LOOP,
+            BRISC_MIDDLE_LOOP,
+            BRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_brisc_unique_rtargs,
+            num_brisc_common_rtargs,
+            page_size};
 
-//         // trisc
-//         uint32_t TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP;
-//         if (i == 0) {
-//             TRISC_OUTER_LOOP = MAX_LOOP;
-//             TRISC_MIDDLE_LOOP = MAX_LOOP;
-//             TRISC_INNER_LOOP = MAX_LOOP;
-//         } else {
-//             TRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
-//             TRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
-//             TRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-//         }
+        // ncrisc
+        uint32_t NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP;
+        if (i == 0) {
+            NCRISC_OUTER_LOOP = MAX_LOOP;
+            NCRISC_MIDDLE_LOOP = MAX_LOOP;
+            NCRISC_INNER_LOOP = MAX_LOOP;
+        } else {
+            NCRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
+            NCRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
+            NCRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
+        }
 
-//         auto [trisc_unique_rtargs, trisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
-//         uint32_t num_trisc_unique_rtargs = trisc_unique_rtargs.size();
-//         uint32_t num_trisc_common_rtargs = trisc_common_rtargs.size();
-//         vector<uint32_t> trisc_compile_args = {
-//             TRISC_OUTER_LOOP,
-//             TRISC_MIDDLE_LOOP,
-//             TRISC_INNER_LOOP,
-//             NUM_CBS,
-//             NUM_SEMS,
-//             num_trisc_unique_rtargs,
-//             num_trisc_common_rtargs,
-//             page_size};
+        auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
+        uint32_t num_ncrisc_unique_rtargs = ncrisc_unique_rtargs.size();
+        uint32_t num_ncrisc_common_rtargs = ncrisc_common_rtargs.size();
+        vector<uint32_t> ncrisc_compile_args = {
+            NCRISC_OUTER_LOOP,
+            NCRISC_MIDDLE_LOOP,
+            NCRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_ncrisc_unique_rtargs,
+            num_ncrisc_common_rtargs,
+            page_size};
 
-//         bool at_least_one_kernel = false;
-//         if (i == 0 or ((rand() % 2) == 0)) {
-//             auto dummy_brisc_kernel = CreateKernel(
-//                 program,
-//                 "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                 cr_set,
-//                 DataMovementConfig{
-//                     .processor = DataMovementProcessor::RISCV_0,
-//                     .noc = NOC::RISCV_0_default,
-//                     .compile_args = brisc_compile_args,
-//                     .defines = data_movement_defines});
-//             SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
-//             SetCommonRuntimeArgs(program, dummy_brisc_kernel, brisc_common_rtargs);
-//             at_least_one_kernel = true;
-//         }
+        // trisc
+        uint32_t TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP;
+        if (i == 0) {
+            TRISC_OUTER_LOOP = MAX_LOOP;
+            TRISC_MIDDLE_LOOP = MAX_LOOP;
+            TRISC_INNER_LOOP = MAX_LOOP;
+        } else {
+            TRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
+            TRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
+            TRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
+        }
 
-//         if (i == 0 or ((rand() % 2) == 0)) {
-//             auto dummy_ncrisc_kernel = CreateKernel(
-//                 program,
-//                 "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                 cr_set,
-//                 DataMovementConfig{
-//                     .processor = DataMovementProcessor::RISCV_1,
-//                     .noc = NOC::RISCV_1_default,
-//                     .compile_args = ncrisc_compile_args,
-//                     .defines = data_movement_defines});
-//             SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
-//             SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, ncrisc_common_rtargs);
-//             at_least_one_kernel = true;
-//         }
+        auto [trisc_unique_rtargs, trisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
+        uint32_t num_trisc_unique_rtargs = trisc_unique_rtargs.size();
+        uint32_t num_trisc_common_rtargs = trisc_common_rtargs.size();
+        vector<uint32_t> trisc_compile_args = {
+            TRISC_OUTER_LOOP,
+            TRISC_MIDDLE_LOOP,
+            TRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_trisc_unique_rtargs,
+            num_trisc_common_rtargs,
+            page_size};
 
-//         if (i == 0 or ((rand() % 2) == 0)) {
-//             auto dummy_trisc_kernel = CreateKernel(
-//                 program,
-//                 "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                 cr_set,
-//                 ComputeConfig{
-//                     .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
-//             SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
-//             SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
-//             at_least_one_kernel = true;
-//         }
+        bool at_least_one_kernel = false;
+        if (i == 0 or ((rand() % 2) == 0)) {
+            auto dummy_brisc_kernel = CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = brisc_compile_args,
+                    .defines = data_movement_defines});
+            SetRuntimeArgs(program_, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
+            SetCommonRuntimeArgs(program_, dummy_brisc_kernel, brisc_common_rtargs);
+            at_least_one_kernel = true;
+        }
 
-//         if (not at_least_one_kernel) {
-//             uint32_t random_risc = rand() % 3 + 1;
-//             if (random_risc == 1) {
-//                 auto dummy_brisc_kernel = CreateKernel(
-//                     program,
-//                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                     cr_set,
-//                     DataMovementConfig{
-//                         .processor = DataMovementProcessor::RISCV_0,
-//                         .noc = NOC::RISCV_0_default,
-//                         .compile_args = brisc_compile_args,
-//                         .defines = data_movement_defines});
-//                 SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
-//                 SetCommonRuntimeArgs(program, dummy_brisc_kernel, brisc_common_rtargs);
-//             } else if (random_risc == 2) {
-//                 auto dummy_ncrisc_kernel = CreateKernel(
-//                     program,
-//                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                     cr_set,
-//                     DataMovementConfig{
-//                         .processor = DataMovementProcessor::RISCV_1,
-//                         .noc = NOC::RISCV_1_default,
-//                         .compile_args = ncrisc_compile_args,
-//                         .defines = data_movement_defines});
-//                 SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
-//                 SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, ncrisc_common_rtargs);
-//             } else if (random_risc == 3) {
-//                 auto dummy_trisc_kernel = CreateKernel(
-//                     program,
-//                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                     cr_set,
-//                     ComputeConfig{
-//                         .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
-//                 SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
-//                 SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
-//             } else {
-//                 TT_THROW("Invalid");
-//             }
-//         }
+        if (i == 0 or ((rand() % 2) == 0)) {
+            auto dummy_ncrisc_kernel = CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::RISCV_1_default,
+                    .compile_args = ncrisc_compile_args,
+                    .defines = data_movement_defines});
+            SetRuntimeArgs(program_, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
+            SetCommonRuntimeArgs(program_, dummy_ncrisc_kernel, ncrisc_common_rtargs);
+            at_least_one_kernel = true;
+        }
 
-//         tt::tt_metal::detail::CompileProgram(this->device_, program);
-//     }
+        if (i == 0 or ((rand() % 2) == 0)) {
+            auto dummy_trisc_kernel = CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                ComputeConfig{
+                    .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
+            SetRuntimeArgs(program_, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
+            SetCommonRuntimeArgs(program_, dummy_trisc_kernel, trisc_common_rtargs);
+            at_least_one_kernel = true;
+        }
 
-//     for (uint8_t cq_id = 0; cq_id < this->device_->num_hw_cqs(); ++cq_id) {
-//         log_info(tt::LogTest, "Running {} programs on cq {} for cache warmup.", programs.size(), (uint32_t)cq_id);
-//         // This loop caches program and runs
-//         for (Program& program : programs) {
-//             EnqueueProgram(this->device_->command_queue(cq_id), program, false);
-//         }
+        if (not at_least_one_kernel) {
+            uint32_t random_risc = rand() % 3 + 1;
+            if (random_risc == 1) {
+                auto dummy_brisc_kernel = CreateKernel(
+                    program_,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = NOC::RISCV_0_default,
+                        .compile_args = brisc_compile_args,
+                        .defines = data_movement_defines});
+                SetRuntimeArgs(program_, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
+                SetCommonRuntimeArgs(program_, dummy_brisc_kernel, brisc_common_rtargs);
+            } else if (random_risc == 2) {
+                auto dummy_ncrisc_kernel = CreateKernel(
+                    program_,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_1,
+                        .noc = NOC::RISCV_1_default,
+                        .compile_args = ncrisc_compile_args,
+                        .defines = data_movement_defines});
+                SetRuntimeArgs(program_, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
+                SetCommonRuntimeArgs(program_, dummy_ncrisc_kernel, ncrisc_common_rtargs);
+            } else if (random_risc == 3) {
+                auto dummy_trisc_kernel = CreateKernel(
+                    program_,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    ComputeConfig{
+                        .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
+                SetRuntimeArgs(program_, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
+                SetCommonRuntimeArgs(program_, dummy_trisc_kernel, trisc_common_rtargs);
+            } else {
+                TT_THROW("Invalid");
+            }
+        }
+    }
 
-//         // This loops assumes already cached
-//         uint32_t NUM_ITERATIONS = 500;  // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of
-//                                         // iterations, need to come back to that
+    for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+        log_info(tt::LogTest, "Running {} MeshWorkloads on cq {} for cache warmup.", workloads.size(), (uint32_t)cq_id);
+        // This loop caches program and runs
+        for (distributed::MeshWorkload& wl : workloads) {
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), wl, false);
+        }
 
-//         log_info(
-//             tt::LogTest,
-//             "Running {} programs on cq {} for {} iterations now.",
-//             programs.size(),
-//             (uint32_t)cq_id,
-//             NUM_ITERATIONS);
-//         for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
-//             auto rng = std::default_random_engine{};
-//             std::shuffle(std::begin(programs), std::end(programs), rng);
-//             if (i % 10 == 0) {
-//                 log_debug(
-//                     tt::LogTest,
-//                     "Enqueuing {} programs on cq {} for iter: {}/{} now.",
-//                     programs.size(),
-//                     (uint32_t)cq_id,
-//                     i + 1,
-//                     NUM_ITERATIONS);
-//             }
-//             for (Program& program : programs) {
-//                 EnqueueProgram(this->device_->command_queue(cq_id), program, false);
-//             }
-//         }
+        // This loops assumes already cached
+        uint32_t NUM_ITERATIONS = 500;  // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of
+                                        // iterations, need to come back to that
 
-//         log_info(tt::LogTest, "Calling Finish.");
-//         Finish(this->device_->command_queue(cq_id));
-//     }
-// }
+        log_info(
+            tt::LogTest,
+            "Running {} programs on cq {} for {} iterations now.",
+            workloads.size(),
+            (uint32_t)cq_id,
+            NUM_ITERATIONS);
+        for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
+            auto rng = std::default_random_engine{};
+            std::shuffle(std::begin(workloads), std::end(workloads), rng);
+            if (i % 10 == 0) {
+                log_debug(
+                    tt::LogTest,
+                    "Enqueuing {} programs on cq {} for iter: {}/{} now.",
+                    workloads.size(),
+                    (uint32_t)cq_id,
+                    i + 1,
+                    NUM_ITERATIONS);
+            }
+            for (distributed::MeshWorkload& wl : workloads) {
+                EnqueueMeshWorkload(device->mesh_command_queue(), wl, false);
+            }
+        }
 
-TEST_F(UnitMeshCommandQueueFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
+        log_info(tt::LogTest, "Calling Finish.");
+        Finish(device->mesh_command_queue(cq_id));
+    }
+}
+
+TEST_F(UnitMeshCQFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
     uint32_t NUM_ITER = 100000;
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -2082,448 +2055,449 @@ TEST_F(UnitMeshCommandQueueFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
     }
 }
 
-// TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
-//     uint32_t NUM_PROGRAMS = 100;
-//     uint32_t MAX_LOOP = 100;
-//     uint32_t page_size = 1024;
+TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
+    uint32_t NUM_PROGRAMS = 100;
+    uint32_t MAX_LOOP = 100;
+    uint32_t page_size = 1024;
 
-//     // Make random
-//     auto random_seed = 0;  // (unsigned int)time(NULL);
-//     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-//     log_info(tt::LogTest, "Using Test Seed: {}", seed);
-//     srand(seed);
+    // Make random
+    auto random_seed = 0;  // (unsigned int)time(NULL);
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
+    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    srand(seed);
 
-//     CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
-//     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-//     CoreRangeSet cr_set(cr);
+    auto device = this->devices_.at(0);
 
-//     log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
+    CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+    CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+    CoreRangeSet cr_set(cr);
 
-//     vector<Program> programs;
-//     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-//         programs.push_back(Program());
-//         Program& program = programs.back();
+    log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
-//         std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
-//         std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
+    vector<distributed::MeshWorkload> workloads;
+    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        workloads.push_back(distributed::MeshWorkload());
+        distributed::MeshWorkload& workload = workloads.back();
 
-//         // brisc
-//         uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
-//         bool USE_MAX_RT_ARGS;
+        Program program;
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
 
-//         if (i % 10 == 0) {
-//             log_info(tt::LogTest, "Compiling program {} of {}", i + 1, NUM_PROGRAMS);
-//         }
+        std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
+        std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
 
-//         if (i == 0) {
-//             // Ensures that we get at least one compilation with the max amount to
-//             // ensure it compiles and runs
-//             BRISC_OUTER_LOOP = MAX_LOOP;
-//             BRISC_MIDDLE_LOOP = MAX_LOOP;
-//             BRISC_INNER_LOOP = MAX_LOOP;
-//             NUM_CBS = NUM_CIRCULAR_BUFFERS;
-//             NUM_SEMS = NUM_SEMAPHORES;
-//             USE_MAX_RT_ARGS = true;
-//         } else {
-//             BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
-//             BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
-//             BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-//             NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
-//             NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
-//             USE_MAX_RT_ARGS = false;
-//         }
+        // brisc
+        uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
+        bool USE_MAX_RT_ARGS;
 
-//         log_debug(
-//             tt::LogTest,
-//             "Compiling program {}/{} w/ BRISC_OUTER_LOOP: {} BRISC_MIDDLE_LOOP: {} BRISC_INNER_LOOP: {} NUM_CBS: {} "
-//             "NUM_SEMS: {} USE_MAX_RT_ARGS: {}",
-//             i + 1,
-//             NUM_PROGRAMS,
-//             BRISC_OUTER_LOOP,
-//             BRISC_MIDDLE_LOOP,
-//             BRISC_INNER_LOOP,
-//             NUM_CBS,
-//             NUM_SEMS,
-//             USE_MAX_RT_ARGS);
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Compiling program {} of {}", i + 1, NUM_PROGRAMS);
+        }
 
-//         for (uint32_t j = 0; j < NUM_CBS; j++) {
-//             CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j,
-//             tt::DataFormat::Float16_b}})
-//                                                  .set_page_size(j, page_size * (j + 1));
-//             auto cb = CreateCircularBuffer(program, cr_set, cb_config);
-//         }
+        if (i == 0) {
+            // Ensures that we get at least one compilation with the max amount to
+            // ensure it compiles and runs
+            BRISC_OUTER_LOOP = MAX_LOOP;
+            BRISC_MIDDLE_LOOP = MAX_LOOP;
+            BRISC_INNER_LOOP = MAX_LOOP;
+            NUM_CBS = NUM_CIRCULAR_BUFFERS;
+            NUM_SEMS = NUM_SEMAPHORES;
+            USE_MAX_RT_ARGS = true;
+        } else {
+            BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
+            BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
+            BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
+            NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
+            NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
+            USE_MAX_RT_ARGS = false;
+        }
 
-//         for (uint32_t j = 0; j < NUM_SEMS; j++) {
-//             CreateSemaphore(program, cr_set, j + 1);
-//         }
+        log_debug(
+            tt::LogTest,
+            "Compiling program {}/{} w/ BRISC_OUTER_LOOP: {} BRISC_MIDDLE_LOOP: {} BRISC_INNER_LOOP: {} NUM_CBS: {} "
+            "NUM_SEMS: {} USE_MAX_RT_ARGS: {}",
+            i + 1,
+            NUM_PROGRAMS,
+            BRISC_OUTER_LOOP,
+            BRISC_MIDDLE_LOOP,
+            BRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            USE_MAX_RT_ARGS);
 
-//         auto [brisc_unique_rtargs, brisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
-//         uint32_t num_brisc_unique_rtargs = brisc_unique_rtargs.size();
-//         uint32_t num_brisc_common_rtargs = brisc_common_rtargs.size();
-//         vector<uint32_t> brisc_compile_args = {
-//             BRISC_OUTER_LOOP,
-//             BRISC_MIDDLE_LOOP,
-//             BRISC_INNER_LOOP,
-//             NUM_CBS,
-//             NUM_SEMS,
-//             num_brisc_unique_rtargs,
-//             num_brisc_common_rtargs,
-//             page_size};
+        for (uint32_t j = 0; j < NUM_CBS; j++) {
+            CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}})
+                                                 .set_page_size(j, page_size * (j + 1));
+            auto cb = CreateCircularBuffer(program_, cr_set, cb_config);
+        }
 
-//         // ncrisc
-//         uint32_t NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP;
-//         if (i == 0) {
-//             NCRISC_OUTER_LOOP = MAX_LOOP;
-//             NCRISC_MIDDLE_LOOP = MAX_LOOP;
-//             NCRISC_INNER_LOOP = MAX_LOOP;
-//         } else {
-//             NCRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
-//             NCRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
-//             NCRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-//         }
+        for (uint32_t j = 0; j < NUM_SEMS; j++) {
+            CreateSemaphore(program_, cr_set, j + 1);
+        }
 
-//         auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
-//         uint32_t num_ncrisc_unique_rtargs = ncrisc_unique_rtargs.size();
-//         uint32_t num_ncrisc_common_rtargs = ncrisc_common_rtargs.size();
-//         vector<uint32_t> ncrisc_compile_args = {
-//             NCRISC_OUTER_LOOP,
-//             NCRISC_MIDDLE_LOOP,
-//             NCRISC_INNER_LOOP,
-//             NUM_CBS,
-//             NUM_SEMS,
-//             num_ncrisc_unique_rtargs,
-//             num_ncrisc_common_rtargs,
-//             page_size};
+        auto [brisc_unique_rtargs, brisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
+        uint32_t num_brisc_unique_rtargs = brisc_unique_rtargs.size();
+        uint32_t num_brisc_common_rtargs = brisc_common_rtargs.size();
+        vector<uint32_t> brisc_compile_args = {
+            BRISC_OUTER_LOOP,
+            BRISC_MIDDLE_LOOP,
+            BRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_brisc_unique_rtargs,
+            num_brisc_common_rtargs,
+            page_size};
 
-//         // trisc
-//         uint32_t TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP;
-//         if (i == 0) {
-//             TRISC_OUTER_LOOP = MAX_LOOP;
-//             TRISC_MIDDLE_LOOP = MAX_LOOP;
-//             TRISC_INNER_LOOP = MAX_LOOP;
-//         } else {
-//             TRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
-//             TRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
-//             TRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-//         }
+        // ncrisc
+        uint32_t NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP;
+        if (i == 0) {
+            NCRISC_OUTER_LOOP = MAX_LOOP;
+            NCRISC_MIDDLE_LOOP = MAX_LOOP;
+            NCRISC_INNER_LOOP = MAX_LOOP;
+        } else {
+            NCRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
+            NCRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
+            NCRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
+        }
 
-//         auto [trisc_unique_rtargs, trisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
-//         uint32_t num_trisc_unique_rtargs = trisc_unique_rtargs.size();
-//         uint32_t num_trisc_common_rtargs = trisc_common_rtargs.size();
-//         vector<uint32_t> trisc_compile_args = {
-//             TRISC_OUTER_LOOP,
-//             TRISC_MIDDLE_LOOP,
-//             TRISC_INNER_LOOP,
-//             NUM_CBS,
-//             NUM_SEMS,
-//             num_trisc_unique_rtargs,
-//             num_trisc_common_rtargs,
-//             page_size};
+        auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
+        uint32_t num_ncrisc_unique_rtargs = ncrisc_unique_rtargs.size();
+        uint32_t num_ncrisc_common_rtargs = ncrisc_common_rtargs.size();
+        vector<uint32_t> ncrisc_compile_args = {
+            NCRISC_OUTER_LOOP,
+            NCRISC_MIDDLE_LOOP,
+            NCRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_ncrisc_unique_rtargs,
+            num_ncrisc_common_rtargs,
+            page_size};
 
-//         bool at_least_one_kernel = false;
-//         if (i == 0 or ((rand() % 2) == 0)) {
-//             auto dummy_brisc_kernel = CreateKernel(
-//                 program,
-//                 "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                 cr_set,
-//                 DataMovementConfig{
-//                     .processor = DataMovementProcessor::RISCV_0,
-//                     .noc = NOC::RISCV_0_default,
-//                     .compile_args = brisc_compile_args,
-//                     .defines = data_movement_defines});
-//             SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
-//             SetCommonRuntimeArgs(program, dummy_brisc_kernel, brisc_common_rtargs);
-//             at_least_one_kernel = true;
-//         }
+        // trisc
+        uint32_t TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP;
+        if (i == 0) {
+            TRISC_OUTER_LOOP = MAX_LOOP;
+            TRISC_MIDDLE_LOOP = MAX_LOOP;
+            TRISC_INNER_LOOP = MAX_LOOP;
+        } else {
+            TRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
+            TRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
+            TRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
+        }
 
-//         if (i == 0 or ((rand() % 2) == 0)) {
-//             auto dummy_ncrisc_kernel = CreateKernel(
-//                 program,
-//                 "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                 cr_set,
-//                 DataMovementConfig{
-//                     .processor = DataMovementProcessor::RISCV_1,
-//                     .noc = NOC::RISCV_1_default,
-//                     .compile_args = ncrisc_compile_args,
-//                     .defines = data_movement_defines});
-//             SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
-//             SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, ncrisc_common_rtargs);
-//             at_least_one_kernel = true;
-//         }
+        auto [trisc_unique_rtargs, trisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
+        uint32_t num_trisc_unique_rtargs = trisc_unique_rtargs.size();
+        uint32_t num_trisc_common_rtargs = trisc_common_rtargs.size();
+        vector<uint32_t> trisc_compile_args = {
+            TRISC_OUTER_LOOP,
+            TRISC_MIDDLE_LOOP,
+            TRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_trisc_unique_rtargs,
+            num_trisc_common_rtargs,
+            page_size};
 
-//         if (i == 0 or ((rand() % 2) == 0)) {
-//             auto dummy_trisc_kernel = CreateKernel(
-//                 program,
-//                 "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                 cr_set,
-//                 ComputeConfig{
-//                     .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
-//             SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
-//             SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
-//             at_least_one_kernel = true;
-//         }
+        bool at_least_one_kernel = false;
+        if (i == 0 or ((rand() % 2) == 0)) {
+            auto dummy_brisc_kernel = CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = brisc_compile_args,
+                    .defines = data_movement_defines});
+            SetRuntimeArgs(program_, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
+            SetCommonRuntimeArgs(program_, dummy_brisc_kernel, brisc_common_rtargs);
+            at_least_one_kernel = true;
+        }
 
-//         if (not at_least_one_kernel) {
-//             uint32_t random_risc = rand() % 3 + 1;
-//             if (random_risc == 1) {
-//                 auto dummy_brisc_kernel = CreateKernel(
-//                     program,
-//                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                     cr_set,
-//                     DataMovementConfig{
-//                         .processor = DataMovementProcessor::RISCV_0,
-//                         .noc = NOC::RISCV_0_default,
-//                         .compile_args = brisc_compile_args,
-//                         .defines = data_movement_defines});
-//                 SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
-//                 SetCommonRuntimeArgs(program, dummy_brisc_kernel, brisc_common_rtargs);
-//             } else if (random_risc == 2) {
-//                 auto dummy_ncrisc_kernel = CreateKernel(
-//                     program,
-//                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                     cr_set,
-//                     DataMovementConfig{
-//                         .processor = DataMovementProcessor::RISCV_1,
-//                         .noc = NOC::RISCV_1_default,
-//                         .compile_args = ncrisc_compile_args,
-//                         .defines = data_movement_defines});
-//                 SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
-//                 SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, ncrisc_common_rtargs);
-//             } else if (random_risc == 3) {
-//                 auto dummy_trisc_kernel = CreateKernel(
-//                     program,
-//                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                     cr_set,
-//                     ComputeConfig{
-//                         .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
-//                 SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
-//                 SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
-//             } else {
-//                 TT_THROW("Invalid");
-//             }
-//         }
+        if (i == 0 or ((rand() % 2) == 0)) {
+            auto dummy_ncrisc_kernel = CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::RISCV_1_default,
+                    .compile_args = ncrisc_compile_args,
+                    .defines = data_movement_defines});
+            SetRuntimeArgs(program_, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
+            SetCommonRuntimeArgs(program_, dummy_ncrisc_kernel, ncrisc_common_rtargs);
+            at_least_one_kernel = true;
+        }
 
-//         tt::tt_metal::detail::CompileProgram(this->device_, program);
-//     }
+        if (i == 0 or ((rand() % 2) == 0)) {
+            auto dummy_trisc_kernel = CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                ComputeConfig{
+                    .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
+            SetRuntimeArgs(program_, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
+            SetCommonRuntimeArgs(program_, dummy_trisc_kernel, trisc_common_rtargs);
+            at_least_one_kernel = true;
+        }
 
-//     log_info(tt::LogTest, "Running {} programs for cache warmup.", programs.size());
-//     // This loop caches program and runs
-//     for (Program& program : programs) {
-//         EnqueueProgram(this->device_->command_queue(), program, false);
-//     }
+        if (not at_least_one_kernel) {
+            uint32_t random_risc = rand() % 3 + 1;
+            if (random_risc == 1) {
+                auto dummy_brisc_kernel = CreateKernel(
+                    program_,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = NOC::RISCV_0_default,
+                        .compile_args = brisc_compile_args,
+                        .defines = data_movement_defines});
+                SetRuntimeArgs(program_, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
+                SetCommonRuntimeArgs(program_, dummy_brisc_kernel, brisc_common_rtargs);
+            } else if (random_risc == 2) {
+                auto dummy_ncrisc_kernel = CreateKernel(
+                    program_,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_1,
+                        .noc = NOC::RISCV_1_default,
+                        .compile_args = ncrisc_compile_args,
+                        .defines = data_movement_defines});
+                SetRuntimeArgs(program_, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
+                SetCommonRuntimeArgs(program_, dummy_ncrisc_kernel, ncrisc_common_rtargs);
+            } else if (random_risc == 3) {
+                auto dummy_trisc_kernel = CreateKernel(
+                    program_,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    ComputeConfig{
+                        .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
+                SetRuntimeArgs(program_, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
+                SetCommonRuntimeArgs(program_, dummy_trisc_kernel, trisc_common_rtargs);
+            } else {
+                TT_THROW("Invalid");
+            }
+        }
+    }
 
-//     // This loops assumes already cached
-//     uint32_t NUM_ITERATIONS = 500;  // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of
-//                                     // iterations, need to come back to that
+    log_info(tt::LogTest, "Running {} programs for cache warmup.", workloads.size());
+    // This loop caches program and runs
+    for (distributed::MeshWorkload& wl : workloads) {
+        distributed::EnqueueMeshWorkload(device->mesh_command_queue(), wl, false);
+    }
 
-//     log_info(tt::LogTest, "Running {} programs for {} iterations now.", programs.size(), NUM_ITERATIONS);
-//     for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
-//         auto rng = std::default_random_engine{};
-//         std::shuffle(std::begin(programs), std::end(programs), rng);
-//         if (i % 50 == 0) {
-//             log_info(tt::LogTest, "Enqueuing {} programs for iter: {}/{} now.", programs.size(), i + 1,
-//             NUM_ITERATIONS);
-//         }
-//         for (Program& program : programs) {
-//             EnqueueProgram(this->device_->command_queue(), program, false);
-//         }
-//     }
+    // This loops assumes already cached
+    uint32_t NUM_ITERATIONS = 500;  // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of
+                                    // iterations, need to come back to that
 
-//     log_info(tt::LogTest, "Calling Finish.");
-//     Finish(this->device_->command_queue());
-// }
+    log_info(tt::LogTest, "Running {} programs for {} iterations now.", workloads.size(), NUM_ITERATIONS);
+    for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
+        auto rng = std::default_random_engine{};
+        std::shuffle(std::begin(workloads), std::end(workloads), rng);
+        if (i % 50 == 0) {
+            log_info(
+                tt::LogTest, "Enqueuing {} programs for iter: {}/{} now.", workloads.size(), i + 1, NUM_ITERATIONS);
+        }
+        for (distributed::MeshWorkload& wl : workloads) {
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), wl, false);
+        }
+    }
 
-// TEST_F(RandomProgramFixture, TensixTestSimplePrograms) {
-//     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-//         if (i % 10 == 0) {
-//             log_info(tt::LogTest, "Creating Program {}", i);
-//         }
-//         Program program = CreateProgram();
-//         this->create_kernel(program, CoreType::WORKER, true);
-//         EnqueueProgram(device_->command_queue(), program, false);
-//     }
+    log_info(tt::LogTest, "Calling Finish.");
+    Finish(device->mesh_command_queue());
+}
 
-//     Finish(device_->command_queue());
-// }
+TEST_F(RandomProgramFixture, TensixTestSimplePrograms) {
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
+        this->create_kernel(program, CoreType::WORKER, true);
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
 
-// TEST_F(RandomProgramFixture, ActiveEthTestSimplePrograms) {
-//     if (!does_device_have_active_eth_cores(device_)) {
-//         GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet
-//         cores";
-//     }
+    Finish(device_->command_queue());
+}
 
-//     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-//         if (i % 10 == 0) {
-//             log_info(tt::LogTest, "Creating Program {}", i);
-//         }
-//         Program program = CreateProgram();
-//         this->create_kernel(program, CoreType::ETH, true);
-//         EnqueueProgram(device_->command_queue(), program, false);
-//     }
+TEST_F(RandomProgramFixture, ActiveEthTestSimplePrograms) {
+    if (!does_device_have_active_eth_cores(device_)) {
+        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
+    }
 
-//     Finish(device_->command_queue());
-// }
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
+        this->create_kernel(program, CoreType::ETH, true);
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
 
-// TEST_F(RandomProgramFixture, TensixActiveEthTestSimplePrograms) {
-//     if (!does_device_have_active_eth_cores(device_)) {
-//         GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet
-//         cores";
-//     }
+    Finish(device_->command_queue());
+}
 
-//     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-//         if (i % 10 == 0) {
-//             log_info(tt::LogTest, "Creating Program {}", i);
-//         }
-//         Program program = CreateProgram();
+TEST_F(RandomProgramFixture, TensixActiveEthTestSimplePrograms) {
+    if (!does_device_have_active_eth_cores(device_)) {
+        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
+    }
 
-//         bool eth_kernel_added_to_program = false;
-//         if (rand() % 2 == 0) {
-//             this->create_kernel(program, CoreType::ETH, true);
-//             eth_kernel_added_to_program = true;
-//         }
-//         if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
-//             this->create_kernel(program, CoreType::WORKER, true);
-//         }
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
 
-//         EnqueueProgram(device_->command_queue(), program, false);
-//     }
+        bool eth_kernel_added_to_program = false;
+        if (rand() % 2 == 0) {
+            this->create_kernel(program, CoreType::ETH, true);
+            eth_kernel_added_to_program = true;
+        }
+        if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
+            this->create_kernel(program, CoreType::WORKER, true);
+        }
 
-//     Finish(device_->command_queue());
-// }
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
 
-// TEST_F(RandomProgramFixture, TensixTestPrograms) {
-//     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-//         if (i % 10 == 0) {
-//             log_info(tt::LogTest, "Creating Program {}", i);
-//         }
-//         Program program = CreateProgram();
-//         this->create_kernel(program, CoreType::WORKER);
-//         EnqueueProgram(device_->command_queue(), program, false);
-//     }
+    Finish(device_->command_queue());
+}
 
-//     Finish(device_->command_queue());
-// }
+TEST_F(RandomProgramFixture, TensixTestPrograms) {
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
+        this->create_kernel(program, CoreType::WORKER);
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
 
-// TEST_F(RandomProgramFixture, ActiveEthTestPrograms) {
-//     if (!does_device_have_active_eth_cores(device_)) {
-//         GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet
-//         cores";
-//     }
+    Finish(device_->command_queue());
+}
 
-//     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-//         if (i % 10 == 0) {
-//             log_info(tt::LogTest, "Creating Program {}", i);
-//         }
-//         Program program = CreateProgram();
-//         // Large eth kernels currently don't fit in the ring buffer, so we're reducing the max number of RTAs
-//         // and the max kernel size to ensure that the kernel can fit in the ring buffer
-//         KernelProperties kernel_properties;
-//         kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
-//         kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
-//         this->create_kernel(program, CoreType::ETH, false, kernel_properties);
-//         EnqueueProgram(device_->command_queue(), program, false);
-//     }
+TEST_F(RandomProgramFixture, ActiveEthTestPrograms) {
+    if (!does_device_have_active_eth_cores(device_)) {
+        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
+    }
 
-//     Finish(device_->command_queue());
-// }
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
+        // Large eth kernels currently don't fit in the ring buffer, so we're reducing the max number of RTAs
+        // and the max kernel size to ensure that the kernel can fit in the ring buffer
+        KernelProperties kernel_properties;
+        kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
+        kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
+        this->create_kernel(program, CoreType::ETH, false, kernel_properties);
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
 
-// TEST_F(RandomProgramFixture, TensixActiveEthTestPrograms) {
-//     if (!does_device_have_active_eth_cores(device_)) {
-//         GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet
-//         cores";
-//     }
+    Finish(device_->command_queue());
+}
 
-//     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-//         if (i % 10 == 0) {
-//             log_info(tt::LogTest, "Creating Program {}", i);
-//         }
-//         Program program = CreateProgram();
+TEST_F(RandomProgramFixture, TensixActiveEthTestPrograms) {
+    if (!does_device_have_active_eth_cores(device_)) {
+        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
+    }
 
-//         bool eth_kernel_added_to_program = false;
-//         if (rand() % 2 == 0) {
-//             // Large eth kernels currently don't fit in the ring buffer, so we're reducing the max number of RTAs
-//             // and the max kernel size to ensure that the kernel can fit in the ring buffer
-//             KernelProperties kernel_properties;
-//             kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
-//             kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
-//             kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
-//             this->create_kernel(program, CoreType::ETH, false, kernel_properties);
-//             eth_kernel_added_to_program = true;
-//         }
-//         if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
-//             KernelProperties kernel_properties;
-//             kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
-//             this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-//         }
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
 
-//         EnqueueProgram(device_->command_queue(), program, false);
-//     }
+        bool eth_kernel_added_to_program = false;
+        if (rand() % 2 == 0) {
+            // Large eth kernels currently don't fit in the ring buffer, so we're reducing the max number of RTAs
+            // and the max kernel size to ensure that the kernel can fit in the ring buffer
+            KernelProperties kernel_properties;
+            kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
+            kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
+            kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
+            this->create_kernel(program, CoreType::ETH, false, kernel_properties);
+            eth_kernel_added_to_program = true;
+        }
+        if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
+            KernelProperties kernel_properties;
+            kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
+            this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
+        }
 
-//     Finish(device_->command_queue());
-// }
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
 
-// TEST_F(RandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms) {
-//     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-//         if (i % 10 == 0) {
-//             log_info(tt::LogTest, "Creating Program {}", i);
-//         }
-//         Program program = CreateProgram();
+    Finish(device_->command_queue());
+}
 
-//         KernelProperties kernel_properties;
-//         if (i % 2 == 0) {
-//             kernel_properties = this->get_large_kernel_properties();
-//         } else {
-//             kernel_properties = this->get_small_kernel_properties();
-//         }
+TEST_F(RandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms) {
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
 
-//         this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-//         EnqueueProgram(device_->command_queue(), program, false);
-//     }
+        KernelProperties kernel_properties;
+        if (i % 2 == 0) {
+            kernel_properties = this->get_large_kernel_properties();
+        } else {
+            kernel_properties = this->get_small_kernel_properties();
+        }
 
-//     Finish(device_->command_queue());
-// }
+        this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
 
-// TEST_F(RandomProgramFixture, TensixTestLargeProgramFollowedBySmallPrograms) {
-//     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-//         if (i % 10 == 0) {
-//             log_info(tt::LogTest, "Creating Program {}", i);
-//         }
-//         Program program = CreateProgram();
+    Finish(device_->command_queue());
+}
 
-//         KernelProperties kernel_properties;
-//         if (i == 0) {
-//             kernel_properties = this->get_large_kernel_properties();
-//         } else {
-//             kernel_properties = this->get_small_kernel_properties();
-//         }
+TEST_F(RandomProgramFixture, TensixTestLargeProgramFollowedBySmallPrograms) {
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
 
-//         this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-//         EnqueueProgram(device_->command_queue(), program, false);
-//     }
+        KernelProperties kernel_properties;
+        if (i == 0) {
+            kernel_properties = this->get_large_kernel_properties();
+        } else {
+            kernel_properties = this->get_small_kernel_properties();
+        }
 
-//     Finish(device_->command_queue());
-// }
+        this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
 
-// TEST_F(RandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPrograms) {
-//     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-//         if (i % 10 == 0) {
-//             log_info(tt::LogTest, "Creating Program {}", i);
-//         }
-//         Program program = CreateProgram();
+    Finish(device_->command_queue());
+}
 
-//         KernelProperties kernel_properties;
-//         if (i % 6 == 0) {
-//             kernel_properties = this->get_large_kernel_properties();
-//         } else {
-//             kernel_properties = this->get_small_kernel_properties();
-//         }
+TEST_F(RandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPrograms) {
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
+        Program program = CreateProgram();
 
-//         this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-//         EnqueueProgram(device_->command_queue(), program, false);
-//     }
+        KernelProperties kernel_properties;
+        if (i % 6 == 0) {
+            kernel_properties = this->get_large_kernel_properties();
+        } else {
+            kernel_properties = this->get_small_kernel_properties();
+        }
 
-//     Finish(device_->command_queue());
-// }
+        this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
+
+    Finish(device_->command_queue());
+}
 
 }  // namespace stress_tests
 
