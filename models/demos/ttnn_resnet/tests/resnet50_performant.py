@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
+from models.demos.ttnn_resnet.runner.performant_runner_infra import ResNet50PerformanceRunnerInfra
 
 try:
     from tracy import signpost
@@ -21,7 +21,7 @@ def run_resnet50_inference(
     math_fidelity,
     model_location_generator,
 ):
-    test_infra = create_test_infra(
+    test_infra = ResNet50PerformanceRunnerInfra(
         device,
         device_batch_size,
         act_dtype,
@@ -62,7 +62,7 @@ def run_resnet50_trace_inference(
     math_fidelity,
     model_location_generator,
 ):
-    test_infra = create_test_infra(
+    test_infra = ResNet50PerformanceRunnerInfra(
         device,
         device_batch_size,
         act_dtype,
@@ -116,7 +116,7 @@ def run_resnet50_2cqs_inference(
     math_fidelity,
     model_location_generator,
 ):
-    test_infra = create_test_infra(
+    test_infra = ResNet50PerformanceRunnerInfra(
         device,
         device_batch_size,
         act_dtype,
@@ -181,7 +181,7 @@ def run_resnet50_trace_2cqs_inference(
     math_fidelity,
     model_location_generator,
 ):
-    test_infra = create_test_infra(
+    test_infra = ResNet50PerformanceRunnerInfra(
         device,
         device_batch_size,
         act_dtype,

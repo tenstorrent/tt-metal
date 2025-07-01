@@ -8,8 +8,8 @@ from loguru import logger
 from transformers import AutoImageProcessor
 
 import ttnn
+from models.demos.ttnn_resnet.runner.performant_runner import ResNet50PerformantRunner
 from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data_loader
-from models.demos.ttnn_resnet.tests.resnet50_performant_imagenet import ResNet50Trace2CQ
 from models.utility_functions import profiler, run_for_blackhole
 
 
@@ -37,15 +37,9 @@ def test_run_resnet50_trace_2cqs_inference(
     iterations = iterations // device.get_num_devices()
     profiler.clear()
     with torch.no_grad():
-        resnet50_trace_2cq = ResNet50Trace2CQ()
-
         profiler.start(f"compile")
-        resnet50_trace_2cq.initialize_resnet50_trace_2cqs_inference(
-            device,
-            batch_size_per_device,
-            act_dtype,
-            weight_dtype,
-        )
+        resnet50_trace_2cq = ResNet50PerformantRunner(device, batch_size_per_device, act_dtype, weight_dtype)
+
         profiler.end(f"compile")
         model_version = "microsoft/resnet-50"
         image_processor = AutoImageProcessor.from_pretrained(model_version)
@@ -70,13 +64,8 @@ def test_run_resnet50_trace_2cqs_inference(
             labels = input_labels_all[iter]
             profiler.start(f"run")
             ### TODO optimize input streamer for better e2e performance
-            tt_inputs_host = ttnn.from_torch(
-                inputs,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=resnet50_trace_2cq.test_infra.inputs_mesh_mapper,
-            )
-            output = resnet50_trace_2cq.execute_resnet50_trace_2cqs_inference(tt_inputs_host)
+
+            output = resnet50_trace_2cq.run(inputs)
             output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
             prediction = output[:, 0, 0, :].argmax(dim=-1)
             profiler.end(f"run")

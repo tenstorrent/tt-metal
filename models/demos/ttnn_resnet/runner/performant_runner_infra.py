@@ -168,7 +168,7 @@ golden_pcc[ttnn.device.Arch.GRAYSKULL][16][
 ] = 0.936
 
 
-class ResNet50TestInfra:
+class ResNet50PerformanceRunnerInfra:
     def __init__(
         self,
         device,
@@ -176,9 +176,9 @@ class ResNet50TestInfra:
         act_dtype,
         weight_dtype,
         math_fidelity,
-        use_pretrained_weight,
-        dealloc_input,
-        final_output_mem_config,
+        use_pretrained_weight=True,
+        dealloc_input=True,
+        final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=None,
     ):
         super().__init__()
@@ -286,6 +286,13 @@ class ResNet50TestInfra:
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
+        # if c == 3:
+        #     c = 16
+        # input_mem_config = ttnn.create_sharded_memory_config(
+        #     [n, c, h, w],
+        #     ttnn.CoreGrid(x=8, y=8),
+        #     ttnn.ShardStrategy.HEIGHT,
+        # )
         tt_inputs_host = ttnn.from_torch(
             torch_input_tensor,
             dtype=ttnn.bfloat16,
@@ -352,27 +359,3 @@ class ResNet50TestInfra:
         )
 
         return self.pcc_passed, self.pcc_message
-
-
-def create_test_infra(
-    device,
-    batch_size,
-    act_dtype,
-    weight_dtype,
-    math_fidelity,
-    use_pretrained_weight=True,
-    dealloc_input=True,
-    final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
-    model_location_generator=None,
-):
-    return ResNet50TestInfra(
-        device,
-        batch_size,
-        act_dtype,
-        weight_dtype,
-        math_fidelity,
-        use_pretrained_weight,
-        dealloc_input,
-        final_output_mem_config,
-        model_location_generator,
-    )

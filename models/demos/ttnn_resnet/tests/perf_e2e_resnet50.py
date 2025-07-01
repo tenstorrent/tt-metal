@@ -8,7 +8,7 @@ from loguru import logger
 from transformers import AutoImageProcessor
 
 import ttnn
-from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra, load_resnet50_model
+from models.demos.ttnn_resnet.runner.performant_runner_infra import ResNet50PerformanceRunnerInfra, load_resnet50_model
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import profiler
 
@@ -299,7 +299,7 @@ def run_perf_resnet(
 
     torch_resnet50.to(torch.bfloat16)
 
-    test_infra = create_test_infra(
+    test_infra = ResNet50PerformanceRunnerInfra(
         device,
         device_batch_size,
         model_config["ACTIVATIONS_DTYPE"],

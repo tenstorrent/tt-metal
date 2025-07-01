@@ -9,8 +9,8 @@ from loguru import logger
 from transformers import AutoImageProcessor
 
 import ttnn
+from models.demos.ttnn_resnet.runner.performant_runner_infra import ResNet50PerformanceRunnerInfra
 from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data, get_data_loader
-from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
 from models.utility_functions import profiler
 
 resnet_model_config = {
@@ -48,7 +48,7 @@ def run_resnet_imagenet_inference(
     # this will move weights to device
     profiler.start(f"compile")
 
-    test_infra = create_test_infra(
+    test_infra = ResNet50PerformanceRunnerInfra(
         device,
         batch_size_per_device,
         model_config["ACTIVATIONS_DTYPE"],
@@ -147,7 +147,7 @@ def run_resnet_inference(
     # this will move weights to device
     profiler.start(f"move_weights")
 
-    test_infra = create_test_infra(
+    test_infra = ResNet50PerformanceRunnerInfra(
         device,
         batch_size_per_device,
         model_config["ACTIVATIONS_DTYPE"],
