@@ -53,6 +53,7 @@ def test_flux_1_schnell(
         checkpoint="black-forest-labs/FLUX.1-schnell",
         device=mesh_device,
         use_torch_encoder=(not t5_on_device),
+        model_location_generator=model_location_generator,
     )
 
     pipeline.prepare(
