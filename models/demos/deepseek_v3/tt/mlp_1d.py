@@ -2,35 +2,39 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
-from attr import dataclass
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.utils.abstract_module import AbstractModule, InferenceMode
+from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherConfig,
+    FromWeightConfig,
     LinearConfig,
     MeshDeviceStub,
-    ModelConfig,
+    ModelDecodeConfig,
+    ModelPrefillConfig,
     MulConfig,
     OpConfigBase,
-    RunConfig,
+    RunDecodeConfig,
+    RunPrefillConfig,
     WeightConfig,
-    WeightStub,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
     COMPUTE_KERNEL_CONFIG_LOFI,
     TILE_SIZE,
+    dequantize,
     dram_shard_core_grid_for_k_and_n,
     dram_sharded_matmul_config,
     dram_sharded_weight_config,
     find_prefill_grid,
     matmul_config,
+    save_and_get_path,
 )
 from models.utility_functions import is_blackhole
 
@@ -93,22 +97,19 @@ class MLP1D(AbstractModule):
             mesh_device: TTNN mesh device
 
         Returns:
-            Dict mapping operation names to keyword tensor arguments and their tensor stubs
+            Dict mapping operation names to their TTNN weight file paths
         """
 
         assert cls.is_device_supported(mesh_device)
         return {
             models_name: {
-                "input_tensor_b": WeightStub.from_weight(
+                "input_tensor_b": save_and_get_path(
+                    output_path / f"{models_name}.input_tensor_b",
                     cls.convert_weight(
-                        hf_config,
                         state_dict[f"{hf_name}.weight"],
-                        state_dict[f"{hf_name}.weight_scale_inv"],
                         mesh_shard_dims,
-                        output_path,
                         mesh_device,
                     ),
-                    output_path / f"{models_name}.input_tensor_b",
                 )
             }
             for hf_name, models_name, mesh_shard_dims in [
@@ -119,13 +120,12 @@ class MLP1D(AbstractModule):
         }
 
     @classmethod
-    def convert_weight(
+    def convert_quantized_weight(
         cls,
         hf_config: Any,
         quantized_weight_tensor: torch.Tensor,
         scale_inv_tensor: torch.Tensor,
         mesh_shard_dims: tuple[int, int],
-        output_path: Path,
         mesh_device: ttnn.Device,
     ) -> ttnn.Tensor:
         """
@@ -135,11 +135,12 @@ class MLP1D(AbstractModule):
             hf_config: The Hugging Face configuration object.
             quantized_weight_tensor: The quantized weight tensor.
             scale_inv_tensor: The scale inverse tensor.
+            mesh_shard_dims: The mesh sharding dimensions.
             output_path: The path to save the converted weight file.
             mesh_device: The mesh device to use for the conversion.
 
         Returns:
-            The path to the converted weight file.
+            The converted TTNN tensor.
         """
         torch_weight_tensor = dequantize(
             quantized_weight_tensor, scale_inv_tensor, hf_config.quantization_config.weight_block_size
@@ -152,11 +153,47 @@ class MLP1D(AbstractModule):
             torch_weight_tensor,
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
-            device=ttnn.MeshDevice(mesh_device),
+            device=mesh_device,
             memory_config=dram_sharded_weight_config(
                 in_features // device_shape[mesh_shard_dims[0]],
                 out_features // device_shape[mesh_shard_dims[1]],
-                mesh_device.dram_grid_size,
+                mesh_device.dram_grid_size(),
+            ),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=mesh_shard_dims, mesh_shape=device_shape),
+        )
+
+    @classmethod
+    def convert_weight(
+        cls,
+        weight_tensor: torch.Tensor,
+        mesh_shard_dims: tuple[int, int],
+        mesh_device: ttnn.Device,
+    ) -> ttnn.Tensor:
+        """
+        Convert a normal (non-quantized) weight tensor to a format suitable for TTNN.
+
+        Args:
+            weight_tensor: The weight tensor.
+            mesh_shard_dims: The mesh sharding dimensions.
+            mesh_device: The mesh device to use for the conversion.
+
+        Returns:
+            The converted TTNN tensor.
+        """
+        torch_weight_tensor = weight_tensor.permute(
+            1, 0
+        )  # In torch the weights are in (out_features, in_features) format
+        in_features, out_features = torch_weight_tensor.shape
+        device_shape = tuple(mesh_device.shape)
+        return ttnn.from_torch(
+            torch_weight_tensor,
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=dram_sharded_weight_config(
+                in_features // device_shape[mesh_shard_dims[0]],
+                out_features // device_shape[mesh_shard_dims[1]],
+                mesh_device.dram_grid_size(),
             ),
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=mesh_shard_dims, mesh_shape=device_shape),
         )
@@ -175,13 +212,12 @@ class MLP1D(AbstractModule):
         return tuple(mesh_device.shape)[0] == 1
 
     @classmethod
-    def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelConfig:
+    def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
         """Prefill model config for a module with 1D tensor parallelism.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device
-            kwargs: Additional arguments for specifying the model configuration
 
         Returns:
             Dict containing operator configurations for prefill mode
@@ -190,14 +226,20 @@ class MLP1D(AbstractModule):
         hidden_dim = hf_config.intermediate_size
         num_devices = mesh_device.get_num_devices()
 
-        config: ModelConfig = {"mode": InferenceMode.PREFILL}
+        config: ModelPrefillConfig = {}
 
         # Maximum rows to process at once in prefill mode
         config["max_rows"] = 512 if is_blackhole() else 1024
 
-        # Program configs are dynamically generated in __init__ based on sequence length
-        # See __init__ function for implementation details
-        config["w1"] = config["w2"] = config["w3"] = LinearConfig(
+        # Program configs are dynamically generated in forward pass based on sequence length
+        config["w1"] = config["w3"] = LinearConfig(
+            input_tensor_b=FromWeightConfig(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
+        )
+
+        config["w2"] = LinearConfig(
+            input_tensor_b=FromWeightConfig(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
         )
@@ -220,11 +262,15 @@ class MLP1D(AbstractModule):
 
         config["pc_gen"] = MLP1D.MLPProgramConfigData(dim=dim, hidden_dim=hidden_dim, num_devices=num_devices)
 
+        # Memory configs for input and output tensors
+        config["input_memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        config["output_memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+
         return config
 
     @classmethod
-    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelConfig:
-        """Generate decode operator configuration for this MLP layer.
+    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelDecodeConfig:
+        """In decode mode we expect input to be replicated across devices, and output to be sharded across devices.
 
         Args:
             hf_config: HuggingFace model configuration object
@@ -238,10 +284,11 @@ class MLP1D(AbstractModule):
         hidden_dim = hf_config.intermediate_size
         num_devices = mesh_device.get_num_devices()
 
-        config: ModelConfig = {"mode": InferenceMode.DECODE}
+        config: ModelDecodeConfig = {}
 
         # Decode mode configurations
         config["w1"] = config["w3"] = LinearConfig(
+            input_tensor_b=FromWeightConfig(),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=dram_sharded_matmul_config(dim, hidden_dim, mesh_device),
             compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,  # FP16 accumulation saves L1
@@ -263,6 +310,7 @@ class MLP1D(AbstractModule):
             mesh_device=MeshDeviceStub(tuple(mesh_device.shape)),
         )
         config["w2"] = LinearConfig(
+            input_tensor_b=FromWeightConfig(),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=dram_sharded_matmul_config(hidden_dim // num_devices, dim, mesh_device),
             compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
@@ -289,6 +337,34 @@ class MLP1D(AbstractModule):
         # )
 
         config["pc_gen"] = MLP1D.MLPProgramConfigData(dim=dim, hidden_dim=hidden_dim, num_devices=num_devices)
+
+        # Memory configs for input and output tensors (decode mode uses sharded configs)
+        tile_padded_batch_rows = TILE_SIZE * int(math.ceil(MLP1D.MAX_BATCH_SIZE / TILE_SIZE))
+        residual_grid = dram_shard_core_grid_for_k_and_n(dim // num_devices, dim)
+
+        # Input memory config (not sharded across devices)
+        config["input_memory_config"] = ttnn.create_sharded_memory_config(
+            (
+                tile_padded_batch_rows,
+                dim // residual_grid.num_cores,
+            ),
+            residual_grid,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # Output memory config (sharded across devices)
+        config["output_memory_config"] = ttnn.create_sharded_memory_config(
+            (
+                tile_padded_batch_rows,
+                dim // residual_grid.num_cores // num_devices,
+            ),
+            residual_grid,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
         return config
 
@@ -318,7 +394,7 @@ class MLP1D(AbstractModule):
         )
 
     @classmethod
-    def _forward_prefill(cls, x: ttnn.Tensor, cfg: RunConfig) -> ttnn.Tensor:
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         """Forward pass of the MLP.
 
         Prefill mode we reshape to respect cfg["max_rows"] and generate program configs from the seq-len lambda.
@@ -326,7 +402,6 @@ class MLP1D(AbstractModule):
         Args:
             x: Input tensor
             cfg: RunConfig containing weights and op configurations
-            mesh_device: TTNN mesh device for multi-device operations
 
         Returns:
             Output tensor after MLP computation
@@ -367,10 +442,13 @@ class MLP1D(AbstractModule):
         if original_shape is not None:
             output = ttnn.reshape(output, original_shape)
 
+        # Convert output to expected memory config
+        output = ttnn.to_memory_config(output, cfg["output_memory_config"])
+
         return output
 
     @classmethod
-    def _forward_decode(cls, x: ttnn.Tensor, cfg: RunConfig) -> ttnn.Tensor:
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         """Straightforward forward pass for decode mode"""
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1"])
@@ -388,6 +466,9 @@ class MLP1D(AbstractModule):
         # Down projection
         output = ttnn.linear(activated, **cfg["w2"])
         ttnn.deallocate(activated)
+
+        # Convert output to expected memory config
+        output = ttnn.to_memory_config(output, cfg["output_memory_config"])
 
         return output
 

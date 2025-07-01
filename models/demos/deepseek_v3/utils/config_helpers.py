@@ -389,7 +389,7 @@ def dram_sharded_weight_config(k, n, dram_grid_size):
         }
     )
     padding_multiple = TILE_SIZE * dram_cores
-    padded_size = ((n + padding_multiple - 1) / padding_multiple) * padding_multiple
+    padded_size = math.ceil(n / padding_multiple) * padding_multiple
     shard_spec = ttnn.ShardSpec(dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 

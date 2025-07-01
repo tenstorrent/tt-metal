@@ -89,7 +89,7 @@ class Embedding1D(AbstractModule):
     def _embedding_config(mesh_device: ttnn.MeshDevice) -> EmbeddingConfig:
         """Config for the Embedding1D module."""
         return EmbeddingConfig(
-            weight=FromWeightConfig(),  # matched to the WeightStub in the WeightConfig
+            weight=FromWeightConfig(),  # matched to the path in the WeightConfig
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )

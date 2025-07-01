@@ -84,7 +84,9 @@ Since the module classes are meant to only exist as namespaces for the module-sp
 ### `forward_prefill(x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor` and `forward_decode(x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor`
 - Executes the layer using the provided RunConfig
 - Uses clean dict expansion: `ttnn.linear(x, **cfg["w1"])`
+- **Important**: `OpConfigBase` automatically filters out `None` values during `**cfg` expansion, so `None` means "use TTNN's default" rather than "pass None explicitly"
 - For dynamic configs, overrides with keyword arguments: `ttnn.linear(x, program_config=self.w1_pc(**cfg["w1_pc"]), **cfg["w1"])`
+- This allows clean mixing of dataclass defaults with explicit overrides without parameter conflicts
 - Handles memory management (deallocations)
 
 ### (optionally) `_new_state(stateless_run_prefill_config: StatelessRunPrefillConfig, stateless_run_decode_config: StatelessRunDecodeConfig,, mesh_device: ttnn.Device) -> Any`
@@ -110,6 +112,7 @@ Modules might require operating on several mesh devices, e.g. when running MLPs 
 - Runtime config is a nested dict with dataclass instances containing loaded tensors
 - Each operation gets its own dataclass instance to prevent accidental weight sharing
 - Dataclasses inherit from OpConfigBase which provides dict-like access for `**cfg["op"]` unpacking
+- **OpConfigBase automatically filters out `None` values**: When using `**cfg["op"]`, only non-None fields are passed to TTNN functions, allowing clean parameter overrides without conflicts
 - Modules should be specific rather than overly general. Different architectures or sharding strategies warrant different module implementations
 - Validation happens when creating runtime config - ensuring weights exist where expected
 - Use dataclasses from `config_dataclass.py` for type safety and better IDE support

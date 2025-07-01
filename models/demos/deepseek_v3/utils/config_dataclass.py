@@ -41,7 +41,20 @@ class OpConfigBase:
         return getattr(self, key)
 
     def keys(self):
+        """Return only keys with non-None values for clean dictionary expansion."""
+        return tuple(f.name for f in fields(self) if getattr(self, f.name) is not None)
+
+    def items(self):
+        """Return only key-value pairs with non-None values."""
+        return ((f.name, getattr(self, f.name)) for f in fields(self) if getattr(self, f.name) is not None)
+
+    def all_keys(self):
+        """Return all keys, including those with None values."""
         return tuple(f.name for f in fields(self))
+
+    def get(self, key: str, default=None):
+        """Get a field value with a default fallback."""
+        return getattr(self, key, default)
 
 
 @dataclass
