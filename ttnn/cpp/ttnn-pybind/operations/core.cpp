@@ -270,7 +270,7 @@ void py_module(py::module& module) {
     module.def(
         "copy_host_to_device_tensor",
         [](const ttnn::Tensor& host_tensor, ttnn::Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId) {
-            tt::tt_metal::write_tensor(host_tensor, device_tensor, cq_id);
+            tt::tt_metal::write_tensor(host_tensor, device_tensor, /*blocking=*/false, cq_id);
         },
         py::arg("host_tensor"),
         py::arg("device_tensor"),
@@ -278,11 +278,15 @@ void py_module(py::module& module) {
 
     module.def(
         "copy_device_to_host_tensor",
-        [](const ttnn::Tensor& device_tensor, ttnn::Tensor& host_tensor, QueueId cq_id = ttnn::DefaultQueueId) {
-            tt::tt_metal::write_tensor(device_tensor, host_tensor, cq_id);
+        [](const ttnn::Tensor& device_tensor,
+           ttnn::Tensor& host_tensor,
+           bool blocking = true,
+           QueueId cq_id = ttnn::DefaultQueueId) {
+            tt::tt_metal::write_tensor(device_tensor, host_tensor, blocking, cq_id);
         },
         py::arg("device_tensor"),
         py::arg("host_tensor"),
+        py::arg("blocking") = true,
         py::arg("cq_id") = ttnn::DefaultQueueId);
 
     bind_registered_operation(

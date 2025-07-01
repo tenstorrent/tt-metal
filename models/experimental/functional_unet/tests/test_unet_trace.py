@@ -122,9 +122,6 @@ def test_unet_trace_2cq(
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
     ttnn.synchronize_device(device)
 
-    logger.info(
-        f"Pre-allocating space on host for output tensor (shape={dram_output_tensor.shape}, shard_spec={output_dram_memory_config.shard_spec})"
-    )
     outputs = [
         ttnn.allocate_tensor_on_host(
             dram_output_tensor.shape,
@@ -151,7 +148,7 @@ def test_unet_trace_2cq(
         ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
         write_event = ttnn.record_event(device, 1)
         ttnn.wait_for_event(1, model_event)
-        outputs[i] = dram_output_tensor.cpu(blocking=False, cq_id=1)
+        ttnn.copy_device_to_host_tensor(dram_output_tensor, outputs[i], cq_id=1)
         read_event = ttnn.record_event(device, 1)
     ttnn.wait_for_event(0, write_event)
     op_event = ttnn.record_event(device, 0)
@@ -160,7 +157,7 @@ def test_unet_trace_2cq(
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
     model_event = ttnn.record_event(device, 0)
     ttnn.wait_for_event(1, model_event)
-    outputs[-1] = dram_output_tensor.cpu(blocking=False, cq_id=1)
+    ttnn.copy_device_to_host_tensor(dram_output_tensor, outputs[-1], cq_id=1)
     ttnn.synchronize_device(device)
     end = time.time()
     inference_time = (end - start) / iterations
@@ -268,12 +265,22 @@ def test_unet_trace_2cq_multi_device(
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
     ttnn.synchronize_device(mesh_device)
 
-    outputs = []
+    outputs = [
+        ttnn.allocate_tensor_on_host(
+            dram_output_tensor.shape,
+            dram_output_tensor.dtype,
+            dram_output_tensor.layout,
+            mesh_device,
+            output_dram_memory_config,
+        )
+        for _ in range(iterations)
+    ]
+
     start = time.time()
     ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
     write_event = ttnn.record_event(mesh_device, 1)
-    for _ in range(iterations - 1):
+    for i in range(iterations - 1):
         ttnn.wait_for_event(0, write_event)
         op_event = ttnn.record_event(mesh_device, 0)
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
@@ -281,10 +288,10 @@ def test_unet_trace_2cq_multi_device(
         dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
         model_event = ttnn.record_event(mesh_device, 0)
         ttnn.wait_for_event(1, op_event)
-        ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
+        ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, blocking=False, cq_id=1)
         write_event = ttnn.record_event(mesh_device, 1)
         ttnn.wait_for_event(1, model_event)
-        outputs.append(dram_output_tensor.cpu(blocking=False, cq_id=1))
+        ttnn.copy_device_to_host_tensor(dram_output_tensor, outputs[i], cq_id=1)
         read_event = ttnn.record_event(mesh_device, 1)
     ttnn.wait_for_event(0, write_event)
     op_event = ttnn.record_event(mesh_device, 0)
@@ -293,7 +300,7 @@ def test_unet_trace_2cq_multi_device(
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
     model_event = ttnn.record_event(mesh_device, 0)
     ttnn.wait_for_event(1, model_event)
-    outputs.append(dram_output_tensor.cpu(blocking=False, cq_id=1))
+    ttnn.copy_device_to_host_tensor(dram_output_tensor, outputs[-1], blocking=False, cq_id=1)
     ttnn.synchronize_device(mesh_device)
     end = time.time()
 

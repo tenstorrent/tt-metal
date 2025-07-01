@@ -740,7 +740,7 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
     return Tensor(MultiDeviceHostStorage(std::move(distributed_host_buffer)), tensor_spec, ReplicateTensor{});
 }
 
-void write_tensor(const Tensor& src, Tensor& dst, QueueId cq_id) {
+void write_tensor(const Tensor& src, Tensor& dst, bool blocking, QueueId cq_id) {
     ZoneScoped;
     TT_FATAL(
         (is_device_tensor(src) && is_multi_device_host_tensor(dst)) ||                            // device to host
@@ -750,12 +750,13 @@ void write_tensor(const Tensor& src, Tensor& dst, QueueId cq_id) {
         dst.storage_type());
 
     if (is_device_tensor(src)) {
-        tensor_impl::copy_to_host_tensor_wrapper(src, dst, cq_id);
+        tensor_impl::copy_to_host_tensor_wrapper(src, dst, blocking, cq_id);
         return;
     }
 
     auto& device_storage = std::get<DeviceStorage>(dst.storage());
     if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
+        TT_FATAL(!blocking, "Blocking is not supported for host to device copy");
         tensor_impl::copy_to_device_tensor_wrapper(src, dst, cq_id);
         return;
     }

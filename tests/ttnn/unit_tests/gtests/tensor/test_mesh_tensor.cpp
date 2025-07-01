@@ -318,7 +318,7 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     auto device_tensor = [&]() {
         if (GetParam().use_pre_allocated_tensor_api) {
             Tensor device_tensor = allocate_tensor_on_device(input_host_shards.at(0).tensor_spec(), mesh_device_.get());
-            write_tensor(input_host_tensor_sharded, device_tensor);
+            write_tensor(input_host_tensor_sharded, device_tensor, /*blocking=*/false);
             return device_tensor;
         } else {
             return tensor_impl::to_device_mesh_tensor_wrapper(
@@ -335,7 +335,7 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     auto output_host_tensor = [&]() {
         if (GetParam().use_pre_allocated_tensor_api) {
             Tensor host_tensor = allocate_tensor_on_host(device_tensor.tensor_spec(), mesh_device_.get());
-            write_tensor(device_tensor, host_tensor);
+            write_tensor(device_tensor, host_tensor, /*blocking=*/true);
             return host_tensor;
         } else {
             return tensor_impl::to_host_mesh_tensor_wrapper(device_tensor);

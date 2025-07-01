@@ -328,7 +328,7 @@ Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::Mes
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
 // Writes tensor from `src` to `dst`; supports only host-to-device and device-to-host transfers.
-void write_tensor(const Tensor& src, Tensor& dst, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+void write_tensor(const Tensor& src, Tensor& dst, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 Tensor set_tensor_id(const Tensor& tensor);
 
