@@ -32,7 +32,11 @@
 // len(cb_scaler) == 2
 //   index 0: multiplier before adding. Can be 1 for sum or 1/n for average
 //   index 1: must be scaler with 1
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+//
+//      bool pop_inputs: Determines if we wish to preserve cb_in.
+//          true: Pops inputs
+//          false: Does not pop inputs
+template <bool pop_input = true, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 void pairwise_reduce_cb(
     uint32_t cb_in,
     uint32_t cb_scaler,
@@ -46,14 +50,20 @@ void pairwise_reduce_cb(
     mul_tiles_bcast_scalar_init_short(cb_in, cb_scaler);
     reconfig_data_format(cb_in, cb_scaler);
     pack_reconfig_data_format(cb_intermediate);
+    // always 0 if are popping cb_in, increases if we are not popping cb_in
+    uint32_t index = 0;
     for (uint32_t tile = 0; tile < cb_length; tile += num_dst_regs) {
         tile_regs_acquire();
         uint32_t blk = tile + num_dst_regs > cb_length ? cb_length - tile : num_dst_regs;
-        cb_wait_front(cb_in, blk);
+        cb_wait_front(cb_in, index + blk);
         for (uint32_t wtr = 0; wtr < blk; wtr++) {
-            mul_tiles_bcast_scalar(cb_in, cb_scaler, wtr, 0, wtr);
+            mul_tiles_bcast_scalar(cb_in, cb_scaler, index + wtr, 0, wtr);
         }
-        cb_pop_front(cb_in, blk);
+        if constexpr (pop_input) {
+            cb_pop_front(cb_in, blk);
+        } else {
+            index += blk;
+        }
         tile_regs_commit();
         tile_regs_wait();
         cb_reserve_back(cb_intermediate, blk);

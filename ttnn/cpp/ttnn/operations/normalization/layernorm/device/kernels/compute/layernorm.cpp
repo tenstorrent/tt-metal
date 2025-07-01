@@ -124,7 +124,7 @@ void MAIN {
          * means = ttnn.sum(x, 3, True, None, None, 1.0/W) # -> NCH1
          */
 
-        pairwise_reduce_cb(cb_x, cb_scaler, cb_ex, cb_ex, Wt, 4);
+        pairwise_reduce_cb<false>(cb_x, cb_scaler, cb_xmm2, cb_ex, Wt, 4);
 
         /*
          * x - E[x]
@@ -169,7 +169,7 @@ void MAIN {
             REL();
         }
 
-        pairwise_reduce_cb(cb_xmm2, cb_scaler, cb_ex2, cb_ex2, Wt, 4);
+        pairwise_reduce_cb(cb_xmm2, cb_scaler, cb_xmm2, cb_ex2, Wt, 4);
 
         if constexpr (FLOAT32_DTYPE) {
             reconfig_data_format(cb_ex2, cb_eps);
