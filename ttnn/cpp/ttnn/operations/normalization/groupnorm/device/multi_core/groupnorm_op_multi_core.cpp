@@ -128,12 +128,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const std::optional<const Tensor>& input_mask,
     Tensor& output,
     float eps,
-    const uint32_t num_groups,
-    const uint32_t num_batches,
-    MathFidelity fidelity,
+    uint32_t num_groups,
+    uint32_t num_batches,
     DataType im_data_format,
     CoreCoord grid_size,
-    bool inplace) {
+    bool inplace,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (gamma.has_value()) {
         TT_FATAL(
@@ -742,14 +742,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH};
     // compute kernel
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = true;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     auto mcast_sender_compute_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp",
         mcast_sender_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_sender_compute_compile_time_args,
@@ -759,7 +759,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp",
         mcast_receiver_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_receiver_compute_compile_time_args,
@@ -1115,13 +1115,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     const std::optional<const Tensor>& input_mask,
     Tensor& output,
     float eps,
-    const uint32_t num_groups,
-    const uint32_t num_batches,
-    MathFidelity fidelity,
+    uint32_t num_groups,
+    uint32_t num_batches,
     DataType im_data_format,
     CoreCoord grid_size,
     bool inplace,
-    uint32_t num_out_blocks) {
+    uint32_t num_out_blocks,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     if (gamma.has_value()) {
@@ -1998,14 +1998,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks,
     };
     // compute kernel
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = true;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     auto mcast_sender_compute_kernels_id_group_1 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
         mcast_sender_cores_group_1,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_sender_compute_compile_time_args_group_1,
@@ -2015,7 +2015,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
         mcast_sender_cores_group_2,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_sender_compute_compile_time_args_group_2,
@@ -2025,7 +2025,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
         mcast_receiver_cores_group_1,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_receiver_compute_compile_time_args_group_1,
@@ -2035,7 +2035,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
         mcast_receiver_cores_group_2,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_receiver_compute_compile_time_args_group_2,
