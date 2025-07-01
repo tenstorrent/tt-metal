@@ -1669,7 +1669,7 @@ const std::unordered_set<TerminationInfo>& get_registered_termination_cores(chip
     return termination_info.at(dev_id);
 }
 
-void teardown_topology_state() {
+void reset_topology_state() {
     node_id_to_kernel.clear();
     command_queue_pgms.clear();
     dispatch_cores.clear();

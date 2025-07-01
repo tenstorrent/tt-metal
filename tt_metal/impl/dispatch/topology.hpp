@@ -67,4 +67,7 @@ const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(chip_id_
 // Return the list of termination targets that were registered for this device
 const std::unordered_set<tt::tt_metal::TerminationInfo>& get_registered_termination_cores(chip_id_t dev_id);
 
+// Must be called at the end of the application to cleanup any static state allocated by this module.
+void reset_topology_state();
+
 }  // namespace tt::tt_metal
