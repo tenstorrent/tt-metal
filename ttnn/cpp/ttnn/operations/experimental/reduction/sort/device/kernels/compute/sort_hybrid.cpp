@@ -8,6 +8,7 @@
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/binary_max_min.h"
 
 #include "debug/dprint.h"
 #include "debug/waypoint.h"
@@ -17,6 +18,40 @@
 #include "sort_common.hpp"
 
 #include <cstdint>
+
+FORCE_INLINE
+void COPY_TILE_TO_DST_INIT(uint32_t new_cb, uint32_t& global_old_cb) {
+    copy_tile_to_dst_init_short_with_dt(global_old_cb, new_cb);
+    global_old_cb = new_cb;
+}
+
+FORCE_INLINE
+void print_Wt_tiles(uint32_t cb_value, uint32_t Wt) {
+    // Debug: Print data
+    for (uint32_t w = 0; w < Wt; w++) {
+        constexpr uint32_t INPUT_TILE0 = 0;
+
+        tile_regs_wait();
+        // Nothing to do: We are only printing tiles
+        pack_reconfig_data_format(cb_value);
+        // pack_tile(INPUT_TILE0, cb_value, w);
+
+        tile_regs_release();
+
+        DPRINT << "[" << w << "]" << ENDL();
+        // input_tensor_transposed_cb_index already in reserved state
+        tile_regs_acquire();
+        reconfig_data_format_srca(cb_value);
+        copy_tile_to_dst_init_short(cb_value);
+        copy_tile(cb_value, w, INPUT_TILE0);
+
+        binary_min_tile_init();
+        binary_min_tile(INPUT_TILE0, INPUT_TILE0);
+
+        dprint_tensix_dest_reg(INPUT_TILE0);
+        tile_regs_commit();
+    }
+}
 
 namespace NAMESPACE {
 void MAIN {
@@ -49,6 +84,8 @@ void MAIN {
     const uint16_t processing_pair_start = core_id * number_of_pairs_processed_by_each_core;
     const uint16_t processing_pair_end = processing_pair_start + number_of_pairs_processed_by_each_core;
 
+    uint32_t global_old_cb = 0;
+
     DPRINT << "COMPUTE: "
            << " input_cb_index: " << input_tensor_cb_index << " index_output_cb_index: " << index_tensor_output_cb_index
            << " value_intermediate = " << value_tensor_intermediate_cb_index
@@ -69,7 +106,7 @@ void MAIN {
     for (uint32_t h = 0; h < Ht; h++) {
         // PAUSE();  // TODO: Remove
         // Create input sequence
-        DPRINT << "COMPUTE: Generating bitonic sequence" << ENDL();
+        DPRINT << "COMPUTE: Generatinag bitonic sequence" << ENDL();
 
         sort_Wt_tiles_row_to_bitonic_sequence(
             input_tensor_cb_index,
@@ -81,11 +118,11 @@ void MAIN {
             ascending,
             /*end_phase(log2(K))=*/5);
 
+        global_old_cb = index_tensor_cb_index;
+
         // Wait for bitonic sequence of Wt tiles
         cb_wait_front(input_tensor_transposed_cb_index, number_of_tiles_per_core);
         cb_wait_front(index_tensor_transposed_cb_index, number_of_tiles_per_core);
-
-        DPRINT << "COMPUTE: Bitonic sequence OK" << ENDL();
 
         // Sort and merge step of bitonic merge sort
         uint32_t stages = 0;
@@ -118,15 +155,17 @@ void MAIN {
                             // PAUSE();  // TODO: Remove
                             tile_regs_acquire();
 
-                            copy_tile_to_dst_init_short_with_dt(
-                                input_tensor_transposed_cb_index, index_tensor_transposed_cb_index);
-                            copy_tile(index_tensor_transposed_cb_index, left_tile_id, index_dest_start);
-                            copy_tile(index_tensor_transposed_cb_index, right_tile_id, index_dest_end);
-
-                            copy_tile_to_dst_init_short_with_dt(
-                                index_tensor_transposed_cb_index, input_tensor_transposed_cb_index);
+                            COPY_TILE_TO_DST_INIT(input_tensor_transposed_cb_index, global_old_cb);
+                            // copy_tile_to_dst_init_short_with_dt(
+                            // index_tensor_transposed_cb_index, input_tensor_transposed_cb_index);
                             copy_tile(input_tensor_transposed_cb_index, left_tile_id, input_dest_start);
                             copy_tile(input_tensor_transposed_cb_index, right_tile_id, input_dest_end);
+
+                            COPY_TILE_TO_DST_INIT(index_tensor_transposed_cb_index, global_old_cb);
+                            // copy_tile_to_dst_init_short_with_dt(
+                            // input_tensor_transposed_cb_index, index_tensor_transposed_cb_index);
+                            copy_tile(index_tensor_transposed_cb_index, left_tile_id, index_dest_start);
+                            copy_tile(index_tensor_transposed_cb_index, right_tile_id, index_dest_end);
 
                             ckernel::topk_local_sort(0, (int)dir, 5);
 
@@ -146,21 +185,24 @@ void MAIN {
                     } else {
                         DPRINT << "COMPUTE: exchanging tiles " << i << " and " << j << ENDL();
 
-                        const uint32_t tile_id = 0;  // TODO: Compute correct index
+                        const uint32_t tile_id = i - global_tile_start;  // TODO: Compute correct index
                         constexpr uint32_t FIRST_TILE = 0;
 
                         tile_regs_acquire();
                         // Read from
-                        copy_tile_to_dst_init_short_with_dt(
-                            input_tensor_transposed_cb_index, index_tensor_transposed_cb_index);
+                        // copy_tile_to_dst_init_short_with_dt(
+                        // input_tensor_transposed_cb_index, index_tensor_transposed_cb_index);
+                        // reconfig_data_format_srca(index_tensor_transposed_cb_index);
+                        // copy_tile_to_dst_init_short(index_tensor_transposed_cb_index);
+                        COPY_TILE_TO_DST_INIT(index_tensor_transposed_cb_index, global_old_cb);
                         copy_tile(index_tensor_transposed_cb_index, tile_id, index_dest_start);
 
-                        copy_tile_to_dst_init_short_with_dt(
-                            index_tensor_transposed_cb_index, input_tensor_transposed_cb_index);
+                        // copy_tile_to_dst_init_short_with_dt(
+                        // index_tensor_transposed_cb_index, input_tensor_transposed_cb_index);
+                        // reconfig_data_format_srca(input_tensor_transposed_cb_index);
+                        // copy_tile_to_dst_init_short(input_tensor_transposed_cb_index);
+                        COPY_TILE_TO_DST_INIT(input_tensor_transposed_cb_index, global_old_cb);
                         copy_tile(input_tensor_transposed_cb_index, tile_id, input_dest_start);
-
-                        DPRINT_MATH(DPRINT << "THIS INPUT [input_dest_start] = " << ENDL());
-                        dprint_tensix_dest_reg(input_dest_start);
 
                         tile_regs_commit();
 
@@ -169,13 +211,13 @@ void MAIN {
                         // Send current index to reader
                         cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
                         pack_reconfig_data_format(index_tensor_intermediate_cb_index);
-                        pack_tile<true>(index_dest_start, index_tensor_intermediate_cb_index, FIRST_TILE);
+                        pack_tile(index_dest_start, index_tensor_intermediate_cb_index, FIRST_TILE);
                         cb_push_back(index_tensor_intermediate_cb_index, one_tile);
 
                         // Send current tile to writer
                         cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
                         pack_reconfig_data_format(value_tensor_intermediate_cb_index);
-                        pack_tile<true>(input_dest_start, value_tensor_intermediate_cb_index, FIRST_TILE);
+                        pack_tile(input_dest_start, value_tensor_intermediate_cb_index, FIRST_TILE);
                         cb_push_back(value_tensor_intermediate_cb_index, one_tile);
 
                         tile_regs_release();
@@ -186,14 +228,21 @@ void MAIN {
                         // Read other indices from reader
                         tile_regs_acquire();
                         cb_wait_front(index_tensor_peer_cb_index, one_tile);
-                        copy_tile_to_dst_init_short_with_dt(
-                            input_tensor_transposed_cb_index, index_tensor_peer_cb_index);
+                        // copy_tile_to_dst_init_short_with_dt(
+                        //     input_tensor_transposed_cb_index, index_tensor_peer_cb_index);
+                        // reconfig_data_format_srca(index_tensor_peer_cb_index);
+                        // copy_tile_to_dst_init_short(index_tensor_peer_cb_index);
+                        COPY_TILE_TO_DST_INIT(index_tensor_peer_cb_index, global_old_cb);
                         copy_tile(index_tensor_peer_cb_index, FIRST_TILE, index_dest_end);
+
                         cb_pop_front(index_tensor_peer_cb_index, one_tile);
 
                         // Read other tile from writer
                         cb_wait_front(value_tensor_peer_cb_index, one_tile);
-                        copy_tile_to_dst_init_short_with_dt(index_tensor_peer_cb_index, value_tensor_peer_cb_index);
+                        // copy_tile_to_dst_init_short_with_dt(index_tensor_peer_cb_index, value_tensor_peer_cb_index);
+                        // reconfig_data_format_srca(value_tensor_peer_cb_index);
+                        // copy_tile_to_dst_init_short(value_tensor_peer_cb_index);
+                        COPY_TILE_TO_DST_INIT(value_tensor_peer_cb_index, global_old_cb);
                         copy_tile(value_tensor_peer_cb_index, FIRST_TILE, input_dest_end);
                         cb_pop_front(value_tensor_peer_cb_index, one_tile);
 
@@ -213,19 +262,21 @@ void MAIN {
                             index_output_tile = index_dest_end;
                         }
 
-                        DPRINT << "OUTPUT [value_output_tile] = ";
+                        DPRINT << "OUTPUT [value_output_tile], tile id = " << tile_id << ENDL();
                         dprint_tensix_dest_reg(value_output_tile);
 
                         tile_regs_commit();
 
                         tile_regs_wait();
-                        pack_reconfig_data_format(input_tensor_transposed_cb_index);
-                        pack_tile<true>(value_output_tile, input_tensor_transposed_cb_index, tile_id);
-                        // pack_tile<true>(input_dest_end, input_tensor_transposed_cb_index, right_tile_id);
 
                         pack_reconfig_data_format(index_tensor_transposed_cb_index);
                         pack_tile<true>(index_output_tile, index_tensor_transposed_cb_index, tile_id);
                         // pack_tile<true>(index_dest_end, index_tensor_transposed_cb_index, right_tile_id);
+
+                        pack_reconfig_data_format(input_tensor_transposed_cb_index);
+                        pack_tile<true>(value_output_tile, input_tensor_transposed_cb_index, tile_id);
+                        // pack_tile<true>(input_dest_end, input_tensor_transposed_cb_index, right_tile_id);
+
                         tile_regs_release();
 
                         // TODO: Sync Unpacker/Packer
@@ -236,6 +287,11 @@ void MAIN {
             }  // sub
         }  // stages
         DPRINT << "COMPUTE: AFTER LOGIC" << ENDL();
+        COPY_TILE_TO_DST_INIT(input_tensor_transposed_cb_index, global_old_cb);
+        print_Wt_tiles(input_tensor_transposed_cb_index, number_of_tiles_per_core);
+        DPRINT << "COMPUTE: AFTER LOGIC2" << ENDL();
+
+        print_Wt_tiles(input_tensor_transposed_cb_index, number_of_tiles_per_core);
 
         cb_reserve_back(input_tensor_transposed_cb_index, number_of_tiles_per_core);
         cb_reserve_back(index_tensor_transposed_cb_index, number_of_tiles_per_core);

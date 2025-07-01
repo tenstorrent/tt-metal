@@ -117,7 +117,7 @@ def test_sort_long_tensor(shape, dim, descending, device):
     assert list(ttnn_sort_values.shape) == shape
     assert list(ttnn_sort_indices.shape) == shape
 
-    torch.set_printoptions(profile="full")
+    torch.set_printoptions(profile="full", sci_mode=False)
     print(f"torch = {torch_sort_values}")
     print(f"ttnn = {ttnn.to_torch(ttnn_sort_values)}")
 
