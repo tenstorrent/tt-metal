@@ -15,7 +15,6 @@
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
-#include "dprint_server.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
 #include "hal_types.hpp"
@@ -165,7 +164,8 @@ KernelHandle FDKernel::configure_kernel_variant(
     if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
-    if (!DPrintServerReadsDispatchCores(device_->id())) {
+    if (!(MetalContext::instance().dprint_server() and
+          MetalContext::instance().dprint_server()->reads_dispatch_cores(device_->id()))) {
         defines["FORCE_DPRINT_OFF"] = "1";
     }
     defines.insert(defines_in.begin(), defines_in.end());
