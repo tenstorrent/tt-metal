@@ -22,7 +22,7 @@ def run_yolov8s_inference(
         device=device,
         batch_size=device_batch_size,
     )
-    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
+    tt_inputs_host, input_mem_config = test_infra._setup_l1_sharded_input(device)
 
     # First run configures convs JIT
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
@@ -55,7 +55,7 @@ def run_yolov8s_trace_inference(
         device=device,
         batch_size=device_batch_size,
     )
-    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
+    tt_inputs_host, input_mem_config = test_infra._setup_l1_sharded_input(device)
 
     # First run configures convs JIT
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
@@ -101,7 +101,7 @@ def run_yolov8s_trace_2cqs_inference(
         device,
         device_batch_size,
     )
-    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
+    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra._setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
     # Initialize the op event so we can write
