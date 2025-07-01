@@ -67,30 +67,20 @@ struct WorkerToFabricEdmSenderImpl {
     template <ProgrammableCoreType my_core_type>
     static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
-        uint32_t direction;
-        WorkerXY edm_worker_xy(0, 0);
-        uint32_t edm_buffer_base_addr;
-        uint32_t num_buffers_per_channel;
-        uint32_t edm_l1_sem_id;
-        uint32_t edm_connection_handshake_l1_addr;
-        uint32_t edm_worker_location_info_addr;
-        uint32_t buffer_size_bytes;
-        uint32_t edm_copy_of_wr_counter_addr;
-
-        uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
         tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
             reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+        uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
         const auto& conn = connection_info->connections[eth_channel];
 
-        direction = conn.edm_direction;
-        edm_worker_xy = WorkerXY::from_uint32(conn.edm_noc_xy);
-        edm_buffer_base_addr = conn.edm_buffer_base_addr;
-        num_buffers_per_channel = conn.num_buffers_per_channel;
-        edm_l1_sem_id = conn.edm_l1_sem_addr;
-        edm_connection_handshake_l1_addr = conn.edm_connection_handshake_addr;
-        edm_worker_location_info_addr = conn.edm_worker_location_info_addr;
-        buffer_size_bytes = conn.buffer_size_bytes;
-        edm_copy_of_wr_counter_addr = conn.buffer_index_semaphore_id;
+        uint32_t direction = conn.edm_direction;
+        WorkerXY edm_worker_xy = WorkerXY::from_uint32(conn.edm_noc_xy);
+        uint32_t edm_buffer_base_addr = conn.edm_buffer_base_addr;
+        uint32_t num_buffers_per_channel = conn.num_buffers_per_channel;
+        uint32_t edm_l1_sem_id = conn.edm_l1_sem_addr;
+        uint32_t edm_connection_handshake_l1_addr = conn.edm_connection_handshake_addr;
+        uint32_t edm_worker_location_info_addr = conn.edm_worker_location_info_addr;
+        uint32_t buffer_size_bytes = conn.buffer_size_bytes;
+        uint32_t edm_copy_of_wr_counter_addr = conn.buffer_index_semaphore_id;
         const auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
 
         auto writer_send_sem_addr =

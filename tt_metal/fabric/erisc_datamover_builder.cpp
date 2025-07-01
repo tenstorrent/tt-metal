@@ -659,9 +659,8 @@ void append_worker_to_fabric_edm_sender_rt_args(
         (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
         "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
 
-    args_out.push_back(true);  // whether using L1 data
-    args_out.push_back(eth_channel);
     const std::vector<uint32_t> values = {
+        eth_channel,
         sender_worker_flow_control_semaphore_id,
         sender_worker_terminate_semaphore_id,
         sender_worker_buffer_index_semaphore_id};
@@ -677,20 +676,21 @@ void append_worker_to_fabric_edm_sender_rt_args(
     size_t sender_worker_terminate_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out) {
-    auto edm_noc_xy = tt::tt_fabric::WorkerXY(connection.edm_noc_x, connection.edm_noc_y);
+    TT_FATAL(
+        (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
+        "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
 
-    // Convert edm_noc_x/y (virtual coordinates) to ethernet channel number
     const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip_id);
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    CoreCoord logical_eth_core =
-        cluster.get_logical_ethernet_core_from_virtual(chip_id, CoreCoord(connection.edm_noc_x, connection.edm_noc_y));
+    CoreCoord virtual_core(connection.edm_noc_x, connection.edm_noc_y);
+    CoreCoord logical_core =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+            chip_id, virtual_core);
+    chan_id_t eth_channel = logical_core.y;
 
-    // Use the direct mapping from logical ethernet core to channel ID
-    chan_id_t eth_channel = soc_desc.logical_eth_core_to_chan_map.at(logical_eth_core);
     tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_connections = {};
     auto& connection_info = fabric_connections.connections[eth_channel];
     connection_info.edm_direction = connection.edm_direction;
-    connection_info.edm_noc_xy = edm_noc_xy.to_uint32();
+    connection_info.edm_noc_xy = tt::tt_fabric::WorkerXY(connection.edm_noc_x, connection.edm_noc_y).to_uint32();
     connection_info.edm_buffer_base_addr = connection.edm_buffer_base_addr;
     connection_info.num_buffers_per_channel = connection.num_buffers_per_channel;
     connection_info.edm_l1_sem_addr = connection.edm_l1_sem_addr;
@@ -699,10 +699,6 @@ void append_worker_to_fabric_edm_sender_rt_args(
     connection_info.buffer_size_bytes = connection.buffer_size_bytes;
     connection_info.buffer_index_semaphore_id = connection.buffer_index_semaphore_id;
     fabric_connections.valid_connections_mask |= (1u << eth_channel);
-
-    TT_FATAL(
-        (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
-        "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
 
     const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
     // Write to all Tensix cores
@@ -731,8 +727,8 @@ void append_worker_to_fabric_edm_sender_rt_args(
                 mask_offset);
     }
 
-    args_out.push_back(eth_channel);
     const std::vector<uint32_t> values = {
+        eth_channel,
         sender_worker_flow_control_semaphore_id,
         sender_worker_terminate_semaphore_id,
         sender_worker_buffer_index_semaphore_id};

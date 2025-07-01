@@ -1378,7 +1378,7 @@ static void write_to_all_tensix_cores(
     }
 }
 
-// Write routing table to Tensix cores on a specific chip
+// Write routing table to Tensix cores' L1 on a specific chip
 void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const {
     FabricNodeId src_fabric_node_id{mesh_id, chip_id};
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
@@ -1440,6 +1440,7 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
         physical_chip_id);
 }
 
+// Write connection info to Tensix cores' L1 on a specific chip
 void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const {
     if (this->fabric_context_ == nullptr) {
         log_warning(
@@ -1464,8 +1465,8 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& connected_chips_and_eth_cores = cluster.get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
 
-    // Collect all connected ethernet channels
-    std::set<chan_id_t> all_connected_channels;
+    // Collect all physically connected ethernet channels
+    std::unordered_set<chan_id_t> all_connected_channels;
     for (const auto& [connected_chip_id, eth_cores] : connected_chips_and_eth_cores) {
         for (const auto& eth_core : eth_cores) {
             auto channel_id = soc_desc.logical_eth_core_to_chan_map.at(eth_core);
@@ -1473,31 +1474,23 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
         }
     }
 
-    size_t eth_endpoint_idx = 0;
-    // Iterate through all physically connected channels
+    size_t num_eth_endpoint = 0;
     for (const auto& eth_channel_id : all_connected_channels) {
-        // Determine the fabric direction for this channel by checking the fabric mapping
         bool is_fabric_connected = false;
         eth_chan_directions router_direction = eth_chan_directions::COUNT;
         for (const auto& [direction, eth_chans] :
              this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
+            // Check if the physically connected channel is part of fabric channel
             if (std::find(eth_chans.begin(), eth_chans.end(), eth_channel_id) != eth_chans.end()) {
                 is_fabric_connected = true;
                 router_direction = this->routing_direction_to_eth_direction(direction);
                 break;
             }
         }
-
-        CoreCoord fabric_router_virtual_core =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-                physical_chip_id, eth_channel_id);
-
         if (!is_fabric_connected) {
-            continue;  // Don't populate fabric_connections for unrouted channels
+            continue;
         }
-
-        // Only populate fabric_connections for fabric-routed channels
-        if (eth_endpoint_idx >= tt::tt_fabric::tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS) {
+        if (num_eth_endpoint >= tt::tt_fabric::tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS) {
             log_warning(
                 tt::LogFabric,
                 "ControlPlane: Maximum number of fabric endpoints exceeded for M%dD%d, skipping further connections",
@@ -1505,6 +1498,10 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
                 chip_id);
             break;
         }
+
+        CoreCoord fabric_router_virtual_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+                physical_chip_id, eth_channel_id);
 
         // Populate connection info for fabric-routed channels
         const auto sender_channel = is_2d_fabric ? router_direction : 0;
@@ -1526,7 +1523,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
 
         // Mark this connection as valid for fabric communication
         fabric_connections.valid_connections_mask |= (1u << eth_channel_id);
-        eth_endpoint_idx++;
+        num_eth_endpoint++;
     }
 
     write_to_all_tensix_cores(
