@@ -23,7 +23,7 @@ template <
     bool neginf_srca_maxpool,
     bool zero_srca_avgpool>
 inline void reduce_h_fused(
-    const uint32_t interm_cb_id,
+    const uint32_t in_cb_id,
     const uint32_t in_scalar_cb_id,
     const uint32_t output_row_index,
     const uint32_t out_cb_id) {
@@ -31,7 +31,7 @@ inline void reduce_h_fused(
 
     tile_regs_acquire();
     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-        interm_cb_id,
+        in_cb_id,
         in_scalar_cb_id,
         num_output_tiles,
         0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
