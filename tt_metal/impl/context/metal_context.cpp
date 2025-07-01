@@ -383,8 +383,7 @@ void MetalContext::set_fabric_config(
     const tt_metal::FabricConfig fabric_config,
     tt_metal::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes) {
-    // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
-    // config, not through this function exposed in the detail API.
+    // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch config, not through this function exposed in the detail API.
     force_reinit_ = true;
     if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED || fabric_config == tt_metal::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
@@ -446,7 +445,9 @@ void MetalContext::initialize_fabric_config() {
         this->fabric_config_, this->fabric_reliability_mode_);
 }
 
-tt_metal::FabricConfig MetalContext::get_fabric_config() const { return fabric_config_; }
+tt_metal::FabricConfig MetalContext::get_fabric_config() const {
+    return fabric_config_;
+}
 
 void MetalContext::initialize_control_plane() {
     // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
@@ -478,7 +479,8 @@ void MetalContext::initialize_control_plane() {
     const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
                                                        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
 
-    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(mesh_graph_desc_path.string());
+    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
+        mesh_graph_desc_path.string());
 }
 
 void MetalContext::reset_cores(chip_id_t device_id) {
