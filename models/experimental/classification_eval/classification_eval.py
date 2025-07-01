@@ -38,6 +38,8 @@ def evaluation(
     for i in range(iterations // batch_size):
         if model_name in ["vit", "resnet50", "mobilenetv2"]:
             inputs, labels = get_batch(data_loader, image_processor)
+        elif model_name == "swin_v2":
+            inputs, labels = get_batch(data_loader)
         else:
             inputs, labels = get_batch(data_loader)
             inputs = image_processor(inputs, return_tensors="pt")
@@ -65,6 +67,8 @@ def evaluation(
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     mesh_mapper=model.test_infra.inputs_mesh_mapper,
                 )
+        elif model_name == "swin_v2":
+            torch_input_tensor = inputs
         else:
             torch_input_tensor = inputs
             if model_type == "tt_model":
@@ -89,11 +93,26 @@ def evaluation(
                 output = model.execute_vit_trace_2cqs_inference(tt_inputs_host)
             elif model_name == "resnet50":
                 output = model.execute_resnet50_trace_2cqs_inference(tt_inputs_host)
+            elif model_name == "swin_v2":
+                output = model.run(inputs)
         elif model_type == "torch_model":
             output = model(torch_input_tensor)
 
         # post_process
         if model_name == "mobilenetv2":
+            if model_type == "tt_model":
+                final_output = ttnn.to_torch(output)
+            else:
+                final_output = output
+            prediction = final_output.argmax(dim=-1)
+
+            for i in range(batch_size):
+                pred_id.append(prediction[i].item())
+                gt_id.append(labels[i])
+
+            del output, final_output
+
+        if model_name == "swin_v2":
             if model_type == "tt_model":
                 final_output = ttnn.to_torch(output)
             else:
@@ -136,6 +155,8 @@ def evaluation(
             model.release_resnet50_trace_2cqs_inference()
         elif model_name == "vit":
             model.release_vit_trace_2cqs_inference()
+        elif model_name == "swin_v2":
+            model.release()
 
     # Evaluation : Here we use correct_predection/total items
     correct_prediction = 0
@@ -308,6 +329,43 @@ def test_mobilenetv2_image_classification_eval(
         model_type=model_type,
         model_name="mobilenetv2",
         image_processor=image_processor,
+        config=None,
+        get_batch=get_batch,
+        batch_size=batch_size,
+        res=res,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 16998400, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+        ("torch_model"),
+    ],
+)
+@pytest.mark.parametrize("batch_size, res", [[1, 512]])
+def test_swin_v2_image_classification_eval(device, model_type, batch_size, res, model_location_generator, reset_seeds):
+    from models.experimental.swin_v2.runner.performant_runner import SwinV2PerformantRunner
+    import torchvision.models as models
+    from models.demos.swin_v2.demo.demo_utils import get_batch
+
+    model = models.swin_v2_s(weights="IMAGENET1K_V1")
+    state_dict = model.state_dict()
+    if model_type == "torch_model":
+        torch_model = models.swin_v2_s(weights="IMAGENET1K_V1")
+    else:
+        swinv2_trace_2cq = SwinV2PerformantRunner(device=device)
+
+    evaluation(
+        device=device,
+        model=swinv2_trace_2cq if model_type == "tt_model" else torch_model,
+        model_location_generator=model_location_generator,
+        model_type=model_type,
+        model_name="swin_v2",
+        image_processor=None,
         config=None,
         get_batch=get_batch,
         batch_size=batch_size,
