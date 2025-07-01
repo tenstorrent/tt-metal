@@ -102,6 +102,7 @@ jobs:
           MANYLINUX_HASH=$(cat \
             .github/workflows/build-docker-artifact.yaml \
             dockerfile/Dockerfile.manylinux \
+            install_dependencies.sh \
             tt_metal/sfpi-version.sh \
             | sha1sum | cut -d' ' -f1)
           echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
