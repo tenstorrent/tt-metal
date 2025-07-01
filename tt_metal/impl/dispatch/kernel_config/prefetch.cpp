@@ -30,6 +30,7 @@
 #include <umd/device/types/xy_pair.h>
 #include "dispatch/system_memory_manager.hpp"
 #include "utils.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 
 using namespace tt::tt_metal;
 
