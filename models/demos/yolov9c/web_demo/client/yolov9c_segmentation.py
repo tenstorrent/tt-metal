@@ -175,7 +175,7 @@ class VideoProcessor(VideoProcessorBase):
         bgr_image = frame.to_ndarray(format="bgr24")
 
         # Load class names
-        namesfile = "coco.names"
+        namesfile = "../../../../experimental/yolo_common/yolo_web_demo/coco.names"
         class_names = self.load_class_names(namesfile)
 
         # Extract boxes and masks from response
@@ -193,21 +193,7 @@ class VideoProcessor(VideoProcessorBase):
         return av.VideoFrame.from_ndarray(image_final, format="bgr24")
 
 
-st.sidebar.title("YOLOv9c Segmentation Demo")
-
-# Try to load logo images, but don't fail if they don't exist
-try:
-    st.sidebar.image("TT.png", use_column_width=True)
-except:
-    st.sidebar.write("Tenstorrent")
-
-try:
-    st.sidebar.image("GS.png", use_column_width=True)
-except:
-    st.sidebar.write("GS")
-
 st.title("YOLOv9c Segmentation Demo")
-st.write("This demo shows real-time object detection with segmentation masks overlay.")
 
 webrtc_streamer(
     key="segmentation_example",
@@ -219,20 +205,4 @@ webrtc_streamer(
             "frameRate": {"min": 1, "ideal": 50, "max": 60},
         }
     },
-)
-
-st.markdown(
-    """
-### Features:
-- **Real-time segmentation**: Process video stream with live segmentation masks
-- **Instance segmentation**: Separate masks for each detected object
-- **Color-coded masks**: Each instance gets a unique color for easy identification
-- **Mask overlays**: Transparent mask visualization with contour outlines
-- **Pure segmentation**: Focus on pixel-level segmentation without bounding boxes
-
-### Performance:
-- **Inference time**: ~0.04-0.05 seconds per frame
-- **FPS**: 18-23 frames per second
-- **Hardware**: Tenstorrent Wormhole B0
-"""
 )

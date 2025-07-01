@@ -139,7 +139,7 @@ class VideoProcessor(VideoProcessorBase):
         nms_thresh = 0.5
 
         # Load class names and plot bounding boxes
-        namesfile = "coco.names"
+        namesfile = "../../../../experimental/yolo_common/yolo_web_demo/coco.names"
         class_names = self.load_class_names(namesfile)
         image_final = self.plot_boxes_cv2(bgr_image, output, None, class_names)
 
