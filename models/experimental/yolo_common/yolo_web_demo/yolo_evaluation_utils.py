@@ -303,12 +303,9 @@ def postprocess(preds, img, orig_imgs, batch=None, names=None):
             results.append(Results(orig_img, path=img_path, names=names, boxes=pred))
     else:
         for pred, orig_img in zip(preds, orig_imgs):
-            # pred[:, :4] = scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
             results.append({"boxes": Boxes(pred)})
-            # results.append(Results(orig_img, names=names, boxes=pred))
     te = time.time()
-    print("NMS time", t1 - ts)
-    print("Result time", te - t1)
-    print("Total time", te - ts)
-
+    logger.info(f"NMS time: {t1 - ts:.4f}s")
+    logger.info(f"Result time: {te - t1:.4f}s")
+    logger.info(f"Total time: {te - ts:.4f}s")
     return results

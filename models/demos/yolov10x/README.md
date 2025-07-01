@@ -55,3 +55,6 @@ A runs folder will be created inside the `models/demos/yolov10x/demo/` directory
 
 ## Additional Information:
 The tests can be run with  randomly initialized weights and pre-trained real weights.  To run only for the pre-trained weights, specify pretrained_weight_true when running the tests.
+
+## Web Demo:
+Try the interactive web demo following the [instructions](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov10x/web_demo/README.md)
