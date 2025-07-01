@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,11 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 class VGG_UnetTestInfra:
-    def __init__(
-        self,
-        device,
-        model_location_generator=None,
-    ):
+    def __init__(self, device, model_location_generator=None, use_pretrained_weight=False):
         super().__init__()
         torch.manual_seed(0)
         self.pcc_passed = False
@@ -30,6 +26,9 @@ class VGG_UnetTestInfra:
         torch_input_permuted = self.torch_input.permute(0, 2, 3, 1)
         self.ttnn_input = ttnn.from_torch(torch_input_permuted, dtype=ttnn.bfloat16)
         torch_model = UNetVGG19()
+        if use_pretrained_weight:
+            torch_model.load_state_dict(torch.load("models/demos/vgg_unet/vgg_unet_torch.pth"))
+            torch_model.eval()  # Set to evaluation mode
         parameters = create_vgg_unet_model_parameters(torch_model, self.torch_input, device=device)
         self.torch_output = torch_model(self.torch_input)
         self.ttnn_vgg_unet_model = Tt_vgg_unet(device, parameters, parameters.conv_args)
@@ -97,11 +96,5 @@ class VGG_UnetTestInfra:
         ttnn.deallocate(self.output_tensor)
 
 
-def create_test_infra(
-    device,
-    model_location_generator=None,
-):
-    return VGG_UnetTestInfra(
-        device,
-        model_location_generator,
-    )
+def create_test_infra(device, model_location_generator=None, use_pretrained_weight=False):
+    return VGG_UnetTestInfra(device, model_location_generator, use_pretrained_weight)
