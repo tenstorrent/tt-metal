@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+
+namespace ttnn::kernel_utils {
 #if !defined(KERNEL_BUILD)
 
 #include <type_traits>
 #include <vector>
 #include <bit>
-
-namespace ttnn::kernel_utils {
 
 template <typename KernelStruct>
 concept SerializableKernelArgs = alignof(KernelStruct) == alignof(uint32_t) && std::is_aggregate_v<KernelStruct> &&
@@ -26,13 +26,10 @@ std::vector<uint32_t> to_vector(const KernStruct& kernel_data) {
     return std::vector<uint32_t>(res.begin(), res.end());
 }
 
-}  // namespace ttnn::kernel_utils
-
-#define VALIDATE_KERNEL_ARGS_STRUCT(KernStruct)                 \
-    static_assert(                                              \
-        ttnn::kernel_utils::SerializableKernelArgs<KernStruct>, \
-        "Struct does not satisfy the requirements of SerializableKernelArgs.");
-
 #else
-#define VALIDATE_KERNEL_ARGS_STRUCT(KernStruct)
+template <typename KernelStruct>
+inline constexpr bool SerializableKernelArgs =
+    alignof(KernelStruct) == alignof(uint32_t) && std::is_aggregate_v<KernelStruct> &&
+    std::is_trivially_copyable_v<KernelStruct>;
 #endif
+}  // namespace ttnn::kernel_utils

@@ -14,6 +14,6 @@ struct ElemwiseComputeKernelArgs {
     uint32_t per_core_block_size;
 };
 
-VALIDATE_KERNEL_ARGS_STRUCT(ElemwiseComputeKernelArgs)
+static_assert(ttnn::kernel_utils::SerializableKernelArgs<ElemwiseComputeKernelArgs>);
 
 }  // namespace ttnn::kernel::eltwise::where_args

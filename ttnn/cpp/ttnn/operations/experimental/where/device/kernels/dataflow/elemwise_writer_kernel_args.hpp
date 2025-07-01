@@ -20,6 +20,7 @@ struct CompileTimeWriterKernelArgs {
     bool is_dst_dram;
 };
 
-VALIDATE_KERNEL_ARGS_STRUCT(ElemwiseWriterKernelArgs)
-VALIDATE_KERNEL_ARGS_STRUCT(CompileTimeWriterKernelArgs)
+static_assert(ttnn::kernel_utils::SerializableKernelArgs<ElemwiseWriterKernelArgs>);
+static_assert(ttnn::kernel_utils::SerializableKernelArgs<CompileTimeWriterKernelArgs>);
+
 }  // namespace ttnn::kernel::eltwise::where_args

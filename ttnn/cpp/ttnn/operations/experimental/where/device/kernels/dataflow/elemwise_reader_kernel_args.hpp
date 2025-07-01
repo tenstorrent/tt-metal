@@ -26,6 +26,7 @@ struct CompileTimeReaderKernelArgs {
     bool is_false_tensor_in_dram;
 };
 
-VALIDATE_KERNEL_ARGS_STRUCT(ElemwiseReaderKernelArgs)
-VALIDATE_KERNEL_ARGS_STRUCT(CompileTimeReaderKernelArgs)
+static_assert(ttnn::kernel_utils::SerializableKernelArgs<ElemwiseReaderKernelArgs>);
+static_assert(ttnn::kernel_utils::SerializableKernelArgs<CompileTimeReaderKernelArgs>);
+
 }  // namespace ttnn::kernel::eltwise::where_args
