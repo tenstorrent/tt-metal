@@ -15,13 +15,13 @@ import pytest
 
 @pytest.mark.parametrize(
     "no_prompt",
-    [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
+    [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), True)],
 )
 @pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE") or "N300", len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
