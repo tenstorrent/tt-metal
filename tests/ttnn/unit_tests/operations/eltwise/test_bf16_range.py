@@ -445,22 +445,22 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         plot_df = pd.read_csv(csv_path)
 
         label = f"scalar={scalar}" if scalar is not None else operation_name
-        plt.plot(plot_df["base_x"], plot_df["max_ulp_error"], label=label)
+        plt.plot(plot_df["base_x"], plot_df["max_ulp_error"], label=f"{label} (max ULP)")
+        plt.plot(plot_df["base_x"], plot_df["mean_ulp_error"], label=f"{label} (mean ULP)", linestyle="--")
 
         plt.title(f"TTNN vs PyTorch: Max ULP Error for {operation_name} (bfloat16)")
         plt.xlabel("Input Value (base_x)")
         plt.ylabel("Max ULP Error")
         plt.ylim(0, 20)
-        if operation_name == "deg2rad":
-            plt.xlim(-360, 360)
+        plt.xlim(-360, 360)
 
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
 
-    plt.title(f"TTNN vs PyTorch: Mean ULP Error for {operation_name} (bfloat16)")
+    plt.title(f"TTNN vs PyTorch: Max ULP Error for {operation_name} (bfloat16)")
     plt.xlabel("Input Value (base_x)")
-    plt.ylabel("Mean ULP Error")
+    plt.ylabel("Max ULP Error")
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
