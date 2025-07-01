@@ -6,6 +6,7 @@ import contextlib
 import functools
 
 from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable, Union, List
+from deprecated import deprecated
 
 import ttnn
 
@@ -209,23 +210,23 @@ class ReplicateTensorToMeshWrapper:
         return self._mapper
 
 
-# Deprecated. Prefer to use `ttnn.replicate_tensor_to_mesh_mapper` directly.
+@deprecated(reason="Use `ttnn.replicate_tensor_to_mesh_mapper` directly.")
 def ReplicateTensorToMesh(mesh_device: MeshDevice):
     mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
     return ReplicateTensorToMeshWrapper(mapper)
 
 
-# Deprecated. Prefer to use `ttnn.shard_tensor_to_mesh_mapper` directly.
+@deprecated(reason="Use `ttnn.shard_tensor_to_mesh_mapper` directly.")
 def ShardTensorToMesh(mesh_device: MeshDevice, dim: int):
     return ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim)
 
 
-# Deprecated. Prefer to use `ttnn.concat_mesh_to_tensor_composer` directly.
+@deprecated(reason="Use `ttnn.concat_mesh_to_tensor_composer` directly.")
 def ConcatMeshToTensor(mesh_device: MeshDevice, dim: int):
     return ttnn.concat_mesh_to_tensor_composer(mesh_device, dim)
 
 
-# Deprecated. Prefer to create `ttnn.MeshMapperConfig` directly.
+@deprecated(reason="Use `ttnn.create_mesh_mapper` directly.")
 def ShardTensor2dMesh(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[Optional[int], Optional[int]]):
     return ttnn.create_mesh_mapper(
         mesh_device,
@@ -239,7 +240,7 @@ def ShardTensor2dMesh(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims
     )
 
 
-# Deprecated. Prefer to use `ttnn.MeshComposerConfig` directly.
+@deprecated(reason="Use `ttnn.create_mesh_composer` directly.")
 def ConcatMesh2dToTensor(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[int, int]):
     return ttnn.create_mesh_composer(
         mesh_device,
@@ -251,7 +252,7 @@ def ConcatMesh2dToTensor(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], d
 
 
 @contextlib.contextmanager
-def distribute(default: Union[ttnn.CppTensorToMesh, ReplicateTensorToMeshWrapper, MeshToTensor]):
+def distribute(default: Union[ttnn.CppTensorToMesh, ReplicateTensorToMeshWrapper, ttnn.CppMeshToTensor]):
     """
     Context manager to temporarily modify the behavior of ttnn.from_torch and ttnn.to_torch to use the specified
     mesh_mapper or mesh_composer for tensor distribution and composition to/from MeshDevice.
