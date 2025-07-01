@@ -339,7 +339,6 @@ def run_ring_joint_sdpa(
 )
 def test_ring_joint_sdpa(
     mesh_device,
-    use_program_cache,
     b,
     nh,
     seq_len,
@@ -428,7 +427,6 @@ def test_ring_joint_sdpa(
 )
 def test_ring_joint_sdpa_program_cache(
     mesh_device,
-    use_program_cache,
     b,
     nh,
     seq_len,

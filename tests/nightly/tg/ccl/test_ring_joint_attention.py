@@ -60,7 +60,6 @@ from tests.nightly.t3000.ccl.test_ring_joint_attention import run_ring_joint_sdp
 )
 def test_ring_joint_sdpa(
     mesh_device,
-    use_program_cache,
     b,
     nh,
     seq_len,
@@ -144,7 +143,6 @@ def test_ring_joint_sdpa(
 )
 def test_ring_joint_sdpa_program_cache(
     mesh_device,
-    use_program_cache,
     b,
     nh,
     seq_len,

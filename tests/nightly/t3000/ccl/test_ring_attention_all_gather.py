@@ -55,7 +55,6 @@ def run_ring_attention_all_gather_impl(
     mem_config_input,
     mem_config_ag,
     all_gather_topology,
-    use_program_cache,
     num_iters=1,
     enable_trace=True,
 ):
@@ -266,7 +265,6 @@ def test_ring_attention_all_gather(
     mem_config_ag,
     enable_trace,
     num_iters,
-    use_program_cache,
     all_gather_topology,
 ):
     if all_gather_topology == ttnn.Topology.Ring:
@@ -286,7 +284,6 @@ def test_ring_attention_all_gather(
         layout,
         mem_config_input,
         mem_config_ag,
-        use_program_cache=use_program_cache,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
@@ -347,7 +344,6 @@ def test_ring_attention_all_gather_program_cache(
     mem_config_ag,
     enable_trace,
     num_iters,
-    use_program_cache,
     all_gather_topology,
 ):
     submesh_device = create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor)
@@ -377,7 +373,6 @@ def test_ring_attention_all_gather_program_cache(
             layout,
             mem_config_input,
             mem_config_ag,
-            use_program_cache=use_program_cache,
             all_gather_topology=all_gather_topology,
             enable_trace=enable_trace,
             num_iters=num_iters,

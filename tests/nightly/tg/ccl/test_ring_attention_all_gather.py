@@ -67,7 +67,6 @@ def test_ring_attention_all_gather(
     mem_config_ag,
     enable_trace,
     num_iters,
-    use_program_cache,
     all_gather_topology,
 ):
     submesh_device = create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor)
@@ -84,7 +83,6 @@ def test_ring_attention_all_gather(
         layout,
         mem_config_input,
         mem_config_ag,
-        use_program_cache=use_program_cache,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
@@ -145,7 +143,6 @@ def test_ring_attention_all_gather_program_cache(
     mem_config_ag,
     enable_trace,
     num_iters,
-    use_program_cache,
     all_gather_topology,
 ):
     submesh_device = create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor)
@@ -175,7 +172,6 @@ def test_ring_attention_all_gather_program_cache(
             layout,
             mem_config_input,
             mem_config_ag,
-            use_program_cache=use_program_cache,
             all_gather_topology=all_gather_topology,
             enable_trace=enable_trace,
             num_iters=num_iters,

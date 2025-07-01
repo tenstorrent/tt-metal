@@ -402,9 +402,13 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         writer_forward_rt_args.push_back(false);
         writer_forward_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
+            const auto target_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+            const auto backward_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                target_device->id(),
-                backward_device.value()->id(),
+                target_fabric_node_id,
+                backward_fabric_node_id,
                 link,
                 program,
                 sender_worker_cores[link * 2 + 1],
@@ -436,9 +440,13 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         }
         writer_backward_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
+            const auto target_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+            const auto forward_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                target_device->id(),
-                forward_device.value()->id(),
+                target_fabric_node_id,
+                forward_fabric_node_id,
                 link,
                 program,
                 sender_worker_cores[link * 2],
