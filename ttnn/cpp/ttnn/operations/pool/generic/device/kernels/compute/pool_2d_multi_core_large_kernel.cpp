@@ -16,7 +16,7 @@
 #endif
 
 template <
-    uint32_t num_output_tiles,
+    uint32_t max_tiles_per_iter,
     uint32_t num_faces_in_input_tile,
     uint32_t num_faces_in_output_tile,
     uint32_t unpA_face_r_dim,
@@ -29,26 +29,16 @@ inline void reduce_h_fused(
     const uint32_t out_cb_id) {
     constexpr uint32_t num_out_rows = 1;
 
-    tile_regs_acquire();
     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
         in_cb_id,
         in_scalar_cb_id,
-        num_output_tiles,
+        max_tiles_per_iter,
         0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
         num_faces_in_input_tile /* unpack 1 or 2 faces ) */,
         unpA_face_r_dim);
-    for (uint32_t c_i = 0; c_i < num_output_tiles; ++c_i) {
+    for (uint32_t c_i = 0; c_i < max_tiles_per_iter; ++c_i) {
         reduce_tile_math(c_i, num_faces_in_input_tile /* reduce 1 or 2 faces */);
     }
-    tile_regs_wait();
-    tile_regs_commit();
-    pack_untilize_dst<num_output_tiles>(
-        out_cb_id,
-        1 /*out_subblock_h*/,
-        output_row_index,
-        num_out_rows,
-        num_faces_in_output_tile); /* pack 1 row (1x16 or 1x32) */
-    tile_regs_release();
 }
 
 namespace NAMESPACE {
@@ -132,9 +122,12 @@ void MAIN {
             // For 5x5 kernel as an example, reduction over first 16 sticks AND next 9 sticks. It runs
             // twice, and both results are written to interm_cb_id. interm_cb_id will be the input to the
             // next level of reduction.
+            tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 uint32_t max_rows_interm_remainder =
                     chunk % (max_rows_for_reduction - 1);  // reduce 31 interm rows at a time
+
+                DPRINT << "interm reduction" << ENDL();
 
                 cb_wait_front(curr_in_cb_id, 1);
                 reduce_h_fused<
@@ -145,39 +138,32 @@ void MAIN {
                     neginf_srca_maxpool,
                     zero_srca_avgpool>(
                     curr_in_cb_id,
-                    is_avg_pool ? in_one_cb_id : curr_scalar_cb_id,
+                    curr_scalar_cb_id,
                     max_rows_interm_remainder + 1,  // skip the first row where we are accumulating
                     interm_cb_id);
                 cb_pop_front(curr_in_cb_id, 1);
-
-                if (max_rows_interm_remainder == max_rows_for_reduction - 2 || chunk == interm_reduction_chunks - 1) {
-                    // sync PACK and UNPACK so intermediate reduction gets packed before the final reduction is unpacked
-                    cb_reserve_back(sync_cb_id5, 1);
-                    cb_push_back(sync_cb_id5, 1);
-                    cb_wait_front(sync_cb_id5, 1);
-                    cb_pop_front(sync_cb_id5, 1);
-
-                    // perform the final reduction over the first N - 1 whole chunks // Reduction of final 2 sticks.
-                    reduce_h_fused<
-                        max_tiles_per_iter,
-                        num_faces_in_input_tile,
-                        num_faces_in_output_tile,
-                        face_r_dim,
-                        neginf_srca_maxpool,
-                        zero_srca_avgpool>(
-                        interm_cb_id,
-                        !is_avg_pool || (chunk == interm_reduction_chunks - 1) ? curr_scalar_cb_id : in_one_cb_id,
-                        0,
-                        interm_cb_id);
-
-                    // either write output stick or for avg pool notify the reader that we need the interm CB cleared
-                    if (chunk == interm_reduction_chunks - 1 || is_avg_pool) {
-                        cb_push_back(curr_sync_cb_id, 1);
-                        // wait for reader to finish task before continuing
-                        cb_reserve_back(curr_sync_cb_id, 1);
-                    }
-                }
             }
+            tile_regs_commit();
+
+            DPRINT << "final reduction wait" << ENDL();
+
+            // sync PACK and UNPACK so intermediate reduction gets packed before the final reduction is unpacked
+            cb_reserve_back(sync_cb_id5, 1);
+            cb_push_back(sync_cb_id5, 1);
+            cb_wait_front(sync_cb_id5, 1);
+            cb_pop_front(sync_cb_id5, 1);
+
+            DPRINT << "final reduction" << ENDL();
+
+            tile_regs_wait();
+            pack_untilize_dst<max_tiles_per_iter>(
+                interm_cb_id, 1 /*out_subblock_h*/, 0, 1, num_faces_in_output_tile); /* pack 1 row (1x16 or 1x32) */
+            tile_regs_release();
+
+            cb_push_back(curr_sync_cb_id, 1);
+            cb_reserve_back(curr_sync_cb_id, 1);
+
+            DPRINT << "done" << ENDL();
         }
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);

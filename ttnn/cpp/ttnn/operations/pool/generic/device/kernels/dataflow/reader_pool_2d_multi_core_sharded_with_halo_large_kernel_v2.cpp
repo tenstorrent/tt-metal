@@ -82,20 +82,6 @@ FORCE_INLINE void read_window_with_top_left_index(
                             clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
                                 get_noc_addr(in_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
                         }
-
-                        // clear the interm CB
-                        // TODO we only really need to clear the interm CB before the last reduction stage ie if
-                        // cur_reduction = (total_rows % 32) / 31 - 2
-                        uint32_t max_rows_interm_remainder = chunk % (max_rows_for_reduction - 1);
-                        if (max_rows_interm_remainder == max_rows_for_reduction - 2) {
-                            cb_wait_front(compute_sync_cb_id, 1);
-                            // skip the first row where we are accumulating
-                            fill_with_val(
-                                get_write_ptr(interm_cb_id) + TILE_WIDTH * in_cb_ntiles * BYTES_PER_ELEM,
-                                (TILE_HEIGHT - 1) * TILE_WIDTH * in_cb_ntiles,
-                                bf16_init_value);
-                            cb_pop_front(compute_sync_cb_id, 1);
-                        }
                     }
                     chunk++;
                 }
@@ -107,8 +93,6 @@ FORCE_INLINE void read_window_with_top_left_index(
         // write the first row from the interm buffer
         noc_async_read(get_noc_addr(get_read_ptr(interm_cb_id)), out_l1_write_addr, read_bytes);
         noc_async_read_barrier();
-        // clear the interm buffer's first row, partial tiles get first 2 rows cleared which is fine
-        fill_with_val(get_read_ptr(interm_cb_id), TILE_WIDTH * in_cb_ntiles, bf16_init_value);
         out_l1_write_addr += read_bytes;
         // signal to compute that output has been written
         cb_pop_front(compute_sync_cb_id, 1);

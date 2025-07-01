@@ -17,10 +17,16 @@ def tensor_map():
 
 def randomize_tensor(tensor_map, tensor_shape):
     tensor_shape = tuple(tensor_shape)
-    if tensor_shape in tensor_map.keys():
-        torch_tensor = tensor_map[tensor_shape]
-    else:
-        torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+    # if tensor_shape in tensor_map.keys():
+    #     torch_tensor = tensor_map[tensor_shape]
+    # else:
+    #     torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+    torch_tensor = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+    for n in range(tensor_shape[0]):
+        for c in range(tensor_shape[1]):
+            for h in range(tensor_shape[2]):
+                for w in range(tensor_shape[3]):
+                    torch_tensor[n, c, h, w] = h * tensor_shape[3] + w
     return torch_tensor
 
 
