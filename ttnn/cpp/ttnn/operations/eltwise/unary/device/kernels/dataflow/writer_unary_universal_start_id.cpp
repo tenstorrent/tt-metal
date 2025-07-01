@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "accessor/tensor_accessor.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -11,7 +10,7 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    auto tensor_args = make_tensor_accessor_args<1, 0>();
+    constexpr auto tensor_args = make_tensor_accessor_args<1>();
 
 #ifdef OUT_SHARDED
     cb_wait_front(cb_id_out, num_tiles);
@@ -33,8 +32,7 @@ void kernel_main() {
 #endif
         cb_wait_front(cb_id_out, onetile);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        uint64_t curr_noc_addr = tensor_accessor.get_noc_addr(i);
-        noc_async_write(l1_read_addr, curr_noc_addr, tile_bytes);
+        noc_async_write_tile(i, tensor_accessor, l1_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_id_out, onetile);
     }
