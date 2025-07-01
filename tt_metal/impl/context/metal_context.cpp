@@ -102,6 +102,12 @@ void MetalContext::initialize(
         std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs);
     dispatch_mem_map_[magic_enum::enum_integer(CoreType::ETH)] =
         std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs);
+    // Initialize debug servers. Attaching individual devices done below
+    if (rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+        TT_FATAL(!rtoptions_.get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
+        rtoptions_.set_disable_dma_ops(true);  // DMA is not thread-safe
+        dprint_server_ = std::make_unique<DPrintServer>(rtoptions_);
+    }
 
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
@@ -146,13 +152,15 @@ void MetalContext::initialize(
     }
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
-    tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(true);
+    cluster_->set_internal_routing_info_for_ethernet_cores(true);
 
     // Initialize debug tools, reset cores, init FW
+    if (dprint_server_) {
+        dprint_server_->attach_devices();
+    };
     for (chip_id_t device_id : all_devices) {
         // Init debug tools
         ClearNocData(device_id);
-        DprintServerAttach(device_id);
         watcher_init(device_id);
 
         // TODO: as optimization, investigate removing all this call for already initialized devivces
@@ -179,11 +187,16 @@ void MetalContext::teardown() {
     initialized_ = false;
 
     // Set internal routing to false to exit active ethernet FW & go back to base FW
-    tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
+    cluster_->set_internal_routing_info_for_ethernet_cores(false);
+
+    if (dprint_server_) {
+        dprint_server_->detach_devices();
+        dprint_server_.reset();
+        rtoptions_.set_disable_dma_ops(false);
+    }
 
     auto all_devices = cluster_->all_chip_ids();
     for (chip_id_t device_id : all_devices) {
-        DprintServerDetach(device_id);
         watcher_detach(device_id);
         assert_cores(device_id);
 

@@ -7,13 +7,21 @@ import re
 
 
 class ModelOptimisations:
-    def __init__(self, conv_act_dtype=ttnn.bfloat16, conv_w_dtype=ttnn.bfloat16):
+    def __init__(
+        self,
+        conv_act_dtype=ttnn.bfloat16,
+        conv_w_dtype=ttnn.bfloat16,
+        attention_weights_dtype=ttnn.bfloat16,
+        ff_weights_dtype=ttnn.bfloat8_b,
+    ):
         self.conv_configs = {}
         self.matmul_configs = {}
         self.compute_configs = {}
         self.prepared_weights = False
         self.conv_w_dtype = conv_w_dtype
         self.conv_ws_dtype = ttnn.bfloat8_b
+        self.attention_weights_dtype = attention_weights_dtype
+        self.ff_weights_dtype = ff_weights_dtype
 
         # HEIGHT SHARDED
         self.conv_configs["ABH_256_ADB"] = ttnn.Conv2dConfig(
@@ -443,7 +451,7 @@ class ModelOptimisations:
 
         self.matmul_configs["2D_FF2_SEQ_LEN_4096"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
-            in0_block_w=10,  # max is 10, 2 seems optimal
+            in0_block_w=10,  # max is 10
             out_subblock_h=1,
             out_subblock_w=3,
             per_core_M=16,
@@ -491,7 +499,7 @@ class ModelOptimisations:
             fused_activation=[ttnn.UnaryOpType.GELU, True],
         )
 
-        in_0_block_w_geglu_1280 = 5
+        in_0_block_w_geglu_1280 = 5  # max is 5
         per_core_M_geglu_1280 = 4
         per_core_N_geglu_1280 = 20
         out_subblock_h_geglu_1280 = 1
@@ -593,6 +601,31 @@ class ModelOptimisations:
             out_subblock_h=1,
             out_subblock_w=8,
             transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        # 21 cores, [1, 1, 96, 2048] x [1, 1, 2048, 640]
+        self.matmul_configs["2D_ATTEN_K_V_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=4,  # max is 64, 4 seems optimal
+            per_core_M=1,
+            per_core_N=3,
+            out_subblock_h=1,
+            out_subblock_w=3,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        # 40 cores, [1, 1, 96, 2048] x [1, 1, 2048, 1280]
+        self.matmul_configs["1D_ATTEN_K_V_LINEAR_1280"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=16,  # max is 64, 16 seems optimal
+            out_subblock_h=3,
+            out_subblock_w=1,
+            per_core_M=3,
+            per_core_N=1,
+            mcast_in0=True,
+            fuse_batch=True,
             fused_activation=None,
         )
 
@@ -769,6 +802,16 @@ class ModelOptimisations:
                     return self.matmul_configs["2D_ATTN_QKV_LINEAR_640"]
                 else:
                     return self.matmul_configs["2D_ATTN_QKV_LINEAR_1280"]
+            if (
+                "attn1.to_k" in matmul_path
+                or "attn1.to_v" in matmul_path
+                or "attn2.to_k" in matmul_path
+                or "attn2.to_v" in matmul_path
+            ):
+                if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
+                    return self.matmul_configs["2D_ATTEN_K_V_LINEAR_640"]
+                else:
+                    return self.matmul_configs["1D_ATTEN_K_V_LINEAR_1280"]
 
             # # # Down block 1 # # #
             pattern_downn_block_1_dense_out = re.compile(
