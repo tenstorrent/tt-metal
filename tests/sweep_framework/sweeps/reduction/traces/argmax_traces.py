@@ -9,8 +9,8 @@ import torch
 import ttnn
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import profile_ttnn_call
 from models.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.utils import profile_ttnn_call
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 TIMEOUT = 15

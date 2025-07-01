@@ -120,7 +120,7 @@ def test_prod(
     assert result, msg
     logger.info(msg)
     if e2e_perf:
-        logger.info(f"Perf. metrics: {e2e_perf}")
+        logger.info(f"E2E Perf: {e2e_perf}")
 
 
 @pytest.mark.parametrize(

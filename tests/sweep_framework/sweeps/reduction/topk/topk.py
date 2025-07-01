@@ -10,11 +10,16 @@ import pytest
 import torch
 import random
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args, gen_shapes, sanitize_shape
+from tests.sweep_framework.sweep_utils.utils import (
+    gen_pytest_parametrize_args,
+    gen_shapes,
+    sanitize_shape,
+    profile_ttnn_call,
+)
+from tests.sweep_framework.sweep_utils.roofline_utils import update_check_result, get_roofline_metrics
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_topk_simmilarity
-from tests.ttnn.utils_for_testing import profile_ttnn_call
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
@@ -157,6 +162,9 @@ def run_topk(
     (output_values, output_indices), e2e_perf = profile_ttnn_call(
         device, ttnn.topk, input_tensor_a, k=k, dim=dim, largest=largest, sorted=True
     )
+    metrics = get_roofline_metrics([input_tensor_a])
+    metrics.update(e2e_perf)
+    e2e_perf = metrics["E2E_PERF"]
 
     output_values, output_indices = ttnn.to_torch(output_values), ttnn.to_torch(output_indices).to(torch.int64)
     output_gathered_values = torch.gather(torch_input_tensor_a, dim, output_indices)
@@ -165,7 +173,7 @@ def run_topk(
         [torch_output_values, torch_output_indices], [output_values, output_gathered_values]
     )
 
-    return [(passing, output_str), e2e_perf]
+    return [update_check_result((passing, output_str), metrics), e2e_perf]
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -214,4 +222,4 @@ def test_topk(
     assert result, msg
     logger.info(msg)
     if e2e_perf:
-        logger.info(f"Perf. metrics: {e2e_perf}")
+        logger.info(f"E2E Perf: {e2e_perf}")

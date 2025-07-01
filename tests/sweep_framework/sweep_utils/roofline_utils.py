@@ -56,7 +56,8 @@ def update_check_result(check_result, metrics):
     if not status:
         return check_result
     metrics.update({"PCC": message})
-    return status, metrics
+    message = " ".join([f"{key} {value}" for key, value in metrics.items()])
+    return status, message
 
 
 def get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf, flop_counts=None):
@@ -64,6 +65,7 @@ def get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2
     metrics = get_roofline_metrics(tensors)
     if isinstance(e2e_perf, dict):
         metrics.update(e2e_perf)
+        e2e_perf = metrics["E2E_PERF"]
     else:
         metrics.update({"E2E_PERF": e2e_perf})
     if flop_counts:

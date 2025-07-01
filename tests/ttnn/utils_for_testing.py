@@ -8,9 +8,7 @@ import time
 
 from loguru import logger
 from models.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
-from typing import Tuple, Union, Callable, List, Dict, Any
-from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
+from typing import Tuple, Union
 
 import ttnn
 import torch
@@ -262,31 +260,3 @@ def start_measuring_time() -> int:
 
 def stop_measuring_time(start_time) -> int:
     return time.time_ns() - start_time
-
-
-IGNORE_RUNS = 1
-"""The number of runs to ignore when measuring the average time."""
-
-
-REPEAT_RUNS = 1
-"""The number of runs to average when measuring performance."""
-
-
-def profile_ttnn_call(device, function: Callable, *args: List[Any], **kwargs: Dict[str, Any]) -> Tuple[Any, float]:
-    """Determine the average time taken for a function call, excluding the first IGNORE_RUNS runs."""
-    for _ in range(IGNORE_RUNS):
-        _results = function(*args, **kwargs)
-
-    start_time = start_measuring_time()
-    for _ in range(REPEAT_RUNS):
-        results = function(*args, **kwargs)
-    avg_host_time = stop_measuring_time(start_time) / REPEAT_RUNS
-
-    ttnn.DumpDeviceProfiler(device)
-    opPerfData = get_device_data_generate_report(
-        PROFILER_LOGS_DIR, outputFolder=None, date=None, nameAppend=None, export_csv=False, cleanup_device_log=True
-    )
-    e2e_perf = {"AVG_HOST_TIME": avg_host_time}
-    if opPerfData:
-        e2e_perf["AVG_DEVICE_TIME"] = opPerfData[0]["DEVICE KERNEL DURATION [ns]"]
-    return results, e2e_perf

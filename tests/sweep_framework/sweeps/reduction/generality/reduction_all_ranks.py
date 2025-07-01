@@ -11,8 +11,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
-from tests.ttnn.utils_for_testing import profile_ttnn_call
+from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args, profile_ttnn_call
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 # Override the default timeout in seconds for hang detection.
