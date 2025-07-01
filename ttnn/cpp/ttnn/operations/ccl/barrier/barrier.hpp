@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {

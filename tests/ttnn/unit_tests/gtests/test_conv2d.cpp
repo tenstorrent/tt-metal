@@ -9,7 +9,7 @@
 #include <vector>
 #include <tt-metalium/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/small_vector.hpp>
+#include <tt_stl/small_vector.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/tensor/tensor.hpp"

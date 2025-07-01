@@ -67,7 +67,7 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
 
     ttnn::SmallVector<uint32_t> output_end_vector;
     ttnn::Shape output_end;
-    const auto input_shape = input_tensor.logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     if (input_shape.rank() > 4) {
         for (auto index = 0; index < input_shape.rank(); ++index) {
             output_end_vector.push_back(input_shape[index] - 1);

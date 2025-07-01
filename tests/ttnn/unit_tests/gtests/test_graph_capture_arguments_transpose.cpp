@@ -32,7 +32,6 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
         TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::ROW_MAJOR), L1_MEMORY_CONFIG));
     auto tt_input = create_device_tensor(tensor_spec, device_);
 
-    tt_input.reshape(ttnn::Shape{1, 2048, 4, 128});
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NORMAL);
     ttnn::transpose(tt_input, 1, 2);
     auto trace = ttnn::graph::GraphProcessor::end_graph_capture();

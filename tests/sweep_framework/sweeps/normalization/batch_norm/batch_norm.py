@@ -65,9 +65,6 @@ def run_batch_norm(
         input_shape, 5, 10, device, is_input=True, testing_dtype=dtype_names, memory_config=input_memory_config
     )
 
-    if input_dtype == ttnn.float32 and ttnn.device.is_grayskull(device):
-        return [(False, "Dest Fp32 mode is not supported for arch grayskull"), 0]
-
     mean_data, mean_tensor = (
         data_gen_with_range_batch_norm(
             input_shape, 4, 10, device, testing_dtype=dtype_names, memory_config=input_memory_config

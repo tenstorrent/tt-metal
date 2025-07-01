@@ -7,7 +7,7 @@
 
 #include "tt-metalium/bfloat16.hpp"
 #include "tt-metalium/shape.hpp"
-#include "tt-metalium/small_vector.hpp"
+#include <tt_stl/small_vector.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -69,7 +69,7 @@ private:
 
 // Wrapper to abstract const-eval logic out of runtime funcs to keep them
 // cleaner.  Invokes constEvalFunc iff outputs is empty.
-void constEvalFuncWrapper(
+inline void constEvalFuncWrapper(
     std::function<std::vector<ttnn::Tensor>(std::vector<ttnn::Tensor>)> constEvalFunc,
     const std::vector<ttnn::Tensor>& inputs,
     std::vector<ttnn::Tensor>* outputs) {

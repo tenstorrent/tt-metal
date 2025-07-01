@@ -1073,6 +1073,7 @@ void gen_dram_ringbuffer_read_cmd(
         ringbuffer_cmd.log2_page_size = log_page_size;
         ringbuffer_cmd.base_addr = DRAM_DATA_BASE_ADDR + count * page_size;
         ringbuffer_cmd.length = length;
+        ringbuffer_cmd.wp_offset_update = length;
         count++;
 
         update_cmd_sizes(prefetch_cmds, cmd_sizes, [&]() { add_bare_prefetcher_cmd(prefetch_cmds, cmd, true); });
@@ -2078,6 +2079,11 @@ void configure_for_single_chip(
         0,
         0,
         0,
+        0,
+        0,
+        0,
+        0,
+        0,
     };
 
     constexpr NOC my_noc_index = NOC::NOC_0;
@@ -2367,6 +2373,11 @@ void configure_for_single_chip(
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
+        0,
+        0,
+        0,
+        0,
+        0,
         0,
         0,
         0,

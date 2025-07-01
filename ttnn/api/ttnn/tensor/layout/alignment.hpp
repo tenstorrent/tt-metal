@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/small_vector.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <tt-metalium/shape_base.hpp>
 
 namespace tt::tt_metal {

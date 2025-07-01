@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <umd/device/types/arch.h>
 #include "gtest/gtest.h"
 #include "dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
@@ -23,7 +24,9 @@ class CommandQueueFixture : public DispatchFixture {
 protected:
     tt::tt_metal::IDevice* device_;
     void SetUp() override {
-        this->validate_dispatch_mode();
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_device();
     }
@@ -34,18 +37,19 @@ protected:
         }
     }
 
-    void validate_dispatch_mode() {
+    bool validate_dispatch_mode() {
         this->slow_dispatch_ = false;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
-            GTEST_SKIP();
+            return false;
         }
+        return true;
     }
 
     void create_device(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        const chip_id_t device_id = 0;
+        const chip_id_t device_id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         this->device_ =
@@ -62,7 +66,9 @@ class CommandQueueProgramFixture : public CommandQueueFixture {};
 class CommandQueueTraceFixture : public CommandQueueFixture {
 protected:
     void SetUp() override {
-        this->validate_dispatch_mode();
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     }
 
@@ -72,30 +78,37 @@ protected:
 class CommandQueueSingleCardFixture : virtual public DispatchFixture {
 protected:
     void SetUp() override {
-        this->validate_dispatch_mode();
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
     }
 
-    void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
+    void TearDown() override {
+        if (!reserved_devices_.empty()) {
+            tt::tt_metal::detail::CloseDevices(reserved_devices_);
+        }
+    }
 
-    void validate_dispatch_mode() {
+    bool validate_dispatch_mode() {
         this->slow_dispatch_ = false;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = false;
-            GTEST_SKIP();
+            return false;
         }
+        return true;
     }
 
     void create_devices(const std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        const chip_id_t mmio_device_id = 0;
+        const chip_id_t mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<chip_id_t> chip_ids;
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB) {
-            for (unsigned int id = 0; id < tt::tt_metal::GetNumAvailableDevices(); id++) {
+            for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
                 chip_ids.push_back(id);
             }
         } else {
@@ -124,7 +137,9 @@ class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture
 class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture {
 protected:
     void SetUp() override {
-        this->validate_dispatch_mode();
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices(90000000);
     }
@@ -151,7 +166,7 @@ protected:
         }
 
         std::vector<chip_id_t> chip_ids;
-        for (unsigned int id = 0; id < num_devices_; id++) {
+        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
             chip_ids.push_back(id);
         }
 
@@ -174,5 +189,29 @@ protected:
 class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};
 
 class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
+
+class CommandQueueOnFabricMultiDeviceFixture : public CommandQueueMultiDeviceFixture,
+                                               public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
+protected:
+    void SetUp() override {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
+            GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
+        }
+        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
+        // This will force dispatch init to inherit the FabricConfig param
+        tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+        CommandQueueMultiDeviceFixture::SetUp();
+
+        if (::testing::Test::IsSkipped()) {
+            tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
+        }
+    }
+
+    void TearDown() override {
+        CommandQueueMultiDeviceFixture::TearDown();
+        tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
+    }
+};
 
 }  // namespace tt::tt_metal

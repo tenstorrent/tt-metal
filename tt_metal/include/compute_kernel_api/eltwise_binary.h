@@ -135,7 +135,7 @@ ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
 
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<ELWMUL, NONE, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-        icb0, icb1, idst)));
+        icb0, icb1, idst, true)));
 }
 
 // clang-format off
@@ -159,7 +159,7 @@ ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
 ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<ELWADD, NONE, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-        icb0, icb1, idst)));
+        icb0, icb1, idst, true)));
 }
 
 // clang-format off
@@ -183,7 +183,7 @@ ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
 ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<ELWSUB, NONE, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-        icb0, icb1, idst)));
+        icb0, icb1, idst, true)));
 }
 
 /**
@@ -227,7 +227,7 @@ template <
 ALWI void binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
     UNPACK((llk_unpack_A<BroadcastType::NONE, true, binary_reuse_dest>(in_cb_id, in_tile_index)));
     MATH((llk_math_eltwise_binary<eltwise_binary_type, NONE, DST_ACCUM_MODE, MATH_FIDELITY, binary_reuse_dest>(
-        in_tile_index, in_tile_index, dst_tile_index)));
+        in_tile_index, in_tile_index, dst_tile_index, true)));
 }
 
 }  // namespace ckernel

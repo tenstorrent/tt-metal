@@ -25,7 +25,7 @@ TEST_F(MeshAllocatorTest, BasicAllocationSanityCheck) {
         .size = allocation_size,
         .page_size = 1024,
         .buffer_type = buffer_type,
-        .buffer_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED};
+    };
 
     auto buffer = CreateBuffer(config);
 

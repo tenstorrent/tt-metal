@@ -18,7 +18,8 @@ Mesh: [
 {
   id: 0,
   board: P100,
-  topology: [1, 1],
+  device_topology: [1, 1],
+  host_topology: [1, 1],
   host_ranks: [[0]]}
 ]
 

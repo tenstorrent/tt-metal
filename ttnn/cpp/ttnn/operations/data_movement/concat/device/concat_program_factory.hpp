@@ -31,6 +31,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups = 1);
 
 tt::tt_metal::operation::ProgramWithCallbacks concat_multi_core(
-    const std::vector<Tensor>& input_tensors, const uint32_t dim, const Tensor& output);
+    const std::vector<Tensor>& input_tensors, uint32_t dim, const Tensor& output);
 
 }  // namespace ttnn::operations::data_movement::detail

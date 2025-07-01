@@ -1,5 +1,5 @@
 add_library(ttnn_op_ccl ${LIB_TYPE})
-add_library(TT::NN::Ops::CCL ALIAS ttnn_op_ccl)
+add_library(TTNN::Ops::CCL ALIAS ttnn_op_ccl)
 
 target_precompile_headers(ttnn_op_ccl REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_ccl)
@@ -23,6 +23,9 @@ target_sources(
         all_gather/all_gather.cpp
         all_gather/device/all_gather_op.cpp
         all_gather/device/multi_core/all_gather_op_multi_core.cpp
+        all_to_all_dispatch/all_to_all_dispatch.cpp
+        all_to_all_dispatch/device/all_to_all_dispatch_device_operation.cpp
+        all_to_all_dispatch/device/all_to_all_dispatch_program_factory.cpp
         reduce_scatter/device/host/reduce_scatter_full_worker_grid.cpp
         reduce_scatter/device/reduce_scatter_op.cpp
         reduce_scatter/reduce_scatter.cpp
@@ -38,7 +41,7 @@ target_link_libraries(
     ttnn_op_ccl
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(TARGETS ttnn_op_ccl LIBRARY COMPONENT tar)

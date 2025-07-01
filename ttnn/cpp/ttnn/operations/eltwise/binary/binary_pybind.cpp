@@ -331,8 +331,8 @@ void bind_binary_unary_max_operation(
     py::module& module,
     const binary_operation_t& operation,
     const std::string& description,
-    const std::string& supported_dtype = "BFLOAT16, FLOAT32, INT32",
-    const std::string& note = " ") {
+    const std::string& note = " ",
+    const std::string& supported_dtype = "BFLOAT16, FLOAT32, INT32") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -386,7 +386,7 @@ void bind_binary_unary_max_operation(
         ttnn::pybind_overload_t{
             [](const binary_operation_t& self,
                const ttnn::Tensor& input_tensor_a,
-               const float scalar,
+               const std::variant<int32_t, float> scalar,
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
@@ -2207,7 +2207,8 @@ void py_module(py::module& module) {
     detail::bind_binary_unary_max_operation(
         module,
         ttnn::maximum,
-        R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Supported range for :attr:`input_tensor_b` when its of scalar type is [-16777216, 16777216])doc");
 
     detail::bind_prelu(
         module,

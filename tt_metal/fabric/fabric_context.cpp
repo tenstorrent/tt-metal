@@ -8,6 +8,7 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/assert.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
@@ -42,8 +43,8 @@ std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() con
     return wrap_around_mesh;
 }
 
-tt::tt_fabric::Topology FabricContext::get_topology() const {
-    switch (this->fabric_config_) {
+tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_metal::FabricConfig fabric_config) {
+    switch (fabric_config) {
         case tt::tt_metal::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_metal::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
         case tt::tt_metal::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
@@ -51,7 +52,7 @@ tt::tt_fabric::Topology FabricContext::get_topology() const {
         case tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_metal::FabricConfig::DISABLED:
         case tt::tt_metal::FabricConfig::CUSTOM:
-            TT_THROW("Unsupported fabric config: {}", magic_enum::enum_name(this->fabric_config_));
+            TT_THROW("Unsupported fabric config: {}", magic_enum::enum_name(fabric_config));
     }
     return tt::tt_fabric::Topology::Linear;
 }
@@ -74,6 +75,26 @@ size_t FabricContext::get_max_payload_size_bytes() const {
     }
 }
 
+std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_edm_config_options(
+    tt::tt_fabric::FabricEriscDatamoverType edm_type, tt::tt_fabric::FabricEriscDatamoverAxis edm_axis) {
+    auto edm_buffer_config = tt::tt_fabric::FabricRouterBufferConfig{
+        .enable_dateline_sender_extra_buffer_slots = true,
+        .enable_dateline_receiver_extra_buffer_slots = true,
+        .enable_dateline_upstream_sender_extra_buffer_slots = true,
+        .enable_dateline_upstream_receiver_extra_buffer_slots = true,
+        .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
+            edm_axis != tt::tt_fabric::FabricEriscDatamoverAxis::Short,
+    };
+    auto edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
+        .edm_type = edm_type,
+        .edm_axis = edm_axis,
+        .edm_buffer_config = edm_buffer_config,
+    };
+
+    return std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
+        this->channel_buffer_size_bytes_, this->topology_, edm_options);
+}
+
 FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     TT_FATAL(
         fabric_config != tt::tt_metal::FabricConfig::DISABLED,
@@ -82,24 +103,56 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
 
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
-    this->topology_ = this->get_topology();
+    this->topology_ = this->get_topology_from_config(fabric_config);
 
     this->packet_header_size_bytes_ = this->get_packet_header_size_bytes();
     this->max_payload_size_bytes_ = this->get_max_payload_size_bytes();
     this->channel_buffer_size_bytes_ = this->packet_header_size_bytes_ + this->max_payload_size_bytes_;
 
-    this->router_config_ =
-        std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(this->channel_buffer_size_bytes_, this->topology_);
-    // disable upstream buffering optimization for now for device init.
-    auto dateline_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
-        .edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline,
-        .enable_dateline_sender_extra_buffer_slots = false,
-        .enable_dateline_receiver_extra_buffer_slots = true,
-        .enable_dateline_upstream_sender_extra_buffer_slots = false,
-        .enable_dateline_upstream_receiver_extra_buffer_slots = false,
-    };
-    this->dateline_router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
-        this->channel_buffer_size_bytes_, this->topology_, dateline_edm_options);
+    auto short_axis = static_cast<std::size_t>(tt::tt_fabric::FabricEriscDatamoverAxis::Short);
+    auto long_axis = static_cast<std::size_t>(tt::tt_fabric::FabricEriscDatamoverAxis::Long);
+
+    // default router config don't care about the axis, since there's no optimization to it.
+    this->router_config_ = get_edm_config_options(
+        tt::tt_fabric::FabricEriscDatamoverType::Default, tt::tt_fabric::FabricEriscDatamoverAxis::Short);
+
+    // dateline edm router
+    this->dateline_router_config_[short_axis] = get_edm_config_options(
+        tt::tt_fabric::FabricEriscDatamoverType::Dateline, tt::tt_fabric::FabricEriscDatamoverAxis::Short);
+    this->dateline_router_config_[long_axis] = get_edm_config_options(
+        tt::tt_fabric::FabricEriscDatamoverType::Dateline, tt::tt_fabric::FabricEriscDatamoverAxis::Long);
+
+    // dateline upstream edm router
+    this->dateline_upstream_router_config_[short_axis] = get_edm_config_options(
+        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream, tt::tt_fabric::FabricEriscDatamoverAxis::Short);
+    this->dateline_upstream_router_config_[long_axis] = get_edm_config_options(
+        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream, tt::tt_fabric::FabricEriscDatamoverAxis::Long);
+
+    // dateline upstream adjacent edm router
+    this->dateline_upstream_adjcent_router_config_[short_axis] = get_edm_config_options(
+        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice,
+        tt::tt_fabric::FabricEriscDatamoverAxis::Short);
+    this->dateline_upstream_adjcent_router_config_[long_axis] = get_edm_config_options(
+        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice,
+        tt::tt_fabric::FabricEriscDatamoverAxis::Long);
+
+    // dateline upstream adjacent upstream edm router
+    this->dateline_upstream_adjcent_upstream_router_config_[short_axis] = get_edm_config_options(
+        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream,
+        tt::tt_fabric::FabricEriscDatamoverAxis::Short);
+    this->dateline_upstream_adjcent_upstream_router_config_[long_axis] = get_edm_config_options(
+        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream,
+        tt::tt_fabric::FabricEriscDatamoverAxis::Long);
+
+    this->num_devices = tt::tt_metal::GetNumAvailableDevices();
+    auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
+    if (this->num_devices != 4 && num_pcie_devices == 4) {
+        // adding TG's 4 dispatch devices
+        this->num_devices += num_pcie_devices;
+    }
+    this->master_router_chans_.resize(num_devices, UNINITIALIZED_MASTER_ROUTER_CHAN);
+    this->num_initialized_routers_.resize(num_devices, UNINITIALIZED_ROUTERS);
+
     set_routing_mode(this->topology_, this->fabric_config_);
 }
 
@@ -117,42 +170,77 @@ size_t FabricContext::get_fabric_max_payload_size_bytes() const { return this->m
 
 size_t FabricContext::get_fabric_channel_buffer_size_bytes() const { return this->channel_buffer_size_bytes_; }
 
-tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_config(bool is_dateline) const {
-    if (is_dateline) {
-        TT_FATAL(this->dateline_router_config_ != nullptr, "Error, fabric dateline router config is uninitialized");
-        return *this->dateline_router_config_.get();
-    } else {
-        TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
-        return *this->router_config_.get();
+tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_config(
+    tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type,
+    tt::tt_fabric::FabricEriscDatamoverAxis fabric_edm_axis) const {
+    auto axis_index = static_cast<std::size_t>(fabric_edm_axis);
+    switch (fabric_edm_type) {
+        case tt::tt_fabric::FabricEriscDatamoverType::Default:
+            TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
+            return *this->router_config_.get();
+            break;
+        case tt::tt_fabric::FabricEriscDatamoverType::Dateline:
+            TT_FATAL(
+                this->dateline_router_config_[axis_index] != nullptr,
+                "Error, fabric dateline router config is uninitialized");
+            return *this->dateline_router_config_[axis_index].get();
+            break;
+        case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream:
+            TT_FATAL(
+                this->dateline_upstream_router_config_[axis_index] != nullptr,
+                "Error, fabric dateline upstream router config is uninitialized");
+            return *this->dateline_upstream_router_config_[axis_index].get();
+            break;
+        case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice:
+            TT_FATAL(
+                this->dateline_upstream_adjcent_router_config_[axis_index] != nullptr,
+                "Error, fabric dateline upstream adjacent device router config is uninitialized");
+            return *this->dateline_upstream_adjcent_router_config_[axis_index].get();
+            break;
+        case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream:
+            TT_FATAL(
+                this->dateline_upstream_adjcent_upstream_router_config_[axis_index] != nullptr,
+                "Error, fabric dateline upstream adjacent device upstream router config is uninitialized");
+            return *this->dateline_upstream_adjcent_upstream_router_config_[axis_index].get();
+            break;
+        default: TT_FATAL(false, "Error, invalid fabric edm type");
     }
 };
 
 void FabricContext::set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers) {
-    auto it = this->num_initialized_routers_.find(chip_id);
+    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
     TT_FATAL(
-        it == this->num_initialized_routers_.end(),
-        "Error, tried to set num initialized routers again for the same device");
+        this->num_initialized_routers_[chip_id] == UNINITIALIZED_ROUTERS,
+        "Error, tried to set num initialized routers again for device {}",
+        chip_id);
     this->num_initialized_routers_[chip_id] = num_routers;
 }
 
 uint32_t FabricContext::get_num_fabric_initialized_routers(chip_id_t chip_id) const {
-    auto it = this->num_initialized_routers_.find(chip_id);
+    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
     TT_FATAL(
-        it != this->num_initialized_routers_.end(), "Error, querying num initialized routers for an unknown device");
-    return it->second;
+        this->num_initialized_routers_[chip_id] != UNINITIALIZED_ROUTERS,
+        "Error, querying num initialized routers for an unknown device {}",
+        chip_id);
+    return this->num_initialized_routers_[chip_id];
 }
 
 void FabricContext::set_fabric_master_router_chan(chip_id_t chip_id, chan_id_t chan_id) {
-    auto it = this->master_router_chans_.find(chip_id);
+    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
     TT_FATAL(
-        it == this->master_router_chans_.end(), "Error, tried to set master router channel again for the same device");
+        this->master_router_chans_[chip_id] == UNINITIALIZED_MASTER_ROUTER_CHAN,
+        "Error, tried to set master router channel again for the same device {}",
+        chip_id);
     this->master_router_chans_[chip_id] = chan_id;
 }
 
 chan_id_t FabricContext::get_fabric_master_router_chan(chip_id_t chip_id) const {
-    auto it = this->master_router_chans_.find(chip_id);
-    TT_FATAL(it != this->master_router_chans_.end(), "Error, querying master router channel for an unknown device");
-    return it->second;
+    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
+    TT_FATAL(
+        this->master_router_chans_[chip_id] != UNINITIALIZED_MASTER_ROUTER_CHAN,
+        "Error, querying master router channel for an unknown device {}",
+        chip_id);
+    return this->master_router_chans_[chip_id];
 }
 
 std::vector<size_t> FabricContext::get_fabric_router_addresses_to_clear() const {

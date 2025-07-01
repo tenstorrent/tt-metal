@@ -345,7 +345,6 @@ def test_upsample_multicore_corerange(
 @pytest.mark.parametrize("math_approx_mode", [True, False])
 def test_bilinear_multi_core(
     device,
-    use_program_cache,
     batch_size,
     num_channels,
     height,

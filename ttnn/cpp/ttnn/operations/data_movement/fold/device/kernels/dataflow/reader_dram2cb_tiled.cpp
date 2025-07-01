@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <cstdint>
 #include "dataflow_api.h"
-#include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     constexpr uint32_t ntiles_per_row = get_compile_time_arg_val(0);

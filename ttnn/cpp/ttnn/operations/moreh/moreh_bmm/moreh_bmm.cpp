@@ -4,7 +4,7 @@
 
 #include "moreh_bmm.hpp"
 
-#include "cpp/ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
+#include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
 
 namespace ttnn::operations::moreh::moreh_bmm {
 Tensor MorehBMM::invoke(

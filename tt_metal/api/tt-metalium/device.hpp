@@ -149,11 +149,10 @@ public:
     virtual CommandQueue& command_queue(size_t cq_id = 0) = 0;
 
     // Metal trace device capture mode
-    virtual void begin_trace(const uint8_t cq_id, const uint32_t tid) = 0;
-    virtual void end_trace(const uint8_t cq_id, const uint32_t tid) = 0;
-    virtual void replay_trace(
-        const uint8_t cq_id, const uint32_t tid, const bool block_on_device, const bool block_on_worker_thread) = 0;
-    virtual void release_trace(const uint32_t tid) = 0;
+    virtual void begin_trace(uint8_t cq_id, uint32_t tid) = 0;
+    virtual void end_trace(uint8_t cq_id, uint32_t tid) = 0;
+    virtual void replay_trace(uint8_t cq_id, uint32_t tid, bool block_on_device, bool block_on_worker_thread) = 0;
+    virtual void release_trace(uint32_t tid) = 0;
 
     virtual std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) = 0;
     virtual uint32_t get_trace_buffers_size() const = 0;
@@ -167,17 +166,18 @@ public:
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
     virtual bool initialize(
-        const uint8_t num_hw_cqs,
+        uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) = 0;
-    virtual void reset_cores() = 0;
-    virtual void initialize_and_launch_firmware() = 0;
     virtual void init_command_queue_host() = 0;
     virtual void init_command_queue_device() = 0;
 
+    // return false if compile fails (mainly come from Nebula on TG)
+    virtual bool compile_fabric() = 0;
+    virtual void configure_fabric() = 0;
     virtual void init_fabric() = 0;
     // Puts device into reset
     virtual bool close() = 0;
@@ -185,6 +185,7 @@ public:
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     virtual void enable_program_cache() = 0;
+    virtual void clear_program_cache() = 0;
     virtual void disable_and_clear_program_cache() = 0;
     void set_program_cache_misses_allowed(bool allowed);
     virtual program_cache::detail::ProgramCache& get_program_cache() = 0;
@@ -214,10 +215,6 @@ public:
     virtual void reset_sub_device_stall_group() = 0;
     virtual uint32_t num_sub_devices() const = 0;
     virtual uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) = 0;
-
-    // TODO #15944: Temporary api until migration to actual fabric is complete
-    virtual std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
 
     virtual bool is_mmio_capable() const = 0;
 

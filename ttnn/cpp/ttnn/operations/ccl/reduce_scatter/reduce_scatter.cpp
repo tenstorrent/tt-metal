@@ -4,7 +4,7 @@
 
 #include "reduce_scatter.hpp"
 
-#include "cpp/ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
 
 namespace ttnn::operations::ccl {
 

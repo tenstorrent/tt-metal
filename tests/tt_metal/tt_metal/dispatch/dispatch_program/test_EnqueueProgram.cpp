@@ -29,6 +29,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include "buffer_types.hpp"
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -224,9 +225,8 @@ bool cb_config_successful(IDevice* device, Program& program, const DummyProgramM
     return pass;
 }
 
-bool test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoord& eth_core_coord) {
+void test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoord& eth_core_coord) {
     Program program;
-    bool pass = true;
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
 
     constexpr uint32_t num_runtime_args0 = 9;
@@ -257,9 +257,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED),
         dummy_kernel0_args.size() * sizeof(uint32_t));
 
-    pass &= (dummy_kernel0_args == dummy_kernel0_args_readback);
-
-    return pass;
+    ASSERT_EQ(dummy_kernel0_args, dummy_kernel0_args_readback);
 }
 
 bool test_dummy_EnqueueProgram_with_cbs(IDevice* device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
@@ -362,7 +360,8 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
     uint32_t num_runtime_args_dm0,
     uint32_t num_runtime_args_dm1,
     uint32_t num_runtime_args_compute,
-    uint32_t num_iterations) {
+    uint32_t num_iterations,
+    bool do_checks = true) {
     Program program;
     bool pass = true;
 
@@ -433,6 +432,11 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
         EnqueueProgram(cq, program, false);
     }
     Finish(cq);
+
+    // Early return to skip slow dispatch path
+    if (!do_checks) {
+        return pass;
+    }
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         for (const CoreCoord& core_coord : core_range) {
@@ -976,6 +980,64 @@ void test_my_coordinates(IDevice* device, tt::RISCV processor_class, size_t cq_i
     tt::tt_metal::verify_kernel_coordinates(processor_class, cr, device, tt::tt_metal::SubDeviceId{0}, cb_addr);
 }
 
+void test_basic_dispatch_functions(IDevice* device, int cq_id) {
+    CoreRange cr({0, 0}, {0, 0});
+    CoreRangeSet cr_set({cr});
+
+    constexpr uint32_t k_DataSize = 64 * 1024;
+    constexpr uint32_t k_PageSize = 4 * 1024;
+    constexpr uint32_t k_Iterations = 10;
+    constexpr uint32_t k_LoopPerDev = 100;
+
+    DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+
+    log_info(tt::LogTest, "Running On Device {} CQ{}", device->id(), cq_id);
+
+    // Alternate write patterns
+    std::vector<uint32_t> src_data_1(k_DataSize / sizeof(uint32_t));
+    std::vector<uint32_t> src_data_2(k_DataSize / sizeof(uint32_t));
+    for (int i = 0; i < k_DataSize / sizeof(uint32_t); ++i) {
+        src_data_1[i] = (device->id() + rand()) * 0xdeadbeef;
+        src_data_2[i] = (device->id() + rand()) * 0xabcd1234;
+    }
+    auto buffer = CreateBuffer(InterleavedBufferConfig{device, k_DataSize, k_PageSize, BufferType::L1});
+    auto dram_buffer = CreateBuffer(InterleavedBufferConfig{device, k_DataSize, k_PageSize, BufferType::DRAM});
+    auto& cq = device->command_queue(cq_id);
+    for (int iteration = 0; iteration < k_Iterations; ++iteration) {
+        for (int i = 0; i < k_LoopPerDev; ++i) {
+            EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+                device, cq, dummy_program_config, 24, 12, 15, k_LoopPerDev, false));
+
+            std::vector<uint32_t> dst_data;
+            if (i & 1) {
+                EnqueueWriteBuffer(cq, *buffer, src_data_1, false);
+                EnqueueReadBuffer(cq, *buffer, dst_data, true);
+                EXPECT_EQ(src_data_1, dst_data);
+            } else {
+                EnqueueWriteBuffer(cq, *dram_buffer, src_data_2, false);
+                EnqueueReadBuffer(cq, *dram_buffer, dst_data, true);
+                EXPECT_EQ(src_data_2, dst_data);
+            }
+        }
+    }
+
+    // non blocking fast data movement APIs
+    for (int iteration = 0; iteration < k_Iterations; ++iteration) {
+        for (int i = 0; i < k_LoopPerDev; ++i) {
+            EnqueueWriteBuffer(cq, *buffer, src_data_1, false);
+        }
+    }
+
+    std::vector<uint32_t> dst_data;
+    for (int iteration = 0; iteration < k_Iterations; ++iteration) {
+        for (int i = 0; i < k_LoopPerDev; ++i) {
+            EnqueueReadBuffer(cq, *buffer, dst_data, false);
+        }
+    }
+
+    Finish(cq);
+}
+
 }  // namespace local_test_functions
 
 namespace basic_tests {
@@ -1185,7 +1247,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixSetCommonRuntimeArgsMultipleC
 TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthEnqueueDummyProgram) {
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
-            ASSERT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, eth_core));
+            local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, eth_core);
         }
     }
 }
@@ -1249,6 +1311,31 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestRuntimeArgsCorrectlySentS
     for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
             device, device->command_queue(), dummy_program_config, 9, 12, 15, 1));
+    }
+}
+
+auto CommandQueueFabricConfigsToTest = ::testing::Values(
+    tt::tt_metal::FabricConfig::FABRIC_1D,
+    tt::tt_metal::FabricConfig::FABRIC_1D_RING,
+    tt::tt_metal::FabricConfig::FABRIC_2D,
+    tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
+
+INSTANTIATE_TEST_SUITE_P(CommandQueue, CommandQueueOnFabricMultiDeviceFixture, CommandQueueFabricConfigsToTest);
+
+INSTANTIATE_TEST_SUITE_P(
+    MultiCommandQueue, MultiCommandQueueOnFabricMultiDeviceFixture, CommandQueueFabricConfigsToTest);
+
+TEST_P(CommandQueueOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunctions) {
+    for (IDevice* device : devices_) {
+        local_test_functions::test_basic_dispatch_functions(device, 0);
+    }
+}
+
+TEST_P(MultiCommandQueueOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunctions) {
+    for (IDevice* device : devices_) {
+        for (int cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+            local_test_functions::test_basic_dispatch_functions(device, cq_id);
+        }
     }
 }
 
@@ -1876,7 +1963,7 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
             if (i % 10 == 0) {
                 log_debug(
                     tt::LogTest,
-                    "Enqueueing {} programs on cq {} for iter: {}/{} now.",
+                    "Enqueuing {} programs on cq {} for iter: {}/{} now.",
                     programs.size(),
                     (uint32_t)cq_id,
                     i + 1,
@@ -2145,8 +2232,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
         auto rng = std::default_random_engine{};
         std::shuffle(std::begin(programs), std::end(programs), rng);
         if (i % 50 == 0) {
-            log_info(
-                tt::LogTest, "Enqueueing {} programs for iter: {}/{} now.", programs.size(), i + 1, NUM_ITERATIONS);
+            log_info(tt::LogTest, "Enqueuing {} programs for iter: {}/{} now.", programs.size(), i + 1, NUM_ITERATIONS);
         }
         for (Program& program : programs) {
             EnqueueProgram(this->device_->command_queue(), program, false);

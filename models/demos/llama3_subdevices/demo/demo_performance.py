@@ -100,8 +100,8 @@ def run_llama3_decode_performance(
     tt_device_name = model_args.device_name  # ["N150", "N300", "T3K", "TG"]
 
     if llama_model_name == "3.1-70B":
-        assert tt_device_name in ["TG"], "Llama3.1-70B is only supported on TG"
-        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama3.1-70B"
+        assert tt_device_name in ["TG"], "Llama-3.1-70B is only supported on TG"
+        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama-3.1-70B"
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
@@ -126,7 +126,7 @@ def run_llama3_decode_performance(
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         )
 
-    # Load TTNN Llama3.1 model
+    # Load TTNN Llama-3.1 model
     logger.info("Loading weights to device...")
     profiler.start("loading_weights_to_device")
     tt_model = TtTransformer(
@@ -458,7 +458,6 @@ def test_llama_decode_performance(
     weights,
     layers,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     reset_seeds,
 ):

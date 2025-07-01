@@ -236,6 +236,7 @@ class CMakeBuild(build_ext):
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
         lib_patterns = [
             "_ttnn.so",
+            "_ttnncpp.so",
             "libtt_metal.so",
             "libdevice.so",
         ]

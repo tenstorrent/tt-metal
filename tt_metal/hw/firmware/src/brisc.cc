@@ -249,7 +249,7 @@ void device_setup() {
 
 inline void deassert_ncrisc_trisc() {
     // Below sets ncrisc to go so we can wait until it is cleared on first iteration
-    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_INIT;
 
     // Bring ncrisc/triscs out of reset
     deassert_all_reset();
@@ -341,9 +341,10 @@ int main() {
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
     mailboxes->ncrisc_halt.resume_addr = 0;
-    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
     deassert_ncrisc_trisc();
 
+    // Wait for all cores to be finished initializing before reporting initialization done.
+    wait_ncrisc_trisc();
     mailboxes->go_message.signal = RUN_MSG_DONE;
 
     // Initialize the NoCs to a safe state

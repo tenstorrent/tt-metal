@@ -81,12 +81,12 @@ page](docs/source/tt-metalium/get_started/get_started.rst).
 ### Setting logger level
 
 In order to get debug level log messages, set the environment variable
-`TT_METAL_LOGGER_LEVEL=Debug`.
+`TT_LOGGER_LEVEL=Debug`.
 
 For example,
 
 ```
-TT_METAL_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
+TT_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
 ```
 
 ### Building and viewing the documentation locally
@@ -170,8 +170,8 @@ You must run post-commit regressions before you commit something.
 These regressions will also run after every pushed commit to the GitHub repo.
 
 ```
-cmake --build build --target install
-cmake --build build --target tests
+# Build directly with CMake for full control or run the provided script for building all tests.
+./build_metal.sh --build-tests
 ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit
 ```
 
@@ -219,9 +219,10 @@ We have a legacy suite of C++ integration tests that are built like standalone
 executables. This section goes over how to generally run such tests if there's
 a specific one you'd like to run.
 
-1. Build the API integration tests using the make command,
+1. Build the API integration tests:
 ```
-cmake --build build --target tests
+# Build directly with CMake for full control or run the provided script for building all tests.
+./build_metal.sh --build-tests
 ```
 2. Run the test binaries from the path **${TT_METAL_HOME}/build/test/tt_metal**
 
@@ -235,9 +236,10 @@ You can use `--gtest_filter` to filter out the specific test you'd like.
 For example, to build and run the `DispatchFixture.TensixDRAMLoopbackSingleCore` on
 fast dispatch, you can
 
-1. Build the unit tests:
+1. Build the tests:
    ```
-   cmake --build build --target tests
+   # Build directly with CMake for full control or run the provided script for building all tests.
+   ./build_metal.sh --build-tests
    ```
 2. Run the test:
    ```

@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "squeeze.hpp"
-#include "tt-metalium/small_vector.hpp"
+#include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& dim) {
-    const auto original_logical_shape = input_tensor.logical_shape();
-    const auto padded_shape = input_tensor.padded_shape();
+    const auto& original_logical_shape = input_tensor.logical_shape();
+    const auto& padded_shape = input_tensor.padded_shape();
     auto input_tensor_rank = original_logical_shape.rank();
 
     SmallVector<uint32_t> new_logical_shape(original_logical_shape.cbegin(), original_logical_shape.cend());

@@ -530,7 +530,7 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::IDevice* device)
                 convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
 
             // log_info(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank, dram_address);
-            // print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));
+            // print_vec_of_bfloat16(result_flat_layout, 1, "Result - tile#" + std::to_string(tile_id));
             pass &= (golden_tile == result_flat_layout);
         }
     }

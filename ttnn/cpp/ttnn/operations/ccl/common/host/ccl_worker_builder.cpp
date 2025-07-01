@@ -6,18 +6,17 @@
 #include <iterator>
 
 #include "hostdevcommon/kernel_structs.h"
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include <tt-metalium/fabric.hpp>
 #include "tt-metalium/kernel_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/erisc_datamover_builder.hpp>
 
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/host_api.hpp>
 
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 #include <tt_stl/overloaded.hpp>
 
 #include <optional>
@@ -1296,12 +1295,16 @@ void generate_multi_input_command_stream_kernel_rt_args(
     rt_args.push_back(forward_device.has_value() and forward_device.value());
     auto worker_core = corerange_to_cores(worker_core_range).at(0);
     if (forward_device.has_value() and forward_device.value()) {
-        tt::tt_fabric::append_fabric_connection_rt_args(device->id(), forward_device.value()->id(), link, program, {worker_core}, rt_args);
+        const auto device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+        const auto forward_device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        tt::tt_fabric::append_fabric_connection_rt_args(device_fabric_node_id, forward_device_fabric_node_id, link, program, {worker_core}, rt_args);
     }
 
     rt_args.push_back(backward_device.has_value() and backward_device.value());
     if (backward_device.has_value() and backward_device.value()) {
-        tt::tt_fabric::append_fabric_connection_rt_args(device->id(), backward_device.value()->id(), link, program, {worker_core}, rt_args);
+        const auto device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+        const auto backward_device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        tt::tt_fabric::append_fabric_connection_rt_args(device_fabric_node_id, backward_device_fabric_node_id, link, program, {worker_core}, rt_args);
     }
 
     for (size_t i = 0; i < num_command_streams; i++) {

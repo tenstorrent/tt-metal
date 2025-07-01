@@ -9,10 +9,13 @@
 #include <tt-metalium/command_queue.hpp>
 
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
+#include "dispatch/cq_shared_state.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "mesh_trace.hpp"
+#include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
+#include "tt_metal/impl/program/dispatch.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -33,7 +36,6 @@ class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
     void populate_read_descriptor_queue();
     void populate_virtual_program_dispatch_core();
-    void populate_dispatch_core_type();
     CoreCoord virtual_program_dispatch_core() const;
     CoreType dispatch_core_type() const;
 
@@ -51,6 +53,9 @@ private:
         bool stall_first,
         bool stall_before_program,
         uint32_t program_runtime_id);
+    // Captures a dispatch command to reset the expected number of workers. Used when the worker
+    // counter on the host overflows.
+    void capture_expected_worker_count_reset_cmd(uint32_t previous_expected_workers, SubDeviceId sub_device);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Go signals
     // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
     // When running trace, the dispatch commands responsible for forwarding go signals must be
@@ -60,7 +65,8 @@ private:
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
-        bool unicast_go_signals);
+        bool unicast_go_signals,
+        const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // Workload dispatch utility functions
     // Write dispatch commands associated with running a program on a Virtual Mesh subgrid
     void write_program_cmds_to_subgrid(
@@ -78,7 +84,8 @@ private:
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
-        bool unicast_go_signals);
+        bool unicast_go_signals,
+        const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // When the device profiler is not enabled, launch messages are identical across all physical devices running the
     // same program, to reduce state managed on host. When the profiler is enabled, the host_assigned_id field in the
     // launch message must be unique across physical devices to accurately capture program execution time on host and
@@ -104,7 +111,7 @@ private:
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
     // Shared across all MeshCommandQueue instances for a MeshDevice.
-    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state_;
+    std::shared_ptr<CQSharedState> cq_shared_state_;
 
     DispatchArray<uint32_t> expected_num_workers_completed_;
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
@@ -120,7 +127,7 @@ private:
     std::vector<MeshTraceStagingMetadata> ordered_mesh_trace_md_;
 
     CoreCoord dispatch_core_;
-    CoreType dispatch_core_type_ = CoreType::WORKER;
+    const CoreType dispatch_core_type_;
     // MeshCommandQueues and the MeshDevice share thread-pools for dispatching to and reading from the Mesh
     std::shared_ptr<ThreadPool>
         reader_thread_pool_;  // Thread pool used to read from the Mesh (used by the Completion Queue Reader thread)
@@ -152,6 +159,15 @@ private:
     // This is temporary - will not be needed when we MeshCommandQueue is the only dispatch interface.
     std::atomic<bool> in_use_ = false;
 
+    const uint32_t prefetcher_dram_aligned_block_size_;
+    const uint64_t prefetcher_cache_sizeB_;
+    const uint32_t prefetcher_dram_aligned_num_blocks_;
+    const uint32_t prefetcher_cache_manager_size_;
+    // The prefetcher cache manager is used to track the state of the prefetcher cache.
+    std::unique_ptr<RingbufferCacheManager> prefetcher_cache_manager_;
+    // The backup prefetcher cache manager is used to stash away the prefetcher cache state during trace recording.
+    std::unique_ptr<RingbufferCacheManager> dummy_prefetcher_cache_manager_;
+
 protected:
     void write_shard_to_device(
         const MeshBuffer& buffer,
@@ -174,7 +190,7 @@ public:
         uint32_t id,
         std::shared_ptr<ThreadPool>& dispatch_thread_pool,
         std::shared_ptr<ThreadPool>& reader_thread_pool,
-        std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state);
+        std::shared_ptr<CQSharedState>& cq_shared_state);
 
     ~FDMeshCommandQueue() override;
 
@@ -221,6 +237,11 @@ public:
     void copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor);
     // Helper function - read L1 data from Completion Queue
     void read_l1_data_from_completion_queue(MeshCoreDataReadDescriptor& read_l1_data_descriptor);
+
+    // Prefetcher Cache Manager APIs
+    std::pair<bool, size_t> query_prefetcher_cache(uint64_t workload_id, uint32_t lengthB);
+    void reset_prefetcher_cache_manager();
+    int get_prefetcher_cache_sizeB() const;
 };
 
 }  // namespace tt::tt_metal::distributed

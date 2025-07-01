@@ -98,7 +98,6 @@ jobs:
         GITHUB_ACTIONS: true
         LOGURU_LEVEL: DEBUG
         PYTHONPATH: /work
-        TT_METAL_HOME: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -135,12 +134,12 @@ jobs:
         run: |
           source /opt/conda/etc/profile.d/conda.sh
           conda activate metalium_env
-          export SITE_PACKAGES_DIR="$CONDA_PREFIX/lib/python$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages"
-          rm -rf $CONDA_PREFIX/share/tt-metalium/runtime/sfpi
-          wget https://github.com/tenstorrent/sfpi/releases/download/v6.5.0/sfpi-release.tgz
-          tar -xzf sfpi-release.tgz
-          mv sfpi $CONDA_PREFIX/share/tt-metalium/runtime/
-          ln -sf $SITE_PACKAGES_DIR/runtime runtime
+          wget -O /tmp/sfpi-version.sh https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/sfpi-version.sh
+          sfpi_arch_os=$(uname -m)_$(uname -s)
+          source /tmp/sfpi-version.sh
+          wget ${sfpi_url}/${sfpi_version}/sfpi-${sfpi_arch_os}.rpm
+          dnf -y install ./sfpi-${sfpi_arch_os}.rpm
+          rm -f sfpi-${sfpi_arch_os}.rpm /tmp/sfpi-version.sh
           export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
           ${{ matrix.test-group.cmd }}
 

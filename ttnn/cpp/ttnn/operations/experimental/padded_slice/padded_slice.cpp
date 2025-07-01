@@ -55,14 +55,13 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     }
 
     TT_FATAL(no_step, "Steps != 1 are not supported for padded_slice.");
-    TT_FATAL(input_layout == Layout::ROW_MAJOR, "Only Row Major Inputs are supported for padded_slice.");
     TT_FATAL(memory_config.is_sharded(), "Output Memory Config must be sharded. Use slice for non-sharded outputs.");
     TT_FATAL(!input_tensor.memory_config().is_sharded(), " padded_slice does not support sharded inputs.");
 
     auto ret_adjustment([&](const ttnn::Tensor& ret_input_tensor) {
         if (ret_input_tensor.storage_type() == StorageType::DEVICE) {
             auto tensor = ttnn::to_memory_config(ret_input_tensor, memory_config, std::nullopt);
-            tensor = ttnn::to_layout(tensor, input_layout, std::nullopt, std::nullopt, (IDevice*)nullptr);
+            tensor = ttnn::to_layout(tensor, input_layout);
             return tensor;
         }
         return ret_input_tensor;

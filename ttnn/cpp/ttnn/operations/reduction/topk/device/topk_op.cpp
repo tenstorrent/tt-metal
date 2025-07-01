@@ -13,9 +13,9 @@ static inline uint32_t largest_power_of_two(std::uint32_t x) { return x == 0 ? 0
 
 static inline bool verify_multi_core_cost(
     const std::vector<Tensor>& input_tensors,
-    uint16_t width,
-    uint16_t min_dim,
-    uint16_t max_dim,
+    uint32_t width,
+    uint32_t min_dim,
+    uint32_t max_dim,
     uint32_t k,
     const CoreRangeSet& core_range_set) {
     auto device = input_tensors.at(0).device();
@@ -27,10 +27,10 @@ static inline bool verify_multi_core_cost(
 
     const auto core_range = core_range_set.ranges().at(0);
     const auto max_cores = core_range.end_coord.y - core_range.start_coord.y - 1;
-    uint16_t start_split_size = width / largest_power_of_two(max_cores);
-    for (uint16_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
-        uint16_t rem = width % split_size;
-        uint16_t num_cores = width / split_size + (rem > 0);
+    uint32_t start_split_size = width / largest_power_of_two(max_cores);
+    for (uint32_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
+        uint32_t rem = width % split_size;
+        uint32_t num_cores = width / split_size + (rem > 0);
         uint32_t memory_cost_gather =
             2 * num_cores * (value_tile_size + index_tile_size);  // gathering one index and one value tile from each
                                                                   // local core, allocating two CBs for each
@@ -178,17 +178,7 @@ operation::ProgramWithCallbacks TopK::create_program(
 
     multicore_supported &= (this->k <= 64);  // old implementation cannot handle k>64
 
-    if (!multicore_supported) {
-        return detail::topk_single_core_interleaved(
-            input_tensor,
-            this->k,
-            this->dim,
-            this->largest,
-            this->sorted,
-            this->sub_core_grids,
-            output_tensors.at(0),
-            output_tensors.at(1));
-    } else {
+    if (multicore_supported) {
         return detail::topk_multicore_interleaved(
             input_tensor,
             this->k,
@@ -199,6 +189,16 @@ operation::ProgramWithCallbacks TopK::create_program(
             output_tensors.at(0),
             output_tensors.at(1));
     }
+
+    return detail::topk_single_core_interleaved(
+        input_tensor,
+        this->k,
+        this->dim,
+        this->largest,
+        this->sorted,
+        this->sub_core_grids,
+        output_tensors.at(0),
+        output_tensors.at(1));
 }
 
 }  // namespace ttnn::operations::reduction

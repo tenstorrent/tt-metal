@@ -1420,19 +1420,6 @@ std::vector<T> get_col_slice(std::vector<T> data, int start_col_index, int num_c
     return result;
 }
 
-void print_vec(const std::vector<float>& data, int rows, int cols, const string& name) {
-    std::cout << name << ": " << std::endl;
-    int index = 0;
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            std::cout << data.at(index) << " ";
-            index++;
-        }
-        std::cout << std::endl;
-    }
-    std::cout << std::endl;
-}
-
 void prepare_inputs(
     tt_metal::IDevice* device,
     CoreCoord core_range,
@@ -1532,6 +1519,7 @@ bool validation_single_core(
     }
 
     std::vector<float> result_vec;
+    result_vec.reserve(result_untilized.size());
     for (int i = 0; i < result_untilized.size(); ++i) {
         result_vec.push_back(to_float(static_cast<bfloat16>(result_untilized[i])));
     }

@@ -38,7 +38,10 @@ volatile tt_reg_ptr uint * mailbox_base[4] = {
 };
 }
 
-extern "C" uint32_t kernel_launch() {
+extern "C" [[gnu::section(".start")]]
+uint32_t _start() {
+    // Enable GPREL optimizations.
+    asm("0: .reloc 0b, R_RISCV_NONE, __global_pointer$");
     mark_stack_usage();
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     wait_for_go_message();

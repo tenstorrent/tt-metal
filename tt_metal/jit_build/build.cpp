@@ -257,6 +257,7 @@ void JitBuildEnv::init(
         "..",
         root_,
         root_ + "ttnn",
+        root_ + "ttnn/cpp",
         root_ + "tt_metal",
         root_ + "tt_metal/include",
         root_ + "tt_metal/hw/inc",
@@ -271,8 +272,7 @@ void JitBuildEnv::init(
         root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/common/inc",
         root_ + "tt_metal/api/",
         root_ + "tt_metal/api/tt-metalium/",
-        root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib"
-    };
+        root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib"};
 
     std::ostringstream oss;
     for (size_t i = 0; i < includeDirs.size(); ++i) {
@@ -321,21 +321,20 @@ void JitBuildState::finish_init() {
     // Append hw build objects compiled offline
     std::string build_dir =
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() + "runtime/hw/lib/" + get_alias(env_.arch_) + "/";
-    if (this->is_fw_) {
-        if (this->target_name_ != "erisc") {
-            this->link_objs_ += build_dir + "tmu-crt0.o ";
-        }
-        if (this->target_name_ == "ncrisc" and this->env_.arch_ == tt::ARCH::WORMHOLE_B0) {
-            this->link_objs_ += build_dir + "ncrisc-halt-wormhole.o ";
+    if (this->is_fw_ and this->target_name_ != "erisc") {
+        this->link_objs_ += build_dir + "tmu-crt0.o ";
+    }
+
+    if (this->env_.arch_ == tt::ARCH::WORMHOLE_B0 and this->target_name_ == "ncrisc") {
+        // ncrisc wormhole kernels have an exciting entry sequence
+        if (this->is_fw_) {
+            this->link_objs_ += build_dir + "wh-iram-trampoline.o ";
             this->link_objs_ += build_dir + "tdma_xmov.o ";
-        }
-    } else {
-        if (this->target_name_ == "ncrisc" and this->env_.arch_ == tt::ARCH::WORMHOLE_B0) {
-            this->link_objs_ += build_dir + "tmu-crt0k-ncrisc.o ";
-        } else if (this->target_name_ != "erisc") {
-            this->link_objs_ += build_dir + "tmu-crt0k.o ";
+        } else {
+            this->link_objs_ += build_dir + "wh-iram-start.o ";
         }
     }
+
     if (this->target_name_ == "brisc" or this->target_name_ == "idle_erisc") {
         this->link_objs_ += build_dir + "noc.o ";
     }

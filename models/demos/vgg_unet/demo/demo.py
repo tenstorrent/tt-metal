@@ -11,8 +11,8 @@ import torch
 
 from models.demos.vgg_unet.demo.demo_utils import postprocess, prediction, preprocess, process_single_image
 from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
-from models.demos.vgg_unet.ttnn.model_preprocessing import create_vgg_unet_model_parameters
-from models.demos.vgg_unet.ttnn.ttnn_vgg_unet import Tt_vgg_unet
+from models.demos.vgg_unet.tests.vgg_unet_e2e_performant import VggUnetTrace2CQ
+from models.utility_functions import disable_persistent_kernel_cache
 
 for dirname, _, filenames in os.walk("/kaggle/input"):
     for filename in filenames:
@@ -38,15 +38,20 @@ filterwarnings("ignore")
     "use_pretrained_weight",
     [
         False,
-        # True,
+        # True,  # Requires downloading pretrained weights from Google Drive
     ],
     ids=[
         "pretrained_weight_false",
         # "pretrained_weight_true",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_demo(device, reset_seeds, demo_type, model_type, use_pretrained_weight):
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+def test_demo(device, model_location_generator, reset_seeds, demo_type, model_type, use_pretrained_weight):
+    # https://github.com/tenstorrent/tt-metal/issues/23270
+    device.disable_and_clear_program_cache()
+    disable_persistent_kernel_cache()
     # Download latest version of the dataset
     path = kagglehub.dataset_download("mateuszbuda/lgg-mri-segmentation")
     for dirname, _, filenames in os.walk("/kaggle/input"):
@@ -54,14 +59,16 @@ def test_demo(device, reset_seeds, demo_type, model_type, use_pretrained_weight)
             print(os.path.join(dirname, filename))
     model_seg = UNetVGG19()
     if use_pretrained_weight:
-        model_seg.load_state_dict(torch.load("models/experimental/vgg_unet/vgg_unet_torch.pth"))
+        model_seg.load_state_dict(torch.load("models/demos/vgg_unet/vgg_unet_torch.pth"))
     model_seg.eval()  # Set to evaluation mode
 
     if model_type == "ttnn_model":
-        # Weights pre-processing
-        torch_input = torch.randn((1, 3, 256, 256), dtype=torch.float)
-        parameters = create_vgg_unet_model_parameters(model_seg, torch_input, device)
-        ttnn_model = Tt_vgg_unet(device, parameters, parameters.conv_args)
+        vgg_unet_trace_2cq = VggUnetTrace2CQ()
+
+        vgg_unet_trace_2cq.initialize_vgg_unet_trace_2cqs_inference(
+            device,
+            model_location_generator,
+        )
 
     if demo_type == "multi":
         X_test = preprocess(path)
@@ -69,7 +76,7 @@ def test_demo(device, reset_seeds, demo_type, model_type, use_pretrained_weight)
         if model_type == "torch_model":
             df_pred = prediction(X_test, model_seg, model_type)
         else:
-            df_pred = prediction(X_test, ttnn_model, model_type)
+            df_pred = prediction(X_test, vgg_unet_trace_2cq, model_type)
         postprocess(df_pred, X_test, model_type)
     else:
         base_path = path
@@ -84,14 +91,14 @@ def test_demo(device, reset_seeds, demo_type, model_type, use_pretrained_weight)
                 img_path,
                 mask_path,
                 model_seg,
-                output_dir="models/experimental/vgg_unet/demo/output_single_image",
+                output_dir="models/demos/vgg_unet/demo/output_single_image",
                 model_type=model_type,
             )
         else:
             process_single_image(
                 img_path,
                 mask_path,
-                ttnn_model,
-                output_dir="models/experimental/vgg_unet/demo/output_single_image_ttnn",
+                vgg_unet_trace_2cq,
+                output_dir="models/demos/vgg_unet/demo/output_single_image_ttnn",
                 model_type=model_type,
             )

@@ -5,13 +5,12 @@
 import pytest
 
 import torch
-import math
 
 import ttnn
 import itertools
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_blackhole, skip_for_blackhole
+from models.utility_functions import is_blackhole, skip_for_wormhole_b0
 
 
 def random_torch_tensor(dtype, shape):
@@ -80,7 +79,16 @@ def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w, dtype):
 @pytest.mark.parametrize(
     "perm", [(0,), (0, 1), (1, 0), (0, 1, 2), (0, 2, 1), (1, 2, 0), (1, 0, 2), (2, 0, 1), (2, 1, 0)]
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        ttnn.bfloat16,
+        pytest.param(
+            ttnn.int32,
+            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
+        ),
+    ],
+)
 def test_permute_on_less_than_4D(device, perm, dtype):
     torch.manual_seed(2005)
     shape = tuple([32 * (value + 1) for value in perm])
@@ -101,7 +109,9 @@ def test_permute_on_less_than_4D(device, perm, dtype):
 @pytest.mark.parametrize("s", [8])
 @pytest.mark.parametrize("h", [1500])
 @pytest.mark.parametrize("w", [64])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+# @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+# #24347: Looks like we have a non-det issue on N150 + N300
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_permute_for_specific_case(device, b, s, h, w, dtype):
     torch.manual_seed(2005)
     shape = (b, s, h, w)
@@ -232,9 +242,7 @@ def test_permute_5d_width(device, shape, perm, memory_config, dtype):
         ttnn.float32,
         pytest.param(
             ttnn.int32,
-            marks=pytest.mark.skip(
-                reason="possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"
-            ),
+            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
         ),
     ],
 )
@@ -287,9 +295,7 @@ def test_permute_squeeze(device, dtype):
         ttnn.float32,
         pytest.param(
             ttnn.int32,
-            marks=pytest.mark.skip(
-                reason="possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"
-            ),
+            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
         ),
     ],
 )
@@ -376,7 +382,16 @@ def test_permute_4d_wh(device, shape, dtype):
 @pytest.mark.parametrize(
     "shape", [[1, 1, 32, 32], [2, 2, 32, 32], [32, 32, 32, 32], [1, 1, 64, 64], [2, 2, 64, 64], [32, 32, 64, 64]]
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        ttnn.bfloat16,
+        pytest.param(
+            ttnn.int32,
+            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
+        ),
+    ],
+)
 def test_permute_4d_cnwh(device, shape, dtype):
     torch.manual_seed(2005)
     torch_tensor = random_torch_tensor(dtype, shape)
@@ -396,9 +411,7 @@ def test_permute_4d_cnwh(device, shape, dtype):
         ttnn.bfloat16,
         pytest.param(
             ttnn.int32,
-            marks=pytest.mark.skip(
-                reason="possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"
-            ),
+            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
         ),
     ],
 )
@@ -529,9 +542,7 @@ def test_permute_5d_yw_padded(device, shape, perm, dtype, pad_value):
         ttnn.float32,
         pytest.param(
             ttnn.int32,
-            marks=pytest.mark.skip(
-                reason="possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"
-            ),
+            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
         ),
     ],
 )
@@ -554,9 +565,7 @@ def test_permute_5d_yw_permutations(device, shape, perm, dtype):
         ttnn.bfloat16,
         pytest.param(
             ttnn.int32,
-            marks=pytest.mark.skip(
-                reason="possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"
-            ),
+            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
         ),
     ],
 )
@@ -579,9 +588,7 @@ def test_permute_4d_yw_permutations(device, shape, perm, dtype):
         ttnn.bfloat16,
         pytest.param(
             ttnn.int32,
-            marks=pytest.mark.skip(
-                reason="possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"
-            ),
+            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
         ),
     ],
 )
@@ -604,9 +611,7 @@ def test_permute_4d_whyx_permutations(device, shape, perm, dtype):
         ttnn.bfloat16,
         pytest.param(
             ttnn.int32,
-            marks=pytest.mark.skip(
-                reason="possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"
-            ),
+            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
         ),
     ],
 )
@@ -630,9 +635,7 @@ def test_permute_4d_other_permutations(device, shape, perm, dtype):
         ttnn.float32,
         pytest.param(
             ttnn.int32,
-            marks=pytest.mark.skip(
-                reason="possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"
-            ),
+            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
         ),
     ],
 )

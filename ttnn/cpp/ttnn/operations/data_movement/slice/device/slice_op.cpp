@@ -15,13 +15,12 @@ inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const t
 }
 
 inline __attribute__((always_inline)) uint32_t
-get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
+get_upper_start_offset(const ttnn::Shape& shape, Layout layout, const ttnn::Shape& slice_start) {
     // offset for every dim except last 2
     uint32_t start_offset = 0;
-    const auto& shape = tensor.padded_shape();
 
-    uint32_t num_pages = tensor.physical_volume();
-    if (tensor.layout() == Layout::TILE) {
+    uint32_t num_pages = shape.volume();
+    if (layout == Layout::TILE) {
         num_pages /= tt::constants::TILE_HW;
     } else {
         uint32_t page_width = shape[-1];
@@ -38,18 +37,34 @@ get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
     return start_offset;
 }
 
-uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& slice_start) {
+inline __attribute__((always_inline)) uint32_t
+get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
+    return get_upper_start_offset(tensor.padded_shape(), tensor.layout(), slice_start);
+}
+
+// Returns the start offset for a tiled tensor, given the input tensor and the slice start shape.
+// If round_up is true, and the slice_start is not aligned to a tile boundary, it will round up to the next tile.
+uint32_t get_tiled_start_offset(const ttnn::Shape& input_shape, const ttnn::Shape& slice_start, bool round_up) {
     using namespace tt::constants;
-    uint32_t num_input_pages = input_tensor.physical_volume() / (TILE_HW);
-    const auto& shape = input_tensor.padded_shape();
-    uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
-    uint32_t num_pages_width = num_input_pages / (upper_dims_compressed * (shape[-2] / TILE_HEIGHT));
+    uint32_t num_input_pages = input_shape.volume() / (TILE_HW);
+    uint32_t upper_dims_compressed = get_upper_dims_compressed(input_shape);
+    uint32_t num_pages_width = num_input_pages / (upper_dims_compressed * tt::div_up(input_shape[-2], TILE_HEIGHT));
 
     // offset for every dim except last 2
-    uint32_t start_offset = get_upper_start_offset(input_tensor, slice_start);
+    uint32_t start_offset = get_upper_start_offset(input_shape, Layout::TILE, slice_start);
 
-    start_offset += slice_start[-2] / TILE_HEIGHT * num_pages_width + slice_start[-1] / TILE_WIDTH;
+    if (round_up) {
+        start_offset +=
+            tt::div_up(slice_start[-2], TILE_HEIGHT) * num_pages_width + tt::div_up(slice_start[-1], TILE_WIDTH);
+    } else {
+        start_offset += slice_start[-2] / TILE_HEIGHT * num_pages_width + slice_start[-1] / TILE_WIDTH;
+    }
     return start_offset;
+}
+
+uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& slice_start, bool round_up) {
+    const auto& shape = input_tensor.padded_shape();
+    return get_tiled_start_offset(shape, slice_start, round_up);
 }
 
 uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {

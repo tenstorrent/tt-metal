@@ -11,13 +11,6 @@
 
 #include <tt-metalium/mesh_coord.hpp>
 
-namespace tt {
-namespace stl {
-template <typename T>
-class Indestructible;
-}  // namespace stl
-}  // namespace tt
-
 namespace tt::tt_metal::distributed {
 
 // SystemMesh creates a virtualization over the physical devices in the system.

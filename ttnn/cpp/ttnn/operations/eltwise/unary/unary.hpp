@@ -7,7 +7,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
-
 namespace ttnn {
 
 namespace operations {
@@ -38,7 +37,7 @@ struct ExecuteUnaryWithFastAndApproximateMode {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const bool parameter = false,
+        bool parameter = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -48,8 +47,8 @@ struct ExecuteUnaryWithVectorAndFastAndApproximateMode {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const int vector_mode = (int32_t)VecMode::RC,
-        const bool parameter = false,
+        int vector_mode = (int32_t)VecMode::RC,
+        bool parameter = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -59,7 +58,18 @@ struct ExecuteUnaryWithFloatParameter {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const float parameter,
+        float parameter,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+template <UnaryOpType unary_op_type>
+struct ExecuteUnaryWithVariantFloatIntParameter {
+    template <typename T>
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        T parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -92,8 +102,8 @@ struct Softplus {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input,
-        const float beta,
-        const float threshold,
+        float beta,
+        float threshold,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -141,6 +151,14 @@ struct Floor {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Trunc {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Ceil {
     static Tensor invoke(
         QueueId queue_id,
@@ -151,9 +169,9 @@ struct Ceil {
 struct Dropout {
     static Tensor invoke(
         const Tensor& input,
-        const uint32_t seed,
-        const float probability,
-        const float scale,
+        uint32_t seed,
+        float probability,
+        float scale,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -228,6 +246,22 @@ struct Tanhshrink {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Deg2Rad {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct Rad2Deg {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Tanh {
     static Tensor invoke(
         QueueId queue_id,
@@ -278,8 +312,10 @@ struct Tanh {
 
 REGISTER_UNARY_OPERATION(acos, ACOS);
 REGISTER_UNARY_OPERATION(asin, ASIN);
+REGISTER_UNARY_OPERATION(asinh, ASINH);
 REGISTER_UNARY_OPERATION(atan, ATAN);
 REGISTER_UNARY_OPERATION(cos, COS);
+REGISTER_UNARY_OPERATION(acosh, ACOSH);
 REGISTER_UNARY_OPERATION(erfinv, ERFINV);
 REGISTER_UNARY_OPERATION(exp2, EXP2);
 REGISTER_UNARY_OPERATION(expm1, EXPM1);
@@ -316,6 +352,7 @@ REGISTER_UNARY_OPERATION(bitwise_not, BITWISE_NOT);
 REGISTER_UNARY_OPERATION(alt_complex_rotate90, ALT_COMPLEX_ROTATE90);
 REGISTER_UNARY_OPERATION(floor, FLOOR);
 REGISTER_UNARY_OPERATION(ceil, CEIL);
+REGISTER_UNARY_OPERATION(trunc, TRUNC);
 
 // Unaries with fast_and_approximate_mode
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP);
@@ -352,7 +389,8 @@ constexpr auto abs = ttnn::register_operation<"ttnn::abs", ttnn::operations::una
 constexpr auto eqz = ttnn::register_operation<"ttnn::eqz", ttnn::operations::unary::Eqz>();
 constexpr auto mish = ttnn::register_operation<"ttnn::mish", ttnn::operations::unary::Mish>();
 constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
-
+constexpr auto deg2rad = ttnn::register_operation<"ttnn::deg2rad", ttnn::operations::unary::Deg2Rad>();
+constexpr auto rad2deg = ttnn::register_operation<"ttnn::rad2deg", ttnn::operations::unary::Rad2Deg>();
 constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::operations::unary::Softplus>();
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();

@@ -17,11 +17,50 @@ Description:
 """
 
 from dataclasses import dataclass
+from functools import cache, cached_property
 import os
 import sys
 import yaml
 from datetime import datetime, timedelta, timezone
 from docopt import docopt
+
+
+# Note: This method is parsing enty by entry and should be used only for debugging large log files.
+def fast_parse_yaml_log_file(log_file: str):
+    log_entry = ""
+    with open(log_file, "r") as f:
+        while (line := f.readline()) != "":
+            if len(line) > 0 and line[0] != " " and line[0] != "\t" and line[0] != "\n":
+                if len(log_entry) > 0:
+                    parsed_entry = yaml.safe_load(log_entry)
+                    if log_entry[0] == "-":
+                        yield parsed_entry[0]
+                    else:
+                        yield parsed_entry
+                log_entry = line
+            else:
+                log_entry += line
+    if len(log_entry) > 0:
+        yield yaml.safe_load(log_entry)
+
+
+def read_yaml(yaml_path: str):
+    try:
+        # Try to use ryml for faster parsing if available
+        import ryml
+        from ttexalens.util import ryml_to_lazy
+
+        with open(yaml_path, "r") as f:
+            content = f.read()
+            tree = ryml.parse_in_arena(content)
+            data = ryml_to_lazy(tree, tree.root_id())
+    except:
+        # Fallback to standard yaml library
+        with open(yaml_path, "r") as f:
+            data = yaml.safe_load(f)
+    if data is None:
+        return []
+    return data
 
 
 @dataclass
@@ -44,30 +83,27 @@ class ProgramData:
         return self.binary_status_per_device.get(device_id, "NotSet")
 
 
-def get_kernels(log_directory: str) -> list[KernelData]:
+def get_kernels(log_directory: str) -> dict[int, KernelData]:
     yaml_path = os.path.join(log_directory, "kernels.yaml")
-    with open(yaml_path, "r") as f:
-        data = yaml.safe_load(f)
+    data = read_yaml(yaml_path)
 
-    kernels = []
+    kernels: dict[int, KernelData] = {}
     for entry in data:
         kernel_info = entry.get("kernel", {})
-        kernels.append(
-            KernelData(
-                watcher_kernel_id=int(kernel_info.get("watcher_kernel_id")),
-                name=kernel_info.get("name"),
-                path=kernel_info.get("path"),
-                source=kernel_info.get("source"),
-                program_id=int(kernel_info.get("program_id")),
-            )
+        kernel_data = KernelData(
+            watcher_kernel_id=int(kernel_info.get("watcher_kernel_id")),
+            name=kernel_info.get("name"),
+            path=kernel_info.get("path"),
+            source=kernel_info.get("source"),
+            program_id=int(kernel_info.get("program_id")),
         )
+        kernels[kernel_data.watcher_kernel_id] = kernel_data
     return kernels
 
 
-def get_programs(log_directory: str, verbose: bool = False) -> list[ProgramData]:
+def get_programs(log_directory: str, verbose: bool = False) -> dict[int, ProgramData]:
     yaml_path = os.path.join(log_directory, "programs_log.yaml")
-    with open(yaml_path, "r") as f:
-        data = yaml.safe_load(f)
+    data = read_yaml(yaml_path)
     if verbose:
         print("Programs log:")
         startup_yaml_path = os.path.join(log_directory, "startup.yaml")
@@ -88,25 +124,20 @@ def get_programs(log_directory: str, verbose: bool = False) -> list[ProgramData]
             f"  {convert_timestamp(timestamp_ns).strftime('%Y-%m-%d %H:%M:%S.%f')}: {message}"
         )
 
-    programs: list[ProgramData] = []
+    programs: dict[int, ProgramData] = {}
     for entry in data:
         if "program_created" in entry:
             info = entry["program_created"]
             program_id = int(info.get("id"))
-            programs.append(
-                ProgramData(
-                    id=program_id,
-                    compiled=False,
-                    watcher_kernel_ids=[],
-                    binary_status_per_device={},
-                )
+            programs[program_id] = ProgramData(
+                id=program_id, compiled=False, watcher_kernel_ids=[], binary_status_per_device={}
             )
             if verbose:
                 print_log(int(info.get("timestamp_ns")), f"Program {program_id} created")
         elif "program_destroyed" in entry:
             info = entry["program_destroyed"]
             program_id = int(info.get("id"))
-            programs = [p for p in programs if p.id != program_id]
+            del programs[program_id]
             if verbose:
                 print_log(int(info.get("timestamp_ns")), f"Program {program_id} destroyed")
         elif "program_compile_started" in entry:
@@ -118,7 +149,10 @@ def get_programs(log_directory: str, verbose: bool = False) -> list[ProgramData]
             info = entry["program_kernel_compile_finished"]
             program_id = int(info.get("id"))
             watcher_kernel_id = int(info.get("watcher_kernel_id"))
-            programs[program_id].watcher_kernel_ids.append(watcher_kernel_id)
+            try:
+                programs[program_id].watcher_kernel_ids.append(watcher_kernel_id)
+            except:
+                print(f"Program ID {program_id} is out of range. Skipping...")
             if verbose:
                 print_log(
                     int(info.get("timestamp_ns")),
@@ -153,15 +187,42 @@ def get_programs(log_directory: str, verbose: bool = False) -> list[ProgramData]
     return programs
 
 
-def get_devices_in_use(programs: list[ProgramData]) -> set[int]:
+def get_devices_in_use(programs: dict[int, ProgramData]) -> set[int]:
     used_devices = set()
-    for program in programs:
+    for program in programs.values():
         # Only include devices with status "Committed"
         committed_devices = {
             device_id for device_id, status in program.binary_status_per_device.items() if status == "Committed"
         }
         used_devices.update(committed_devices)
     return used_devices
+
+
+class InspectorData:
+    def __init__(self, log_directory: str):
+        self.log_directory = log_directory
+
+    @cached_property
+    def kernels(self) -> dict[int, KernelData]:
+        return get_kernels(self.log_directory)
+
+    @cached_property
+    def programs(self) -> dict[int, ProgramData]:
+        return get_programs(self.log_directory)
+
+    @cached_property
+    def devices_in_use(self) -> set[int]:
+        return get_devices_in_use(self.programs)
+
+
+@cache
+def get_data(log_directory: str | None = None) -> InspectorData:
+    if log_directory is None:
+        log_directory = os.environ.get("TT_METAL_HOME", "")
+        if not log_directory:
+            raise ValueError("TT_METAL_HOME environment variable is not set")
+        log_directory = os.path.join(log_directory, "generated", "inspector")
+    return InspectorData(log_directory)
 
 
 def main():
@@ -176,7 +237,7 @@ def main():
 
     programs = get_programs(log_directory, verbose=True)
     print("Programs:")
-    for program in programs:
+    for program in programs.values():
         print(f"  Program ID {program.id}, compiled: {program.compiled}")
         print(f"    Binary status per device: {program.binary_status_per_device}")
         print(f"    Watcher Kernel IDs: {program.watcher_kernel_ids}")
@@ -184,11 +245,11 @@ def main():
 
     kernels = get_kernels(log_directory)
     print("Kernels:")
-    for kernel in kernels:
+    for kernel in kernels.values():
         print(f"  {kernel.watcher_kernel_id}, pid {kernel.program_id}: {kernel.name} ({kernel.path})")
-    devices_in_use = get_devices_in_use(programs)
     print()
 
+    devices_in_use = get_devices_in_use(programs)
     print(f"Devices in use: {devices_in_use}")
     print()
 

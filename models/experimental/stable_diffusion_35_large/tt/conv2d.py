@@ -149,35 +149,16 @@ class TtConv2d:
                 prepared_bias=prepared_bias,
             )
 
-        results = [
-            call_conv2d(*t)
-            for t in zip(
-                ttnn.get_device_tensors(x),
-                ttnn.get_device_tensors(self._weight),
-                ttnn.get_device_tensors(self._bias)
-                if self._bias is not None
-                else [None] * len(ttnn.get_device_tensors(x)),
-                strict=True,
-            )
-        ]
+        results = call_conv2d(x, self._weight, self._bias)
 
-        if len(results) > 1:
-            x = ttnn.combine_device_tensors([result.output for result in results])
-            self._weight = ttnn.combine_device_tensors([result.prepared_weight for result in results])
-            self._bias = (
-                ttnn.combine_device_tensors([result.prepared_bias for result in results])
-                if self._bias is not None
-                else None  # type: ignore
-            )
-        else:
-            x = results[0].output
-            self._weight = results[0].prepared_weight
-            self._bias = results[0].prepared_bias
+        x = results.output
+        self._weight = results.prepared_weight
+        self._bias = results.prepared_bias
 
         if slice_count > 1:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-        shape = [batch_size, results[0].output_height, results[0].output_width, self._out_channels]
+        shape = [batch_size, results.output_height, results.output_width, self._out_channels]
         return x, shape
 
     def __call__(
