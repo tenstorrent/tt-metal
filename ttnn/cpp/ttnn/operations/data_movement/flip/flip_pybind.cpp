@@ -32,6 +32,18 @@ void bind_flip(py::module& module) {
                List of ttnn.Tensor: the output tensor.
 
             Example:
+                >>> # Create a simple tensor
+                >>> torch_tensor = torch.arange(12).reshape(3, 4).float()
+                >>> tensor = ttnn.from_torch(torch_tensor, device=device)
+                >>>
+                >>> # Flip along dimension 0 (rows)
+                >>> flipped = ttnn.flip(tensor, dims=[0])
+                >>>
+                >>> # Flip along dimension 1 (columns)
+                >>> flipped_cols = ttnn.flip(tensor, dims=[1])
+                >>>
+                >>> # Flip along both dimensions
+                >>> flipped_both = ttnn.flip(tensor, dims=[0, 1])
 
                 >>> x = ttnn.to_device(ttnn.from_torch(torch.arrange(8).view(2, 2, 2), dtype=torch.bfloat16)), device)
                 >>> x
