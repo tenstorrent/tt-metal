@@ -75,6 +75,11 @@ class TtAttention(nn.Module):
             self.tt_q_weights, _ = prepare_linear_params(device, q_weights, None, model_config.attention_weights_dtype)
             self.tt_k_weights, _ = prepare_linear_params(device, k_weights, None, model_config.attention_weights_dtype)
             self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, model_config.attention_weights_dtype)
+
+            self.k_program_config = model_config.get_matmul_config(f"{module_path}.to_k")
+            self.v_program_config = model_config.get_matmul_config(f"{module_path}.to_v")
+            assert self.k_program_config is not None, "k_program_config should not be None"
+            assert self.v_program_config is not None, "v_program_config should not be None"
         self.q_program_config = model_config.get_matmul_config(f"{module_path}.to_q")
         self.q_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_q")
 
@@ -136,11 +141,15 @@ class TtAttention(nn.Module):
                 encoder_hidden_states,
                 self.tt_k_weights,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.default_compute_kernel_config,
+                program_config=self.k_program_config,
             )
             v_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_v_weights,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.default_compute_kernel_config,
+                program_config=self.v_program_config,
             )
 
             q_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
