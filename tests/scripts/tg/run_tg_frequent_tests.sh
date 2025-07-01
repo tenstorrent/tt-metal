@@ -1,7 +1,5 @@
 #!/bin/bash
 
-export TT_METAL_FD_FABRIC=true
-
 run_tg_llama3_tests() {
   # Record the start time
   fail=0

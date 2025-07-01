@@ -7,9 +7,6 @@ if [ -z "${ARCH_NAME}" ]; then
   exit 1
 fi
 
-# Enable FD Fabric for all tests
-export TT_METAL_FD_FABRIC=true
-
 run_t3000_ttmetal_tests() {
   # Record the start time
   fail=0

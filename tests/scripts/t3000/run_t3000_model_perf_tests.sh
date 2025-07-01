@@ -1,8 +1,6 @@
 #!/bin/bash
 set -eo pipefail
 
-export TT_METAL_FD_FABRIC=true
-
 run_t3000_falcon7b_tests() {
   # Record the start time
   fail=0

@@ -1,7 +1,5 @@
 #!/bin/bash
 
-export TT_METAL_FD_FABRIC=true
-
 run_tg_cnn_tests() {
 
   echo "LOG_METAL: Running run_tg_resnet50_tests"
