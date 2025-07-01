@@ -34,7 +34,7 @@ void kernel_main() {
     const InterleavedAddrGenFast<src_indices_is_dram> s_indices = {
         .bank_base_address = src_indices_addr, .page_size = tile_bytes_indices, .data_format = data_format_indices};
 
-    // Stream in input tensor and indices tensor
+    // Stream in input tensor and index tensor
     // The input buffer has four tiles as we double-buffer for the two tiles needed for topk_local_sort to start
     // We could load in an entire row of tiles at a time but that would require substantially more memory (we would be
     // double buffering four Wt_local sized CBs)
