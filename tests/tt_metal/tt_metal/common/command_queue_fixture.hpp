@@ -127,6 +127,8 @@ protected:
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
 };
 
+class UnitMeshCommandQueueProgramFixture : public UnitMeshCommandQueueFixture {};
+
 class CommandQueueSingleCardFixture : virtual public DispatchFixture {
 protected:
     void SetUp() override {

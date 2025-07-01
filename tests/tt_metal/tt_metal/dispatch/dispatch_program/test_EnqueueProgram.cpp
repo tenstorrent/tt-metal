@@ -2074,256 +2074,263 @@ TEST_F(UnitMeshCommandQueueFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
     }
 }
 
-// TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
-//     uint32_t NUM_PROGRAMS = 100;
-//     uint32_t MAX_LOOP = 100;
-//     uint32_t page_size = 1024;
+TEST_F(UnitMeshCommandQueueProgramFixture, TensixTestRandomizedProgram) {
+    uint32_t NUM_PROGRAMS = 100;
+    uint32_t MAX_LOOP = 100;
+    uint32_t page_size = 1024;
 
-//     // Make random
-//     auto random_seed = 0;  // (unsigned int)time(NULL);
-//     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-//     log_info(tt::LogTest, "Using Test Seed: {}", seed);
-//     srand(seed);
+    // Make random
+    auto random_seed = 0;  // (unsigned int)time(NULL);
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
+    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    srand(seed);
 
-//     CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
-//     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-//     CoreRangeSet cr_set(cr);
+    auto device = this->devices_.at(0);
 
-//     log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
+    CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+    CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+    CoreRangeSet cr_set(cr);
 
-//     vector<Program> programs;
-//     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-//         programs.push_back(Program());
-//         Program& program = programs.back();
+    log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
-//         std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
-//         std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
+    vector<distributed::MeshWorkload> workloads;
+    // vector<Program> programs;
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        workloads.push_back(distributed::MeshWorkload());
+        distributed::MeshWorkload& workload = workloads.back();
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        // programs.push_back(Program());
+        // Program& program = programs.back();
+        Program program;
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
 
-//         // brisc
-//         uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
-//         bool USE_MAX_RT_ARGS;
+        std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
+        std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
 
-//         if (i % 10 == 0) {
-//             log_info(tt::LogTest, "Compiling program {} of {}", i + 1, NUM_PROGRAMS);
-//         }
+        // brisc
+        uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
+        bool USE_MAX_RT_ARGS;
 
-//         if (i == 0) {
-//             // Ensures that we get at least one compilation with the max amount to
-//             // ensure it compiles and runs
-//             BRISC_OUTER_LOOP = MAX_LOOP;
-//             BRISC_MIDDLE_LOOP = MAX_LOOP;
-//             BRISC_INNER_LOOP = MAX_LOOP;
-//             NUM_CBS = NUM_CIRCULAR_BUFFERS;
-//             NUM_SEMS = NUM_SEMAPHORES;
-//             USE_MAX_RT_ARGS = true;
-//         } else {
-//             BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
-//             BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
-//             BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-//             NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
-//             NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
-//             USE_MAX_RT_ARGS = false;
-//         }
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Compiling program {} of {}", i + 1, NUM_PROGRAMS);
+        }
 
-//         log_debug(
-//             tt::LogTest,
-//             "Compiling program {}/{} w/ BRISC_OUTER_LOOP: {} BRISC_MIDDLE_LOOP: {} BRISC_INNER_LOOP: {} NUM_CBS: {} "
-//             "NUM_SEMS: {} USE_MAX_RT_ARGS: {}",
-//             i + 1,
-//             NUM_PROGRAMS,
-//             BRISC_OUTER_LOOP,
-//             BRISC_MIDDLE_LOOP,
-//             BRISC_INNER_LOOP,
-//             NUM_CBS,
-//             NUM_SEMS,
-//             USE_MAX_RT_ARGS);
+        if (i == 0) {
+            // Ensures that we get at least one compilation with the max amount to
+            // ensure it compiles and runs
+            BRISC_OUTER_LOOP = MAX_LOOP;
+            BRISC_MIDDLE_LOOP = MAX_LOOP;
+            BRISC_INNER_LOOP = MAX_LOOP;
+            NUM_CBS = NUM_CIRCULAR_BUFFERS;
+            NUM_SEMS = NUM_SEMAPHORES;
+            USE_MAX_RT_ARGS = true;
+        } else {
+            BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
+            BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
+            BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
+            NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
+            NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
+            USE_MAX_RT_ARGS = false;
+        }
 
-//         for (uint32_t j = 0; j < NUM_CBS; j++) {
-//             CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j,
-//             tt::DataFormat::Float16_b}})
-//                                                  .set_page_size(j, page_size * (j + 1));
-//             auto cb = CreateCircularBuffer(program, cr_set, cb_config);
-//         }
+        log_debug(
+            tt::LogTest,
+            "Compiling program {}/{} w/ BRISC_OUTER_LOOP: {} BRISC_MIDDLE_LOOP: {} BRISC_INNER_LOOP: {} NUM_CBS: {} "
+            "NUM_SEMS: {} USE_MAX_RT_ARGS: {}",
+            i + 1,
+            NUM_PROGRAMS,
+            BRISC_OUTER_LOOP,
+            BRISC_MIDDLE_LOOP,
+            BRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            USE_MAX_RT_ARGS);
 
-//         for (uint32_t j = 0; j < NUM_SEMS; j++) {
-//             CreateSemaphore(program, cr_set, j + 1);
-//         }
+        for (uint32_t j = 0; j < NUM_CBS; j++) {
+            CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}})
+                                                 .set_page_size(j, page_size * (j + 1));
+            auto cb = CreateCircularBuffer(program_, cr_set, cb_config);
+        }
 
-//         auto [brisc_unique_rtargs, brisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
-//         uint32_t num_brisc_unique_rtargs = brisc_unique_rtargs.size();
-//         uint32_t num_brisc_common_rtargs = brisc_common_rtargs.size();
-//         vector<uint32_t> brisc_compile_args = {
-//             BRISC_OUTER_LOOP,
-//             BRISC_MIDDLE_LOOP,
-//             BRISC_INNER_LOOP,
-//             NUM_CBS,
-//             NUM_SEMS,
-//             num_brisc_unique_rtargs,
-//             num_brisc_common_rtargs,
-//             page_size};
+        for (uint32_t j = 0; j < NUM_SEMS; j++) {
+            CreateSemaphore(program_, cr_set, j + 1);
+        }
 
-//         // ncrisc
-//         uint32_t NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP;
-//         if (i == 0) {
-//             NCRISC_OUTER_LOOP = MAX_LOOP;
-//             NCRISC_MIDDLE_LOOP = MAX_LOOP;
-//             NCRISC_INNER_LOOP = MAX_LOOP;
-//         } else {
-//             NCRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
-//             NCRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
-//             NCRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-//         }
+        auto [brisc_unique_rtargs, brisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
+        uint32_t num_brisc_unique_rtargs = brisc_unique_rtargs.size();
+        uint32_t num_brisc_common_rtargs = brisc_common_rtargs.size();
+        vector<uint32_t> brisc_compile_args = {
+            BRISC_OUTER_LOOP,
+            BRISC_MIDDLE_LOOP,
+            BRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_brisc_unique_rtargs,
+            num_brisc_common_rtargs,
+            page_size};
 
-//         auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
-//         uint32_t num_ncrisc_unique_rtargs = ncrisc_unique_rtargs.size();
-//         uint32_t num_ncrisc_common_rtargs = ncrisc_common_rtargs.size();
-//         vector<uint32_t> ncrisc_compile_args = {
-//             NCRISC_OUTER_LOOP,
-//             NCRISC_MIDDLE_LOOP,
-//             NCRISC_INNER_LOOP,
-//             NUM_CBS,
-//             NUM_SEMS,
-//             num_ncrisc_unique_rtargs,
-//             num_ncrisc_common_rtargs,
-//             page_size};
+        // ncrisc
+        uint32_t NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP;
+        if (i == 0) {
+            NCRISC_OUTER_LOOP = MAX_LOOP;
+            NCRISC_MIDDLE_LOOP = MAX_LOOP;
+            NCRISC_INNER_LOOP = MAX_LOOP;
+        } else {
+            NCRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
+            NCRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
+            NCRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
+        }
 
-//         // trisc
-//         uint32_t TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP;
-//         if (i == 0) {
-//             TRISC_OUTER_LOOP = MAX_LOOP;
-//             TRISC_MIDDLE_LOOP = MAX_LOOP;
-//             TRISC_INNER_LOOP = MAX_LOOP;
-//         } else {
-//             TRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
-//             TRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
-//             TRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-//         }
+        auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
+        uint32_t num_ncrisc_unique_rtargs = ncrisc_unique_rtargs.size();
+        uint32_t num_ncrisc_common_rtargs = ncrisc_common_rtargs.size();
+        vector<uint32_t> ncrisc_compile_args = {
+            NCRISC_OUTER_LOOP,
+            NCRISC_MIDDLE_LOOP,
+            NCRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_ncrisc_unique_rtargs,
+            num_ncrisc_common_rtargs,
+            page_size};
 
-//         auto [trisc_unique_rtargs, trisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
-//         uint32_t num_trisc_unique_rtargs = trisc_unique_rtargs.size();
-//         uint32_t num_trisc_common_rtargs = trisc_common_rtargs.size();
-//         vector<uint32_t> trisc_compile_args = {
-//             TRISC_OUTER_LOOP,
-//             TRISC_MIDDLE_LOOP,
-//             TRISC_INNER_LOOP,
-//             NUM_CBS,
-//             NUM_SEMS,
-//             num_trisc_unique_rtargs,
-//             num_trisc_common_rtargs,
-//             page_size};
+        // trisc
+        uint32_t TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP;
+        if (i == 0) {
+            TRISC_OUTER_LOOP = MAX_LOOP;
+            TRISC_MIDDLE_LOOP = MAX_LOOP;
+            TRISC_INNER_LOOP = MAX_LOOP;
+        } else {
+            TRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
+            TRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
+            TRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
+        }
 
-//         bool at_least_one_kernel = false;
-//         if (i == 0 or ((rand() % 2) == 0)) {
-//             auto dummy_brisc_kernel = CreateKernel(
-//                 program,
-//                 "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                 cr_set,
-//                 DataMovementConfig{
-//                     .processor = DataMovementProcessor::RISCV_0,
-//                     .noc = NOC::RISCV_0_default,
-//                     .compile_args = brisc_compile_args,
-//                     .defines = data_movement_defines});
-//             SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
-//             SetCommonRuntimeArgs(program, dummy_brisc_kernel, brisc_common_rtargs);
-//             at_least_one_kernel = true;
-//         }
+        auto [trisc_unique_rtargs, trisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
+        uint32_t num_trisc_unique_rtargs = trisc_unique_rtargs.size();
+        uint32_t num_trisc_common_rtargs = trisc_common_rtargs.size();
+        vector<uint32_t> trisc_compile_args = {
+            TRISC_OUTER_LOOP,
+            TRISC_MIDDLE_LOOP,
+            TRISC_INNER_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_trisc_unique_rtargs,
+            num_trisc_common_rtargs,
+            page_size};
 
-//         if (i == 0 or ((rand() % 2) == 0)) {
-//             auto dummy_ncrisc_kernel = CreateKernel(
-//                 program,
-//                 "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                 cr_set,
-//                 DataMovementConfig{
-//                     .processor = DataMovementProcessor::RISCV_1,
-//                     .noc = NOC::RISCV_1_default,
-//                     .compile_args = ncrisc_compile_args,
-//                     .defines = data_movement_defines});
-//             SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
-//             SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, ncrisc_common_rtargs);
-//             at_least_one_kernel = true;
-//         }
+        bool at_least_one_kernel = false;
+        if (i == 0 or ((rand() % 2) == 0)) {
+            auto dummy_brisc_kernel = CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = brisc_compile_args,
+                    .defines = data_movement_defines});
+            SetRuntimeArgs(program_, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
+            SetCommonRuntimeArgs(program_, dummy_brisc_kernel, brisc_common_rtargs);
+            at_least_one_kernel = true;
+        }
 
-//         if (i == 0 or ((rand() % 2) == 0)) {
-//             auto dummy_trisc_kernel = CreateKernel(
-//                 program,
-//                 "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                 cr_set,
-//                 ComputeConfig{
-//                     .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
-//             SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
-//             SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
-//             at_least_one_kernel = true;
-//         }
+        if (i == 0 or ((rand() % 2) == 0)) {
+            auto dummy_ncrisc_kernel = CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::RISCV_1_default,
+                    .compile_args = ncrisc_compile_args,
+                    .defines = data_movement_defines});
+            SetRuntimeArgs(program_, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
+            SetCommonRuntimeArgs(program_, dummy_ncrisc_kernel, ncrisc_common_rtargs);
+            at_least_one_kernel = true;
+        }
 
-//         if (not at_least_one_kernel) {
-//             uint32_t random_risc = rand() % 3 + 1;
-//             if (random_risc == 1) {
-//                 auto dummy_brisc_kernel = CreateKernel(
-//                     program,
-//                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                     cr_set,
-//                     DataMovementConfig{
-//                         .processor = DataMovementProcessor::RISCV_0,
-//                         .noc = NOC::RISCV_0_default,
-//                         .compile_args = brisc_compile_args,
-//                         .defines = data_movement_defines});
-//                 SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
-//                 SetCommonRuntimeArgs(program, dummy_brisc_kernel, brisc_common_rtargs);
-//             } else if (random_risc == 2) {
-//                 auto dummy_ncrisc_kernel = CreateKernel(
-//                     program,
-//                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                     cr_set,
-//                     DataMovementConfig{
-//                         .processor = DataMovementProcessor::RISCV_1,
-//                         .noc = NOC::RISCV_1_default,
-//                         .compile_args = ncrisc_compile_args,
-//                         .defines = data_movement_defines});
-//                 SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
-//                 SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, ncrisc_common_rtargs);
-//             } else if (random_risc == 3) {
-//                 auto dummy_trisc_kernel = CreateKernel(
-//                     program,
-//                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-//                     cr_set,
-//                     ComputeConfig{
-//                         .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
-//                 SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
-//                 SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
-//             } else {
-//                 TT_THROW("Invalid");
-//             }
-//         }
+        if (i == 0 or ((rand() % 2) == 0)) {
+            auto dummy_trisc_kernel = CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                cr_set,
+                ComputeConfig{
+                    .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
+            SetRuntimeArgs(program_, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
+            SetCommonRuntimeArgs(program_, dummy_trisc_kernel, trisc_common_rtargs);
+            at_least_one_kernel = true;
+        }
 
-//         tt::tt_metal::detail::CompileProgram(this->device_, program);
-//     }
+        if (not at_least_one_kernel) {
+            uint32_t random_risc = rand() % 3 + 1;
+            if (random_risc == 1) {
+                auto dummy_brisc_kernel = CreateKernel(
+                    program_,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = NOC::RISCV_0_default,
+                        .compile_args = brisc_compile_args,
+                        .defines = data_movement_defines});
+                SetRuntimeArgs(program_, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
+                SetCommonRuntimeArgs(program_, dummy_brisc_kernel, brisc_common_rtargs);
+            } else if (random_risc == 2) {
+                auto dummy_ncrisc_kernel = CreateKernel(
+                    program_,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_1,
+                        .noc = NOC::RISCV_1_default,
+                        .compile_args = ncrisc_compile_args,
+                        .defines = data_movement_defines});
+                SetRuntimeArgs(program_, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
+                SetCommonRuntimeArgs(program_, dummy_ncrisc_kernel, ncrisc_common_rtargs);
+            } else if (random_risc == 3) {
+                auto dummy_trisc_kernel = CreateKernel(
+                    program_,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+                    cr_set,
+                    ComputeConfig{
+                        .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
+                SetRuntimeArgs(program_, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
+                SetCommonRuntimeArgs(program_, dummy_trisc_kernel, trisc_common_rtargs);
+            } else {
+                TT_THROW("Invalid");
+            }
+        }
+    }
 
-//     log_info(tt::LogTest, "Running {} programs for cache warmup.", programs.size());
-//     // This loop caches program and runs
-//     for (Program& program : programs) {
-//         EnqueueProgram(this->device_->command_queue(), program, false);
-//     }
+    log_info(tt::LogTest, "Running {} programs for cache warmup.", workloads.size());
+    // This loop caches program and runs
+    for (distributed::MeshWorkload& wl : workloads) {
+        distributed::EnqueueMeshWorkload(device->mesh_command_queue(), wl, false);
+    }
 
-//     // This loops assumes already cached
-//     uint32_t NUM_ITERATIONS = 500;  // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of
-//                                     // iterations, need to come back to that
+    // This loops assumes already cached
+    uint32_t NUM_ITERATIONS = 500;  // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of
+                                    // iterations, need to come back to that
 
-//     log_info(tt::LogTest, "Running {} programs for {} iterations now.", programs.size(), NUM_ITERATIONS);
-//     for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
-//         auto rng = std::default_random_engine{};
-//         std::shuffle(std::begin(programs), std::end(programs), rng);
-//         if (i % 50 == 0) {
-//             log_info(tt::LogTest, "Enqueuing {} programs for iter: {}/{} now.", programs.size(), i + 1,
-//             NUM_ITERATIONS);
-//         }
-//         for (Program& program : programs) {
-//             EnqueueProgram(this->device_->command_queue(), program, false);
-//         }
-//     }
+    log_info(tt::LogTest, "Running {} programs for {} iterations now.", workloads.size(), NUM_ITERATIONS);
+    for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
+        auto rng = std::default_random_engine{};
+        std::shuffle(std::begin(workloads), std::end(workloads), rng);
+        if (i % 50 == 0) {
+            log_info(
+                tt::LogTest, "Enqueuing {} programs for iter: {}/{} now.", workloads.size(), i + 1, NUM_ITERATIONS);
+        }
+        for (distributed::MeshWorkload& wl : workloads) {
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), wl, false);
+        }
+    }
 
-//     log_info(tt::LogTest, "Calling Finish.");
-//     Finish(this->device_->command_queue());
-// }
+    log_info(tt::LogTest, "Calling Finish.");
+    Finish(device->mesh_command_queue());
+}
 
 // TEST_F(RandomProgramFixture, TensixTestSimplePrograms) {
 //     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
