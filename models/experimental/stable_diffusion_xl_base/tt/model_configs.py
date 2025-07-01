@@ -604,6 +604,31 @@ class ModelOptimisations:
             fused_activation=None,
         )
 
+        # 21 cores, [1, 1, 96, 2048] x [1, 1, 2048, 640]
+        self.matmul_configs["2D_ATTEN_K_V_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=4,  # max is 64, 4 seems optimal
+            per_core_M=1,
+            per_core_N=3,
+            out_subblock_h=1,
+            out_subblock_w=3,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        # 40 cores, [1, 1, 96, 2048] x [1, 1, 2048, 1280]
+        self.matmul_configs["1D_ATTEN_K_V_LINEAR_1280"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=16,  # max is 64, 16 seems optimal
+            out_subblock_h=3,
+            out_subblock_w=1,
+            per_core_M=3,
+            per_core_N=1,
+            mcast_in0=True,
+            fuse_batch=True,
+            fused_activation=None,
+        )
+
         self.matmul_configs["2D_RESNET_CONV_2560_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=2,
@@ -777,6 +802,16 @@ class ModelOptimisations:
                     return self.matmul_configs["2D_ATTN_QKV_LINEAR_640"]
                 else:
                     return self.matmul_configs["2D_ATTN_QKV_LINEAR_1280"]
+            if (
+                "attn1.to_k" in matmul_path
+                or "attn1.to_v" in matmul_path
+                or "attn2.to_k" in matmul_path
+                or "attn2.to_v" in matmul_path
+            ):
+                if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
+                    return self.matmul_configs["2D_ATTEN_K_V_LINEAR_640"]
+                else:
+                    return self.matmul_configs["1D_ATTEN_K_V_LINEAR_1280"]
 
             # # # Down block 1 # # #
             pattern_downn_block_1_dense_out = re.compile(
