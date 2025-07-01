@@ -201,7 +201,7 @@ void MAIN {
                         neginf_srca_maxpool,
                         zero_srca_avgpool>(
                         interm_cb_id,
-                        !is_avg_pool || (chunk == interm_reduction_chunks - 1) ? in_scalar_cb_id_0 : in_one_cb_id,
+                        !is_avg_pool || (chunk == interm_reduction_chunks - 1) ? curr_scalar_cb_id : in_one_cb_id,
                         interm_cb_id);
 
                     // either write output stick or for avg pool notify the reader that we need the interm CB cleared

@@ -99,7 +99,13 @@ def run_avg_pool2d(
     ttnn_output = ttnn.to_torch(ttnn_output)
 
     ## Assertion
-    assert_with_pcc(torch_output, ttnn_output, 0.99)
+    pcc_thresh = 0.99
+    # for very large kernel sizes we get poor PCC due to buildup of floating point error
+    # during multiple reduction stages, so we lower the threshold since allclose will
+    # still rigorously check the values
+    if kernel_size[0] * kernel_size[1] > 32 * 31:
+        pcc_thresh = 0.95
+    assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
     allclose = torch.allclose(ttnn_output, torch_output, rtol=0.02)
     assert allclose, " Reference and output tensor are not close"
 
