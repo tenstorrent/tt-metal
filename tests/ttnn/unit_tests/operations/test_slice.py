@@ -167,15 +167,82 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
     torch_input = torch.randint(-10, 10, dims)
-    torch_input = torch.tensor(range(dims[2])).reshape(1, 1, dims[2], 1).broadcast_to(dims).to(
-        torch.bfloat16
-    ) + torch.tensor(range(dims[1])).reshape(1, dims[1], 1, 1).broadcast_to(dims).to(torch.bfloat16)
+
     ttnn_output = ttnn.zeros(dims, device=device, layout=layout, dtype=ttnn.bfloat16)
     ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
 
     core_range = ttnn.num_cores_to_corerangeset(cores, core_grid, orientation == ttnn.ShardOrientation.ROW_MAJOR)
     parallel_config = ttnn.SlidingWindowParallelConfig(
         grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, shard_orientation=orientation
+    )
+    num_slices = round_up(dims[slice_dim], slice_size) // slice_size
+    padded_channels = round_up(dims[-1], 32)
+
+    padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
+
+    for i in range(num_slices):
+        begins = [0, 0, 0, 0]
+        ends = [dims[0], dims[1], dims[2], padded_channels]
+        begins[slice_dim] = i * slice_size
+        if i == num_slices - 1:
+            ends[slice_dim] = dims[slice_dim]
+        else:
+            ends[slice_dim] = (i + 1) * slice_size
+        this_torch_input = padded_torch_input[
+            begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]
+        ]
+
+        this_ttnn_input = ttnn.from_torch(
+            this_torch_input,
+            layout=layout,
+            dtype=ttnn.bfloat16,
+        )
+        this_ttnn_input = ttnn.to_device(
+            this_ttnn_input,
+            device=device,
+        )
+        this_ttnn_input = ttnn.reshape(this_ttnn_input, this_ttnn_input.padded_shape)
+        this_ttnn_input = ttnn.reshape(this_ttnn_input, [1, 1, -1, this_ttnn_input.padded_shape[-1]])
+        memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+            this_ttnn_input.shape,
+            parallel_config,
+            32 if layout == ttnn.TILE_LAYOUT else 1,
+        )
+
+        this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, memory_config)
+        ends[-1] = ttnn_output.shape[-1]
+        ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
+
+    output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_input, output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "dims, slice_size, cores",
+    [
+        [[2, 64, 64, 2048], 32, 64],
+        [[2, 48, 48, 2944], 32, 46],
+    ],
+)
+@pytest.mark.parametrize("slice_dim", [1, 2])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, layout, orientation):
+    core_grid = device.compute_with_storage_grid_size()
+
+    if core_grid.x * core_grid.y < cores:
+        pytest.skip("Device does not have enough cores")
+
+    strides = [1, 1, 1, 1]
+    torch.manual_seed(2005)
+    torch_input = torch.randint(-10, 10, dims)
+
+    ttnn_output = ttnn.zeros(dims, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
+
+    core_range = ttnn.num_cores_to_corerangeset(cores, core_grid, orientation == ttnn.ShardOrientation.ROW_MAJOR)
+    parallel_config = ttnn.SlidingWindowParallelConfig(
+        grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED, shard_orientation=orientation
     )
     num_slices = round_up(dims[slice_dim], slice_size) // slice_size
     padded_channels = round_up(dims[-1], 32)
