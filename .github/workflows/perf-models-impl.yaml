@@ -48,7 +48,8 @@ jobs:
           name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
         run: sudo cpupower frequency-set -g performance
-      - name: Run performance regressions
+      - name: Run sentence_bert tests
+        if: ${{ matrix.model-type == 'llm_javelin' && !cancelled()}}
         timeout-minutes: 70
         uses: ./.github/actions/docker-run
         env:
@@ -64,7 +65,9 @@ jobs:
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e GITHUB_ACTIONS=true
           install_wheel: true
-          run_args: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.test-info.arch }} --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.test-info.machine-type }}
+          run_args: |
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/sentence_bert/tests -m models_performance_bare_metal
+            env python3 models/perf/merge_perf_results.py
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
       #  if: ${{ failure() }}
