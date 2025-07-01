@@ -512,8 +512,9 @@ int main(int argc, char **argv) {
         auto &ctx = ttml::autograd::ctx();
         ctx.initialize_distributed_context(argc, argv);
 
-        auto &distributed_ctx = ctx.get_distributed_context();
-        fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx.size(), *distributed_ctx.rank());
+        auto distributed_ctx = ctx.get_distributed_context();
+        fmt::print(
+            "Size {}, Rank {}: Initializing MPI context\n", distributed_ctx->size(), distributed_ctx->rank().get());
 
         // disable wandb for now in case of mpi example
         enable_wandb = false;
@@ -607,7 +608,7 @@ int main(int argc, char **argv) {
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
     if (config.enable_mpi) {
-        int rank = *ttml::autograd::ctx().get_distributed_context().rank();
+        int rank = ttml::autograd::ctx().get_distributed_context()->rank().get();
         auto seed = config.seed + static_cast<uint32_t>(rank);
         ttml::autograd::ctx().set_seed(seed);
     }
@@ -746,7 +747,8 @@ int main(int argc, char **argv) {
     std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.vocab_size; }) {
-                arg.vocab_size = round_up_to_tile(tokenizer->get_vocab_size(), (device_config.enable_tp ? num_devices : 1U) * 32U);
+                arg.vocab_size =
+                    round_up_to_tile(tokenizer->get_vocab_size(), (device_config.enable_tp ? num_devices : 1U) * 32U);
             } else {
                 throw std::runtime_error(
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
@@ -925,7 +927,7 @@ int main(int argc, char **argv) {
                 scheduler->step();
                 auto global_step = optimizer->get_steps();
                 if (config.enable_mpi) {
-                    fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context().rank());
+                    fmt::print("[Rank {}] ", ttml::autograd::ctx().get_distributed_context()->rank().get());
                 }
                 fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 loss_meter.update(gradient_accumulator_helper.average_loss());
@@ -981,9 +983,9 @@ int main(int argc, char **argv) {
 
     if (config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
-        auto &distributed_ctx = ctx.get_distributed_context();
-        distributed_ctx.barrier();
-        fmt::print("Rank {}: Finalizing MPI context\n", *distributed_ctx.rank());
+        auto distributed_ctx = ctx.get_distributed_context();
+        distributed_ctx->barrier();
+        fmt::print("Rank {}: Finalizing MPI context\n", distributed_ctx->rank().get());
     }
 
     if (enable_wandb) {

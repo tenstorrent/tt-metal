@@ -1,4 +1,4 @@
-#include "mpi_socket.hpp"
+#include "ttnn/distributed/mpi_socket.hpp"
 
 #include <ttnn/operations/data_movement/copy/copy.hpp>
 
@@ -67,6 +67,18 @@ void MPISocket::recv(ttnn::Tensor& tensor) {
     }
 
     ttnn::assign(cpu_tensor.to_device(tensor.device()), tensor);
+}
+
+tt::tt_metal::distributed::multihost::Rank MPISocket::get_sender_rank() const {
+    return mesh_socket_.get_config().sender_rank;
+}
+
+tt::tt_metal::distributed::multihost::Rank MPISocket::get_receiver_rank() const {
+    return mesh_socket_.get_config().receiver_rank;
+}
+
+std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> MPISocket::get_distributed_context() const {
+    return mesh_socket_.get_config().distributed_context;
 }
 
 }  // namespace ttnn::distributed

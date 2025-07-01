@@ -67,6 +67,13 @@ ttnn::distributed::MeshDevice& AutoContext::get_device() {
     return m_device->get_device();
 }
 
+std::shared_ptr<ttnn::distributed::MeshDevice> AutoContext::get_shared_ptr_device() {
+    if (!m_device) {
+        open_device();
+    }
+    return m_device->get_shared_ptr_device();
+}
+
 AutoContext::AutoContext() : m_generator(m_seed) {
 }
 
@@ -74,19 +81,19 @@ tt::tt_metal::distributed::MeshShape AutoContext::get_mesh_shape() const {
     return m_mesh_shape;
 }
 
-DistributedContext& AutoContext::get_distributed_context() const {
+std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> AutoContext::get_distributed_context() const {
     if (!m_distributed_context) {
         throw std::runtime_error("DistributedContext is not initialized.");
     }
-    return *m_distributed_context;
+    return m_distributed_context;
 }
 
 void AutoContext::initialize_distributed_context(int argc, char** argv) {
     if (m_distributed_context) {
         throw std::runtime_error("MPIContext is already initialized.");
     }
-    DistributedContext::create(argc, argv);
-    m_distributed_context = DistributedContext::get_current_world();
+    tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
+    m_distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 }
 
 }  // namespace ttml::autograd

@@ -1,7 +1,7 @@
-#include "create_socket.hpp"
-#include "bidirectional_fabric_socket.hpp"
-#include "fabric_socket.hpp"
-#include "mpi_socket.hpp"
+#include "ttnn/distributed/create_socket.hpp"
+#include "ttnn/distributed/bidirectional_fabric_socket.hpp"
+#include "ttnn/distributed/fabric_socket.hpp"
+#include "ttnn/distributed/mpi_socket.hpp"
 #include "tt-metalium/distributed_context.hpp"
 
 namespace ttnn::distributed {
@@ -9,7 +9,7 @@ namespace ttnn::distributed {
 std::unique_ptr<ISocket> create_socket(
     SocketType socket_type,
     EndpointSocketType endpoint_socket_type,
-    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     tt::tt_metal::distributed::multihost::Rank other_rank,
     tt::tt_metal::distributed::SocketConfig socket_config) {
     if (socket_type == SocketType::MPI) {

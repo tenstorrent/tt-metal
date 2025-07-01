@@ -15,8 +15,6 @@ namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
 
-using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
-
 class AutoContext {
 public:
     // Delete copy constructor and assignment operator to prevent copying
@@ -45,6 +43,15 @@ public:
     ~AutoContext() = default;  // to make it work with unique_ptr.
 
     ttnn::distributed::MeshDevice& get_device();
+    [[nodiscard]] std::shared_ptr<ttnn::distributed::MeshDevice> get_shared_ptr_device();
+
+    [[nodiscard]] const Graph& get_graph() const {
+        return m_graph;
+    }
+
+    [[nodiscard]] Graph& get_graph() {
+        return m_graph;
+    }
 
     [[nodiscard]] tt::tt_metal::distributed::MeshShape get_mesh_shape() const;
 
@@ -56,7 +63,8 @@ public:
 
     void initialize_distributed_context(int argc, char** argv);
 
-    [[nodiscard]] DistributedContext& get_distributed_context() const;
+    [[nodiscard]] std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context()
+        const;
 
 private:
     AutoContext();
@@ -69,7 +77,7 @@ private:
     tt::tt_metal::distributed::MeshShape m_mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1);
     std::unique_ptr<core::MeshDevice> m_device;
 
-    std::shared_ptr<DistributedContext> m_distributed_context;
+    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> m_distributed_context;
 
     friend class tt::stl::Indestructible<AutoContext>;
 };

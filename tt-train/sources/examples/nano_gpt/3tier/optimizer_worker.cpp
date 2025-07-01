@@ -13,34 +13,40 @@
 #include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
 #include "optimizers/adamw.hpp"
+#include "socket_manager.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 
 using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
 
 void send_weights_to_aggregator(
-    const ttml::autograd::DistributedContext &ctx, const SortedParameters &sorted_model_parameters) {
-    auto aggregator_rank = ttml::core::distributed::Rank(*ctx.rank() - 1);
+    SocketManager &socket_manager,
+    const std::shared_ptr<ttml::core::distributed::DistributedContext> &ctx,
+    const SortedParameters &sorted_model_parameters) {
+    auto aggregator_rank = ttml::core::distributed::Rank(ctx->rank().get() - 1);
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         if (!tensor_ptr->get_requires_grad()) {
             continue;
         }
 
         auto tensor = tensor_ptr->get_value();
-        ttml::core::distributed::send_tensor(ctx, tensor, aggregator_rank);
+        // ttml::core::distributed::send_tensor(ctx, tensor, aggregator_rank);
+        socket_manager.send(tensor, ctx, aggregator_rank);
     }
 }
 
 void receive_gradients_from_aggregator(
-    const ttml::autograd::DistributedContext &ctx, const SortedParameters &sorted_model_parameters) {
-    auto aggregator_rank = ttml::core::distributed::Rank(*ctx.rank() - 1);
+    SocketManager &socket_manager,
+    const std::shared_ptr<ttml::core::distributed::DistributedContext> &ctx,
+    const SortedParameters &sorted_model_parameters) {
+    auto aggregator_rank = ttml::core::distributed::Rank(ctx->rank().get() - 1);
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         if (!tensor_ptr->get_requires_grad()) {
             continue;
         }
 
         auto tensor = ttnn::empty_like(tensor_ptr->get_value());
-        ttml::core::distributed::recv_tensor(ctx, tensor, aggregator_rank);
+        socket_manager.recv(tensor, ctx, aggregator_rank);
         tensor_ptr->set_grad(tensor);
     }
 }
@@ -48,17 +54,19 @@ void receive_gradients_from_aggregator(
 int main(int argc, char **argv) {
     auto &ctx = ttml::autograd::ctx();
     ctx.initialize_distributed_context(argc, argv);
-    auto &distributed_ctx = ctx.get_distributed_context();
+    auto distributed_ctx = ctx.get_distributed_context();
+    auto socket_manager = SocketManager(SocketType::MPI);
 
     CLI::App app{"Multihost Example"};
-    fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx.size(), *distributed_ctx.rank());
+    fmt::print("Size {}, Rank {}: Initializing MPI context\n", distributed_ctx->size(), distributed_ctx->rank());
     argv = app.ensure_utf8(argv);
 
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt_3tier.yaml";
 
-    std::vector<int> aggregator_and_optimizer_ranks = {*distributed_ctx.rank() - 1, *distributed_ctx.rank()};
+    std::vector<int> aggregator_and_optimizer_ranks = {
+        distributed_ctx->rank().get() - 1, distributed_ctx->rank().get()};
 
-    auto aggregator_and_optimizer_ctx = distributed_ctx.create_sub_context(aggregator_and_optimizer_ranks);
+    auto aggregator_and_optimizer_ctx = distributed_ctx->create_sub_context(aggregator_and_optimizer_ranks);
 
     bool ddp = false;
     bool enable_tp = false;
@@ -77,7 +85,7 @@ int main(int argc, char **argv) {
     auto [steps_per_dataset, vocab_size] = three_tier_arch::get_steps_per_dataset_and_vocab_size(config);
     fmt::println(
         "[optimizer] Rank {}: Epochs {}: Steps per dataset: {} max steps: {}",
-        *distributed_ctx.rank(),
+        distributed_ctx->rank(),
         config.num_epochs,
         steps_per_dataset,
         config.max_steps);
@@ -117,14 +125,14 @@ int main(int argc, char **argv) {
 
     auto optimizer = select_optimizer(config.use_moreh_adamw);
 
-    send_weights_to_aggregator(*aggregator_and_optimizer_ctx, sorted_model_parameters);
+    send_weights_to_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
 
     uint32_t global_step = 0;
     for (uint32_t epoch = 0; epoch < config.num_epochs; ++epoch) {
         for (uint32_t step = 0; step < steps_per_dataset; ++step, ++global_step) {
-            receive_gradients_from_aggregator(*aggregator_and_optimizer_ctx, sorted_model_parameters);
+            receive_gradients_from_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
             optimizer->step();
-            send_weights_to_aggregator(*aggregator_and_optimizer_ctx, sorted_model_parameters);
+            send_weights_to_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
             if (global_step >= config.max_steps) {
                 break;
             }
@@ -132,11 +140,11 @@ int main(int argc, char **argv) {
         if (global_step >= config.max_steps) {
             break;
         }
-        fmt::print("[aggregator] Rank {}: Training epoch {} finished\n", *distributed_ctx.rank(), epoch);
+        fmt::print("[aggregator] Rank {}: Training epoch {} finished\n", distributed_ctx->rank().get(), epoch);
     }
 
-    fmt::print("[aggregator] Rank {}: Training finished\n", *distributed_ctx.rank());
-    distributed_ctx.barrier();
-    fmt::print("Rank {}: Finalized MPI context\n", *distributed_ctx.rank());
+    fmt::print("[aggregator] Rank {}: Training finished\n", distributed_ctx->rank().get());
+    distributed_ctx->barrier();
+    fmt::print("Rank {}: Finalized MPI context\n", distributed_ctx->rank().get());
     return 0;
 }
