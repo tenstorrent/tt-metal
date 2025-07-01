@@ -13,8 +13,13 @@ std::unique_ptr<ISocket> create_socket(
     tt::tt_metal::distributed::multihost::Rank other_rank,
     tt::tt_metal::distributed::SocketConfig socket_config) {
     if (socket_type == SocketType::MPI) {
-        socket_config.sender_rank = other_rank;
-        socket_config.receiver_rank = other_rank;
+        if (socket_config.distributed_context->rank() < other_rank) {
+            socket_config.sender_rank = socket_config.distributed_context->rank();
+            socket_config.receiver_rank = other_rank;
+        } else {
+            socket_config.sender_rank = other_rank;
+            socket_config.receiver_rank = socket_config.distributed_context->rank();
+        }
         auto mesh_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, socket_config);
         return std::make_unique<MPISocket>(mesh_socket);
     }

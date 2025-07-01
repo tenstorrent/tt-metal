@@ -51,9 +51,15 @@ void MPISocket::send(const ttnn::Tensor& tensor) {
     auto buffers = get_bytes_from_cpu_tensor(cpu_tensor);
 
     const auto& socket_config = mesh_socket_.get_config();
-    ;
+
+    auto rank = socket_config.distributed_context->rank();
+    auto receiver_rank = socket_config.receiver_rank;
+    if (rank == receiver_rank) {
+        receiver_rank = socket_config.sender_rank;
+    }
+
     for (auto buffer : buffers) {
-        socket_config.distributed_context->send(buffer, socket_config.receiver_rank, Tag{0});
+        socket_config.distributed_context->send(buffer, receiver_rank, Tag{0});
     }
 }
 
@@ -62,8 +68,15 @@ void MPISocket::recv(ttnn::Tensor& tensor) {
     auto buffers = get_bytes_from_cpu_tensor(cpu_tensor);
 
     const auto& socket_config = mesh_socket_.get_config();
+
+    auto rank = socket_config.distributed_context->rank();
+    auto sender_rank = socket_config.sender_rank;
+    if (rank == sender_rank) {
+        sender_rank = socket_config.receiver_rank;
+    }
+
     for (auto buffer : buffers) {
-        socket_config.distributed_context->recv(buffer, socket_config.sender_rank, Tag{0});
+        socket_config.distributed_context->recv(buffer, sender_rank, Tag{0});
     }
 
     ttnn::assign(cpu_tensor.to_device(tensor.device()), tensor);
