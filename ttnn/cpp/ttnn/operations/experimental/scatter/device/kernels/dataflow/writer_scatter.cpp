@@ -8,6 +8,7 @@
 
 namespace {
 
+// this function is supposed to write either a whole stick or part of it (76800 elements)
 template <bool is_dram, typename AddrGen>
 FORCE_INLINE void write_to_output(
     const uint32_t& cb, const AddrGen& addr_gtor, const uint32_t& offset_bytes, const uint32_t& chunk_size_bytes, const uint32_t& stick_id) {
@@ -39,6 +40,7 @@ void kernel_main() {
 
     const uint32_t input_and_output_chunk_size = get_arg_val<uint32_t>(3);
 
+    // read sticks (or chunks of them) and write them to output
     for (uint32_t stick_id = start_stick_id; stick_id < start_stick_id + sticks_for_core; ++stick_id) {
         for (uint32_t offset_bytes = 0; offset_bytes < ctas.output_stick_size_bytes; offset_bytes += input_and_output_chunk_size * sizeof(output_std_type)) {
             const uint32_t chunk_write_bytes = std::min(
