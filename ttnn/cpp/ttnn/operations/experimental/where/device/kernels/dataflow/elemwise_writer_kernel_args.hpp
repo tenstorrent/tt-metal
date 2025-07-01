@@ -17,7 +17,7 @@ struct ElemwiseWriterKernelArgs {
 
 struct CompileTimeWriterKernelArgs {
     uint32_t cb_dst;
-    uint32_t is_dst_dram;
+    bool is_dst_dram;
 };
 
 VALIDATE_KERNEL_ARGS_STRUCT(ElemwiseWriterKernelArgs)

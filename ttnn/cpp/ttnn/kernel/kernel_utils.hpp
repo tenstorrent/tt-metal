@@ -17,7 +17,8 @@
 namespace ttnn::kernel_utils {
 template <typename KernelArgsStruct, uint32_t... I>
 KernelArgsStruct make_runtime_struct_from_args(std::integer_sequence<uint32_t, I...>) {
-    return KernelArgsStruct{get_arg_val<uint32_t>(I)...};
+    const uint32_t args[]{get_arg_val<uint32_t>(I)...};
+    return __builtin_bit_cast(KernelArgsStruct, args);
 }
 
 template <typename KernelArgsStruct>
@@ -28,7 +29,8 @@ KernelArgsStruct make_runtime_struct_from_args() {
 
 template <typename KernelArgsStruct, uint32_t... I>
 constexpr KernelArgsStruct make_compile_time_struct_from_args(std::integer_sequence<uint32_t, I...>) {
-    return KernelArgsStruct{get_compile_time_arg_val(I)...};
+    constexpr uint32_t args[]{get_compile_time_arg_val(I)...};
+    return __builtin_bit_cast(KernelArgsStruct, args);
 }
 
 template <typename KernelArgsStruct>

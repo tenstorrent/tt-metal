@@ -11,16 +11,15 @@
 namespace ttnn::kernel_utils {
 
 template <typename KernelStruct>
-concept KernelArgsStructU32Concept =
-    alignof(KernelStruct) == alignof(uint32_t) && sizeof(KernelStruct) % sizeof(uint32_t) == 0 &&
-    std::is_aggregate_v<KernelStruct> && std::is_trivially_copyable_v<KernelStruct>;
+concept SerializableKernelArgs = alignof(KernelStruct) == alignof(uint32_t) && std::is_aggregate_v<KernelStruct> &&
+                                 std::is_trivially_copyable_v<KernelStruct>;
 
-template <KernelArgsStructU32Concept KernStruct>
+template <SerializableKernelArgs KernStruct>
 consteval uint32_t amount_of_fields() {
     return sizeof(KernStruct) / sizeof(uint32_t);
 }
 
-template <KernelArgsStructU32Concept KernStruct>
+template <SerializableKernelArgs KernStruct>
 std::vector<uint32_t> to_vector(const KernStruct& kernel_data) {
     constexpr auto N = amount_of_fields<KernStruct>();
     auto res = std::bit_cast<std::array<std::uint32_t, N>>(kernel_data);
@@ -29,10 +28,10 @@ std::vector<uint32_t> to_vector(const KernStruct& kernel_data) {
 
 }  // namespace ttnn::kernel_utils
 
-#define VALIDATE_KERNEL_ARGS_STRUCT(KernStruct)                     \
-    static_assert(                                                  \
-        ttnn::kernel_utils::KernelArgsStructU32Concept<KernStruct>, \
-        "Struct does not satisfy the requirements of KernelArgsStructU32Concept.");
+#define VALIDATE_KERNEL_ARGS_STRUCT(KernStruct)                 \
+    static_assert(                                              \
+        ttnn::kernel_utils::SerializableKernelArgs<KernStruct>, \
+        "Struct does not satisfy the requirements of SerializableKernelArgs.");
 
 #else
 #define VALIDATE_KERNEL_ARGS_STRUCT(KernStruct)
