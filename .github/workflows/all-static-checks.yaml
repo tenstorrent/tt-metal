@@ -130,7 +130,7 @@ jobs:
       run: cmake --version
     - name: Install Build Dependencies
       if: steps.find-changes.outputs.cmake-changed == 'true'
-      run: sudo ./install_dependencies.sh --mode build
+      run: sudo ./install_dependencies.sh --docker
     - name: Check CMake compatibility
       if: steps.find-changes.outputs.cmake-changed == 'true'
       env:
