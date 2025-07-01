@@ -11,12 +11,12 @@
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
-#include "ttnn/operations/experimental/reduction/cumprod/cumprod.hpp"
+#include "ttnn/operations/reduction/cumprod/cumprod.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/common/queue_id.hpp"
 
-namespace ttnn::operations::experimental::reduction::cumprod::detail {
-void bind_cumprod_operation(py::module& module) {
+namespace ttnn::operations::reduction::detail {
+void bind_reduction_cumprod_operation(py::module& module) {
     auto doc =
         R"doc(
 
@@ -42,7 +42,7 @@ void bind_cumprod_operation(py::module& module) {
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2, 3), dtype=torch.bfloat16), device=device)
                 >>> # Note that the call below will output the same tensor it was fed for the time being,
                 >>> # until the actual implementation is provided.
-                >>> output = ttnn.experimental.cumprod(tensor, 1)
+                >>> output = ttnn.cumprod(tensor, 1)
                 >>> assert tensor.shape == output.shape
                 >>> assert tensor.dtype == output.dtyoe
 
@@ -52,15 +52,15 @@ void bind_cumprod_operation(py::module& module) {
                 >>> # Note that the call below will output the same tensor it was fed for the time being,
                 >>> # until the actual implementation is provided.
                 >>> tensor_copy = ttnn.zeros_like(tensor)
-                >>> output = ttnn.experimental.cumprod(tensor, 1, out=tensor_copy)
+                >>> output = ttnn.cumprod(tensor, 1, out=tensor_copy)
                 >>> assert tensor.shape == output.shape
                 >>> assert tensor.dtype == output.dtype
             )doc";
 
-    using OperationType = decltype(ttnn::experimental::cumprod);
+    using OperationType = decltype(ttnn::cumprod);
     bind_registered_operation(
         module,
-        ttnn::experimental::cumprod,
+        ttnn::cumprod,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -69,8 +69,8 @@ void bind_cumprod_operation(py::module& module) {
                std::optional<DataType>& dtype,
                std::optional<Tensor> optional_out,
                const std::optional<MemoryConfig>& memory_config,
-               const QueueId& queue_id = DefaultQueueId) {
-                return self(input_tensor, dim, dtype, optional_out, memory_config, queue_id);
+               const QueueId& queue_id = DefaultQueueId) -> Tensor {
+                return self(queue_id, input_tensor, dim, dtype, optional_out, memory_config);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim"),
@@ -81,4 +81,4 @@ void bind_cumprod_operation(py::module& module) {
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::experimental::reduction::cumprod::detail
+}  // namespace ttnn::operations::reduction::detail

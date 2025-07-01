@@ -138,6 +138,9 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     if (fabric_config == tt_metal::FabricConfig::CUSTOM || fabric_config == tt_metal::FabricConfig::DISABLED) {
         return;
     }
+
+    this->router_port_directions_to_num_routing_planes_map_.clear();
+
     auto topology = FabricContext::get_topology_from_config(fabric_config);
     size_t min_routing_planes = std::numeric_limits<size_t>::max();
 
@@ -1445,7 +1448,13 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_routing_planes_in_dir
         this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).contains(routing_direction)) {
         num_routing_planes =
             this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).at(routing_direction);
-        TT_FATAL(eth_chans.size() >= num_routing_planes, "Not enough active fabric eth channels in direction");
+        TT_FATAL(
+            eth_chans.size() >= num_routing_planes,
+            "Not enough active fabric eth channels for node {} in direction {}. Requested {} routing planes but only have {} eth channels",
+            fabric_node_id,
+            routing_direction,
+            num_routing_planes,
+            eth_chans.size());
         eth_chans.resize(num_routing_planes);
     }
     return eth_chans;
