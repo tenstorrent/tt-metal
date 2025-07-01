@@ -1,4 +1,4 @@
-#include "fabric_socket.hpp"
+#include "ttnn/distributed/fabric_socket.hpp"
 #include <stdexcept>
 
 namespace ttnn::distributed {
@@ -29,6 +29,19 @@ void FabricSocket::send(const ttnn::Tensor& tensor) {
 void FabricSocket::recv(ttnn::Tensor& tensor) {
     assert(check_if_recv_socket(mesh_socket_));
     throw std::runtime_error("FabricSocket::recv is not implemented yet. Please use MPISocket for now.");
+}
+
+tt::tt_metal::distributed::multihost::Rank FabricSocket::get_sender_rank() const {
+    return mesh_socket_.get_config().sender_rank;
+}
+
+tt::tt_metal::distributed::multihost::Rank FabricSocket::get_receiver_rank() const {
+    return mesh_socket_.get_config().receiver_rank;
+}
+
+std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> FabricSocket::get_distributed_context()
+    const {
+    return mesh_socket_.get_config().distributed_context;
 }
 
 }  // namespace ttnn::distributed
