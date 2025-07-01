@@ -10,6 +10,8 @@ from pathlib import Path
 from statistics import mean, variance
 from typing import List
 
+import plotly.graph_objects as go
+
 from helpers.device import run_elf_files, wait_for_tensix_operations_finished
 from helpers.profiler import Profiler
 from helpers.test_config import ProfilerBuild, build_test
@@ -231,7 +233,7 @@ def delete_benchmark_dir(testname: str):
     if not root:
         raise AssertionError("Environment variable LLK_HOME is not set")
 
-    path = Path(root) / "perf" / testname
+    path = Path(root) / "perf_data" / testname
 
     if path.exists() and path.is_dir():
         shutil.rmtree(path)
@@ -242,7 +244,7 @@ def create_benchmark_dir(testname: str):
     if not root:
         raise AssertionError("Environment variable LLK_HOME is not set")
 
-    output_path = Path(root) / "perf" / testname
+    output_path = Path(root) / "perf_data" / testname
     output_path.mkdir(parents=True, exist_ok=True)
 
     return output_path
@@ -270,3 +272,56 @@ def dump_report(testname: str, report: PerfReport):
         writer = csv.writer(csvfile)
         writer.writerow(header_row)
         writer.writerows(data_rows)
+
+
+def dump_scatter(testname: str, report: PerfReport):
+    # generate a scatter plot using plotly.graph_objects (no pandas required)
+
+    if not report.sweep_names or not report.stat_names:
+        raise ValueError("Report is missing names")
+
+    dir = create_benchmark_dir(testname)
+    output_path = dir / f"{testname}.html"
+
+    # x-axis: sweep values (left to right, zipped for each sweep)
+    # y-axis: stat values (for each run type, for each stat)
+    # stat_names: e.g. mean(L1_TO_L1), mean(UNPACK_ISOLATE), ...
+    # sweep_names: e.g. tile_cnt, param2, ...
+
+    fig = go.Figure()
+
+    mean_columns = [
+        (name, i) for i, name in enumerate(report.stat_names) if name.startswith("mean")
+    ]
+
+    hover = [
+        ", ".join(f"{name}={val}" for name, val in zip(report.sweep_names, sweep))
+        for sweep in report.sweep_values
+    ]
+
+    # For each stat column (run type), plot all points
+    for stat_name, stat_idx in mean_columns:
+        y_vals = [stat[stat_idx] for stat in report.stat_values]
+
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(len(report.sweep_values))),
+                y=y_vals,
+                mode="markers",
+                name=stat_name,
+                text=hover,
+                hoverinfo="text+y",
+            )
+        )
+
+    # X-axis label
+    xaxis_title = "Sweep index (see hover for values)"
+
+    fig.update_layout(
+        title=f"Performance Scatter Plot: {testname}",
+        xaxis_title=xaxis_title,
+        yaxis_title="Cycles / Tile",
+        legend_title="Run Type / Stat",
+    )
+
+    fig.write_html(str(output_path))

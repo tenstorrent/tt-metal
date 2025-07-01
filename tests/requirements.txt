@@ -6,3 +6,4 @@ pytest-sugar==1.0.0
 pytest-timeout==2.4.0
 pytest==8.4.0
 torch==2.7.1
+plotly==6.2.0

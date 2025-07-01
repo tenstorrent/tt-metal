@@ -20,6 +20,7 @@ from helpers.perf import (
     PerfReport,
     delete_benchmark_dir,
     dump_report,
+    dump_scatter,
     perf_benchmark,
     update_report,
 )
@@ -50,6 +51,7 @@ def report_fixture():
     delete_benchmark_dir(TEST_NAME)
     yield
     dump_report(TEST_NAME, report)
+    dump_scatter(TEST_NAME, report)
 
 
 @pytest.mark.perf
