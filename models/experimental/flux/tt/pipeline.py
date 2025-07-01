@@ -24,13 +24,19 @@ from .transformer import FluxTransformer, FluxTransformerParameters
 
 
 class FluxPipeline:
-    def __init__(self, *, checkpoint: str, device: ttnn.MeshDevice, use_torch_encoder: bool = True) -> None:
+    def __init__(
+        self, *, checkpoint: str, device: ttnn.MeshDevice, use_torch_encoder: bool = True, model_location_generator
+    ) -> None:
         self._device = device
 
         logger.info("loading transformer...")
 
+        model_name_checkpoint = model_location_generator(checkpoint, model_subdir="Flux1_Schnell")
+
+        print("model_name_checkpoint", model_name_checkpoint)
+
         torch_transformer = FluxTransformeReference.from_pretrained(
-            checkpoint, subfolder="transformer", torch_dtype=torch.bfloat16
+            model_name_checkpoint, subfolder="transformer", torch_dtype=torch.bfloat16
         )
         assert isinstance(torch_transformer, FluxTransformeReference)
 
@@ -50,14 +56,16 @@ class FluxPipeline:
         del torch_transformer
 
         logger.info("loading other models...")
-        self._tokenizer_1 = CLIPTokenizer.from_pretrained(checkpoint, subfolder="tokenizer")
-        self._tokenizer_2 = T5TokenizerFast.from_pretrained(checkpoint, subfolder="tokenizer_2")
-        self._torch_text_encoder_1 = CLIPTextModel.from_pretrained(checkpoint, subfolder="text_encoder")
+        self._tokenizer_1 = CLIPTokenizer.from_pretrained(model_name_checkpoint, subfolder="tokenizer")
+        self._tokenizer_2 = T5TokenizerFast.from_pretrained(model_name_checkpoint, subfolder="tokenizer_2")
+        self._torch_text_encoder_1 = CLIPTextModel.from_pretrained(model_name_checkpoint, subfolder="text_encoder")
         torch_text_encoder_2 = T5EncoderModel.from_pretrained(
-            checkpoint, subfolder="text_encoder_2", torch_dtype=torch.float32 if use_torch_encoder else torch.bfloat16
+            model_name_checkpoint,
+            subfolder="text_encoder_2",
+            torch_dtype=torch.float32 if use_torch_encoder else torch.bfloat16,
         )
-        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint, subfolder="scheduler")
-        self._vae = AutoencoderKL.from_pretrained(checkpoint, subfolder="vae")
+        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_name_checkpoint, subfolder="scheduler")
+        self._vae = AutoencoderKL.from_pretrained(model_name_checkpoint, subfolder="vae")
 
         assert isinstance(self._tokenizer_1, CLIPTokenizer)
         assert isinstance(self._tokenizer_2, T5TokenizerFast)
@@ -480,14 +488,10 @@ def _get_t5_prompt_embeds(
     text_input_ids = text_inputs.input_ids
     untruncated_ids = tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
 
-    print("text_ids_shape", text_input_ids.shape)
     if untruncated_ids.shape[-1] >= text_input_ids.shape[-1]:
         logger.warning("T5 input text was truncated")
 
     if isinstance(text_encoder, T5Encoder):
-        print("num images per prompt", num_images_per_prompt)
-        print("repeated", text_input_ids.repeat(num_images_per_prompt, 1).shape)
-
         tt_text_input_ids = ttnn.from_torch(
             text_input_ids.repeat(num_images_per_prompt, 1),
             device=device,
