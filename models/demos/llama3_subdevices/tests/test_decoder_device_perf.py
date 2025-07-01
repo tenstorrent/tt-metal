@@ -379,6 +379,7 @@ def load_perf_targets(galaxy_type):
     return perf_targets
 
 
+@pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
 # Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
@@ -405,7 +406,10 @@ def test_llama_TG_perf_device(
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    device_analysis_types = ["device_kernel_duration", "device_kernel_first_to_last_start"]
+    post_processed_results = run_device_perf(
+        command, subdir, num_iterations, cols, batch_size, device_analysis_types=device_analysis_types
+    )
     profiler.end(step_name)
     profiler.end("run")
 
@@ -781,6 +785,7 @@ def test_llama_TG_perf_device(
     assert all_passing
 
 
+@pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
 # Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
