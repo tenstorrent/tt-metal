@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-#!/usr/bin/env python3
-# -*- coding:utf-8 -*-
 import os
 import warnings
 import numpy as np
@@ -11,9 +9,6 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from torch.nn.parameter import Parameter
-
-# from yolov6.utils.general import download_ckpt
-
 
 activation_table = {"relu": nn.ReLU(), "silu": nn.SiLU(), "hardswish": nn.Hardswish()}
 
@@ -134,17 +129,6 @@ class CSPSPPFModule(nn.Module):
             y2 = self.m(y1)
             y3 = self.cv6(self.cv5(torch.cat([x1, y1, y2, self.m(y2)], 1)))
         return self.cv7(torch.cat((y0, y3), dim=1))
-
-
-# class CSPSPPF(nn.Module):
-#     """CSPSPPF with SiLU activation"""
-
-#     def __init__(self, in_channels, out_channels, kernel_size=5, e=0.5, block=ConvBNSiLU):
-#         super().__init__()
-#         self.cspsppf = CSPSPPFModule(in_channels, out_channels, kernel_size, e, block)
-
-#     def forward(self, x):
-#         return self.cspsppf(x)
 
 
 class Transpose(nn.Module):
