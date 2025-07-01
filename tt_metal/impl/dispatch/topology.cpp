@@ -1670,6 +1670,10 @@ const std::unordered_set<TerminationInfo>& get_registered_termination_cores(chip
 }
 
 void reset_topology_state() {
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/24439
+    for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
+        delete node_id_to_kernel[idx];
+    }
     node_id_to_kernel.clear();
     command_queue_pgms.clear();
     dispatch_cores.clear();
