@@ -129,6 +129,7 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
     DeviceCommand command_sequence(MetalContext::instance().hal().get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
 
+    exec_buf_end.reserve(command_sequence.size_bytes() / sizeof(uint32_t));
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         exec_buf_end.push_back(((uint32_t*)command_sequence.data())[i]);
     }
@@ -170,7 +171,6 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
     DeviceLocalBufferConfig device_local_trace_buf_config = {
         .page_size = page_size,
         .buffer_type = BufferType::TRACE,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
     };
 
     ReplicatedBufferConfig global_trace_buf_config = {

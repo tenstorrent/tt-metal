@@ -11,7 +11,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/enum_types.hpp"

@@ -91,13 +91,13 @@ struct MorehAdamWDeviceOperation {
         const Tensor& exp_avg_in,
         const Tensor& exp_avg_sq_in,
 
-        const std::optional<float> lr,
-        const std::optional<float> beta1,
-        const std::optional<float> beta2,
-        const std::optional<float> eps,
-        const std::optional<float> weight_decay,
-        const std::optional<uint32_t> step,
-        const std::optional<bool> amsgrad,
+        std::optional<float> lr,
+        std::optional<float> beta1,
+        std::optional<float> beta2,
+        std::optional<float> eps,
+        std::optional<float> weight_decay,
+        std::optional<uint32_t> step,
+        std::optional<bool> amsgrad,
 
         const std::optional<Tensor>& max_exp_avg_sq_in,
         const std::optional<Tensor>& param_out,
@@ -105,7 +105,7 @@ struct MorehAdamWDeviceOperation {
         const std::optional<Tensor>& exp_avg_sq_out,
         const std::optional<Tensor>& max_exp_avg_sq_out,
         const std::optional<ttnn::MemoryConfig>& memory_config,
-        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
+        std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };

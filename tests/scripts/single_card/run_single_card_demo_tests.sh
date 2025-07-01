@@ -31,6 +31,16 @@ run_segformer_func() {
 
 }
 
+run_sentencebert_func() {
+
+  #SentenceBERT Demo
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference --timeout 600; fail+=$?
+
+  #SentenceBERT eval
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval --timeout 600; fail+=$?
+
+}
+
 run_llama3_func() {
   fail=0
 
@@ -216,6 +226,12 @@ run_yolov9c_perf() {
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov9c/demo/demo.py --timeout 600
 
 }
+run_yolov8s_perf() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov8s/demo/demo.py --timeout 600
+
+}
+
 
 run_mobilenetv2_perf(){
 
@@ -239,13 +255,29 @@ run_yolov8x_perf() {
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov8x/demo/demo.py --timeout 600
 
 }
+run_yolov4_perf() {
 
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov4/demo.py --timeout 600
+}
+run_yolov10x_demo() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings  models/experimental/yolov10/demo/demo.py --timeout 600
+
+}
+
+run_yolov7_demo() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov7/demo/demo.py --timeout 600
+
+}
 
 run_vgg_unet_demo() {
 
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg_unet/demo/demo.py --timeout 600
 
 }
+
+
 
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly

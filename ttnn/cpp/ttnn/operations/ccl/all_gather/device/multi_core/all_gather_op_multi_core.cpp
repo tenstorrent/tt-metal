@@ -16,7 +16,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 
 #include <sstream>
 #include <type_traits>
@@ -211,7 +211,7 @@ static void emit_sharded_tensor_kernel_rt_args(IDevice* d, Tensor const& tensor,
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }
 
-static bool shard_grid_is_transposed(Tensor const& t) {
+inline bool shard_grid_is_transposed(const Tensor& t) {
     TT_FATAL(
         t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
             t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||

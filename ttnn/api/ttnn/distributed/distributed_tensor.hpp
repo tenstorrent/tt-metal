@@ -7,6 +7,7 @@
 #include <memory>
 
 #include <tt_stl/small_vector.hpp>
+#include <tt-metalium/memory_pin.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -84,14 +85,19 @@ public:
     static TensorToMesh create(const MeshDevice& mesh_device, const MeshMapperConfig& config);
 
     // Distributes a tensor onto a mesh.
+    // The input tensor is expected to be a "single device" tensor with `HostStorage`; the output tensor will be a
+    // distributed tensor with `MultiDeviceHostStorage`.
+    // TODO: #15840 - eliminate the distinction between `HostStorage` and `MultiDeviceHostStorage`. This means possibly
+    // removing this API, and instead relying on the overload that accepts the span of logical data.
     Tensor operator()(const Tensor& tensor) const;
 
     // Overload that takes in a span of logical data; used in situations where the tensor object might not be
     // materialized.
     template <typename T>
     Tensor operator()(
-        tt::stl::Span<const T> buffer,
+        tt::stl::Span<T> buffer,
         const ttnn::Shape& shape,
+        const tt::tt_metal::MemoryPin& buffer_pin,
         const tt::tt_metal::TensorLayout& layout,
         T pad_value = 0) const;
 
@@ -140,7 +146,16 @@ public:
 
     static MeshToTensor create(const MeshDevice& mesh_device, const MeshComposerConfig& config);
 
-    Tensor compose(const std::vector<Tensor>& tensors) const;
+    // Composes multi-device tensor into a single tensor.
+    // The input tensor is expected to be distributed over a mesh; the output tensor will be a "single device" tensor
+    // with `HostStorage`.
+    // TODO: #15840 - eliminate the distinction between `HostStorage` and `MultiDeviceHostStorage`. This means possibly
+    // removing this API, and instead relying on the overload that returns the vector of logical data.
+    Tensor compose(const Tensor& tensor) const;
+
+    // Overload that returns a pair of logical data composed of a multi-device tensor and its shape.
+    template <typename T>
+    std::pair<std::vector<T>, Shape> compose(const Tensor& tensor) const;
 
 private:
     class Impl;
@@ -166,10 +181,15 @@ Tensor distribute_tensor(
     ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 // Creates a distributed tensor from a span of logical data specified in `buffer`.
+// `global_shape` must match the size of `buffer`; shapes of shards will be derived automatically based on the `mapper`,
+// and the `shard_layout` will be applied subsequently. `buffer` may be re-used to create tensors directly, taking
+// `buffer_pin` as the RAII to retain reference count to the object.
 template <typename T>
 Tensor create_distributed_tensor(
-    tt::stl::Span<const T> buffer,
-    const TensorSpec& spec,
+    tt::stl::Span<T> buffer,
+    const ttnn::Shape& global_shape,
+    const tt::tt_metal::MemoryPin& buffer_pin,
+    const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
     ttnn::QueueId cq_id = ttnn::DefaultQueueId,

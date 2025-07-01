@@ -98,10 +98,7 @@ def test_slice_write_four_dim(dims, begins, ends, layout, device):
 
 @pytest.mark.parametrize(
     "dims, slice_dim, slice_size",
-    [
-        [[2, 256, 256, 64], 1, 128],
-        [[2, 256, 128, 32], 2, 16],
-    ],
+    [[[2, 256, 256, 64], 1, 128], [[2, 256, 128, 32], 2, 16], [[1, 46, 46, 2904], 2, 23]],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
 def test_slice_write_copy(device, dims, slice_dim, slice_size, layout):
@@ -248,7 +245,7 @@ def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, 
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
-def test_slice_rm_sharded_with_program_cache(device, n, c, h, w, use_program_cache):
+def test_slice_rm_sharded_with_program_cache(device, n, c, h, w):
     for _ in range(2):
         run_slice_rm_sharded(device, n, c, h, w)
         # dummy tensor to change tensor alloc
@@ -367,7 +364,6 @@ def test_run_slice_test(
     in_mem_config,
     out_mem_config,
     dtype,
-    use_program_cache,
 ):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
@@ -1033,9 +1029,7 @@ def test_slice_index(device, input_shape, layout, input_memory_config, indices):
     "memory_config",
     (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
 )
-def test_ttnn_slice_whisper(
-    input_shape, input_start, input_ends, input_steps, memory_config, layout, device, use_program_cache
-):
+def test_ttnn_slice_whisper(input_shape, input_start, input_ends, input_steps, memory_config, layout, device):
     # A couple of slices in whisper that only work for "logical" slicing.
 
     for _ in range(3):

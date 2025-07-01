@@ -21,7 +21,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
     tt_metal::Program program{};
 
-    const auto &ashape = a.padded_shape(), bshape = b.padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
 
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());

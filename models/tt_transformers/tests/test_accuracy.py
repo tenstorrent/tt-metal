@@ -30,7 +30,7 @@ def get_accuracy_thresholds(model_args, optimizations):
     target_section = next(s for s in sections if s.lower().startswith(f"{first_decoder_conf.__name__}\n"))
 
     # Parse the table and find the row for our model and device
-    # Potential lines have the form "| Llama3.1-8b    | T3K    | 91        | 99        | 49.8          |"
+    # Potential lines have the form "| Llama-3.1-8b    | T3K    | 91        | 99        | 49.8          |"
     base_model_name = model_args.base_model_name
     device_name = model_args.device_name
     correct_line = (
@@ -120,7 +120,6 @@ def test_tt_model_acc(
     optimizations,
     mesh_device,
     use_reference_file,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
     is_ci_env,

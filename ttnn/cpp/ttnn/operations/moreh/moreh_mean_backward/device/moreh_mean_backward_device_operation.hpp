@@ -64,7 +64,7 @@ struct MorehMeanBackwardOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& output_grad,
         const ttnn::SmallVector<int64_t>& dims,
-        const bool keepdim,
+        bool keepdim,
         const std::optional<ttnn::Shape>& input_grad_shape,
         const std::optional<Tensor>& input_grad,
         const std::optional<MemoryConfig>& memory_config,

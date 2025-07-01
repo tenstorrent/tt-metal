@@ -70,7 +70,7 @@ struct MorehGroupNormBackwardGammaBetaGradOperation {
         const Tensor& input,
         const Tensor& mean,
         const Tensor& rstd,
-        const uint32_t num_groups,
+        uint32_t num_groups,
         const std::vector<bool>& are_required_outputs,
         const std::optional<const Tensor>& gamma_grad,
         const std::optional<const Tensor>& beta_grad,

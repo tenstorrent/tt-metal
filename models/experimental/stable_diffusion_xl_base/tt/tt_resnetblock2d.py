@@ -60,8 +60,8 @@ class TtResnetBlock2D(nn.Module):
         conv_bias_2 = state_dict[f"{module_path}.conv2.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
         if conv_shortcut:
-            conv_weights_3 = state_dict[f"{module_path}.conv_shortcut.weight"]
-            conv_bias_3 = state_dict[f"{module_path}.conv_shortcut.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
+            conv_weights_3 = state_dict[f"{module_path}.conv_shortcut.weight"].squeeze()
+            conv_bias_3 = state_dict[f"{module_path}.conv_shortcut.bias"]
 
         if split_in > 1:
             self.norm_1_blocks = 6 if "up_blocks.2.resnets.0" in module_path else 3
@@ -138,21 +138,10 @@ class TtResnetBlock2D(nn.Module):
         )
 
         if conv_shortcut:
-            self.conv3_config = model_config.get_conv_config(conv_path=f"{module_path}.conv_shortcut")
-            (
-                self.compute_config_conv_linear,
-                self.tt_conv3_weights,
-                self.tt_conv3_bias,
-                self.conv3_params,
-            ) = prepare_conv_params(
-                device,
-                conv_weights_3,
-                conv_bias_3,
-                model_config.conv_w_dtype,
-                fp32_dest_acc_en=False,
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                packer_l1_acc=True,
+            self.tt_conv3_weights, self.tt_conv3_bias = prepare_linear_params(
+                device, conv_weights_3, conv_bias_3, model_config.conv_w_dtype
             )
+            self.conv3_program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.conv_shortcut")
         else:
             self.tt_conv3_weights = self.tt_conv3_bias = None
 
@@ -314,33 +303,25 @@ class TtResnetBlock2D(nn.Module):
 
         if self.tt_conv3_weights is not None:
             input_tensor_pre_conv = input_tensor
-            [input_tensor, [H, W], [self.tt_conv3_weights, self.tt_conv3_bias]] = ttnn.conv2d(
-                input_tensor=input_tensor,
-                weight_tensor=self.tt_conv3_weights,
-                in_channels=self.conv3_params["input_channels"],
-                out_channels=self.conv3_params["output_channels"],
-                device=self.device,
-                bias_tensor=self.tt_conv3_bias,
-                kernel_size=self.conv3_params["kernel_size"],
-                stride=self.stride,
-                padding=(0, 0),
-                dilation=self.dilation,
-                batch_size=input_shape[0],
-                input_height=input_shape[2],
-                input_width=input_shape[3],
-                conv_config=self.conv3_config,
-                compute_config=self.compute_config_conv_linear,
-                groups=self.groups,
-                memory_config=None,
-                return_output_dim=True,
-                return_weights_and_bias=True,
+            input_tensor = ttnn.linear(
+                input_tensor,
+                self.tt_conv3_weights,
+                bias=self.tt_conv3_bias,
+                program_config=self.conv3_program_config,
+                compute_kernel_config=self.default_compute_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG
+                if C == 320 and (input_shape[1] == 960 or input_shape[1] == 640)
+                else hidden_states.memory_config(),
             )
             ttnn.deallocate(input_tensor_pre_conv)
-            C = self.conv3_params["output_channels"]
+            if input_tensor.memory_config() != hidden_states.memory_config():
+                input_tensor = ttnn.to_memory_config(input_tensor, memory_config=hidden_states.memory_config())
+        else:
             if input_tensor.is_sharded():
                 input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
-        hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ttnn.add(input_tensor, hidden_states)
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        ttnn.add_(hidden_states, input_tensor)
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         return hidden_states, [C, H, W]

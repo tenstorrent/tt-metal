@@ -230,7 +230,7 @@ Result conv_transpose2d(
     }
     if (mm_conv) {
         input_tensor_post_tm = ttnn::to_layout(
-            input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config(), device);
+            input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config());
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
         std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
 

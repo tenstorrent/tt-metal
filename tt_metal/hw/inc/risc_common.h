@@ -189,12 +189,13 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {
 // Flush i$ on ethernet riscs
 inline __attribute__((always_inline)) void flush_erisc_icache() {
 #ifdef ARCH_BLACKHOLE
-// Kernel start instructions on WH are not cached because we apply a 1 cache line (32B) padding
-//  between FW end and Kernel start.
-// This works because risc tries to prefetch 1 cache line.
-// The 32B still get cached but they are never executed
 #pragma GCC unroll 2048
     for (int i = 0; i < 2048; i++) {
+        asm("nop");
+    }
+#else
+#pragma GCC unroll 128
+    for (int i = 0; i < 128; i++) {
         asm("nop");
     }
 #endif

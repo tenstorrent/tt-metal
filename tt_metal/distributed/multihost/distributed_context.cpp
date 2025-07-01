@@ -24,4 +24,7 @@ void DistributedContext::create(int argc, char** argv) { ContextImpl::create(arg
 const ContextPtr& DistributedContext::get_current_world() { return ContextImpl::get_current_world(); }
 
 void DistributedContext::set_current_world(const ContextPtr& ctx) { ContextImpl::set_current_world(ctx); }
+
+bool DistributedContext::is_initialized() { return ContextImpl::is_initialized(); }
+
 }  // namespace tt::tt_metal::distributed::multihost

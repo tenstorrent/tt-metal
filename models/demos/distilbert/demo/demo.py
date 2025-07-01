@@ -33,7 +33,6 @@ def load_inputs(input_path, batch):
 
 def run_distilbert_question_and_answering_inference(
     device,
-    use_program_cache,
     model_name,
     batch_size,
     sequence_size,
@@ -161,7 +160,6 @@ def run_distilbert_question_and_answering_inference(
 
 def run_distilbert_question_and_answering_inference_squad_v2(
     device,
-    use_program_cache,
     model_name,
     batch_size,
     sequence_size,
@@ -278,13 +276,11 @@ def test_demo(
     distilbert,
     model_location_generator,
     device,
-    use_program_cache,
 ):
     disable_persistent_kernel_cache()
 
     return run_distilbert_question_and_answering_inference(
         device=device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         batch_size=8,
         sequence_size=384,
@@ -306,13 +302,11 @@ def test_demo_squadv2(
     n_iterations,
     model_location_generator,
     device,
-    use_program_cache,
 ):
     disable_persistent_kernel_cache()
 
     return run_distilbert_question_and_answering_inference_squad_v2(
         device=device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         batch_size=8,
         sequence_size=384,

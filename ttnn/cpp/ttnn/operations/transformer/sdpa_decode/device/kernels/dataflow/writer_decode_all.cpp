@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "debug/assert.h"
 
-#include "cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
+#include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
@@ -200,7 +200,9 @@ void kernel_main() {
 
         // Write entire out into its corresponding batch
         uint32_t out_tile_id = out_batch_offset;
-        cb_wait_front(cb_out, out_chunk_tiles);
+        if constexpr (num_kv_heads > 1 || !is_out_sharded) {
+            cb_wait_front(cb_out, out_chunk_tiles);
+        }
         noc_async_writes_flushed();
 
         if constexpr (num_kv_heads > 1) {
@@ -279,7 +281,9 @@ void kernel_main() {
                     out_tile_id, out_writer, barrier_count);
             }
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_out, out_chunk_tiles);
+        if constexpr (num_kv_heads > 1 || !is_out_sharded) {
+            noc_async_write_barrier();
+            cb_pop_front(cb_out, out_chunk_tiles);
+        }
     }
 }

@@ -171,7 +171,6 @@ def test_sort_l1_memory_tensor(shape, dim, descending, device):
 )
 def test_sort_program_cache(shape, dim, descending, device):
     torch.manual_seed(0)
-    device.enable_program_cache()
 
     torch_dtype = torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype)

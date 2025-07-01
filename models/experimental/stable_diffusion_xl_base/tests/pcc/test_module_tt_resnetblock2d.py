@@ -26,13 +26,12 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
         ((1, 640, 128, 128), (1, 1280), 2, 1, True, 2, "up_blocks", 0.998),
         ((1, 2560, 32, 32), (1, 1280), 0, 0, True, 1, "up_blocks", 0.996),
         ((1, 1920, 32, 32), (1, 1280), 0, 2, True, 1, "up_blocks", 0.995),
-        ((1, 1920, 64, 64), (1, 1280), 1, 0, True, 1, "up_blocks", 0.998),
+        ((1, 1920, 64, 64), (1, 1280), 1, 0, True, 1, "up_blocks", 0.999),
         ((1, 1280, 64, 64), (1, 1280), 1, 1, True, 1, "up_blocks", 0.998),
         ((1, 960, 64, 64), (1, 1280), 1, 2, True, 1, "up_blocks", 0.998),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 def test_resnetblock2d(
     device,
     temb_shape,
@@ -43,9 +42,7 @@ def test_resnetblock2d(
     split_in,
     block,
     pcc,
-    use_program_cache,
     reset_seeds,
-    conv_weights_dtype,
 ):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
@@ -60,7 +57,7 @@ def test_resnetblock2d(
     else:
         assert "Incorrect block name"
 
-    model_config = ModelOptimisations(conv_w_dtype=conv_weights_dtype)
+    model_config = ModelOptimisations()
     tt_resnet = TtResnetBlock2D(
         device,
         state_dict,
@@ -74,11 +71,12 @@ def test_resnetblock2d(
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch_resnet(torch_input_tensor, torch_temb_tensor)
 
-    input_mem_cfg = (
-        ttnn.L1_MEMORY_CONFIG if down_block_id != 0 and not block == "up_blocks" else ttnn.DRAM_MEMORY_CONFIG
-    )
     ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=input_mem_cfg
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     B, C, H, W = list(ttnn_input_tensor.shape)
 

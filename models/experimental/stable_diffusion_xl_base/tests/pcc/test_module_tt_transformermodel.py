@@ -17,11 +17,10 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 @pytest.mark.parametrize(
     "input_shape, encoder_shape, down_block_id, query_dim, num_attn_heads, out_dim, pcc",
     [
-        ((1, 640, 64, 64), (1, 77, 2048), 1, 640, 10, 640, 0.999),
-        ((1, 1280, 32, 32), (1, 77, 2048), 2, 1280, 20, 1280, 0.998),
+        ((1, 640, 64, 64), (1, 77, 2048), 1, 640, 10, 640, 0.998),
+        ((1, 1280, 32, 32), (1, 77, 2048), 2, 1280, 20, 1280, 0.996),
     ],
 )
-@pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_transformermodel(
     device,
@@ -32,9 +31,7 @@ def test_transformermodel(
     num_attn_heads,
     out_dim,
     pcc,
-    use_program_cache,
     reset_seeds,
-    transformer_weights_dtype,
 ):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
@@ -52,7 +49,6 @@ def test_transformermodel(
         query_dim,
         num_attn_heads,
         out_dim,
-        weights_dtype=transformer_weights_dtype,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_encoder_tensor = torch_random(encoder_shape, -0.1, 0.1, dtype=torch.float32)

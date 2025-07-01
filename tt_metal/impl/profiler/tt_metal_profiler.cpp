@@ -36,7 +36,6 @@
 #include "core_coord.hpp"
 #include "data_types.hpp"
 #include "dev_msgs.h"
-#include "dprint_server.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "impl/context/metal_context.hpp"
@@ -659,7 +658,7 @@ void InitDeviceProfiler(IDevice* device) {
 
         const uint32_t num_cores_per_dram_bank = soc_desc.profiler_ceiled_core_count_perf_dram_bank;
         const uint32_t bank_size_bytes =
-            PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * num_cores_per_dram_bank;
+            PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * num_cores_per_dram_bank;
         TT_ASSERT(bank_size_bytes <= MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::PROFILER));
 
         const uint32_t num_dram_banks = soc_desc.get_num_dram_views();
@@ -710,7 +709,7 @@ void DumpDeviceProfileResults(
 
     if (getDeviceProfilerState()) {
         if (state != ProfilerDumpState::ONLY_DISPATCH_CORES) {
-            if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
+            if (tt::DevicePool::instance().is_dispatch_firmware_active() && !isGalaxyMMIODevice(device)) {
                 if (auto mesh_device = device->get_mesh_device()) {
                     mesh_device->mesh_command_queue().finish();
                 } else {
@@ -769,7 +768,9 @@ void DumpDeviceProfileResults(
             return;
         }
 
-        TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
+        TT_FATAL(
+            not tt::tt_metal::MetalContext::instance().dprint_server(),
+            "Debug print server is running, cannot dump device profiler data");
 
         auto profiler_it = tt_metal_device_profiler_map.find(device->id());
         if (profiler_it != tt_metal_device_profiler_map.end()) {

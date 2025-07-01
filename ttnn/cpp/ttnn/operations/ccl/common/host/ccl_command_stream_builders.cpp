@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
-#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 #include <tt-metalium/assert.hpp>
 

@@ -30,8 +30,7 @@ ttnn::Tensor EmbeddingOperation::invoke(
     Tensor mutable_weight = weight_arg;
 
     if (mutable_weight.layout() == ttnn::TILE_LAYOUT) {
-        mutable_weight = ttnn::to_layout(
-            mutable_weight, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, mutable_weight.device());
+        mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
     }
     auto hidden_embedding_dim = mutable_weight.logical_shape()[-1];
     auto padded_hidden_embedding_dim = mutable_weight.padded_shape()[-1];
@@ -72,8 +71,7 @@ ttnn::Tensor EmbeddingOperation::invoke(
     } else {
         embeddings = ttnn::reshape(embeddings, Shape({batch_size, sentence_size, hidden_embedding_dim}));
     }
-    embeddings = ttnn::to_layout(
-        embeddings, layout.value_or(weight_arg.layout()), std::nullopt, std::nullopt, (IDevice*)nullptr);
+    embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
     return embeddings;
 }
 ttnn::Tensor EmbeddingOperation::invoke(

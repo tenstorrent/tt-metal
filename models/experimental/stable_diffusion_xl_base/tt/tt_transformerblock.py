@@ -18,7 +18,6 @@ class TtBasicTransformerBlock(nn.Module):
         query_dim,
         num_attn_heads,
         out_dim,
-        weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -30,7 +29,6 @@ class TtBasicTransformerBlock(nn.Module):
             query_dim,
             num_attn_heads,
             out_dim,
-            weights_dtype=weights_dtype,
         )
         self.attn2 = TtAttention(
             device,
@@ -40,10 +38,9 @@ class TtBasicTransformerBlock(nn.Module):
             query_dim,
             num_attn_heads,
             out_dim,
-            weights_dtype=weights_dtype,
         )
 
-        self.ff = TtFeedForward(device, state_dict, f"{module_path}.ff", model_config, weights_dtype=weights_dtype)
+        self.ff = TtFeedForward(device, state_dict, f"{module_path}.ff", model_config)
 
         norm1_weights = state_dict[f"{module_path}.norm1.weight"]
         norm1_bias = state_dict[f"{module_path}.norm1.bias"]
@@ -89,9 +86,10 @@ class TtBasicTransformerBlock(nn.Module):
             bias=self.tt_norm1_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         attn_hidden_states = self.attn1(attn_hidden_states, attention_mask, None)
-        hidden_states = ttnn.add(input_tensor, attn_hidden_states)
+        hidden_states = ttnn.add(input_tensor, attn_hidden_states, use_legacy=False)
         ttnn.deallocate(input_tensor)
 
         attn_hidden_states = ttnn.layer_norm(
@@ -100,6 +98,7 @@ class TtBasicTransformerBlock(nn.Module):
             bias=self.tt_norm2_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         attn_hidden_states = self.attn2(attn_hidden_states, attention_mask, encoder_hidden_states)
         hidden_states = ttnn.add(hidden_states, attn_hidden_states)

@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 #include <algorithm>
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 #define ALWI inline __attribute__((always_inline))
 

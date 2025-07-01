@@ -67,7 +67,7 @@ struct BatchNormOperation {
         const Tensor& input,
         const Tensor& batch_mean,
         const Tensor& batch_var,
-        const float eps,
+        float eps,
         std::optional<Tensor> weight,
         std::optional<Tensor> bias,
         std::optional<Tensor> output,

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "compile_time_args.h"
 #include "dataflow_api.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
@@ -295,7 +296,11 @@ constexpr bool ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK = get_compile_time
 
 constexpr size_t DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 11);
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 12;
+// Context switch timeouts
+constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 12);
+constexpr bool IDLE_CONTEXT_SWITCHING = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 13) != 0;
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 14;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
@@ -382,7 +387,6 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_3_pkts_completed_id, to_sender_4_pkts_completed_id});
 
 // Miscellaneous configuration
-constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = 0;
 
 // TODO: move this to compile time args if we need to enable it
 constexpr bool enable_trid_flush_check_on_noc_txn = false;

@@ -50,7 +50,7 @@ FORCE_INLINE void pack_block_tiles_into_rows(uint32_t cb_in, uint32_t cb_out, ui
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 
-    tilize_init_short(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_out);
+    tilize_init(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_out);
 
     cb_wait_front(cb_in, NUM_TILES_IN_TILIZED_CHUNK);
     cb_reserve_back(cb_out, num_tiles);
