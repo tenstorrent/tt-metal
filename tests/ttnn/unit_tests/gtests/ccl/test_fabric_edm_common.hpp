@@ -2980,9 +2980,7 @@ void Run1DFabricPacketSendTest(
                             link,
                             program,
                             {worker_core},
-                            rt_args_out,
-                            CoreType::WORKER,
-                            true);
+                            rt_args_out);
                     } else {
                         const auto connection = local_device_fabric_handle->uniquely_connect_worker(device, direction);
                         const auto new_rt_args = ttnn::ccl::worker_detail::generate_edm_connection_rt_args(

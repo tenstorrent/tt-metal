@@ -87,8 +87,7 @@ void append_fabric_connection_rt_args(
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
-    CoreType core_type,
-    const bool device_init_fabric) {
+    CoreType core_type) {
     TT_FATAL(
         src_fabric_node_id != dst_fabric_node_id,
         "Expected different src and dst chip ids but got same, src:  (M {} D {}), dst:  (M {} D {})",

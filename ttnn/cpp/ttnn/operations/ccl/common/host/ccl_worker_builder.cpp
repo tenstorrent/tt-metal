@@ -1043,6 +1043,7 @@ std::vector<uint32_t> generate_edm_connection_rt_args(
     tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
         connection_info,
         chip_id,
+        worker_cores,
         worker_flow_control_semaphore_id,
         worker_teardown_semaphore_id,
         worker_buffer_index_semaphore_id,
