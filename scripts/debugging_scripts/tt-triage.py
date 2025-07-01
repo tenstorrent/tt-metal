@@ -259,7 +259,10 @@ def collect_pcs_from_riscv(
         assert store is not None, f"Debug bus not found for location {block.location.to_str('logical')}"
         pc_dict = dict()
         for risc_name in block.risc_names:
+            # Name of debug bus signal for PC is standardized as risc_name + _pc
             sig = risc_name + "_pc"
+            # We still don't have debug bus signal for ERISC on WH so we obtain it through gpr
+            # TODO: Once debug bus signal is added delete this if
             if sig == "erisc_pc":
                 pc = block.get_risc_debug("erisc").read_gpr(32)
             else:
@@ -272,6 +275,7 @@ def collect_pcs_from_riscv(
         pcs[block.location] = pc_dict
     return pcs
 
+
 def print_pcs_from_riscv(dev, pcs):
     table = []
     header_row = None
@@ -279,7 +283,7 @@ def print_pcs_from_riscv(dev, pcs):
     # Dump PC through debug bus
     if VERBOSE or VVERBOSE:
         for loc, pc_dict in pcs.items():
-
+            # Set header row in first iteration
             if header_row is None:
                 header_row = ["Loc", *[risc_name + "_pc" for risc_name in dev.get_block(loc).risc_names]]
                 table.append(header_row)
@@ -360,20 +364,21 @@ def format_callstack(cs):
         result.append(line)
     return result
 
+
 def get_firmware_elf_path(a_kernel_path: str, risc_name: str) -> str:
     firmware_elf_path = a_kernel_path + f"../../../firmware/{risc_name.lower()}/{risc_name.lower()}.elf"
     return os.path.realpath(firmware_elf_path)
 
+
 def init_running_ops_table(enum_values) -> list[list[str]] | None:
     if VVERBOSE:
-        return [
-            ["Loc", "Proc", "RD PTR", "Base", "Offset", "Kernel ID:Name", "PC", "Kernel Callstack", "Kernel Path"]
-        ]
+        return [["Loc", "Proc", "RD PTR", "Base", "Offset", "Kernel ID:Name", "PC", "Kernel Callstack", "Kernel Path"]]
     elif VERBOSE:
         return [["Loc", *enum_values["ProcessorTypes"].keys(), "Kernel ID:Name"]]
     else:
         return None
-    
+
+
 def get_info_from_firmware_elf(fw_elf, loc_mem_reader, programmable_core_type, proc_type, proc_class):
     launch_msg_rd_ptr = mem_access(fw_elf, "mailboxes->launch_msg_rd_ptr", loc_mem_reader)[0][0]
 
@@ -403,8 +408,8 @@ def get_info_from_firmware_elf(fw_elf, loc_mem_reader, programmable_core_type, p
 
     return launch_msg_rd_ptr, kernel_config_base, kernel_text_offset, watcher_kernel_id
 
-def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable_core_type, fw_elf, pcs, a_kernel_path):
 
+def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable_core_type, fw_elf, pcs, a_kernel_path):
     printout_table = init_running_ops_table(enum_values)
 
     if printout_table is None:
@@ -426,7 +431,12 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
             loc_mem_reader = ELF.get_mem_reader(context, dev.id(), loc)
 
             try:
-                launch_msg_rd_ptr, kernel_config_base, kernel_text_offset, watcher_kernel_id = get_info_from_firmware_elf(fw_elf, loc_mem_reader, programmable_core_type, proc_type, proc_class)
+                (
+                    launch_msg_rd_ptr,
+                    kernel_config_base,
+                    kernel_text_offset,
+                    watcher_kernel_id,
+                ) = get_info_from_firmware_elf(fw_elf, loc_mem_reader, programmable_core_type, proc_type, proc_class)
             except Exception as e:
                 print()
                 print(f"Loc: {loc}, Process: {proc_name}")
@@ -450,7 +460,7 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
             if kernel_name:
                 assert kernel is not None, f"Kernel with watcher_kernel_id {watcher_kernel_id} not found."
                 if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-                    kernel_path = kernel.path  + "/idle_erisc/idle_erisc.elf"
+                    kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
                 elif proc_name.lower() == "erisc1":
                     kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
                 else:
@@ -510,6 +520,7 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
 
     return printout_table
 
+
 def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
     """Print the running operations on the device."""
     title(dump_running_ops.__doc__)
@@ -530,7 +541,7 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
 
     if not os.path.exists(idle_erisc_elf_path):
         raiseTTTriageError(f"IDLE ERISC ELF file {idle_erisc_elf_path} does not exist.")
-    
+
     # Parse firmware elfs
     brisc_elf = parse_elf(brisc_elf_path, context)
     idle_erisc_elf = parse_elf(idle_erisc_elf_path, context)
@@ -549,15 +560,14 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
         return
 
     # Acces the value of enumerator for supported blocks
-    ProgrammableCoreTypes_TENSIX = brisc_elf.enumerators[
-        "ProgrammableCoreType::TENSIX"
-    ].value  
+    ProgrammableCoreTypes_TENSIX = brisc_elf.enumerators["ProgrammableCoreType::TENSIX"].value
     ProgrammableCoreTypes_IDLE_ETH = brisc_elf.enumerators["ProgrammableCoreType::IDLE_ETH"].value
 
     # Collect pcs
     pcs_tensix = collect_pcs_from_riscv(dev, blocks=dev.get_blocks(block_type="functional_workers"))
-    pcs_idle_eth = collect_pcs_from_riscv(dev, blocks = dev.idle_eth_blocks)
+    pcs_idle_eth = collect_pcs_from_riscv(dev, blocks=dev.idle_eth_blocks)
 
+    # Enumerators for tensix block
     enum_values_tenisx = {
         "ProcessorTypes": {
             "BRISC": brisc_elf.enumerators["TensixProcessorTypes::DM0"].value,
@@ -575,6 +585,7 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
         },
     }
 
+    # Enumerators for eth block
     enum_values_eth = {
         "ProcessorTypes": {
             "ERISC": idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
@@ -583,12 +594,32 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
             "ERISC": idle_erisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"].value,
             "ERISC0": idle_erisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"].value,
             "ERISC1": idle_erisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM1"].value,
-        }
+        },
     }
 
-    running_ops_table_tensix = get_running_ops_table(dev, dev.get_blocks(block_type="functional_workers"), enum_values_tenisx, inspector_data, ProgrammableCoreTypes_TENSIX, brisc_elf, pcs_tensix, a_kernel_path)
-    runinng_ops_table_idle_eth = get_running_ops_table(dev, dev.idle_eth_blocks, enum_values_eth, inspector_data, ProgrammableCoreTypes_IDLE_ETH, idle_erisc_elf, pcs_idle_eth, a_kernel_path)
+    # Getting running ops tables
+    running_ops_table_tensix = get_running_ops_table(
+        dev,
+        dev.get_blocks(block_type="functional_workers"),
+        enum_values_tenisx,
+        inspector_data,
+        ProgrammableCoreTypes_TENSIX,
+        brisc_elf,
+        pcs_tensix,
+        a_kernel_path,
+    )
+    runinng_ops_table_idle_eth = get_running_ops_table(
+        dev,
+        dev.idle_eth_blocks,
+        enum_values_eth,
+        inspector_data,
+        ProgrammableCoreTypes_IDLE_ETH,
+        idle_erisc_elf,
+        pcs_idle_eth,
+        a_kernel_path,
+    )
 
+    # Printing tables if verbose is True
     if VERBOSE or VVERBOSE:
         print()  # Newline after the last PC
         if running_ops_table_tensix is not None:
