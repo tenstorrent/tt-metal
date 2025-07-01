@@ -8,8 +8,6 @@ import os
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
-
 
 @pytest.mark.parametrize(
     "shape_id, warmup_iters, perf_target_us",
@@ -30,17 +28,13 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_rs_ring(
-    shape_id,
-    warmup_iters,
-    perf_target_us,
-):
+def test_rs_ring(shape_id, warmup_iters, perf_target_us, galaxy_type):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = f"rs"
 
     subdir = "llama_ccl_perf"
-    if is_RING_6U:
+    if galaxy_type == "6U":
         command = f'pytest tests/ttnn/unit_tests/operations/ccl/test_llama_prefill_ccl_ops_TG.py::test_reduce_scatter_TG -k \\"{shape_id} and yes-trace\\"'
     else:
         pytest.skip("Needs 6U ring")
@@ -99,17 +93,13 @@ def test_rs_ring(
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_ag_ring(
-    shape_id,
-    warmup_iters,
-    perf_target_us,
-):
+def test_ag_ring(shape_id, warmup_iters, perf_target_us, galaxy_type):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = f"ag"
 
     subdir = "llama_ccl_perf"
-    if is_RING_6U:
+    if galaxy_type == "6U":
         command = f'pytest tests/ttnn/unit_tests/operations/ccl/test_llama_prefill_ccl_ops_TG.py::test_all_gather_TG -k \\"{shape_id} and yes-trace\\"'
     else:
         pytest.skip("Needs 6U ring")
