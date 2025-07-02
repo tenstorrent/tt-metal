@@ -43,7 +43,7 @@ MAX_TYPE = "max"
         (  # 10 layers for devive perf measurements
             "instruct",
             10,
-            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
