@@ -256,6 +256,16 @@ def test_cumsum_backward(size, dim, dtypes, device):
     torch_output.backward(torch_output_grad)
 
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
+<<<<<<< HEAD
+=======
+    # tt_input_grad_cpu = (
+    #     ttnn.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad)
+    #     .cpu()
+    #     .to(cpu_layout)
+    #     .unpad_from_tile(size)
+    #     .to_torch()
+    # )
+>>>>>>> 40f9601e24 (23710: move cumsum out of experimental)
 
     tt_input_grad_cpu = ttnn.to_torch(ttnn.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad))
 
