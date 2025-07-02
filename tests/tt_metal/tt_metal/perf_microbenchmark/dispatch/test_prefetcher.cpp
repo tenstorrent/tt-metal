@@ -2823,7 +2823,7 @@ void configure_for_multi_chip(
     TT_ASSERT(dispatch_h_core_sem_0_id == dispatch_relay_mux_core_sem_0_id);
     const uint32_t dispatch_h_cb_sem = dispatch_h_core_sem_0_id;
 
-    std::map<string, string> prefetch_defines = {
+    std::map<std::string, std::string> prefetch_defines = {
         {"DOWNSTREAM_CB_BASE", std::to_string(dispatch_buffer_base)},  // overridden below for prefetch_h
         {"DOWNSTREAM_CB_LOG_PAGE_SIZE",
          std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},        // overridden below for prefetch_h
