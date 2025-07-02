@@ -24,12 +24,21 @@ namespace tt::tt_fabric {
 
 class FabricContext;
 
+// Forward declaration for test accessor
+class ControlPlaneTestAccessor;
+
 class ControlPlane {
 public:
     explicit ControlPlane(const std::string& mesh_graph_desc_yaml_file);
     explicit ControlPlane(
         const std::string& mesh_graph_desc_yaml_file,
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+
+    // Virtual methods for testing - can be overridden in test classes
+    // FIXME: this is a hack to get the adjacent chips for testing. We should not expose this to the user.
+    //        Change to non-virtual
+    // Should look into making a mock cluster object that can be used to test the control plane:
+    // https://github.com/tenstorrent/tt-metal/issues/24497
     virtual ~ControlPlane();
 
     // Printing functions
@@ -142,19 +151,22 @@ public:
     // by SPI-ROM firmware)
     uint64_t get_asic_id(chip_id_t chip_id) const;
 
+    // Friend declaration for test accessor
+    friend class TestingMockControlPlane;
+
+protected:
+    // Virtual methods for testing - can be overridden in test classes
+    // FIXME: this is a hack to get the adjacent chips for testing. We should not expose this to the user.
+    //        Move these to the cpp file as helper functions and out of the control plane class.
+    // Should look into making a mock cluster object that can be used to test the control plane:
+    // https://github.com/tenstorrent/tt-metal/issues/24497
+    virtual std::vector<chip_id_t> get_adjacent_chips(chip_id_t chip_id, std::uint32_t num_ports_per_side) const;
+    virtual std::set<chip_id_t> get_user_exposed_chip_ids() const;
+
 private:
     // -----------------------------------------------------------------------------
     // Helper: BFS distance map from a start chip to all reachable chips using the
     // physical Ethernet topology. Returned distances are expressed in hop count.
-    // -----------------------------------------------------------------------------
-
-    // FIXME: For testing, need to override ----------------------------------------
-    // Virtual method for getting adjacent chips - can be overridden in test classes
-    virtual std::vector<chip_id_t> get_adjacent_chips(chip_id_t chip_id, std::uint32_t num_ports_per_side) const;
-    // Virtual method for getting user exposed chip ids - can be overridden in test classes
-    virtual std::set<chip_id_t> get_user_exposed_chip_ids() const;
-    std::unordered_map<chip_id_t, std::uint32_t> compute_distances(
-        chip_id_t start_chip, std::uint32_t num_ports_per_side) const;
     // -----------------------------------------------------------------------------
 
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
@@ -184,9 +196,15 @@ private:
     routing_plane_id_t get_routing_plane_id(
         chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const;
 
-    std::vector<chip_id_t> get_mesh_physical_chip_ids(std::uint32_t mesh_ns_size, std::uint32_t mesh_ew_size) const;
+    // Virtual methods for testing - can be overridden in test classes
+    // FIXME: this is a hack to get the adjacent chips for testing. We should not expose this to the user.
+    // Should look into making a mock cluster object that can be used to test the control plane:
+    // https://github.com/tenstorrent/tt-metal/issues/24497
+    virtual std::vector<chip_id_t> get_mesh_physical_chip_ids(
+        const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container) const;
 
-    std::map<FabricNodeId, chip_id_t> get_logical_chip_to_physical_chip_mapping();
+    std::map<FabricNodeId, chip_id_t> get_logical_chip_to_physical_chip_mapping(
+        const std::string& mesh_graph_desc_file);
 
     // Tries to get a valid downstream channel from the candidate_target_chans
     // First along same routing plane, but if not available, take round robin from candidates

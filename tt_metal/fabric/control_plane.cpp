@@ -15,6 +15,7 @@
 #include <ostream>
 #include <queue>
 #include <set>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -41,6 +42,11 @@
 #include <umd/device/types/xy_pair.h>
 #include "tt_metal/fabric/fabric_context.hpp"
 
+// Constants for mesh topology classification based on number of adjacent chips
+#define CORNER_ADJACENT_CHIPS 2     // Corner chips have 2 adjacent neighbors
+#define EDGE_ADJACENT_CHIPS 3       // Edge chips have 3 adjacent neighbors
+#define INTERIOR_ADJACENT_CHIPS 4   // Interior chips have 4 adjacent neighbors
+#define CORNER_1D_ADJACENT_CHIPS 1  // 1D mesh corner chips have 1 adjacent neighbor (endpoints)
 namespace tt::tt_fabric {
 
 namespace {
@@ -64,10 +70,6 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped
     return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(chip_id);
 }
 
-bool is_chip_on_edge_of_mesh(const std::vector<chip_id_t>& adjacent_chips) { return (adjacent_chips.size() == 3); }
-
-bool is_chip_on_corner_of_mesh(const std::vector<chip_id_t>& adjacent_chips) { return (adjacent_chips.size() == 2); }
-
 template <typename CONNECTIVITY_MAP_T>
 static void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
@@ -90,14 +92,140 @@ static void build_golden_link_counts(
             }
         }
     }
-};
+}
+
+// Helper: BFS distance map from a start chip to all reachable chips using the
+// provided adjacency map. Returned distances are expressed in hop count.
+std::unordered_map<chip_id_t, std::uint32_t> compute_distances(
+    chip_id_t start_chip, const std::unordered_map<chip_id_t, std::vector<chip_id_t>>& adjacency_map) {
+    std::unordered_map<chip_id_t, std::uint32_t> dist;
+    std::queue<chip_id_t> q;
+    dist[start_chip] = 0;
+    q.push(start_chip);
+
+    while (!q.empty()) {
+        auto cur = q.front();
+        q.pop();
+
+        auto it = adjacency_map.find(cur);
+        if (it != adjacency_map.end()) {
+            for (auto nbr : it->second) {
+                if (dist.find(nbr) == dist.end()) {
+                    dist[nbr] = dist.at(cur) + 1;
+                    q.push(nbr);
+                }
+            }
+        }
+    }
+    return dist;
+}
+
+// Helper: Generate ASCII visualization of mesh topology for debugging
+std::string generate_mesh_ascii_visualization(
+    const std::unordered_map<chip_id_t, std::vector<chip_id_t>>& adjacency_map,
+    const std::set<chip_id_t>& user_chip_ids,
+    std::uint32_t mesh_ns_size,
+    std::uint32_t mesh_ew_size,
+    const std::vector<chip_id_t>& corners = {},
+    const std::vector<chip_id_t>& edges = {}) {
+    std::stringstream ss;
+    ss << "\n=== MESH TOPOLOGY VISUALIZATION ===" << std::endl;
+    ss << "Expected mesh shape: " << mesh_ns_size << "x" << mesh_ew_size << std::endl;
+    ss << "User chip IDs: ";
+    for (auto chip_id : user_chip_ids) {
+        ss << chip_id << " ";
+    }
+    ss << std::endl;
+
+    if (!corners.empty()) {
+        ss << "Detected corners: ";
+        for (auto corner : corners) {
+            ss << corner << " ";
+        }
+        ss << std::endl;
+    }
+
+    if (!edges.empty()) {
+        ss << "Detected edges: ";
+        for (auto edge : edges) {
+            ss << edge << " ";
+        }
+        ss << std::endl;
+    }
+
+    ss << "\nAdjacency matrix:" << std::endl;
+    ss << "Chip | Neighbors" << std::endl;
+    ss << "-----|----------" << std::endl;
+
+    std::vector<chip_id_t> sorted_chips;
+    for (const auto& [chip_id, _] : adjacency_map) {
+        sorted_chips.push_back(chip_id);
+    }
+    std::sort(sorted_chips.begin(), sorted_chips.end());
+
+    for (auto chip_id : sorted_chips) {
+        ss << std::setw(4) << chip_id << " | ";
+        auto it = adjacency_map.find(chip_id);
+        if (it != adjacency_map.end()) {
+            for (size_t i = 0; i < it->second.size(); ++i) {
+                ss << it->second[i];
+                if (i < it->second.size() - 1) {
+                    ss << ", ";
+                }
+            }
+        }
+        ss << std::endl;
+    }
+
+    // Try to create a visual grid representation
+    ss << "\nAttempted grid visualization:" << std::endl;
+    if (mesh_ns_size <= 10 && mesh_ew_size <= 10) {  // Limit size for readability
+        for (std::uint32_t row = 0; row < mesh_ns_size; ++row) {
+            // Print horizontal connections
+            for (std::uint32_t col = 0; col < mesh_ew_size; ++col) {
+                chip_id_t chip_id = row * mesh_ew_size + col;
+                if (user_chip_ids.find(chip_id) != user_chip_ids.end()) {
+                    ss << std::setw(2) << chip_id;
+                } else {
+                    ss << " ?";
+                }
+
+                // Print horizontal connection
+                if (col < mesh_ew_size - 1) {
+                    chip_id_t next_chip = chip_id + 1;
+                    auto it = adjacency_map.find(chip_id);
+                    bool connected =
+                        (it != adjacency_map.end() &&
+                         std::find(it->second.begin(), it->second.end(), next_chip) != it->second.end());
+                    ss << (connected ? "-" : " ");
+                }
+            }
+            ss << std::endl;
+
+            // Print vertical connections
+            if (row < mesh_ns_size - 1) {
+                for (std::uint32_t col = 0; col < mesh_ew_size; ++col) {
+                    chip_id_t chip_id = row * mesh_ew_size + col;
+                    chip_id_t below_chip = chip_id + mesh_ew_size;
+                    auto it = adjacency_map.find(chip_id);
+                    bool connected =
+                        (it != adjacency_map.end() &&
+                         std::find(it->second.begin(), it->second.end(), below_chip) != it->second.end());
+                    ss << (connected ? " | " : "   ");
+                }
+                ss << std::endl;
+            }
+        }
+    } else {
+        ss << "Grid too large for ASCII visualization (>10x10)" << std::endl;
+    }
+
+    ss << "===================================" << std::endl;
+    return ss.str();
+}
 
 }  // namespace
 
-// -----------------------------------------------------------------------------
-// Helper: BFS distance map from a start chip to all reachable chips using the
-// physical Ethernet topology. Returned distances are expressed in hop count.
-// -----------------------------------------------------------------------------
 std::vector<chip_id_t> ControlPlane::get_adjacent_chips(chip_id_t chip_id, std::uint32_t num_ports_per_side) const {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto eth_links = get_ethernet_cores_grouped_by_connected_chips(chip_id);
@@ -116,35 +244,10 @@ std::vector<chip_id_t> ControlPlane::get_adjacent_chips(chip_id_t chip_id, std::
 
     return adjacent_chips;
 }
-// -----------------------------------------------------------------------------
-// Helper: Get the set of user exposed chip ids
-// -----------------------------------------------------------------------------
+
 std::set<chip_id_t> ControlPlane::get_user_exposed_chip_ids() const {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     return cluster.user_exposed_chip_ids();
-}
-// -----------------------------------------------------------------------------
-// Helper: BFS distance map from a start chip to all reachable chips using the
-// physical Ethernet topology. Returned distances are expressed in hop count.
-// -----------------------------------------------------------------------------
-std::unordered_map<chip_id_t, std::uint32_t> ControlPlane::compute_distances(
-    chip_id_t start_chip, std::uint32_t num_ports_per_side) const {
-    std::unordered_map<chip_id_t, std::uint32_t> dist;
-    std::queue<chip_id_t> q;
-    dist[start_chip] = 0;
-    q.push(start_chip);
-
-    while (!q.empty()) {
-        auto cur = q.front();
-        q.pop();
-        for (auto nbr : this->get_adjacent_chips(cur, num_ports_per_side)) {
-            if (dist.find(nbr) == dist.end()) {
-                dist[nbr] = dist.at(cur) + 1;
-                q.push(nbr);
-            }
-        }
-    }
-    return dist;
 }
 
 void ControlPlane::initialize_dynamic_routing_plane_counts(
@@ -281,7 +384,8 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     this->routing_table_generator_->print_routing_tables();
 
     // Initialize the control plane routers based on mesh graph
-    const auto& logical_mesh_chip_id_to_physical_chip_id_mapping = this->get_logical_chip_to_physical_chip_mapping();
+    const auto& logical_mesh_chip_id_to_physical_chip_id_mapping =
+        this->get_logical_chip_to_physical_chip_mapping(mesh_graph_desc_file);
     this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
     // Query and generate intermesh ethernet links per physical chip
     this->initialize_intermesh_eth_links();
@@ -367,20 +471,22 @@ void ControlPlane::validate_mesh_connections() const {
 }
 
 std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
-    std::uint32_t mesh_ns_size, std::uint32_t mesh_ew_size) const {
+    const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container) const {
     std::uint32_t num_ports_per_side =
         routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
 
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    // Define chip 0 as starting point and check if it is in user chips
-    chip_id_t chip_0 = 0;
-    const auto& user_chip_ids = this->get_user_exposed_chip_ids();
-    if (user_chip_ids.find(chip_0) == user_chip_ids.end()) {
-        TT_THROW("Chip 0 is not in user chip ids");
+    // Convert the coordinate range to a set of chip IDs using MeshContainer iterator
+    std::set<chip_id_t> user_chip_ids;
+    for (const auto& [coord, chip_id] : mesh_container) {
+        user_chip_ids.insert(chip_id);
     }
 
-    // Populate mesh of chips based on adjacency from chip 0
+    // Get the first chip ID from the mesh container iterator
+    chip_id_t chip_0 = *user_chip_ids.begin();
+
+    // Populate mesh of chips based on adjacency from first chip
     std::unordered_map<chip_id_t, std::vector<chip_id_t>> adjacent_chips_map;
     std::unordered_set<chip_id_t> visited_chips;
 
@@ -399,35 +505,36 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
         // Get adjacent chips
         auto adjacent_chips = this->get_adjacent_chips(current_chip, num_ports_per_side);
 
-        // Count neighbours: 2 → corner, 3 → edge, 4 → interior
-        // (we treat only links with ≥ num_ports_per_side lanes as neighbours)
-        // Check if chip is on corner of mesh
-        bool is_1d_mesh = (mesh_ns_size == 1) || (mesh_ew_size == 1);
+        // Count neighbours: CORNER_ADJACENT_CHIPS → corner, EDGE_ADJACENT_CHIPS → edge, INTERIOR_ADJACENT_CHIPS →
+        // interior (we treat only links with ≥ num_ports_per_side lanes as neighbours) Check if chip is on corner of
+        // mesh
+        const auto& mesh_shape = mesh_container.shape();
+        bool is_1d_mesh = (mesh_shape[0] == 1) || (mesh_shape[1] == 1);
         bool is_corner = false;
 
         if (is_1d_mesh) {
             // For 1D meshes, corners have exactly 1 adjacent chip (endpoints)
-            is_corner = (adjacent_chips.size() == 1);
+            is_corner = (adjacent_chips.size() == CORNER_1D_ADJACENT_CHIPS);
         } else {
             // For 2D meshes, corners have exactly 2 adjacent chips
-            is_corner = is_chip_on_corner_of_mesh(adjacent_chips);
+            is_corner = (adjacent_chips.size() == CORNER_ADJACENT_CHIPS);
         }
 
         if (is_corner) {
             // NOTE: First one added is the corner closest to chip 0
             //       this will be the pinned nw corner
             corners.push_back(current_chip);
-        } else if (is_chip_on_edge_of_mesh(adjacent_chips)) {
+        } else if (adjacent_chips.size() == EDGE_ADJACENT_CHIPS) {
             edges.push_back(current_chip);
         }
 
         for (const auto& adjacent_chip : adjacent_chips) {
+            // Add chip to adjacent chips map
+            adjacent_chips_map[current_chip].push_back(adjacent_chip);
+
             if (visited_chips.find(adjacent_chip) != visited_chips.end()) {
                 continue;
             }
-
-            // Add chip to adjacent chips map
-            adjacent_chips_map[current_chip].push_back(adjacent_chip);
 
             // Add chip to queue and visited next set
             chip_queue.push(adjacent_chip);
@@ -436,19 +543,29 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     }
 
     // Special case for 1x1 mesh
-    if (mesh_ns_size == 1 && mesh_ew_size == 1) {
+    if (mesh_container.shape()[0] == 1 && mesh_container.shape()[1] == 1) {
         std::vector<chip_id_t> physical_chip_ids(1);
         physical_chip_ids[0] = chip_0;
         return physical_chip_ids;
     }
 
     // Handle 1D meshes (1xN or Nx1)
-    bool is_1d_mesh = (mesh_ns_size == 1) || (mesh_ew_size == 1);
+    bool is_1d_mesh = (mesh_container.shape()[0] == 1) || (mesh_container.shape()[1] == 1);
     if (is_1d_mesh) {
         // For 1D meshes, we expect exactly 2 corners (the endpoints)
-        TT_FATAL(corners.size() == 2, "Expected 2 corners for 1D mesh, got {}", corners.size());
+        TT_FATAL(
+            corners.size() == 2,
+            "Expected 2 corners for 1D mesh, got {}. {}",
+            corners.size(),
+            generate_mesh_ascii_visualization(
+                adjacent_chips_map,
+                user_chip_ids,
+                mesh_container.shape()[0],
+                mesh_container.shape()[1],
+                corners,
+                edges));
 
-        std::vector<chip_id_t> physical_chip_ids(mesh_ns_size * mesh_ew_size);
+        std::vector<chip_id_t> physical_chip_ids(mesh_container.shape().mesh_size());
         std::fill(physical_chip_ids.begin(), physical_chip_ids.end(), static_cast<chip_id_t>(-1));
 
         // Place the first corner (closest to chip 0) at index 0
@@ -460,33 +577,68 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
         physical_chip_ids[physical_chip_ids.size() - 1] = second_corner;
 
         // Fill in the middle chips using BFS distances
-        auto dist_from_first = this->compute_distances(first_corner, num_ports_per_side);
+        auto dist_from_first = compute_distances(first_corner, adjacent_chips_map);
 
         for (const auto& [chip, distance] : dist_from_first) {
             if (chip != first_corner && chip != second_corner) {
                 // For 1D mesh, distance directly corresponds to the index
                 size_t idx = static_cast<size_t>(distance);
-                TT_FATAL(idx < physical_chip_ids.size(), "Index {} out of bounds for 1D mesh", idx);
-                TT_FATAL(physical_chip_ids[idx] == static_cast<chip_id_t>(-1), "Duplicate mapping at index {}", idx);
+                TT_FATAL(
+                    idx < physical_chip_ids.size(),
+                    "Index {} out of bounds for 1D mesh. {}",
+                    idx,
+                    generate_mesh_ascii_visualization(
+                        adjacent_chips_map,
+                        user_chip_ids,
+                        mesh_container.shape()[0],
+                        mesh_container.shape()[1],
+                        corners,
+                        edges));
+                TT_FATAL(
+                    physical_chip_ids[idx] == static_cast<chip_id_t>(-1),
+                    "Duplicate mapping at index {}. {}",
+                    idx,
+                    generate_mesh_ascii_visualization(
+                        adjacent_chips_map,
+                        user_chip_ids,
+                        mesh_container.shape()[0],
+                        mesh_container.shape()[1],
+                        corners,
+                        edges));
                 physical_chip_ids[idx] = chip;
             }
         }
 
         // Verify all chips are mapped
         for (std::uint32_t i = 0; i < physical_chip_ids.size(); ++i) {
-            TT_FATAL(physical_chip_ids[i] != static_cast<chip_id_t>(-1), "1D mesh embedding incomplete at index {}", i);
+            TT_FATAL(
+                physical_chip_ids[i] != static_cast<chip_id_t>(-1),
+                "1D mesh embedding incomplete at index {}. {}",
+                i,
+                generate_mesh_ascii_visualization(
+                    adjacent_chips_map,
+                    user_chip_ids,
+                    mesh_container.shape()[0],
+                    mesh_container.shape()[1],
+                    corners,
+                    edges));
         }
 
         return physical_chip_ids;
     }
 
     // Check number of corners for 2D meshes
-    TT_FATAL(corners.size() == 4, "Expected 4 corners for 2D mesh, got {}", corners.size());
+    TT_FATAL(
+        corners.size() == 4,
+        "Expected 4 corners for 2D mesh, got {}. {}",
+        corners.size(),
+        generate_mesh_ascii_visualization(
+            adjacent_chips_map, user_chip_ids, mesh_container.shape()[0], mesh_container.shape()[1], corners, edges));
 
     // The first corner found is the northwest corner (closest to chip 0)
     chip_id_t nw_corner = corners[0];
 
-    std::vector<chip_id_t> physical_chip_ids(mesh_ns_size * mesh_ew_size);
+    std::vector<chip_id_t> physical_chip_ids(mesh_container.shape().mesh_size());
 
     // Place northwest corner at (0, 0)
     physical_chip_ids[0] = nw_corner;
@@ -498,11 +650,11 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     // Step 1: BFS from the NW corner to get Manhattan distances dNW[chip].
 
     // Pre-compute signed mesh dimensions once to avoid repetitive casts.
-    const int mesh_cols = static_cast<int>(mesh_ew_size);
-    const int mesh_rows = static_cast<int>(mesh_ns_size);
+    const int mesh_cols = static_cast<int>(mesh_container.shape()[1]);
+    const int mesh_rows = static_cast<int>(mesh_container.shape()[0]);
 
     // 1) Distances from NW corner.
-    auto dist_from_nw = this->compute_distances(nw_corner, num_ports_per_side);
+    auto dist_from_nw = compute_distances(nw_corner, adjacent_chips_map);
 
     // 2) Identify the NE corner (distance of mesh_ew_size-1 from NW) and run a second
     //    BFS from it to obtain dNE[chip].
@@ -513,7 +665,7 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
             continue;
         }
         auto it = dist_from_nw.find(corner);
-        if (it != dist_from_nw.end() && it->second == mesh_ew_size - 1) {
+        if (it != dist_from_nw.end() && it->second == mesh_container.shape()[1] - 1) {
             ne_corner = corner;
             ne_found = true;
             break;
@@ -529,16 +681,32 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
             }
         }
     }
-    TT_FATAL(ne_found, "Ethernet mesh discovered does not match expected shape {}x{}", mesh_ew_size, mesh_ns_size);
+    TT_FATAL(
+        ne_found,
+        "Ethernet mesh discovered does not match expected shape {}x{}. {}",
+        mesh_container.shape()[1],
+        mesh_container.shape()[0],
+        generate_mesh_ascii_visualization(
+            adjacent_chips_map, user_chip_ids, mesh_container.shape()[0], mesh_container.shape()[1], corners, edges));
 
     // BFS from NE corner.
-    auto dist_from_ne = this->compute_distances(ne_corner, num_ports_per_side);
+    auto dist_from_ne = compute_distances(ne_corner, adjacent_chips_map);
 
     // Step 3: compute (row, col) for every chip using the distance formulas
     std::fill(physical_chip_ids.begin(), physical_chip_ids.end(), static_cast<chip_id_t>(-1));
 
     for (const auto& [chip, d_nw] : dist_from_nw) {
-        TT_FATAL(dist_from_ne.count(chip), "Mesh disconnected: chip {} missing in NE BFS", chip);
+        TT_FATAL(
+            dist_from_ne.count(chip),
+            "Mesh disconnected: chip {} missing in NE BFS. {}",
+            chip,
+            generate_mesh_ascii_visualization(
+                adjacent_chips_map,
+                user_chip_ids,
+                mesh_container.shape()[0],
+                mesh_container.shape()[1],
+                corners,
+                edges));
         int d_ne = static_cast<int>(dist_from_ne.at(chip));
         int d_nw_int = static_cast<int>(d_nw);
         // Solve the 2-equation system:
@@ -547,39 +715,115 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
         int col = (mesh_cols - 1 + d_nw_int - d_ne) / 2;
         int row = d_nw_int - col;
 
-        TT_FATAL(row >= 0 && row < mesh_rows, "Row {} out of bounds", row);
-        TT_FATAL(col >= 0 && col < mesh_cols, "Col {} out of bounds", col);
+        TT_FATAL(
+            row >= 0 && row < mesh_rows,
+            "Row {} out of bounds. {}",
+            row,
+            generate_mesh_ascii_visualization(
+                adjacent_chips_map,
+                user_chip_ids,
+                mesh_container.shape()[0],
+                mesh_container.shape()[1],
+                corners,
+                edges));
+        TT_FATAL(
+            col >= 0 && col < mesh_cols,
+            "Col {} out of bounds. {}",
+            col,
+            generate_mesh_ascii_visualization(
+                adjacent_chips_map,
+                user_chip_ids,
+                mesh_container.shape()[0],
+                mesh_container.shape()[1],
+                corners,
+                edges));
 
         size_t idx = static_cast<size_t>(row) * static_cast<size_t>(mesh_cols) + static_cast<size_t>(col);
-        TT_FATAL(physical_chip_ids[idx] == static_cast<chip_id_t>(-1), "Duplicate mapping at index {}", idx);
+        TT_FATAL(
+            physical_chip_ids[idx] == static_cast<chip_id_t>(-1),
+            "Duplicate mapping at index {}. {}",
+            idx,
+            generate_mesh_ascii_visualization(
+                adjacent_chips_map,
+                user_chip_ids,
+                mesh_container.shape()[0],
+                mesh_container.shape()[1],
+                corners,
+                edges));
         physical_chip_ids[idx] = chip;
     }
 
-    TT_FATAL(physical_chip_ids[0] == nw_corner, "NW corner not at index 0 after embedding");
+    TT_FATAL(
+        physical_chip_ids[0] == nw_corner,
+        "NW corner not at index 0 after embedding. {}",
+        generate_mesh_ascii_visualization(
+            adjacent_chips_map, user_chip_ids, mesh_container.shape()[0], mesh_container.shape()[1], corners, edges));
 
     for (std::uint32_t i = 0; i < physical_chip_ids.size(); ++i) {
-        TT_FATAL(physical_chip_ids[i] != static_cast<chip_id_t>(-1), "Mesh embedding incomplete at index {}", i);
+        TT_FATAL(
+            physical_chip_ids[i] != static_cast<chip_id_t>(-1),
+            "Mesh embedding incomplete at index {}. {}",
+            i,
+            generate_mesh_ascii_visualization(
+                adjacent_chips_map,
+                user_chip_ids,
+                mesh_container.shape()[0],
+                mesh_container.shape()[1],
+                corners,
+                edges));
     }
 
     return physical_chip_ids;
 }
 
-std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chip_mapping() {
+std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chip_mapping(
+    const std::string& mesh_graph_desc_file) {
     std::map<FabricNodeId, chip_id_t> logical_mesh_chip_id_to_physical_chip_id_mapping;
 
-    // Iterate over every mesh defined in the mesh-graph descriptor and embed it on top of
-    // the physical cluster using the generic helper.  This approach is now used for _all_
-    // descriptors – including TG – thus removing the previous special-case gateway mapping.
-    for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
-        auto mesh_shape = this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id);
+    std::string mesh_graph_desc_filename = std::filesystem::path(mesh_graph_desc_file).filename().string();
 
-        std::uint32_t mesh_ns_size = static_cast<std::uint32_t>(mesh_shape[0]);
-        std::uint32_t mesh_ew_size = static_cast<std::uint32_t>(mesh_shape[1]);
+    // NOTE: This is a special case for the TG mesh graph descriptor.
+    // It has to use Ethernet coordinates because ethernet coordinates must be mapped manually to physical chip IDs
+    // because the TG intermesh ethernet links could be inverted when mapped to physical chip IDs.
+    if (mesh_graph_desc_filename == "tg_mesh_graph_descriptor.yaml") {
+        // Add the N150 MMIO devices
+        auto eth_coords_per_chip =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates();
+        std::unordered_map<int, chip_id_t> eth_coord_y_for_gateway_chips = {};
+        for (const auto [chip_id, eth_coord] : eth_coords_per_chip) {
+            if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(chip_id) == BoardType::N150) {
+                eth_coord_y_for_gateway_chips[eth_coord.y] = chip_id;
+            }
+        }
+        logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
+            {FabricNodeId(MeshId{0}, 0), eth_coord_y_for_gateway_chips[3]});
+        logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
+            {FabricNodeId(MeshId{1}, 0), eth_coord_y_for_gateway_chips[2]});
+        logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
+            {FabricNodeId(MeshId{2}, 0), eth_coord_y_for_gateway_chips[1]});
+        logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
+            {FabricNodeId(MeshId{3}, 0), eth_coord_y_for_gateway_chips[0]});
 
-        const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size);
+        auto nw_chip_physical_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord({0, 3, 7, 0, 1});
+        auto mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{4});
+        // Main board
+        const auto& mesh_container = this->routing_table_generator_->mesh_graph->get_chip_ids(MeshId{4});
+        const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container);
+        for (std::uint32_t i = 0; i < physical_chip_ids.size(); i++) {
+            logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{4}, i), physical_chip_ids[i]});
+        }
+    } else {
+        // Iterate over every mesh defined in the mesh-graph descriptor and embed it on top of
+        // the physical cluster using the generic helper.
+        for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
+            const auto& mesh_container = this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id);
+            const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container);
 
-        for (std::uint32_t i = 0; i < physical_chip_ids.size(); ++i) {
-            logical_mesh_chip_id_to_physical_chip_id_mapping.emplace(FabricNodeId(mesh_id, i), physical_chip_ids[i]);
+            for (std::uint32_t i = 0; i < physical_chip_ids.size(); ++i) {
+                logical_mesh_chip_id_to_physical_chip_id_mapping.emplace(
+                    FabricNodeId(mesh_id, i), physical_chip_ids[i]);
+            }
         }
     }
 
