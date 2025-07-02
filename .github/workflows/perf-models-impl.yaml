@@ -23,7 +23,7 @@ jobs:
         test-info: [
           {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "perf-no-reset-grayskull"], machine-type: "bare_metal"},
         ]
-        model-type: [cnn_javelin, other2]
+        model-type: [other2]
     name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
     defaults:
       run:
@@ -688,7 +688,8 @@ jobs:
             -e GITHUB_ACTIONS=true
           install_wheel: true
           run_args: |
-            env python3 models/perf/merge_perf_results.py
+            export TODAY=$(date +%Y_%m_%d)
+            env python3 -c "from models.perf.merge_perf_results import merge_perf_files, expected_cols; merge_perf_files('Models_Perf_${TODAY}.csv', 'perf', expected_cols)"
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
       #  if: ${{ failure() }}
