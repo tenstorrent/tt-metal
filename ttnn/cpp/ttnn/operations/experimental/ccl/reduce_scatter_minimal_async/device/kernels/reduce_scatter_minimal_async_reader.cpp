@@ -48,7 +48,7 @@ void kernel_main() {
     uint32_t slice_Wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
-    int32_t start_tiles_read = get_arg_val<int32_t>(arg_idx++);
+    int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
     ReduceScatterOpReceiver matmul_receiver;
