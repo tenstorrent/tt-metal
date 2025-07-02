@@ -108,7 +108,7 @@ class TtFeedForwardModel(LightweightModule):
         return self.ffn(activation)
 
 
-class PytorchFeedForwardModel(LightweightModule):
+class PytorchFeedForwardModel(torch.nn.Module):
     def __init__(self, hugging_face_reference_model):
         super().__init__()
         self.ff1 = hugging_face_reference_model.bert.encoder.layer[0].intermediate

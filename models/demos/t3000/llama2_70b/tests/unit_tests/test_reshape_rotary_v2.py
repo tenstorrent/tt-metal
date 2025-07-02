@@ -76,7 +76,7 @@ class TtLlamaRotary(LightweightModule):
         return xq, xk
 
 
-class PytorchLlamaRotaryModel(LightweightModule):
+class PytorchLlamaRotaryModel(torch.nn.Module):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
         self.n_heads = hf_reference_model.params.n_heads
@@ -111,7 +111,7 @@ def compute_gather_cos_sin(dhead, end, position_ids):
     return cos, sin
 
 
-class PytorchLlamaRotaryMultiplyAddModel(LightweightModule):
+class PytorchLlamaRotaryMultiplyAddModel(torch.nn.Module):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
         self.n_heads = hf_reference_model.params.n_heads

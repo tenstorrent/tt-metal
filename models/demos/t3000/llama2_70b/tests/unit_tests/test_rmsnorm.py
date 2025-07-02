@@ -58,7 +58,7 @@ class TtLlamaRMSNorm(LightweightModule):
         return x_attn_norm
 
 
-class PytorchNormModel(LightweightModule):
+class PytorchNormModel(torch.nn.Module):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
         self.norm = hf_reference_model.layers[layer_num].attention_norm

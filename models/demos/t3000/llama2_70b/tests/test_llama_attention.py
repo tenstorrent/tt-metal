@@ -9,7 +9,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.lightweightmodule import LightweightModule
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
 from models.demos.t3000.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
@@ -42,7 +41,7 @@ class PagedAttentionConfig:
     max_num_blocks = 2048
 
 
-class PytorchLlamaAttentionModel(LightweightModule):
+class PytorchLlamaAttentionModel(torch.nn.Module):
     def __init__(self, hf_reference_model, layer_num, rope_theta, use_scaled_rope):
         super().__init__()
         self.attention = hf_reference_model.layers[layer_num].attention

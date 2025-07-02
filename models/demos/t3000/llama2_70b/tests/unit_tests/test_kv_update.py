@@ -43,7 +43,7 @@ class TtLlamaKVUpdate(LightweightModule):
         return self.layer_past
 
 
-class PytorchLlamaKVUpdateModel(LightweightModule):
+class PytorchLlamaKVUpdateModel(torch.nn.Module):
     def __init__(self, hf_reference_model, layer_past):
         super().__init__()
         self.n_heads = hf_reference_model.params.n_heads

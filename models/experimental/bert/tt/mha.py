@@ -190,7 +190,7 @@ class TtMultiHeadAttentionModel(LightweightModule):
         return result
 
 
-class PytorchMultiHeadAttentionModel(LightweightModule):
+class PytorchMultiHeadAttentionModel(torch.nn.Module):
     def __init__(self, hugging_face_reference_model):
         super().__init__()
         self.mha = hugging_face_reference_model.bert.encoder.layer[0].attention.self

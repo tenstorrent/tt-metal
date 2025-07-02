@@ -63,7 +63,7 @@ class TtLlamaRotary(LightweightModule):
         return xq, xk
 
 
-class PytorchLlamaRotaryModel(LightweightModule):
+class PytorchLlamaRotaryModel(torch.nn.Module):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
         self.n_heads = hf_reference_model.params.n_heads

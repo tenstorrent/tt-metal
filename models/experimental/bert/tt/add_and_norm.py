@@ -85,7 +85,7 @@ class TtAddAndNormModel(LightweightModule):
         return self.add_and_norm(a, b)
 
 
-class PytorchAddAndNormModel(LightweightModule):
+class PytorchAddAndNormModel(torch.nn.Module):
     def __init__(self, hugging_face_reference_model, lnorm_type):
         super().__init__()
         if lnorm_type == "attention":

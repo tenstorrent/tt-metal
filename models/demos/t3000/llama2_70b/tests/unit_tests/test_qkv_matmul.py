@@ -65,7 +65,7 @@ class TtLlamaQKV(LightweightModule):
         return fused_query_key_value[0]
 
 
-class PytorchLlamaQKVModel(LightweightModule):
+class PytorchLlamaQKVModel(torch.nn.Module):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
         self.attn = hf_reference_model.layers[layer_num].attention
