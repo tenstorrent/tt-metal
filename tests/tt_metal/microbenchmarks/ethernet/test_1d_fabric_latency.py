@@ -228,12 +228,13 @@ def test_1D_line_fabric_latency_on_uncongested_fabric(
 @pytest.mark.parametrize(
     "latency_ping_message_size_bytes,latency_measurement_worker_line_index,enable_fused_payload_with_sync, expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns,expected_avg_hop_latency_ns",
     [
-        (0, 0, False, 3100, 2880, 3520, 760),
+        (0, 0, False, 3100, 2880, 3250, 760),
         (16, 0, False, 3000, 2840, 3400, 780),
-        (16, 0, True, 3000, 2860, 3180, 790),
-        (1024, 0, False, 3700, 3580, 4010, 975),
+        (16, 0, True, 3000, 2860, 3180, 750),
+        (1024, 0, False, 3700, 3580, 4010, 923),
         (2048, 0, False, 4250, 4220, 4730, 1050),
         (4096, 0, False, 5310, 5050, 5300, 1330),
+
     ],
 )
 @pytest.mark.parametrize("latency_ping_burst_size", [1])
