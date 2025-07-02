@@ -520,6 +520,11 @@ MeshToTensor::MeshToTensor(MeshToTensor&& other) noexcept = default;
 MeshToTensor& MeshToTensor::operator=(MeshToTensor&& other) noexcept = default;
 Tensor MeshToTensor::compose(const Tensor& tensor) const { return impl_->compose(tensor); }
 
+template <typename T>
+std::pair<std::vector<T>, Shape> MeshToTensor::compose(const Tensor& tensor) const {
+    return impl_->compose<T>(tensor);
+}
+
 MeshToTensor MeshToTensor::create(const MeshDevice& mesh_device, const MeshComposerConfig& config) {
     const auto distributed_shape = config.mesh_shape_override.value_or(mesh_device.shape());
     TT_FATAL(
@@ -660,5 +665,12 @@ template Tensor create_distributed_tensor<uint32_t>(
     uint32_t pad_value);
 
 Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer) { return composer.compose(tensor); }
+
+template std::pair<std::vector<uint32_t>, Shape> MeshToTensor::compose<uint32_t>(const Tensor& tensor) const;
+template std::pair<std::vector<float>, Shape> MeshToTensor::compose<float>(const Tensor& tensor) const;
+template std::pair<std::vector<bfloat16>, Shape> MeshToTensor::compose<bfloat16>(const Tensor& tensor) const;
+template std::pair<std::vector<int32_t>, Shape> MeshToTensor::compose<int32_t>(const Tensor& tensor) const;
+template std::pair<std::vector<uint8_t>, Shape> MeshToTensor::compose<uint8_t>(const Tensor& tensor) const;
+template std::pair<std::vector<uint16_t>, Shape> MeshToTensor::compose<uint16_t>(const Tensor& tensor) const;
 
 }  // namespace ttnn::distributed
