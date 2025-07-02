@@ -38,7 +38,7 @@ void append_sharded_args(
     if (!is_runtime) {
         n_args += 1;  // +1 for the args_config config
     }
-    args.reserve(n_args);
+    args.reserve(args.size() + n_args);
 
     if (!is_runtime) {
         args.push_back(args_config.raw());
