@@ -7,6 +7,10 @@ on:
         required: false
         default: Release
         type: string
+      version:
+          required: false
+          default: "22.04"
+          type: string
   workflow_dispatch:
     inputs:
       build-type:
@@ -19,14 +23,17 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
+      version:
+        required: false
+        default: "22.04"
+        type: choice
+        options:
+          - "22.04"
+          - "24.04"
       with-retries:
         default: false
         type: boolean
         description: "Re-run failed jobs (max 3)"
-    version:
-        required: false
-        default: "22.04"
-        type: string
   push:
     branches: ["main"]
 
