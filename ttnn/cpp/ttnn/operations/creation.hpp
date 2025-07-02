@@ -44,6 +44,7 @@ Tensor arange_impl(
     const Layout layout = Layout::ROW_MAJOR,
     std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
     const MemoryConfig& output_mem_config = ttnn::DRAM_MEMORY_CONFIG) {
+    using namespace tt::tt_metal;
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
 
     TT_FATAL(step != 0, "Step must be nonzero");
@@ -62,14 +63,11 @@ Tensor arange_impl(
             owned_buffer[index++] = static_cast<T>(value);
         }
     }
-    using namespace tt::tt_metal;
 
     TensorSpec spec{
         ttnn::Shape{static_cast<uint32_t>(size)}, TensorLayout{data_type, PageConfig{layout}, output_mem_config}};
 
-    auto output = Tensor::from_vector(owned_buffer, spec, device.has_value() ? std::addressof(device->get()) : nullptr);
-
-    return output;
+    return Tensor::from_vector(owned_buffer, spec, device.has_value() ? std::addressof(device->get()) : nullptr);
 }
 
 template <typename T>
