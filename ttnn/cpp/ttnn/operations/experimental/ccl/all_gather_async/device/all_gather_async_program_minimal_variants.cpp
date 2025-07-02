@@ -54,6 +54,35 @@ void append_fabric_connection_rt_args(
     }
 }
 
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_custom_cores(
+    size_t num_links, size_t num_workers_per_link, IDevice* device) {
+    std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
+    CoreRangeSet sender_worker_core_range;
+    const size_t num_workers_preferred = num_workers_per_link * num_links;
+
+    std::vector<CoreRange> desired_core_range = {CoreRange({5, 3}, {6, 3}), CoreRange({2, 8}, {3, 8})};
+    for (const auto& cr : desired_core_range) {
+        auto start = cr.start_coord;
+        auto end = cr.end_coord;
+        for (size_t y = start.y; y <= end.y; y++) {
+            for (size_t x = start.x; x <= end.x; x++) {
+                sender_worker_core_range =
+                    sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
+                if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                    break;
+                }
+            }
+            if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                break;
+            }
+        }
+        if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+            break;
+        }
+    }
+    return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
     const Tensor& input_tensor,
     IDevice* sender_device,
@@ -756,7 +785,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool use_custom_worker_core_placement = false) {
     tt::tt_metal::Program program{};
 
     IDevice* mesh_device = input_tensor.mesh_device();
@@ -785,7 +815,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, mesh_device, sub_device_id);
+        use_custom_worker_core_placement
+            ? choose_custom_cores(num_links, num_workers_per_link, mesh_device)
+            : choose_worker_cores(num_links, num_workers_per_link, mesh_device, sub_device_id);
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();

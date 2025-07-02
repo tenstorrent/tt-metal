@@ -42,6 +42,7 @@ struct AllGatherAsync {
     const std::vector<GlobalSemaphore> semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
+    bool use_custom_worker_core_placement;
 
     AllGatherAsync(
         std::vector<IDevice*> devices,
@@ -52,7 +53,8 @@ struct AllGatherAsync {
         ccl::Topology topology,
         std::vector<GlobalSemaphore> semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-        std::optional<uint32_t> cluster_axis) :
+        std::optional<uint32_t> cluster_axis,
+        bool use_custom_worker_core_placement) :
         devices(std::move(devices)),
         dim(dim),
         num_links(num_links),
@@ -61,7 +63,8 @@ struct AllGatherAsync {
         topology(topology),
         semaphore(semaphore),
         sub_device_id(sub_device_id),
-        cluster_axis(cluster_axis) {}
+        cluster_axis(cluster_axis),
+        use_custom_worker_core_placement(use_custom_worker_core_placement) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -75,6 +78,7 @@ struct AllGatherAsync {
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
         attrs.emplace_back("cluster_axis", cluster_axis);
+        attrs.emplace_back("use_custom_worker_core_placement", use_custom_worker_core_placement);
         return attrs;
     }
 
@@ -171,7 +175,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool use_custom_worker_core_placement);
 
 namespace operations {
 namespace experimental {
@@ -184,7 +189,8 @@ Tensor all_gather_async(
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool use_custom_worker_core_placement = false);
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -195,7 +201,8 @@ Tensor all_gather_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    std::optional<uint32_t> cluster_axis = std::nullopt);
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    bool use_custom_worker_core_placement = false);
 
 std::vector<Tensor> all_gather_async(
     const std::vector<Tensor>& input_tensors,
@@ -204,7 +211,8 @@ std::vector<Tensor> all_gather_async(
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool use_custom_worker_core_placement = false);
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -216,7 +224,8 @@ Tensor all_gather_async(
     const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool use_custom_worker_core_placement = false);
 
 std::vector<Tensor> all_gather_async(
     const std::vector<Tensor>& input_tensors,
@@ -228,7 +237,8 @@ std::vector<Tensor> all_gather_async(
     const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool use_custom_worker_core_placement = false);
 
 }  // namespace ccl
 }  // namespace experimental

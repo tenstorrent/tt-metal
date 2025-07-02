@@ -721,7 +721,16 @@ class TT_CCL:
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out
 
-    def line_all_gather(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None):
+    def line_all_gather(
+        self,
+        input_tensor_mesh,
+        dim,
+        cluster_axis,
+        memory_config,
+        num_links=1,
+        buffer_key=None,
+        use_custom_worker_core_placement=False,
+    ):
         topology = ttnn.Topology.Linear
         if self.mode == "prefill":
             if buffer_key is None:
@@ -754,6 +763,7 @@ class TT_CCL:
             num_links=num_links,
             memory_config=memory_config,
             subdevice_id=self.worker_sub_device_id,
+            use_custom_worker_core_placement=use_custom_worker_core_placement,
         )
         if self.mode == "prefill" and buffer_key is not None:
             # reshape input back

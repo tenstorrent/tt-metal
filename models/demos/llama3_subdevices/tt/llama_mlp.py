@@ -186,6 +186,7 @@ class TtLlamaMLP(LightweightModule):
             num_links=4 if is_RING_6U else 3,
             memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
             buffer_key="BINARY_MUL",
+            use_custom_worker_core_placement=False if mode == "prefill" else True,
         )
         ttnn.deallocate(ff1ff3)
 
