@@ -412,7 +412,7 @@ jobs:
             env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_vanilla_unet/test/test_perf_vanilla_unet.py -m models_performance_bare_metal
             env python3 models/perf/merge_perf_results.py functional_vanilla_unet
       - name: Run yolov8s_world tests
-        if: ${{ matrix.model-type == 'other3' && !cancelled() }}
+        if: ${{ matrix.model-type == 'other2' && !cancelled() }}
         timeout-minutes: 70
         uses: ./.github/actions/docker-run
         env:
