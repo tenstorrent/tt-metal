@@ -34,7 +34,7 @@ std::unique_ptr<ISocket> create_socket(
         socket_config.sender_rank = other_rank;
         socket_config.receiver_rank = socket_config.distributed_context->rank();
         auto mesh_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, socket_config);
-        return std::make_unique<BidirectionalFabricSocket>(mesh_socket, mesh_socket);
+        return std::make_unique<FabricSocket>(mesh_socket);
     } else if (endpoint_socket_type == EndpointSocketType::BIDIRECTIONAL) {
         auto sender_socket_config = socket_config;
         sender_socket_config.sender_rank = socket_config.distributed_context->rank();
