@@ -23,5 +23,5 @@ check_cols = ["Inference Time (sec)", "Compile Time (sec)"]
 
 if __name__ == "__main__":
     fname = f"Models_Perf_{today}.csv"
-    #merge_perf_files(fname, "perf", expected_cols)
+    merge_perf_files(fname, "perf", expected_cols)
     check_perf_results(fname, expected_cols, check_cols)
