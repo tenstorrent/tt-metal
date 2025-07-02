@@ -11,11 +11,11 @@ namespace ttml::metal::ops::sdpa_fw::device {
 
 struct SDPAForwardProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle sdpa_fw_reader_kernel_id;
-        tt::tt_metal::KernelHandle sdpa_fw_writer_kernel_id;
+        tt::tt_metal::KernelHandle sdpa_fw_reader_kernel;
+        tt::tt_metal::KernelHandle sdpa_fw_writer_kernel;
         // TODO[improve]: think about how to split work around kernels more efficiently
-        tt::tt_metal::KernelHandle sdpa_fw_kernel_group_1_id;
-        tt::tt_metal::KernelHandle sdpa_fw_kernel_group_2_id;
+        tt::tt_metal::KernelHandle sdpa_fw_kernel_group_1;
+        tt::tt_metal::KernelHandle sdpa_fw_kernel_group_2;
         CoreRangeSet core_group_1;
         CoreRangeSet core_group_2;
         uint32_t num_cores{};
