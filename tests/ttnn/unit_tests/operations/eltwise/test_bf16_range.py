@@ -25,6 +25,54 @@ EPSILON = 2**-9
 # ttnn.enable_program_cache(device)  # Useful: we are going to call the same kernel several times
 
 
+def plot_torch_vs_ttnn_outputs_full_range(
+    torch_output, ttnn_output, torch_input_bf16, operation_name, scalar=None, value_range=None
+):
+    torch_input_flat = torch_input_bf16.flatten().to(torch.float32)
+    torch_output_flat = torch_output.flatten().to(torch.float32)
+    ttnn_output_flat = ttnn_output.flatten().to(torch.float32)
+
+    if value_range is not None:
+        min_val, max_val = value_range
+        mask = (torch_input_flat >= min_val) & (torch_input_flat <= max_val)
+
+        if mask.sum() == 0:
+            print(f"No input values found in specified range: {value_range}. Skipping plot.")
+            return
+
+        x_axis = torch_input_flat[mask].numpy()
+        y_torch = torch_output_flat[mask].numpy()
+        y_ttnn = ttnn_output_flat[mask].numpy()
+
+        x_label = f"Input (filtered: {min_val} to {max_val})"
+    else:
+        x_axis = np.arange(torch_input_flat.numel())  # Use raw bit index (0 to 65535)
+        y_torch = torch_output_flat.numpy()
+        y_ttnn = ttnn_output_flat.numpy()
+        x_label = "Bit Pattern Index (0 to 65535)"
+
+    plt.figure(figsize=(14, 6))
+    plt.plot(x_axis, y_torch, label="Torch Output", color="blue", linewidth=1)
+    plt.plot(x_axis, y_ttnn, label="TTNN Output", color="orange", linewidth=1, linestyle="--")
+
+    label_suffix = f" (scalar={scalar})" if scalar is not None else ""
+    range_suffix = f"_range={value_range}" if value_range else "fullrange"
+    plt.title(f"{operation_name}{label_suffix}: Torch vs TTNN Output")
+    plt.xlabel(x_label)
+    plt.ylabel("Output Value")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+
+    plot_dir = "accuracy_results/plots/full_range_comparison/"
+    os.makedirs(plot_dir, exist_ok=True)
+    scalar_str = f"{scalar}" if scalar is not None else "noscalar"
+    filename = f"{operation_name}-bfloat16-output-{range_suffix}-{scalar_str}.png"
+    plt.savefig(os.path.join(plot_dir, filename))
+    plt.close()
+    print(f"==> Torch vs TTNN output graph saved to {os.path.join(plot_dir, filename)}")
+
+
 def generate_bfloat16_scalars(num_of_scalar=5):
     raw_uint16_array = np.array(
         random.sample(range(0, 2**16), num_of_scalar), dtype=np.uint16
@@ -173,6 +221,11 @@ def measure_op_accuracy_bf16_eq_only(operation_name, dest_dir):
 
         torch_output_actual = launch_ttnn_op(torch_input_bf16)
 
+        # Plot input vs output graph
+        plot_torch_vs_ttnn_outputs_full_range(
+            torch_output_ref, torch_output_actual, torch_input_bf16, operation_name, scalar
+        )
+
         match_mask = torch.eq(torch_output_ref, torch_output_actual) | (
             torch.isnan(torch_output_ref) & torch.isnan(torch_output_actual)
         )
@@ -301,6 +354,19 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
 
         torch_golden_bf16 = torch_golden_f64.to(torch.bfloat16)
         torch_ttnn_output_f64 = torch_ttnn_output_bf16.to(torch.float64)
+
+        # Plot input vs output graph
+        plot_torch_vs_ttnn_outputs_full_range(
+            torch_golden_bf16, torch_ttnn_output_bf16, torch_input_bf16, operation_name, scalar
+        )
+        if operation_name == "elu":
+            plot_torch_vs_ttnn_outputs_full_range(
+                torch_golden_bf16, torch_ttnn_output_bf16, torch_input_bf16, "elu", value_range=(-10.0, 10.0)
+            )
+        elif operation_name == "selu":
+            plot_torch_vs_ttnn_outputs_full_range(
+                torch_golden_bf16, torch_ttnn_output_bf16, torch_input_bf16, "selu", value_range=(-10.0, 10.0)
+            )
 
         # Compute errors
         np_golden_f64 = torch_golden_f64.flatten().numpy()
