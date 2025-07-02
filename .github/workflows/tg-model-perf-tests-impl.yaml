@@ -162,7 +162,7 @@ jobs:
           run_args: |
             ${{ matrix.test-group.cmd }}
       - name: Save environment data
-        if: ${{ (matrix.test-group.name == 'Llama Galaxy Perf Unit Tests' || matrix.test-group.name == 'Galaxy Llama 70B model perf tests' || matrix.test-group.name == 'Galaxy Llama 70B model dispatch perf tests' || matrix.test-group.name == 'Galaxy Llama 70B prefill perf tests [128]' || matrix.test-group.name == 'Galaxy Llama 70B prefill perf tests [4096]') && !cancelled() }}
+        if: ${{ (contains(matrix.test-group.name, 'Galaxy Llama 70B prefill perf tests') || matrix.test-group.name == 'Llama Galaxy Perf Unit Tests' || matrix.test-group.name == 'Galaxy Llama 70B model perf tests' || matrix.test-group.name == 'Galaxy Llama 70B model dispatch perf tests') && !cancelled() }}
         uses: ./.github/actions/docker-run
         with:
           docker_image: ${{ inputs.docker-image }}
@@ -174,7 +174,7 @@ jobs:
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
-        if: ${{ (matrix.test-group.name == 'Llama Galaxy Perf Unit Tests' || matrix.test-group.name == 'Galaxy Llama 70B model perf tests' || matrix.test-group.name == 'Galaxy Llama 70B model dispatch perf tests' || matrix.test-group.name == 'Galaxy Llama 70B prefill perf tests [128]' || matrix.test-group.name == 'Galaxy Llama 70B prefill perf tests [4096]') && !cancelled() }}
+        if: ${{ (contains(matrix.test-group.name, 'Galaxy Llama 70B prefill perf tests') || matrix.test-group.name == 'Llama Galaxy Perf Unit Tests' || matrix.test-group.name == 'Galaxy Llama 70B model perf tests' || matrix.test-group.name == 'Galaxy Llama 70B model dispatch perf tests') && !cancelled() }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -183,7 +183,7 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !(matrix.test-group.name == 'Llama Galaxy Perf Unit Tests'|| matrix.test-group.name == 'Galaxy Llama 70B model perf tests' || matrix.test-group.name == 'Galaxy Llama 70B model dispatch perf tests' || matrix.test-group.name == 'Galaxy Llama 70B prefill perf tests [128]' || matrix.test-group.name == 'Galaxy Llama 70B prefill perf tests [4096]') && !cancelled() }}
+        if: ${{ !(contains(matrix.test-group.name, 'Galaxy Llama 70B prefill perf tests') || matrix.test-group.name == 'Llama Galaxy Perf Unit Tests' || matrix.test-group.name == 'Galaxy Llama 70B model perf tests' || matrix.test-group.name == 'Galaxy Llama 70B model dispatch perf tests') && !cancelled() }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
