@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "ckernel_debug.h"
 #include "llk_defs.h"
 
 // Globals
@@ -23,13 +24,13 @@ uint32_t math_sync_tile_dst_index = 0;
 
 void run_kernel()
 {
+    constexpr std::uint32_t tile_size = 128;
+
     _llk_unpack_untilize_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(UNPACK_A_IN, UNPACK_A_OUT, FACE_R_DIM, 0, 4);
-    _llk_unpack_untilize_init_(UNPACK_A_IN, 1024, FACE_R_DIM, 4);
-    for (int i = 0; i < TILE_CNT; i++)
-    {
-        _llk_unpack_untilize_pass_<true>(L1_ADDRESS(buffer_A[0]), 1);
-        _llk_unpack_untilize_pass_<false>(L1_ADDRESS(buffer_A[0]), 1);
-    }
+    _llk_unpack_untilize_init_(UNPACK_A_OUT, tile_size, FACE_R_DIM, 4);
+
+    _llk_unpack_untilize_pass_<true>(L1_ADDRESS(buffer_A[0]), BLOCK_CT_DIM);
+    _llk_unpack_untilize_pass_<false>(L1_ADDRESS(buffer_A[0]), BLOCK_CT_DIM);
 }
 
 #endif
@@ -55,6 +56,7 @@ void run_kernel()
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<false, false>(MATH_FORMAT, MATH_FORMAT);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+
     for (int i = 0; i < TILE_CNT; ++i)
     {
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, false>(i, MATH_FORMAT, MATH_FORMAT);
