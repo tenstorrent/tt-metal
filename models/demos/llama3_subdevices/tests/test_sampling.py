@@ -22,8 +22,6 @@ from scipy.stats import entropy
 import numpy as np
 from collections import Counter
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
-
 
 def counts_to_vector(*samples, return_prob=True, dtype=float):
     """
@@ -212,14 +210,14 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 31744,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": True,
         }
     ],
     indirect=True,
 )
 def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_device, reset_seeds):
     use_tracing = False
-    load_cached_outputs = True
+    load_cached_outputs = False
     num_samples = 10
     num_compile_steps = 1
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=32, dummy_weights=True)

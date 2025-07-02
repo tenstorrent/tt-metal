@@ -603,6 +603,16 @@ class TtModelArgs:
         device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape)
         self.is_galaxy = self.num_devices == 32
+        self.galaxy_type = None
+
+        if self.is_galaxy:
+            self.galaxy_type = "6U" if ttnn.GetNumPCIeDevices() == 32 else "4U"
+        else:
+            raise ValueError(
+                f"Unsupported number of devices: {self.num_devices}. Only 32 devices (Galaxy) are supported."
+            )
+        self.model_config["GALAXY_NUM_LINKS"] = {"6U": 4, "4U": 3}.get(self.galaxy_type)
+        self.model_config["CCL_TOPOLOGY"] = {"6U": ttnn.Topology.Ring, "4U": ttnn.Topology.Linear}.get(self.galaxy_type)
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
 

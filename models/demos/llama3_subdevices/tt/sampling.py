@@ -4,10 +4,7 @@
 
 import torch
 import ttnn
-import os
 from models.common.lightweightmodule import LightweightModule
-
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 
 class TTSampling(LightweightModule):
@@ -29,7 +26,7 @@ class TTSampling(LightweightModule):
         self.max_top_k = args.max_top_k
         self.temperature = temperature
 
-        max_num_gather_links = 4 if is_RING_6U else 3
+        max_num_gather_links = args.model_config["GALAXY_NUM_LINKS"]
         self.num_gather_links = (
             self.max_top_k // 32 if self.max_top_k // 32 <= max_num_gather_links else max_num_gather_links
         )
