@@ -151,9 +151,19 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
         {{tt::CBIndex::c_0, 1}, {tt::CBIndex::c_1, 1}, {tt::CBIndex::c_2, 1}, {tt::CBIndex::c_3, 1}});
 
     std::vector<uint32_t> reader_kernel_compile_args = {
-        num_tiles_per_row, HtWt, product_high_dims, product_low_dims, flip};
+        num_tiles_per_row,
+        HtWt,
+        product_high_dims,
+        product_low_dims,
+        flip,
+        input_tensor.memory_config().buffer_type() == BufferType::DRAM};
     std::vector<uint32_t> writer_kernel_compile_args = {
-        num_tiles_per_row, HtWt, product_high_dims, product_low_dims, flip};
+        num_tiles_per_row,
+        HtWt,
+        product_high_dims,
+        product_low_dims,
+        flip,
+        output_tensor.memory_config().buffer_type() == BufferType::DRAM};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Data Movement Kernel Setup
