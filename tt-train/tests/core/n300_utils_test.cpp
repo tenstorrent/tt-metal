@@ -7,7 +7,6 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
-#include <ttnn/distributed/distributed_tensor.hpp>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"

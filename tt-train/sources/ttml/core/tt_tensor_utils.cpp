@@ -13,7 +13,6 @@
 #include <functional>
 #include <optional>
 #include <stdexcept>
-#include <ttnn/distributed/distributed_tensor.hpp>
 #include <ttnn/tensor/types.hpp>
 
 #include "core/xtensor_utils.hpp"

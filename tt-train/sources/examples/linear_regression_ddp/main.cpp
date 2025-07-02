@@ -5,7 +5,6 @@
 #include <fmt/format.h>
 
 #include <core/ttnn_all_includes.hpp>
-#include <ttnn/distributed/distributed_tensor.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
