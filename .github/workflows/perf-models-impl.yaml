@@ -23,7 +23,7 @@ jobs:
         test-info: [
           {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "perf-no-reset-grayskull"], machine-type: "bare_metal"},
         ]
-        model-type: [llm_javelin, cnn_javelin, other]
+        model-type: [other2]
     name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
     defaults:
       run:
@@ -391,7 +391,7 @@ jobs:
             env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov9c/tests/perf -m models_performance_bare_metal
             
       - name: Run functional_vanilla_unet tests
-        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        if: ${{ matrix.model-type == 'other2' && !cancelled() }}
         timeout-minutes: 70
         uses: ./.github/actions/docker-run
         env:
@@ -408,10 +408,10 @@ jobs:
             -e GITHUB_ACTIONS=true
           install_wheel: true
           run_args: |
-            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_vanilla_unet/test/test_perf_vanilla_unet.py -m models_performance_bare_metal
-            
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_vanilla_unet/test/test_perf_vanilla_unet.py -m models_performance_bare_metal | tee output.txt
+            test ${PIPESTATUS[0]} -eq 0
       - name: Run yolov8s_world tests
-        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        if: ${{ matrix.model-type == 'other2' && !cancelled() }}
         timeout-minutes: 70
         uses: ./.github/actions/docker-run
         env:
@@ -428,10 +428,10 @@ jobs:
             -e GITHUB_ACTIONS=true
           install_wheel: true
           run_args: |
-            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov8s_world/tests -m models_performance_bare_metal
-            
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov8s_world/tests -m models_performance_bare_metal | tee output.txt
+            test ${PIPESTATUS[0]} -eq 0
       - name: Run mobilenetv2 tests
-        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        if: ${{ matrix.model-type == 'other2' && !cancelled() }}
         timeout-minutes: 70
         uses: ./.github/actions/docker-run
         env:
@@ -448,8 +448,8 @@ jobs:
             -e GITHUB_ACTIONS=true
           install_wheel: true
           run_args: |
-            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/mobilenetv2/tests -m models_performance_bare_metal
-            
+            env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/mobilenetv2/tests -m models_performance_bare_metal | tee output.txt
+            test ${PIPESTATUS[0]} -eq 0
       - name: Run ufld_v2 tests
         if: ${{ matrix.model-type == 'other' && !cancelled() }}
         timeout-minutes: 70
