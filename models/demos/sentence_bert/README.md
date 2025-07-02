@@ -37,9 +37,12 @@ pytest --disable-warnings tests/ttnn/integration_tests/sentence_bert/test_ttnn_s
 ```
 
 ###  Performant Model with Trace+2CQ
-- end-2-end perf is 419 sentences per second
+> **Note:** SentenceBERT uses BERT-base as its backbone model.
+- End-to-end performance without mean-pooling post-processing is **419 sentences per second**
+- With mean-pooling post-processing included, the performance is **233 sentences per second**
+- Work is in progress to implement & optimize TTNN mean-pooling. See the related issue [#24252](https://github.com/tenstorrent/tt-metal/issues/24252).
 
-Use the following command to run the performant Model with Trace+2CQs:
+Use the following command to run the performant Model with Trace+2CQs (without mean-pooling):
 
 ```
 pytest --disable-warnings models/demos/sentence_bert/tests/test_sentence_bert_e2e_performant.py

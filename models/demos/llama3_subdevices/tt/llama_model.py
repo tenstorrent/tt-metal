@@ -448,7 +448,7 @@ class TtTransformer(LightweightModule):
         )
 
         # sampling
-        tt_logits = self.tt_sampling(tt_logits[0], tt_out_tok=x)
+        tt_toks = self.tt_sampling(tt_logits[0], tt_out_tok=x)
 
         # Save otuput logits to global python object
         if tt_out_logits_saved is not None:
@@ -469,7 +469,7 @@ class TtTransformer(LightweightModule):
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
-        return tt_logits
+        return tt_toks
 
     def switch_mode(self, mode):
         if mode == "decode":
