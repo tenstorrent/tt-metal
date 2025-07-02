@@ -60,11 +60,16 @@ std::pair<tt_fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
         // 1D Fabric requires passing in the number of hops between the sender and receiver
         // Assume 1D is a single mesh
         auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-        auto sender_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(sender_node_id);
-        auto recv_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(recv_node_id);
-        auto sender_global_coord = SystemMesh::instance().get_global_device_coordinate(sender_device_id);
-        auto recv_global_coord = SystemMesh::instance().get_global_device_coordinate(recv_device_id);
-
+        TT_FATAL(
+            sender_node_id.mesh_id == recv_node_id.mesh_id,
+            "1D Fabric requires sender and receiver to be on the same mesh");
+        auto mesh_id = is_sender ? sender_node_id.mesh_id : recv_node_id.mesh_id;
+        auto mesh_shape = control_plane.get_physical_mesh_shape(mesh_id);
+        TT_FATAL(mesh_shape.dims() == 2, "1D Fabric requires a 2D mesh");
+        MeshCoordinate sender_global_coord =
+            MeshCoordinate(sender_node_id.chip_id / mesh_shape[1], sender_node_id.chip_id % mesh_shape[1]);
+        MeshCoordinate recv_global_coord =
+            MeshCoordinate(recv_node_id.chip_id / mesh_shape[1], recv_node_id.chip_id % mesh_shape[1]);
         TT_FATAL(
             sender_global_coord[0] == recv_global_coord[0] || sender_global_coord[1] == recv_global_coord[1],
             "Sender and receiver chips must be in the same row or column when using 1D Line Fabric");
@@ -72,12 +77,11 @@ std::pair<tt_fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
         // Calculate the number of hops between the sender and receiver needed for 1D Fabric
         // mesh_id is a don't care value for 1D Fabric
         return std::make_pair(
-            tt_fabric::MeshId{0},
+            mesh_id,
             std::abs(static_cast<int>(sender_global_coord[0]) - static_cast<int>(recv_global_coord[0])) +
                 std::abs(static_cast<int>(sender_global_coord[1]) - static_cast<int>(recv_global_coord[1])));
     } else {
         // 2D/Mesh Fabric requires looking up "logical" encodings from the control plane
-        auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
         if (is_sender) {
             return {recv_node_id.mesh_id, recv_node_id.chip_id};
         } else {
@@ -230,7 +234,6 @@ void write_socket_configs(
     auto peer_config_buf_addr = peer_descriptor.config_buffer_address;
 
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     if (is_sender) {
         std::vector<sender_socket_md> config_data(config_buffer->size() / sizeof(sender_socket_md), sender_socket_md());
@@ -240,8 +243,7 @@ void write_socket_configs(
                 const auto& [sender_core, recv_core] = connection;
                 TT_FATAL(sender_core.device_coord == device_coord, "Internal Error: Sender cores incorrectly grouped.");
                 auto [downstream_mesh_id, downstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
-                    control_plane.get_fabric_node_id_from_physical_chip_id(
-                        mesh_device->get_device(sender_core.device_coord)->id()),
+                    mesh_device->get_device_fabric_node_id(sender_core.device_coord),
                     tt_fabric::FabricNodeId(
                         tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
                     fabric_config,
@@ -273,8 +275,7 @@ void write_socket_configs(
                 auto [upstream_mesh_id, upstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
                     tt_fabric::FabricNodeId(
                         tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
-                    control_plane.get_fabric_node_id_from_physical_chip_id(
-                        mesh_device->get_device(recv_core.device_coord)->id()),
+                    mesh_device->get_device_fabric_node_id(recv_core.device_coord),
                     fabric_config,
                     SocketEndpoint::RECEIVER);
                 auto sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core.core_coord);
