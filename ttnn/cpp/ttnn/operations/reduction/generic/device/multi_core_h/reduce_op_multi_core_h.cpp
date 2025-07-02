@@ -135,9 +135,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
         std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, chunk_size, packed_scaler_value};
-        TensorAccessorArgs tensor_args(*src0_buffer);
-        reader_compile_time_args.insert(
-            reader_compile_time_args.end(), tensor_args.compile_time_args.begin(), tensor_args.compile_time_args.end());
+        TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
 
         reader_kernel_id = tt_metal::CreateKernel(
             program,
@@ -161,9 +159,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             WriterDataMovementConfig(writer_ct_args));
     } else {
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-        TensorAccessorArgs tensor_args(*dst_buffer);
-        writer_compile_time_args.insert(
-            writer_compile_time_args.end(), tensor_args.compile_time_args.begin(), tensor_args.compile_time_args.end());
+        TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
 
         writer_kernel_id = tt_metal::CreateKernel(
             program,

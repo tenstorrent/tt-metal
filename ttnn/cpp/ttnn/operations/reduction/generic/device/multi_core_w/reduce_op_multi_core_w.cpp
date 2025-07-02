@@ -77,18 +77,10 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     tt_metal::Buffer* src_buffer = a.buffer();
     std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
-    TensorAccessorArgs src_tensor_args(*src_buffer);
-    reader_compile_time_args.insert(
-        reader_compile_time_args.end(),
-        src_tensor_args.compile_time_args.begin(),
-        src_tensor_args.compile_time_args.end());
+    TensorAccessorArgs(*src_buffer).append_args(reader_compile_time_args);
     tt_metal::Buffer* dst_buffer = output.buffer();
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    TensorAccessorArgs dst_tensor_args(*dst_buffer);
-    writer_compile_time_args.insert(
-        writer_compile_time_args.end(),
-        dst_tensor_args.compile_time_args.begin(),
-        dst_tensor_args.compile_time_args.end());
+    TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
 
     std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::W);
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(

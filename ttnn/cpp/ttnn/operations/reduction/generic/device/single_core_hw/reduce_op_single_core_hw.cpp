@@ -79,18 +79,11 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
-    TensorAccessorArgs src_tensor_args(*src0_buffer);
-    reader_compile_time_args.insert(
-        reader_compile_time_args.end(),
-        src_tensor_args.compile_time_args.begin(),
-        src_tensor_args.compile_time_args.end());
+    TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
-    TensorAccessorArgs dst_tensor_args(*dst_buffer);
-    writer_compile_time_args.insert(
-        writer_compile_time_args.end(),
-        dst_tensor_args.compile_time_args.begin(),
-        dst_tensor_args.compile_time_args.end());
+    TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
+
     std::map<string, string> reader_defines;
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
