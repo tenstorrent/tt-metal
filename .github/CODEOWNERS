@@ -200,6 +200,7 @@ tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 models/common @yieldthought @mtairum @uaydonat
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat
 models/demos @uaydonat
+models/demos/deepseek_v3 @uaydonat @yieldthought @avoraTT @kpaigwar
 models/**/bert*/ @TT-BrianLiu @uaydonat
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/*/convnet_mnist/ @sjameelTT @uaydonat
