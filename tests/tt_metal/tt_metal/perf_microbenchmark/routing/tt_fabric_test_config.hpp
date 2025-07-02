@@ -110,6 +110,42 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"full_ring_multicast", HighLevelTrafficPattern::FullRingMulticast},
     {"half_ring_multicast", HighLevelTrafficPattern::HalfRingMulticast},
 });
+// Optimized string concatenation utility to avoid multiple allocations
+template <typename... Args>
+inline void append_with_separator(std::string& target, const std::string& separator, Args&&... args) {
+    // Calculate total size needed
+    size_t total_size = target.size();
+    auto add_size = [&total_size, &separator](const auto& arg) {
+        if constexpr (std::is_arithmetic_v<std::decay_t<decltype(arg)>>) {
+            // For numeric types, estimate string length (conservative estimate)
+            total_size += separator.size() + 20;  // 20 chars should handle most numeric types
+        } else {
+            // For string types
+            total_size += separator.size() + std::string(arg).size();
+        }
+    };
+
+    // fold expression: calls add_size for each argument to calculate total size
+    // For args (a, b, c), this expands to: add_size(a), add_size(b), add_size(c)
+    (add_size(args), ...);
+
+    // Reserve space to avoid reallocations
+    target.reserve(total_size);
+
+    // Append each argument with separator
+    auto append_arg = [&target, &separator](const auto& arg) {
+        target += separator;
+        if constexpr (std::is_arithmetic_v<std::decay_t<decltype(arg)>>) {
+            target += std::to_string(arg);
+        } else {
+            target += std::string(arg);
+        }
+    };
+
+    // fold expression: calls append_arg for each argument in sequence
+    // For args (a, b, c), this expands to: append_arg(a), append_arg(b), append_arg(c)
+    (append_arg(args), ...);
+}
 
 }  // namespace detail
 
@@ -892,7 +928,8 @@ private:
             iteration_test.patterns.reset();  // Will be expanded into concrete senders.
 
             if (max_iterations > 1) {
-                iteration_test.name += "_iter_" + std::to_string(i);
+                // Use optimized string concatenation utility
+                detail::append_with_separator(iteration_test.name, "_", "iter", i);
             }
 
             iteration_test.seed = std::uniform_int_distribution<uint32_t>()(this->gen_);
@@ -956,7 +993,8 @@ private:
                         for (const auto& value : values) {
                             next_level_configs.emplace_back(current_config);
                             auto& next_config = next_level_configs.back();
-                            next_config.name += "_" + param_name + "_" + value;
+                            // Use optimized string concatenation utility
+                            detail::append_with_separator(next_config.name, "_", param_name, value);
 
                             ParsedTrafficPatternConfig param_default;
                             if (param_name == "ftype") {
@@ -974,7 +1012,8 @@ private:
                         for (const auto& value : values) {
                             next_level_configs.emplace_back(current_config);
                             auto& next_config = next_level_configs.back();
-                            next_config.name += "_" + param_name + "_" + std::to_string(value);
+                            // Use optimized string concatenation utility
+                            detail::append_with_separator(next_config.name, "_", param_name, value);
 
                             ParsedTrafficPatternConfig param_default;
                             if (param_name == "size") {
