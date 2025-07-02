@@ -41,6 +41,12 @@ jobs:
             arch: blackhole,
             cmd: pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device",
             owner_id: U06ECNVR0EN # Evan Smal
+          },
+          { # This should be moved to a BH perf regression pipeline in the future
+            name: "resnet50",
+            arch: blackhole,
+            cmd: pytest models/demos/blackhole/resnet50/demo/demo.py,
+            owner_id: U045U3DEKM4
           }
         ]
     name: ${{ matrix.test-group.name }}
