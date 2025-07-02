@@ -32,8 +32,8 @@ tt::tt_metal::Shape2D get_physical_size(const ttnn::Tensor& tensor);
 std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbors(
     const MeshDeviceView& mesh_view,
     const MeshCoordinate& mesh_coordinate,
-    const tt::tt_fabric::Topology& topology,
-    const std::optional<uint32_t>& axis);
+    tt::tt_fabric::Topology topology,
+    std::optional<uint32_t> axis);
 
 uint32_t select_link(
     const MeshDeviceView& mesh_view,
