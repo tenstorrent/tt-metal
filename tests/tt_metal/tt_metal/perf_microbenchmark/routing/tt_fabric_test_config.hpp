@@ -938,13 +938,24 @@ private:
             for (const auto& [param_name, values_variant] : raw_config.parametrization_params.value()) {
                 std::vector<ParsedTestConfig> next_level_configs;
 
+                // Pre-calculate total size to avoid reallocations
+                size_t total_new_configs = 0;
+                if (std::holds_alternative<std::vector<std::string>>(values_variant)) {
+                    const auto& values = std::get<std::vector<std::string>>(values_variant);
+                    total_new_configs = parametrized_configs.size() * values.size();
+                } else if (std::holds_alternative<std::vector<uint32_t>>(values_variant)) {
+                    const auto& values = std::get<std::vector<uint32_t>>(values_variant);
+                    total_new_configs = parametrized_configs.size() * values.size();
+                }
+                next_level_configs.reserve(total_new_configs);
+
                 for (const auto& current_config : parametrized_configs) {
                     // Handle string-based parameters
                     if (std::holds_alternative<std::vector<std::string>>(values_variant)) {
                         const auto& values = std::get<std::vector<std::string>>(values_variant);
-                        next_level_configs.reserve(next_level_configs.size() + values.size());
                         for (const auto& value : values) {
-                            ParsedTestConfig next_config = current_config;
+                            next_level_configs.emplace_back(current_config);
+                            auto& next_config = next_level_configs.back();
                             next_config.name += "_" + param_name + "_" + value;
 
                             ParsedTrafficPatternConfig param_default;
@@ -955,15 +966,14 @@ private:
                             }
                             next_config.defaults = merge_patterns(
                                 current_config.defaults.value_or(ParsedTrafficPatternConfig{}), param_default);
-                            next_level_configs.push_back(next_config);
                         }
                     }
                     // Handle integer-based parameters
                     else if (std::holds_alternative<std::vector<uint32_t>>(values_variant)) {
                         const auto& values = std::get<std::vector<uint32_t>>(values_variant);
-                        next_level_configs.reserve(next_level_configs.size() + values.size());
                         for (const auto& value : values) {
-                            ParsedTestConfig next_config = current_config;
+                            next_level_configs.emplace_back(current_config);
+                            auto& next_config = next_level_configs.back();
                             next_config.name += "_" + param_name + "_" + std::to_string(value);
 
                             ParsedTrafficPatternConfig param_default;
@@ -974,7 +984,6 @@ private:
                             }
                             next_config.defaults = merge_patterns(
                                 current_config.defaults.value_or(ParsedTrafficPatternConfig{}), param_default);
-                            next_level_configs.push_back(next_config);
                         }
                     }
                 }
