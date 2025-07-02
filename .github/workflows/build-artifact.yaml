@@ -341,25 +341,7 @@ jobs:
           submodules: recursive
           fetch-depth: 500 # Need enough history for `git describe`
           fetch-tags: true # Need tags for `git describe`
-
-      - name: 🐳 Show Docker image info and available Python versions/headers
-        env:
-          CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
-        run: |
-          echo "Docker image: $CIBW_MANYLINUX_X86_64_IMAGE"
-          echo "Python installations in /opt/python:"
-          ls -l /opt/python/
-          echo "Python 3.10 headers:"
-          ls -l /opt/python/cp310-cp310/include || true
-          echo "Python 3.12 headers:"
-          ls -l /opt/python/cp312-cp312/include || true
-          echo "Python 3.10 lib:"
-          ls -l /opt/python/cp310-cp310/lib || true
-          echo "Python 3.12 lib:"
-          ls -l /opt/python/cp312-cp312/lib || true
-          echo "Python versions:"
-          for py in /opt/python/*/bin/python*; do $py --version || true; done
-          
+    
       - name: Set up Python 3.12
         uses: actions/setup-python@v4
         with:
