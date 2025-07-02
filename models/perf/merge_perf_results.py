@@ -30,7 +30,6 @@ if __name__ == "__main__":
         merge_perf_files(fname, f"perf_models_demos_{my_arg}", expected_cols)
         check_perf_results(fname, expected_cols, check_cols)
     else:
-        print("No argument provided.")
-    #fname = f"Models_Perf_{today}.csv"
-    #merge_perf_files(fname, "perf", expected_cols)
-    #check_perf_results(fname, expected_cols, check_cols)
+        fname = f"Models_Perf_{today}.csv"
+        merge_perf_files(fname, "perf", expected_cols)
+        check_perf_results(fname, expected_cols, check_cols)
