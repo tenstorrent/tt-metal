@@ -10,6 +10,7 @@
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "const.h"
 
+// Forward declared from dataflow_api.h
 template <typename T>
 T get_common_arg_val(int arg_idx);
 

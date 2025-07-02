@@ -325,6 +325,7 @@ auto make_dspec(
     return DSpec(std::move(tensor_shape_array), std::move(shard_shape_array), std::move(bank_coord_array));
 }
 
+// Forward declared from dataflow_api.h
 uint32_t get_common_arg_addr(int arg_idx);
 
 /**
