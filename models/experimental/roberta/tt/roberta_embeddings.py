@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from models.common.lightweightmodule import LightweightModule
+import torch
 
 
 class TtEmbeddings(LightweightModule):
@@ -13,7 +14,7 @@ class TtEmbeddings(LightweightModule):
         return
 
 
-class PytorchEmbeddings(LightweightModule):
+class PytorchEmbeddings(torch.nn.Module):
     def __init__(self, hugging_face_reference_model):
         super().__init__()
         self.embeddings = hugging_face_reference_model.embeddings
