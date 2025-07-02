@@ -22,7 +22,7 @@ def tensor_map():
         # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
         # [2, 32, 16, 16],
         # [1, 512, 112, 32],
-        [1, 32, 22, 22],
+        [1, 320, 48, 48],
     ),
 )
 @pytest.mark.parametrize(
@@ -34,7 +34,7 @@ def tensor_map():
         # go to large kernels
         # (3, 3),
         # (9, 9),
-        (6, 6),
+        (36, 36),
     ),
 )
 @pytest.mark.parametrize(

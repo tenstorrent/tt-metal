@@ -84,13 +84,15 @@ void MAIN {
     constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
+    constexpr bool is_avg_pool = REDUCE_OP == PoolType::SUM;
+    // average pool requires fp32 accumulation so we can only reduce 4 tiles at a time, otherwise we can reduce 8 tiles
+    // at a time.
+    constexpr uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool ? 4 : 8;
     constexpr uint32_t max_tiles_per_iter =
         in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
 
-    constexpr bool is_avg_pool = REDUCE_OP == PoolType::SUM;
     static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX or Sum");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;

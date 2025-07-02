@@ -16,7 +16,6 @@
 
 #define ALWI inline __attribute__((always_inline))
 
-#define MAX_ELE_PER_REDUCTION 512  // TILE_WIDTH * 8 * numbytes
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
 
@@ -31,7 +30,6 @@ template <
     uint32_t in_w_padded,
     uint32_t in_nbytes_c,
     uint32_t in_c,
-    uint32_t in_write_inc,
     uint32_t max_rows_for_reduction,
     uint32_t total_elems_to_reduce,
     uint32_t bf16_init_value,
@@ -44,7 +42,12 @@ template <
 FORCE_INLINE void read_window_with_top_left_index(
     uint32_t ind, uint32_t in_l1_read_base_addr, uint32_t& out_l1_write_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
-    constexpr uint32_t read_bytes = wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;
+    // average pool requires fp32 accumulation so we can only reduce 4 tiles at a time, otherwise we can reduce 8 tiles
+    // at a time.
+    const uint32_t MAX_ELE_PER_REDUCTION =
+        is_avg_pool ? 4 * TILE_WIDTH * BYTES_PER_ELEM : 8 * TILE_WIDTH * BYTES_PER_ELEM;
+    constexpr uint32_t in_write_inc =
+        wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
 
     uint32_t in_l1_write_addr_base = get_write_ptr(in_cb_id);
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
@@ -269,8 +272,6 @@ void kernel_main() {
     uint32_t counter = reader_id;
     constexpr uint32_t total_elems_to_reduce = window_h * window_w;
     constexpr bool wide_reduction = in_nblocks_c > 1;
-    constexpr uint32_t in_write_inc =
-        wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
 
     if constexpr (!one_scalar_per_core) {
         config_l1_addr = get_read_ptr(config_cb_id);
@@ -324,7 +325,6 @@ void kernel_main() {
                 in_w_padded,
                 in_nbytes_c,
                 in_c,
-                in_write_inc,
                 max_rows_for_reduction,
                 total_elems_to_reduce,
                 bf16_init_value,
@@ -355,7 +355,6 @@ void kernel_main() {
             in_w_padded,
             in_nbytes_c,
             in_c,
-            in_write_inc,
             max_rows_for_reduction,
             total_elems_to_reduce,
             bf16_init_value,

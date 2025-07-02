@@ -291,12 +291,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         (uint32_t)std::ceil((float)output_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
     const bool is_partial_tile = (input_shape[3] / num_shards_c) == 16;
 
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
-    const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
-    // Hardware can do reduction of 8 tiles at a time.
-    // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
+    bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const bool is_large_kernel =
         is_partial_tile ? kernel_size_hw > tt::constants::TILE_HEIGHT / 2 : kernel_size_hw > tt::constants::TILE_HEIGHT;
+    // For large kernel avg pool, we need to use fp32 accumulation to avoid precision error buildup over multiple
+    // reduction stages, so we can only reduce 4 tiles at a time, otherwise we can reduce 8 tiles at a time.
+    const uint32_t MAX_TILES_PER_REDUCTION = is_avg_pool && is_large_kernel ? 4 : 8;
+    const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     // TODO: enable 32 sticks per tile for reduction for all cases, we can only support 16 row reductions for
     // partial tiles, and there is currently a bug forcing us to use 16 row reductions for avg pool when there
@@ -348,7 +349,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // twice by kernel size for large kernel case.
     uint32_t in_one_cb_id = 32;
     uint32_t in_scalar_cb_id_1 = 32;
-    if (pool_type == Pool2DType::AVG_POOL2D) {
+    if (is_avg_pool) {
         in_one_cb_id = next_cb_index++;
         const uint32_t in_one_cb_pagesize = tile_size(in_df);
         const uint32_t in_one_cb_npages = 1;
@@ -627,7 +628,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
-        .fp32_dest_acc_en = true,
+        .fp32_dest_acc_en =
+            is_large_kernel && is_avg_pool,  // for large kernels average pool requires fp32 accumulation to avoid
+                                             // precision error buildup over multiuple reduction stages
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = get_defines(pool_type)};

@@ -170,13 +170,13 @@ def run_max_pool(
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     ## construct the tensor in NCHW shape
-    # act = randomize_torch_tensor(torch_tensor_map, act_shape)
-    act = torch.zeros(act_shape, dtype=torch.bfloat16)
-    for n in range(act_shape[0]):
-        for c in range(act_shape[1]):
-            for h in range(act_shape[2]):
-                for w in range(act_shape[3]):
-                    act[n, c, h, w] = c  # h * in_w + w
+    act = randomize_torch_tensor(torch_tensor_map, act_shape)
+    # act = torch.zeros(act_shape, dtype=torch.bfloat16)
+    # for n in range(act_shape[0]):
+    #     for c in range(act_shape[1]):
+    #         for h in range(act_shape[2]):
+    #             for w in range(act_shape[3]):
+    #                 act[n, c, h, w] = c#h * in_w + w
     # torch.save(act, "act.pt")
     # act = torch.load("act.pt")
 
@@ -259,9 +259,8 @@ def run_max_pool(
     if dtype == ttnn.bfloat8_b:
         pcc_thresh = 0.9994
 
-    for i, (out_val, gold_val) in enumerate(zip(output_pytorch.flatten(), golden_pytorch.flatten())):
-        diff = abs(out_val - gold_val)
-        print(f"{i:3d}: {out_val:8.4f} | {gold_val:8.4f} | {diff:8.4f}")
+    print(output_pytorch[0][0])
+    print(golden_pytorch[0][0])
 
     passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch, pcc_thresh)
 
@@ -340,7 +339,7 @@ def run_max_pool(
             # # partial grid tests
             # [1, 32, 10, 10],  # BH
             # [1, 32, 6, 6],  # WH
-            [1, 512, 8, 8],
+            [1, 320, 48, 48],
         )
     ),
 )
@@ -352,7 +351,7 @@ def run_max_pool(
         # (5, 5),
         # (9, 9),
         # (13, 13),
-        (8, 8),
+        (36, 36),
     ),
 )
 @pytest.mark.parametrize(
