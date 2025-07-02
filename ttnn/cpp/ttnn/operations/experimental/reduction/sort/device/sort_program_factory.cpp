@@ -307,9 +307,14 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     const tt::DataFormat index_tensor_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(1).dtype());
 
+    // const tt::DataFormat index_tensor_cb_data_format = tt::DataFormat::Float16_b;
+
+    const tt::DataFormat packer_unpacker_sync_cb_data_format = tt::DataFormat::Float16_b;
+
     const uint32_t input_tensor_tile_size = tile_size(input_tensor_cb_data_format);
     const uint32_t value_tensor_tile_size = tile_size(value_tensor_cb_data_format);
     const uint32_t index_tensor_tile_size = tile_size(index_tensor_cb_data_format);
+    const uint32_t packer_unpacker_sync_tile_size = tile_size(packer_unpacker_sync_cb_data_format);
 
     auto input_buffer = tensor_args.input_tensor.buffer();
     auto value_buffer = output_tensors.at(0).buffer();
@@ -504,6 +509,14 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     const auto cb_physical_core_lookup_table =
         tt::tt_metal::CreateCircularBuffer(program, core_range, physical_core_lookup_table_cb_config);
 
+    constexpr uint32_t packer_unpacker_sync_cb_index = tt::CBIndex::c_11;
+    const tt::tt_metal::CircularBufferConfig packer_unpacker_sync_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            packer_unpacker_sync_tile_size, {{packer_unpacker_sync_cb_index, packer_unpacker_sync_cb_data_format}})
+            .set_page_size(packer_unpacker_sync_cb_index, packer_unpacker_sync_tile_size);
+    const auto cb_packer_unpacker_sync =
+        tt::tt_metal::CreateCircularBuffer(program, core_range, packer_unpacker_sync_cb_config);
+
     // Semaphores
     const uint32_t semaphore_exchange_readers = CreateSemaphore(program, core_range, 0);
     const uint32_t semaphore_exchange_writers = CreateSemaphore(program, core_range, 0);
@@ -578,6 +591,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         index_tensor_intermediate_cb_index,
         value_tensor_peer_cb_index,
         index_tensor_peer_cb_index,
+        packer_unpacker_sync_cb_index,
     };
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_hybrid.cpp";
@@ -626,9 +640,9 @@ uint32_t SortProgramFactoryHybrid::get_number_of_tiles_per_core(
     const DataType& input_dtype, const DataType& index_dtype) {
     if (input_dtype == DataType::FLOAT32 || input_dtype == DataType::UINT32 || input_dtype == DataType::INT32 ||
         index_dtype == DataType::INT32 || index_dtype == DataType::UINT32) {
-        return 2;
+        return 64;
     }
-    return 2;
+    return 8;
 }
 
 // Single row - multi core
