@@ -119,11 +119,11 @@ void benchmark_all_args_combinations_single_core(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
-                .compile_args = sharded_accessor_args.compile_time_args,
+                .compile_args = sharded_accessor_args.get_compile_time_args(),
                 .defines = defines});
 
         // Set up runtime args for reader kernel
-        SetCommonRuntimeArgs(program, reader_kernel_id, sharded_accessor_args.runtime_args);
+        SetCommonRuntimeArgs(program, reader_kernel_id, sharded_accessor_args.get_common_runtime_args());
 
         // Launch program
         auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();
