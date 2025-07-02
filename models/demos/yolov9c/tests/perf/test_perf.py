@@ -49,8 +49,9 @@ def dealloc_output(output_tensor):
     "model_task",
     [
         "segment",  # To run the test for instance segmentation
-        # "detect",  # Uncomment to run the test for Object Detection
+        "detect",  # To run the test for Object Detection
     ],
+    ids=["segment", "detect"],
 )
 def test_perf(device, model_task, use_weights_from_ultralytics):
     disable_persistent_kernel_cache()
@@ -99,7 +100,14 @@ def test_perf(device, model_task, use_weights_from_ultralytics):
     "batch_size",
     [1],
 )
-@pytest.mark.parametrize("model_task", ["segment", "detect"])
+@pytest.mark.parametrize(
+    "model_task",
+    [
+        "segment",  # To run the test for instance segmentation
+        "detect",  # To run the test for Object Detection
+    ],
+    ids=["segment", "detect"],
+)
 @pytest.mark.models_device_performance_bare_metal
 def test_perf_device_bare_metal_yolov9c(model_task, batch_size):
     subdir = "ttnn_yolov9c"
