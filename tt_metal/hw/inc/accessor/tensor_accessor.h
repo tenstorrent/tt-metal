@@ -10,7 +10,6 @@
 #include "helpers.h"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "dataflow_api.h"
 #include "dataflow_api_addrgen.h"
 #endif
 
@@ -33,10 +32,6 @@ private:
 
     [[no_unique_address]] mutable tensor_accessor::detail::
         ConditionalField<!DSpec::has_static_rank, uint32_t[tensor_accessor::MAX_RANK]> _page_coord;
-    const size_t bank_base_address;
-
-    // Page size is either compile-time constant or runtime value
-    const uint32_t page_size;
 
 public:
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
@@ -65,18 +60,6 @@ public:
             DYNAMIC_NOC_X(noc, (packed_xy_coords[bank_id] >> 8) & 0xFF),
             DYNAMIC_NOC_Y(noc, packed_xy_coords[bank_id] & 0xFF),
             bank_base_address + bank_offset * page_size + offset);
-    }
-
-    FORCE_INLINE
-    void noc_async_read_page(
-        const uint32_t page_id, const uint32_t dest_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        noc_async_read(get_noc_addr(page_id, offset, noc), dest_addr, page_size, noc);
-    }
-
-    FORCE_INLINE
-    void noc_async_write_page(
-        const uint32_t page_id, const uint32_t src_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        noc_async_write(src_addr, get_noc_addr(page_id, offset, noc), page_size, noc);
     }
 
     // Helpers
@@ -132,16 +115,19 @@ public:
 
         return {bank_id, bank_page_offset};
     }
+
+    const size_t bank_base_address = 0;
+    const uint32_t page_size = 0;
 };
 
 // Factory functions to create TensorAccessor instance
-template <size_t CTA_BASE, size_t CRTA_BASE>
-FORCE_INLINE auto make_tensor_accessor_args() {
+template <size_t CTA_BASE, size_t CRTA_BASE = 0>
+FORCE_INLINE constexpr auto make_tensor_accessor_args() {
     return tensor_accessor::ArgsOffsets<CTA_BASE, CRTA_BASE>();
 }
 
 template <size_t CTA_BASE>
-FORCE_INLINE auto make_tensor_accessor_args(const size_t crta_base) {
+FORCE_INLINE constexpr auto make_tensor_accessor_args(const size_t crta_base) {
     return tensor_accessor::ArgsOffsets<CTA_BASE>(crta_base);
 }
 

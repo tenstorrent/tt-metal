@@ -29,6 +29,7 @@
 #include "dev_msgs.h"
 #include "dataflow_api_common.h"
 #include "dataflow_api_addrgen.h"
+#include "accessor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 // clang-format off
@@ -922,6 +923,70 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
             noc_posted_writes_num_issued[noc] += 1;
         }
     }
+}
+
+template <typename DSpec>
+FORCE_INLINE void noc_async_read_page(
+    const uint32_t id,
+    const TensorAccessor<DSpec>& s,
+    std::uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_read(s.get_noc_addr(id, offset, noc), dst_local_l1_addr, s.page_size, noc);
+}
+
+template <typename DSpec>
+FORCE_INLINE void noc_async_read_tile(
+    const uint32_t id,
+    const TensorAccessor<DSpec>& s,
+    std::uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_read(s.get_noc_addr(id, offset, noc), dst_local_l1_addr, s.page_size, noc);
+}
+
+template <bool DRAM>
+FORCE_INLINE void noc_async_read_tile(
+    const uint32_t id,
+    const InterleavedAddrGen<DRAM>& s,
+    std::uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_read(s.get_noc_addr(id, offset, noc), dst_local_l1_addr, s.page_size, noc);
+}
+
+template <typename DSpec>
+FORCE_INLINE void noc_async_write_page(
+    const uint32_t id,
+    const TensorAccessor<DSpec>& s,
+    std::uint32_t src_local_l1_addr,
+    const uint32_t write_size_bytes,
+    const uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_write(src_local_l1_addr, s.get_noc_addr(id, offset, noc), write_size_bytes, noc);
+}
+
+template <bool DRAM>
+FORCE_INLINE void noc_async_write_page(
+    const uint32_t id,
+    const InterleavedAddrGen<DRAM>& s,
+    std::uint32_t src_local_l1_addr,
+    const uint32_t write_size_bytes,
+    const uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_write(src_local_l1_addr, s.get_noc_addr(id, offset, noc), write_size_bytes, noc);
+}
+
+template <typename DSpec>
+FORCE_INLINE void noc_async_write_tile(
+    const uint32_t id, const TensorAccessor<DSpec>& s, std::uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
+    noc_async_write(src_local_l1_addr, s.get_noc_addr(id, 0, noc), s.page_size, noc);
+}
+
+template <bool DRAM>
+FORCE_INLINE void noc_async_write_tile(
+    const uint32_t id, const InterleavedAddrGen<DRAM>& s, std::uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
+    noc_async_write(src_local_l1_addr, s.get_noc_addr(id, 0, noc), s.page_size, noc);
 }
 
 template <bool DRAM>

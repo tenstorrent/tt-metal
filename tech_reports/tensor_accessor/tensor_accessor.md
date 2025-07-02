@@ -24,11 +24,11 @@ KernelHandle kernel_id = CreateKernel(
     DataMovementConfig{
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::RISCV_0_default,
-        .compile_args = accessor_args.compile_time_args
+        .compile_args = accessor_args.get_compile_time_args()
     });
 
 // Pass any runtime arguments to the kernel
-SetCommonRuntimeArgs(program, kernel_id, accessor_args.runtime_args);
+SetCommonRuntimeArgs(program, kernel_id, accessor_args.get_common_runtime_args());
 ```
 
 ### Configuration Options
