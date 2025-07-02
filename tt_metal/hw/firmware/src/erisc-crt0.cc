@@ -8,7 +8,7 @@ void Application();
 
 static void *stack;  // saved stack pointer
 
-static void do_erisc_exit();
+/*static*/ void do_erisc_exit();
 
 // Pointer to exit routine, (so it may be called from a kernel).  USED
 // attribute is needed to keep this as an symbol that kernels may
@@ -29,7 +29,7 @@ extern "C" void wzerorange(uint32_t *start, uint32_t *end);
 extern "C" [[gnu::section(".start"), gnu::naked, gnu::optimize("Os")]] void _start(void) {
     // Save callee saves.
     __asm__ volatile(
-        "addi sp, sp, -13 * 4\n\t"
+        "addi sp, sp, -16 * 4\n\t"
         "sw ra, 0 * 4(sp)\n\t"
         "sw s0, 1 * 4(sp)\n\t"
         "sw s1, 2 * 4(sp)\n\t"
@@ -60,7 +60,7 @@ extern "C" [[gnu::section(".start"), gnu::naked, gnu::optimize("Os")]] void _sta
 
 // This is not marked noreturn, because it does actually return --
 // just not to where it came from!
-static void do_erisc_exit() {
+void do_erisc_exit() {
     // Restore sp from the save slot.
     __asm__ volatile("lw sp, %[sp]\n\t" : : [sp] "m"(stack));
 
@@ -79,5 +79,5 @@ static void do_erisc_exit() {
         "lw s9, 10 * 4(sp)\n\t"
         "lw s10, 11 * 4(sp)\n\t"
         "lw s11, 12 * 4(sp)\n\t"
-        "addi sp, sp, 4 * 13\n\t");
+        "addi sp, sp, 4 * 16\n\t");
 }
