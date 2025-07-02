@@ -370,7 +370,7 @@ private:
     }
 };
 
-class UnitMeshRandomProgramFixture : virtual public UnitMeshCQSingleCardProgramFixture {
+class UnitMeshRandomProgramFixture : virtual public UnitMeshCommandQueueSingleCardProgramFixture {
 protected:
     static const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
     static const uint32_t MAX_KERNEL_SIZE_BYTES = 4096;
@@ -418,12 +418,12 @@ protected:
             max_num_cbs(MAX_NUM_CBS) {}
     };
 
-    static const uint32_t NUM_WORKLOADS = 75;
+    static const uint32_t NUM_PROGRAMS = 75;
 
     std::shared_ptr<distributed::MeshDevice> device_;
 
     void SetUp() override {
-        UnitMeshCQSingleCardProgramFixture::SetUp();
+        UnitMeshCommandQueueSingleCardProgramFixture::SetUp();
         if (!::testing::Test::IsSkipped()) {
             // Parent may have skipped
             this->device_ = this->devices_[0];
@@ -709,52 +709,6 @@ private:
         CoreRangeSet empty_crs;
         CoreRangeSet resulting_cores = empty_crs.merge(cores_subset);
         return resulting_cores;
-    }
-};
-class UnitMeshRandomProgramTraceFixture : virtual public UnitMeshRandomProgramFixture,
-                                          virtual public UnitMeshCQSingleCardTraceFixture {
-protected:
-    static const uint32_t NUM_TRACE_ITERATIONS = 50;
-    distributed::MeshWorkload workloads[NUM_WORKLOADS];
-
-    void SetUp() override {
-        UnitMeshCQSingleCardTraceFixture::SetUp();
-        if (!::testing::Test::IsSkipped()) {
-            // Parent may have skipped
-            this->device_ = this->devices_[0];
-            this->initialize_seed();
-        }
-    }
-
-    distributed::MeshTraceId trace_programs() {
-        const distributed::MeshTraceId trace_id = this->capture_trace();
-        this->run_trace(trace_id);
-        return trace_id;
-    }
-
-private:
-    distributed::MeshTraceId capture_trace() {
-        auto& mesh_command_queue = this->device_->mesh_command_queue();
-
-        // Create a zero coordinate and range for the device
-        distributed::MeshCoordinate zero_coord =
-            distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
-        const distributed::MeshTraceId trace_id =
-            distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
-        for (auto& workload : this->workloads) {
-            distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-        }
-        distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
-        return trace_id;
-    }
-
-    void run_trace(const distributed::MeshTraceId trace_id) {
-        auto& mesh_command_queue = this->device_->mesh_command_queue();
-        for (uint32_t i = 0; i < NUM_TRACE_ITERATIONS; i++) {
-            distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), trace_id, false);
-        }
     }
 };
 
