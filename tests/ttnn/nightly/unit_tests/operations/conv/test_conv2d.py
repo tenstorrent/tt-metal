@@ -3276,6 +3276,7 @@ def test_conv2d_sdxl(
         (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1, 0),
 
         # channels 4
+        # Skip specific test case for Blackhole devices
         (1, 4, 4, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1, 0),
     ),
 )
@@ -3304,6 +3305,10 @@ def test_conv2d_vae_sdxl(
     num_slices,
     act_block_h_override
 ):
+
+    # Skip specific test case for Blackhole devices
+    if is_blackhole() and (batch, input_channels, output_channels, input_height, input_width, weights_dtype) == (1, 4, 4, 128, 128, ttnn.bfloat8_b):
+        pytest.skip("Skipping this test case for Blackhole devices due to PCC issue, tracked in ISSUE-24463")
 
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
