@@ -1385,7 +1385,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         "dependent on information that is set during device initialization.",
         this->get_id());
 
-    bool profile_kernel = getDeviceProfilerState();
     std::vector<std::shared_future<void>> events;
 
     auto sync_events = [&events] {

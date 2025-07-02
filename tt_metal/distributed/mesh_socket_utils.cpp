@@ -332,7 +332,6 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     bool is_sender = socket_endpoint_type == SocketEndpoint::SENDER;
     auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
 
-    static constexpr uint32_t NUM_SOCKET_HEADER_ELEMENTS = 1;
     // Query the size of the serialized descriptor first (this is the only element in the header)
     auto msg_header_size = context->snoop_incoming_msg_size(Rank{peer_rank}, desc.exchange_tag);
     TT_FATAL(
