@@ -533,7 +533,8 @@ template <bool is_dram_variant, bool is_host_variant>
 void configure_kernel_variant(
     Program& program,
     string path,
-    std::vector<uint32_t> compile_args,  // yes, copy
+    const std::map<std::string, std::string>& defines_in,
+    std::vector<uint32_t> compile_args,
     CoreCoord my_core,
     CoreCoord phys_my_core,
     CoreCoord phys_upstream_core,
@@ -557,10 +558,16 @@ void configure_kernel_variant(
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(0xff)},
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(0xff)},  // todo, add dispatch_s testing
-        {"FD_CORE_TYPE", std::to_string(0)},               // todo, support dispatch on eth
+        {"FD_CORE_TYPE", std::to_string(0)},                     // todo, support dispatch on eth
+        {"IS_D_VARIANT", std::to_string(is_dram_variant)},
+        {"IS_H_VARIANT", std::to_string(is_host_variant)},
     };
+
     compile_args.push_back(is_dram_variant);
     compile_args.push_back(is_host_variant);
+
+    defines.insert(defines_in.begin(), defines_in.end());
+
     tt::tt_metal::CreateKernel(
         program,
         path,
