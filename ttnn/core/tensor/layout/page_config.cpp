@@ -85,6 +85,11 @@ Tile PageConfig::get_tile() const {
     return std::visit([&](const auto& config) { return config.get_tile(); }, config_);
 }
 
+Alignment PageConfig::get_required_shard_shape_alignment() const {
+    return std::visit(
+        [&](const auto& config) constexpr { return config.get_required_shard_shape_alignment(); }, config_);
+}
+
 Alignment PageConfig::get_recommended_shard_shape_alignment(DataType dtype, BufferType buffer_type) const {
     return std::visit(
         [&](const auto& config) constexpr { return config.get_recommended_shard_shape_alignment(dtype, buffer_type); },
@@ -138,6 +143,10 @@ size_t TilePageConfig::get_page_size_bytes(const Shape2D& page_shape, DataType d
 const Tile& TilePageConfig::get_tile() const { return tile_; }
 
 Alignment TilePageConfig::get_recommended_shard_shape_alignment(DataType, BufferType) const {
+    return get_required_shard_shape_alignment();
+}
+
+Alignment TilePageConfig::get_required_shard_shape_alignment() const {
     return Alignment({tile_.get_height(), tile_.get_width()});
 }
 
@@ -214,6 +223,8 @@ size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataTy
 }
 
 const Tile& RowMajorPageConfig::get_tile() const { return tile_; }
+
+Alignment RowMajorPageConfig::get_required_shard_shape_alignment() const { return Alignment({1}); }
 
 Alignment RowMajorPageConfig::get_recommended_shard_shape_alignment(DataType dtype, BufferType buffer_type) const {
     uint32_t memory_alignment_bytes = 0;

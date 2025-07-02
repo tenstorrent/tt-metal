@@ -39,6 +39,8 @@ public:
         tt::stl::Span<const int32_t> dims,
         CoreRangeSet grid,
         ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+    TensorSpec height_sharded(CoreRangeSet grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+    TensorSpec width_sharded(CoreRangeSet grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
     TensorSpec block_sharded(CoreRange grid) const;
 
     Strides compute_strides() const { return tensor_layout_.compute_strides(logical_shape_); }

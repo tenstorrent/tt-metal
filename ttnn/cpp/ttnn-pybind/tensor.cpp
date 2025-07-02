@@ -235,6 +235,22 @@ void tensor_mem_config_module(py::module& m_tensor) {
                 Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
             )doc")
         .def(
+            "height_sharded",
+            &TensorSpec::height_sharded,
+            py::arg("grid"),
+            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            R"doc(
+                Shard tensor across a grid of cores using height sharding.
+            )doc")
+        .def(
+            "width_sharded",
+            &TensorSpec::width_sharded,
+            py::arg("grid"),
+            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            R"doc(
+                Shard tensor across a grid of cores using width sharding.
+            )doc")
+        .def(
             "block_sharded",
             &TensorSpec::block_sharded,
             py::arg("grid"),
