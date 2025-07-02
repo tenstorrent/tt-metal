@@ -18,6 +18,7 @@
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
 #include "datasets/utils.hpp"
+#include "fmt/base.h"
 #include "models/common/transformer_common.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
@@ -842,6 +843,7 @@ int main(int argc, char **argv) {
     auto select_optimizer =
         [&model, &adamw_params, &config](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (config.enable_mpi) {
+            fmt::print("Using RemoteOptimizer with {} workers\n", config.num_mh_workers);
             return std::make_unique<RemoteOptimizer>(get_model_parameters(model), config.num_mh_workers);
         } else if (use_moreh_adamw) {
             return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
@@ -850,7 +852,9 @@ int main(int argc, char **argv) {
         }
     };
 
+    fmt::println("before select optimizer");
     auto optimizer = select_optimizer(config.use_moreh_adamw);
+    fmt::println("after select optimizer");
     auto scheduler = schedule_func(optimizer.get(), config.max_steps);
 
     if (config.enable_mpi) {
