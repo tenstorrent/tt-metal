@@ -109,7 +109,6 @@ done
 echo "✔ Remote copy complete."
 
 # launch MPI job
-# launch MPI job
 echo "Launching MPI 3-tier demo..."
 mpirun --hostfile "${HOSTFILE}" \
   -np "${WORKER_COUNT}" bash -lc "export TT_METAL_HOME='${METAL_HOME}' && export TT_LOGGER_LEVEL=FATAL && export TT_MESH_ID=0 && export TT_HOST_RANK=0 && \"${BIN_DIR}/nano_gpt\" -c \"${CFG_DIR}/${CONFIG}\" $RUN_FLAG" \
