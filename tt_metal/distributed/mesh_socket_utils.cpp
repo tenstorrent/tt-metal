@@ -47,6 +47,8 @@ void validate_fabric_config_for_sockets(
     TT_FATAL(fabric_config_supported, "Unsupported Fabric Config for Sockets specified {}", fabric_config);
 }
 
+// This does not return a FabricNodeId because for 1D fabric, we return a distance between the sender and receiver
+// instead of a chip id (FabricNodeId also stores its chip_id as uint32_t)
 std::pair<tt_fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
     tt_fabric::FabricNodeId sender_node_id,
     tt_fabric::FabricNodeId recv_node_id,

@@ -94,7 +94,7 @@ std::shared_ptr<MeshBuffer> MeshSocket::get_config_buffer() const { return confi
 
 const SocketConfig& MeshSocket::get_config() const { return config_; }
 
-const tt::tt_fabric::FabricNodeId& MeshSocket::get_fabric_node_id(SocketEndpoint endpoint, MeshCoordinate coord) const {
+tt::tt_fabric::FabricNodeId MeshSocket::get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const {
     return fabric_node_id_map_[static_cast<std::underlying_type_t<SocketEndpoint>>(endpoint)].at(coord);
 }
 
