@@ -855,10 +855,9 @@ void MetalContext::initialize_firmware(
         tt_cxy_pair(device_id, virtual_core),
         jit_build_config.fw_launch_addr);
 
-    // Initialize each entry in the launch_msg ring buffer with DISPATCH_MODE_NONE during firmware initialization.
-    // At this time, specifying the actual dispatch mode is misleading since the launch message is not needed
-    // for the workers during firmware initialization. The actual dispatch mode will be set later when needed.
-    // We also set enables = 0 to ensure no kernels are executed during initialization.
+    // Initialize the launch_msg ring buffer. Entry 0 contains the proper firmware startup message,
+    // while entries 1 through N-1 are initialized with DISPATCH_MODE_NONE since they are unused during
+    // firmware initialization.
     //
     // For reference, during program execution, cores that don't get a valid launch_message need to have
     // the correct dispatch mode configured as follows:
@@ -870,12 +869,22 @@ void MetalContext::initialize_firmware(
     // - dispatch cores (Idle Eth) configured with DISPATCH_MODE_HOST
     // - worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
     // When using Slow Dispatch, all cores initialized with DISPATCH_MODE_HOST
-    launch_msg_t initial_buffer_msg = *launch_msg;
-    initial_buffer_msg.kernel_config.mode = DISPATCH_MODE_NONE;
-    // Ensure no kernels execute during initialization
-    initial_buffer_msg.kernel_config.enables = 0;
-    // Initialize the buffer using the temporary message
-    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, initial_buffer_msg);
+    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries);
+
+    // Entry 0: Use the proper firmware startup message
+    init_launch_msg_data[0] = *launch_msg;
+
+    // Entries 1 to N-1: Initialize with DISPATCH_MODE_NONE to avoid misleading dispatch mode settings
+    if (launch_msg_buffer_num_entries > 1) {
+        launch_msg_t unused_buffer_msg = *launch_msg;
+        unused_buffer_msg.kernel_config.mode = DISPATCH_MODE_NONE;
+        unused_buffer_msg.kernel_config.enables = 0;  // Ensure no kernels execute
+        unused_buffer_msg.kernel_config.preload = 0;  // Clear preload flag
+
+        for (uint32_t i = 1; i < launch_msg_buffer_num_entries; i++) {
+            init_launch_msg_data[i] = unused_buffer_msg;
+        }
+    }
     auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
     cluster_->write_core(
         init_launch_msg_data.data(),
