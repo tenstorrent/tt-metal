@@ -9,11 +9,14 @@ import torch.nn.functional as F
 
 def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations, attention_weights, device):
     bs, _, num_heads, embed_dims = value.shape
+    print("sampling_locations tt", sampling_locations.shape)
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
     value_list = []
     value_list.append(value)
     sampling_grids = 2 * sampling_locations - 1
     sampling_value_list = []
+
+    print("value_spatial_shapes", value_spatial_shapes)
     for level, (H_, W_) in enumerate(value_spatial_shapes):
         value_l_ = value_list[level]
         value_l_ = ttnn.reshape(value_l_, [value_l_.shape[0], value_l_.shape[1], value_l_.shape[2] * value_l_.shape[3]])
@@ -36,12 +39,16 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
         sampling_value_l_ = F.grid_sample(
             value_l_, sampling_grid_l_, mode="bilinear", padding_mode="zeros", align_corners=False
         )
-        sampling_value_l_ = ttnn.from_torch(
-            sampling_value_l_, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
-        )
+        sampling_value_l_ = ttnn.from_torch(sampling_value_l_, device=device, dtype=ttnn.bfloat16)
         sampling_value_list.append(sampling_value_l_)
+        print("attention_weights", attention_weights.shape)
+
         attention_weights = ttnn.permute(attention_weights, (0, 2, 1, 3, 4))
+        print("attention_weights", attention_weights.shape)
+
         attention_weights = ttnn.reshape(attention_weights, [bs * num_heads, 1, num_queries, num_levels * num_points])
+        print("attention_weights", attention_weights.shape)
+
     output = ttnn.stack(sampling_value_list, -2)
     output = ttnn.reshape(
         output, [output.shape[0], output.shape[1], output.shape[2], output.shape[3] * output.shape[4]]
@@ -60,6 +67,8 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
 class TtTemporalSelfAttention:
     def __init__(
         self,
+        device,
+        params,
         embed_dims=256,
         num_heads=8,
         num_levels=4,
@@ -70,7 +79,6 @@ class TtTemporalSelfAttention:
         batch_first=True,
         norm_cfg=None,
         init_cfg=None,
-        device=None,
     ):
         super().__init__()
         if embed_dims % num_heads != 0:
@@ -81,6 +89,7 @@ class TtTemporalSelfAttention:
         self.norm_cfg = norm_cfg
         self.batch_first = batch_first
         self.fp16_enabled = False
+        self.params = params
 
         def _is_power_of_2(n):
             if not isinstance(n, int) or n < 0:
@@ -112,9 +121,9 @@ class TtTemporalSelfAttention:
         spatial_shapes=None,
         level_start_index=None,
         flag="decoder",
-        parameter=None,
         **kwargs,
     ):
+        params = self.params
         if value is None:
             assert self.batch_first
             bs, len_bev, c = query.shape
@@ -138,7 +147,7 @@ class TtTemporalSelfAttention:
         query = ttnn.concat([value[:bs], query], dim=-1)
 
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
-        value = ttnn.linear(value, parameter.value_proj.weight, bias=parameter.value_proj.bias)
+        value = ttnn.linear(value, params.value_proj.weight, bias=params.value_proj.bias)
         if key_padding_mask is not None:
             mask = key_padding_mask[..., None]
             value = ttnn.where(mask, ttnn.zeros_like(value), value)
@@ -146,16 +155,14 @@ class TtTemporalSelfAttention:
         value = ttnn.reshape(value, (bs * self.num_bev_queue, num_value, self.num_heads, -1))
 
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
-        sampling_offsets = ttnn.linear(query, parameter.sampling_offsets.weight, bias=parameter.sampling_offsets.bias)
+        sampling_offsets = ttnn.linear(query, params.sampling_offsets.weight, bias=params.sampling_offsets.bias)
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels, self.num_points, 2)
         )
 
-        attention_weights = ttnn.linear(
-            query, parameter.attention_weights.weight, bias=parameter.attention_weights.bias
-        )
-        ttnn.deallocate(parameter.attention_weights.weight)
-        ttnn.deallocate(parameter.attention_weights.bias)
+        attention_weights = ttnn.linear(query, params.attention_weights.weight, bias=params.attention_weights.bias)
+        ttnn.deallocate(params.attention_weights.weight)
+        ttnn.deallocate(params.attention_weights.bias)
         ttnn.deallocate(query)
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels * self.num_points)
@@ -213,9 +220,9 @@ class TtTemporalSelfAttention:
         output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.mean(output, dim=-1)
         output = ttnn.permute(output, (2, 0, 1))
-        output = ttnn.linear(output, parameter.output_proj.weight, bias=parameter.output_proj.bias)
-        ttnn.deallocate(parameter.output_proj.weight)
-        ttnn.deallocate(parameter.output_proj.bias)
+        output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
+        ttnn.deallocate(params.output_proj.weight)
+        ttnn.deallocate(params.output_proj.bias)
 
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
