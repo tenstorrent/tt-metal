@@ -23,7 +23,7 @@ jobs:
         test-info: [
           {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "perf-no-reset-grayskull"], machine-type: "bare_metal"},
         ]
-        model-type: [llm_javelin, cnn_javelin, other]
+        model-type: [other2]
     name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
     defaults:
       run:
@@ -392,7 +392,7 @@ jobs:
             env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov9c/tests/perf -m models_performance_bare_metal
             env python3 models/perf/merge_perf_results.py
       - name: Run functional_vanilla_unet tests
-        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        if: ${{ matrix.model-type == 'other2' && !cancelled() }}
         timeout-minutes: 70
         uses: ./.github/actions/docker-run
         env:
@@ -410,9 +410,9 @@ jobs:
           install_wheel: true
           run_args: |
             env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_vanilla_unet/test/test_perf_vanilla_unet.py -m models_performance_bare_metal
-            env python3 models/perf/merge_perf_results.py
+            env python3 models/perf/merge_perf_results.py functional_vanilla_unet
       - name: Run yolov8s_world tests
-        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        if: ${{ matrix.model-type == 'other2' && !cancelled() }}
         timeout-minutes: 70
         uses: ./.github/actions/docker-run
         env:
@@ -430,9 +430,9 @@ jobs:
           install_wheel: true
           run_args: |
             env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov8s_world/tests -m models_performance_bare_metal
-            env python3 models/perf/merge_perf_results.py
+            env python3 models/perf/merge_perf_results.py yolov8s_world
       - name: Run mobilenetv2 tests
-        if: ${{ matrix.model-type == 'other' && !cancelled() }}
+        if: ${{ matrix.model-type == 'other2' && !cancelled() }}
         timeout-minutes: 70
         uses: ./.github/actions/docker-run
         env:
@@ -450,7 +450,7 @@ jobs:
           install_wheel: true
           run_args: |
             env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/mobilenetv2/tests -m models_performance_bare_metal
-            env python3 models/perf/merge_perf_results.py
+            env python3 models/perf/merge_perf_results.py mobilenetv2
       - name: Run ufld_v2 tests
         if: ${{ matrix.model-type == 'other' && !cancelled() }}
         timeout-minutes: 70
@@ -470,7 +470,7 @@ jobs:
           install_wheel: true
           run_args: |
             env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/tests -m models_performance_bare_metal
-            env python3 models/perf/merge_perf_results.py
+            env python3 models/perf/merge_perf_results.py ufld_v2
       - name: Run yolov8x tests
         if: ${{ matrix.model-type == 'other' && !cancelled() }}
         timeout-minutes: 70

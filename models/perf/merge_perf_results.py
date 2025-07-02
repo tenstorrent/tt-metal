@@ -2,7 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.perf.perf_utils import check_perf_results, merge_perf_files, today
+
+
+from models.perf.perf_utils import check_perf_results, merge_perf_files, today, prep_perf_report
 
 expected_cols = [
     "Model",
@@ -22,6 +24,12 @@ expected_cols = [
 check_cols = ["Inference Time (sec)", "Compile Time (sec)"]
 
 if __name__ == "__main__":
-    fname = f"Models_Perf_{today}.csv"
-    merge_perf_files(fname, "perf", expected_cols)
-    check_perf_results(fname, expected_cols, check_cols)
+    if len(sys.argv) > 1:
+        my_arg = sys.argv[1]
+        fname = f"perf_models_demos_{my_arg}_{today}.csv"
+        check_perf_results(fname, expected_cols, check_cols)
+    else:
+        print("No argument provided.")
+    #fname = f"Models_Perf_{today}.csv"
+    #merge_perf_files(fname, "perf", expected_cols)
+    #check_perf_results(fname, expected_cols, check_cols)
