@@ -287,10 +287,10 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             drain_sync_core = mesh_device->worker_core_from_logical_core(core);
 
             std::vector<uint32_t> reader_rt_args = {
-                input_tensor.buffer()->address(),             // input_tensor_address
-                intermediate_tensor.buffer()->address(),      // intermediate_tensor_address
-                semaphore.at(core_idx + link * 3).address(),  // out_ready_semaphore
-                semaphore.at(2 + link * 3).address(),         // batch_ready_semaphore
+                input_tensor.buffer()->address(),         // input_tensor_address
+                intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
+                semaphore.at(core_idx).address(),         // out_ready_semaphore
+                semaphore.at(2).address(),                // batch_ready_semaphore
                 link,
                 num_links,
                 input_tensor_Wt / ring_size,                                                 // slice_Wt
@@ -306,12 +306,12 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_ids[core_idx], {core}, reader_rt_args);
 
             std::vector<uint32_t> writer_rt_args = {
-                intermediate_tensor.buffer()->address(),      // intermediate_tensor_address
-                output_tensor.buffer()->address(),            // output_tensor_address
-                drain_sync_core.x,                            // out_ready_sem_noc0_x
-                drain_sync_core.y,                            // out_ready_sem_noc0_y
-                semaphore.at(core_idx + link * 3).address(),  // out_ready_fwd_semaphore
-                semaphore.at(2 + link * 3).address(),         // batch_ready_semaphore
+                intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
+                output_tensor.buffer()->address(),        // output_tensor_address
+                drain_sync_core.x,                        // out_ready_sem_noc0_x
+                drain_sync_core.y,                        // out_ready_sem_noc0_y
+                semaphore.at(core_idx).address(),         // out_ready_fwd_semaphore
+                semaphore.at(2).address(),                // batch_ready_semaphore
                 link,
                 num_links,
                 input_tensor_Wt / ring_size,                                                 // slice_Wt

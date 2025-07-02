@@ -24,6 +24,8 @@ void MAIN {
     uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
     uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
 
+    binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
+
     for (uint32_t b = 0; b < num_batches; b++) {
         for (uint32_t i = 0; i < ring_size - 1; i++) {  // Don't reduce on the first slice
             if (!direction) {
@@ -32,7 +34,6 @@ void MAIN {
             }
 
             // Initialize binary operations - use the same constants consistently
-            binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
             add_tiles_init(input_cb_id, intermediate_cb, false);
 
             // Wait for input data once before beginning processing

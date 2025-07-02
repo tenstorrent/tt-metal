@@ -55,7 +55,7 @@ void kernel_main() {
     uint32_t slice_Wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
-    int32_t start_tiles_read = get_arg_val<int32_t>(arg_idx++);
+    int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
     size_t arg_for_fab = arg_idx;
@@ -240,13 +240,14 @@ void kernel_main() {
                 // 2. unicast output ready semaphore
                 uint64_t out_ready_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
-                pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                volatile PACKET_HEADER_TYPE* pkt_hdr_seminc =
+                    reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+                pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                     out_ready_sem_noc_addr_in_pkt,
                     static_cast<uint16_t>(1),  // increment 1
                     32});
                 // Write the unicast packet (forward)
-                pkt_hdr->to_chip_unicast(1);
+                pkt_hdr_seminc->to_chip_unicast(1);
                 if (direction) {
                     fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                     fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
@@ -305,22 +306,23 @@ void kernel_main() {
                 // 2. mcast half batch ready semaphore
                 uint64_t out_ready_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
-                auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
-                pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                volatile PACKET_HEADER_TYPE* pkt_hdr_seminc =
+                    reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+                pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                     out_ready_sem_noc_addr_in_pkt,
                     static_cast<uint16_t>(1),  // increment 1
                     32});
                 // Write the mcast packet
                 if (direction) {
                     fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                    pkt_hdr->to_chip_multicast(
+                    pkt_hdr_seminc->to_chip_multicast(
                         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(ring_size - 1)});
                     fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
                         packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
                     noc_async_writes_flushed();
                 } else {
                     fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                    pkt_hdr->to_chip_multicast(
+                    pkt_hdr_seminc->to_chip_multicast(
                         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(ring_size - 1)});
                     fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
                         packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
