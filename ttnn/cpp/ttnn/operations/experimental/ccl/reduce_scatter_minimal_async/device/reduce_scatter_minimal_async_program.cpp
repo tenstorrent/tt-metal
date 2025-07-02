@@ -139,13 +139,16 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     CoreRangeSet sender_forward_core_range_set = CoreRangeSet(sender_forward_core_ranges);
     CoreRangeSet sender_backward_core_range_set = CoreRangeSet(sender_backward_core_ranges);
 
+    // scatter-write currently only supports 2 distinct noc addresses
+    uint32_t max_target_noc_addresses_per_packet = 2;
+
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    uint32_t tiles_to_write_per_packet = 1;
-    uint32_t tile_granularity = num_pages_per_packet < 4 ? 4 * num_pages_per_packet : 8;
-    uint32_t cb_num_pages = 3 * tile_granularity;  // double buffering
+    uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
+    uint32_t tile_granularity = num_tiles_to_write_per_packet < 4 ? 4 * num_tiles_to_write_per_packet : 8;
+    uint32_t cb_num_pages = 3 * tile_granularity;  // triple buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     uint32_t input_cb_index = tt::CB::c_in0;
@@ -213,7 +216,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             ring_size,                                               // ring_size
             num_batches,                                             // num_batches
             fuse_op,                                                 // fused op
-            tiles_to_write_per_packet,                               // contig_pages_advanced
             core_idx % num_senders_per_link,                         // direction
         };
         auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -240,7 +242,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             batch_slice_num_pages,                                   // batch_slice_num_pages
             ring_size,                                               // ring_size
             num_batches,                                             // num_batches
-            tiles_to_write_per_packet,                               // contig_pages_advanced
+            num_tiles_to_write_per_packet,                           // num_tiles_to_write_per_packet
             core_idx % num_senders_per_link,                         // direction
         };
         auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -285,10 +287,10 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             drain_sync_core = mesh_device->worker_core_from_logical_core(core);
 
             std::vector<uint32_t> reader_rt_args = {
-                input_tensor.buffer()->address(),             // input_tensor_address
-                intermediate_tensor.buffer()->address(),      // intermediate_tensor_address
-                semaphore.at(core_idx + link * 3).address(),  // out_ready_semaphore
-                semaphore.at(2 + link * 3).address(),         // batch_ready_semaphore
+                input_tensor.buffer()->address(),         // input_tensor_address
+                intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
+                semaphore.at(core_idx).address(),         // out_ready_semaphore
+                semaphore.at(2).address(),                // batch_ready_semaphore
                 link,
                 num_links,
                 input_tensor_Wt / ring_size,                                                 // slice_Wt
@@ -304,12 +306,12 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_ids[core_idx], {core}, reader_rt_args);
 
             std::vector<uint32_t> writer_rt_args = {
-                intermediate_tensor.buffer()->address(),      // intermediate_tensor_address
-                output_tensor.buffer()->address(),            // output_tensor_address
-                drain_sync_core.x,                            // out_ready_sem_noc0_x
-                drain_sync_core.y,                            // out_ready_sem_noc0_y
-                semaphore.at(core_idx + link * 3).address(),  // out_ready_fwd_semaphore
-                semaphore.at(2 + link * 3).address(),         // batch_ready_semaphore
+                intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
+                output_tensor.buffer()->address(),        // output_tensor_address
+                drain_sync_core.x,                        // out_ready_sem_noc0_x
+                drain_sync_core.y,                        // out_ready_sem_noc0_y
+                semaphore.at(core_idx).address(),         // out_ready_fwd_semaphore
+                semaphore.at(2).address(),                // batch_ready_semaphore
                 link,
                 num_links,
                 input_tensor_Wt / ring_size,                                                 // slice_Wt
