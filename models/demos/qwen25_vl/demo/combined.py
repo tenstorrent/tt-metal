@@ -42,7 +42,7 @@ def test_qwen_vl_end_to_end(
 
     # Load model and processor
     model_name = os.environ.get("HF_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct")
-    assert "Qwen/Qwen2.5-VL-3B" in model_name, "This test uses only Qwen2.5-VL-3B for accuracy checking"
+    assert "Qwen2.5-VL-3B".lower() in model_name.lower(), "This test uses only Qwen2.5-VL-3B for accuracy checking"
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_name, torch_dtype="auto", device_map="auto")
     processor = AutoProcessor.from_pretrained(model_name)
 
