@@ -217,11 +217,7 @@ def tt_tensors_to_torch_tensors(
         # Untilize using singlecore since multicore version runs out of l1 memory (Issue #9022)
         tt_tensors_device = ttnn.untilize(tt_tensors_device, use_multicore=False)
 
-    tt_tensors_device = ttnn.to_torch(
-        tt_tensors_device, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=concat_dim), device=mesh_device
-    )
-
-    return tt_tensors_device
+    return torch.cat([t.to_torch() for t in ttnn.get_device_tensors(tt_tensors_device.cpu())], dim=concat_dim)
 
 
 def tt2torch_tensor(tt_tensor):
