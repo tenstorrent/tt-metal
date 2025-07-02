@@ -13,7 +13,6 @@ import cv2
 import numpy as np
 import orjson
 import requests
-import streamlit as st
 from streamlit_webrtc import VideoProcessorBase, webrtc_streamer
 
 # Configure the logger
@@ -140,7 +139,7 @@ class VideoProcessor(VideoProcessorBase):
         nms_thresh = 0.5
 
         # Load class names and plot bounding boxes
-        namesfile = "coco.names"
+        namesfile = "../../../../experimental/yolo_common/yolo_web_demo/coco.names"
         class_names = self.load_class_names(namesfile)
         image_final = self.plot_boxes_cv2(bgr_image, output, None, class_names)
 
@@ -151,9 +150,6 @@ class VideoProcessor(VideoProcessorBase):
 
         return av.VideoFrame.from_ndarray(image_final, format="bgr24")
 
-
-st.sidebar.image("TT.png", use_column_width=True)
-st.sidebar.image("GS.png", use_column_width=True)
 
 webrtc_streamer(
     key="example",

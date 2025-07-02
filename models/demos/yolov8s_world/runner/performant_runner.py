@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import torch.nn.functional as F
-
 import ttnn
 from models.demos.yolov8s_world.runner.performant_runner_infra import YOLOv8sWorldPerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -39,6 +37,7 @@ class YOLOv8sWorldPerformantRunner:
             self.input_mem_config,
         ) = self.runner_infra.setup_dram_sharded_input(device)
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
+        self._capture_yolov8s_world_trace_2cqs()
 
     def _capture_yolov8s_world_trace_2cqs(self):
         # Initialize the op event so we can write
@@ -88,8 +87,7 @@ class YOLOv8sWorldPerformantRunner:
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
         # TODO: Add in place support to ttnn to_memory_config
-        if self.input_tensor.is_sharded():
-            self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
+        self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
         ttnn.synchronize_device(self.device)
@@ -101,10 +99,7 @@ class YOLOv8sWorldPerformantRunner:
 
     def run(self, torch_input_tensor, check_pcc=False):
         n, c, h, w = torch_input_tensor.shape
-        torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
-        torch_input_tensor = F.pad(torch_input_tensor, (0, 29), mode="constant", value=0)
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-
+        tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
         output = self._execute_yolov8s_world_trace_2cqs_inference(tt_inputs_host)
         if check_pcc:
             torch_input_tensor = torch_input_tensor.reshape(n, h, w, c)
