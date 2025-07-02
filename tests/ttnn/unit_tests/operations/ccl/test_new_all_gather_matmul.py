@@ -304,7 +304,7 @@ def run_all_gather_impl(
         tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
         tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
         tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
-        eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor)
+        eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor, 1)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED ag: {output}"
 
@@ -380,6 +380,9 @@ def test_all_gather_matmul_async(
     all_gather_topology,
     num_iters,
 ):
+    if use_non_fused == False and all_gather_topology == ttnn.Topology.Linear:
+        pytest.skip("linear is not supported when using fused for all-gather")
+
     run_all_gather_impl(
         t3k_mesh_device,
         num_devices,
