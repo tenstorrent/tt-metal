@@ -17,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -320,6 +321,59 @@ TEST_F(DispatchFixture, IdleEthDRAMLoopbackSingleCore) {
             unit_tests_common::dram::test_dram::dram_single_core(this, devices_.at(id), dram_test_config);
         }
     }
+}
+
+// This test will hang on BH when both nocs use the same DRAM endpoint due to SYS-1419, hang can be reproduced by
+// increasing `num_iterations` DRAM arbiter seems to drop requests from one noc when both nocs are issuing requests to
+// the same DRAM endpoint at a fast rate.
+TEST_F(DispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
+    auto device = devices_.at(0);
+    tt_metal::Program program = tt_metal::CreateProgram();
+    CoreCoord core = {0, 0};
+
+    const uint32_t l1_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t dram_size = device->dram_size_per_channel();
+    const uint32_t num_drams = device->num_dram_channels();
+
+    constexpr uint32_t page_size = 2048;
+    constexpr uint32_t num_iterations = 1000;
+
+    const uint32_t brisc_base_addr = 8519744;
+    uint32_t ncrisc_base_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+
+    uint32_t brisc_num_pages_to_read = 43264;
+    uint32_t ncrisc_num_pages_to_read = ((brisc_base_addr - ncrisc_base_addr) / page_size) * num_drams;
+
+    tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_arbiter_hang.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+
+    tt_metal::SetRuntimeArgs(
+        program, brisc_kernel, core, {brisc_base_addr, page_size, l1_address, brisc_num_pages_to_read, num_iterations});
+
+    tt_metal::KernelHandle ncrisc_kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_arbiter_hang.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+
+    tt_metal::SetRuntimeArgs(
+        program,
+        ncrisc_kernel,
+        core,
+        {
+            ncrisc_base_addr,
+            page_size,
+            l1_address,
+            ncrisc_num_pages_to_read,
+            num_iterations,
+        });
+
+    this->RunProgram(device, program);
 }
 
 }  // namespace tt::tt_metal

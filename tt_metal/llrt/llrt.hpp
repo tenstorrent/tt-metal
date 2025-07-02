@@ -98,9 +98,6 @@ bool test_load_write_read_risc_binary(
     uint32_t processor_type_idx);
 void write_binary_to_address(const ll_api::memory& mem, chip_id_t chip_id, const CoreCoord& core, uint32_t address);
 
-// subchannel hard-coded to 0 for now
-CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id = 0);
-
 namespace internal_ {
 
 void wait_until_cores_done(

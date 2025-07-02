@@ -131,8 +131,8 @@ TEST(GetOptimalDramBankToLogicalWorkerAssignmentAPI, UnitMeshes) {
     std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
     auto devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
     for (auto& [_, dev] : devs) {
-        auto assignment = dev->get_optimal_dram_bank_to_logical_worker_assignment();
-        EXPECT_NO_THROW(dev->get_optimal_dram_bank_to_logical_worker_assignment());
+        EXPECT_NO_THROW(dev->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0));
+        EXPECT_NO_THROW(dev->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_1));
     }
 }
 

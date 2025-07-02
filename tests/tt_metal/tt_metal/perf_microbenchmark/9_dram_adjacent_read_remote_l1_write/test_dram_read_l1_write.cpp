@@ -362,8 +362,11 @@ uint32_t get_dram_bandwidth(tt::ARCH arch) {
 }
 
 void get_optimal_dram_bank_to_reader_assignment(
-    IDevice* device, std::vector<CoreCoord>& all_worker_cores_ordered, CoreRangeSet& all_worker_cores) {
-    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment();
+    IDevice* device,
+    std::vector<CoreCoord>& all_worker_cores_ordered,
+    CoreRangeSet& all_worker_cores,
+    tt_metal::NOC noc) {
+    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
     std::set<CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
         all_cores_set.insert(CoreRange(worker_core));
@@ -551,7 +554,8 @@ int main(int argc, char** argv) {
         std::vector<CoreCoord> all_dram_reader_cores_ordered;
         CoreRangeSet all_l1_receiver_cores;
         std::vector<CoreCoord> all_l1_writer_cores_ordered;
-        get_optimal_dram_bank_to_reader_assignment(device, all_dram_reader_cores_ordered, all_dram_reader_cores);
+        get_optimal_dram_bank_to_reader_assignment(
+            device, all_dram_reader_cores_ordered, all_dram_reader_cores, tt_metal::NOC::NOC_0);
 
         if (device->arch() == tt::ARCH::BLACKHOLE) {
             get_l1_writer_core_coords_blackhole(
