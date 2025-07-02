@@ -21,7 +21,6 @@ from tt_metal.tools.profiler.process_model_log import (
 from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 DECODER_OP_START_INDEX = 4
 DECODER_OP_END_INDEX = -23
@@ -81,7 +80,7 @@ MAX_TYPE = "max"
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": True,
         }
     ],
     indirect=True,
@@ -379,6 +378,7 @@ def load_perf_targets(galaxy_type):
     return perf_targets
 
 
+@pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
 # Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
@@ -405,7 +405,10 @@ def test_llama_TG_perf_device(
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    device_analysis_types = ["device_kernel_duration", "device_kernel_first_to_last_start"]
+    post_processed_results = run_device_perf(
+        command, subdir, num_iterations, cols, batch_size, device_analysis_types=device_analysis_types
+    )
     profiler.end(step_name)
     profiler.end("run")
 
@@ -781,6 +784,7 @@ def test_llama_TG_perf_device(
     assert all_passing
 
 
+@pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
 # Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch

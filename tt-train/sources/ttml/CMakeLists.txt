@@ -113,6 +113,7 @@ if(NOT TARGET Metalium::Metal)
     # Try to find the library
     find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(TTNN_LIBRARY NAMES "_ttnn.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+    find_library(TTNNCPP_LIBRARY NAMES "_ttnncpp.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
 
     if(TT_METAL_LIBRARY)
@@ -149,6 +150,20 @@ if(NOT TARGET Metalium::Metal)
     else()
         message(FATAL_ERROR "_ttnn.so not found in ${METALIUM_LIB_PATH}")
     endif()
+    if(TTNNCPP_LIBRARY)
+        add_library(Metalium::TTNNCPP SHARED IMPORTED)
+        set_target_properties(
+            Metalium::TTNNCPP
+            PROPERTIES
+                IMPORTED_LOCATION
+                    "${TTNNCPP_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES
+                    "${METALIUM_INCLUDE_DIRS}"
+        )
+        message(STATUS "Successfully found _ttnncpp.so at ${TTNNCPP_LIBRARY}")
+    else()
+        message(FATAL_ERROR "_ttnncpp.so not found in ${METALIUM_LIB_PATH}")
+    endif()
 else()
     message(STATUS "Metalium targets already exists")
 endif()
@@ -172,6 +187,7 @@ target_link_libraries(
         atomic
         Metalium::Metal
         Metalium::TTNN
+        Metalium::TTNNCPP
         Python3::Python
         fmt::fmt-header-only
         magic_enum::magic_enum
