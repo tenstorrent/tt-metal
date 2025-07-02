@@ -1588,7 +1588,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
 
     auto const& addr_gen_rt_args = ttnn::ccl::legacy_emit_address_generator_runtime_args(this->device, input_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
-    for (auto const& arg : addr_gen_rt_args) {
+    for ([[maybe_unused]] auto const& arg : addr_gen_rt_args) {
         log_trace(tt::LogOp, "ccl_send_reader arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);
         logged_arg_idx++;
     }
@@ -1749,7 +1749,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
 
     auto const& addr_gen_rt_args = ttnn::ccl::legacy_emit_address_generator_runtime_args(this->device, output_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
-    for (auto const& arg : addr_gen_rt_args) {
+    for ([[maybe_unused]] auto const& arg : addr_gen_rt_args) {
         log_trace(tt::LogOp, "ccl_send_writer arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);
         logged_arg_idx++;
     }
