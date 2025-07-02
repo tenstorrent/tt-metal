@@ -36,8 +36,8 @@ namespace ttnn {
 using namespace ccl;
 
 struct llama_config {
-    CoreRange sem_drain_core_3 = CoreRange({1, 0}, {1, 0});
-    CoreRange sem_drain_core_4 = CoreRange({3, 0}, {3, 0});
+    CoreRange sem_drain_core_3 = CoreRange({5, 3}, {5, 3});
+    CoreRange sem_drain_core_4 = CoreRange({5, 3}, {5, 3});
     CoreRange nlp_only_core_range_1 = CoreRange({1, 1}, {3, 1});  // cores that are used for NLP op only
     CoreRange nlp_only_core_range_2 = CoreRange({1, 2}, {2, 2});
     uint32_t num_cores_input_tensor = 8;
@@ -139,9 +139,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
     CoreRangeSet sender_worker_core_range;
     if (num_links == 4) {
-        sender_worker_core_range = CoreRangeSet(CoreRange({3, 0}, {3, num_links - 1}));
+        std::vector<CoreRange> sender_worker_core_range_vector = {CoreRange({5, 3}, {6, 3}), CoreRange({2, 8}, {3, 8})};
+        sender_worker_core_range = CoreRangeSet(sender_worker_core_range_vector);
     } else {
-        sender_worker_core_range = CoreRangeSet(CoreRange({1, 0}, {num_links, 0}));
+        std::vector<CoreRange> sender_worker_core_range_vector = {CoreRange({5, 3}, {6, 3}), CoreRange({2, 8}, {2, 8})};
+        sender_worker_core_range = CoreRangeSet(sender_worker_core_range_vector);
     }
     auto sender_worker_cores = corerange_to_cores(sender_worker_core_range, num_links, true);
     // Tensor Info
