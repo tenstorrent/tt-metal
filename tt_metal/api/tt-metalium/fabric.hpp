@@ -117,9 +117,9 @@ size_t get_number_of_available_routing_planes(
 enum class FabricMuxChannelType : uint8_t { FULL_SIZE_CHANNEL = 0, HEADER_ONLY_CHANNEL = 1 };
 
 class FabricMuxConfig {
-    static constexpr uint8_t default_num_buffers = 8;
-    static constexpr size_t default_num_full_size_channel_iters = 1;
-    static constexpr size_t default_num_iters_between_teardown_checks = 32;
+    inline static constexpr uint8_t default_num_buffers = 8;
+    inline static constexpr size_t default_num_full_size_channel_iters = 1;
+    inline static constexpr size_t default_num_iters_between_teardown_checks = 32;
 
 public:
     FabricMuxConfig(
