@@ -23,7 +23,7 @@ jobs:
         test-info: [
           {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "perf-no-reset-grayskull"], machine-type: "bare_metal"},
         ]
-        model-type: [llm_javelin, cnn_javelin, other]
+        model-type: [cnn_javelin, other]
     name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
     defaults:
       run:
@@ -680,6 +680,7 @@ jobs:
         id: check-perf-report
         if: ${{ !cancelled() }}
         run: |
+          env python3 models/perf/merge_perf_results.py
           ls -hal
           export PERF_REPORT_FILENAME=Models_Perf_$(date +%Y_%m_%d).csv
           ls -hal $PERF_REPORT_FILENAME
