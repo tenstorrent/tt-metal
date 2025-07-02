@@ -38,6 +38,7 @@ void kernel_main() {
     constexpr bool ascending = get_compile_time_arg_val(16) == 1;
 
     const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(17));
+    const uint32_t sem_barrier_addr = get_semaphore(get_compile_time_arg_val(18));
 
     DPRINT << "READER: "
            << " grid_x: " << compute_with_storage_grid_size_x << " grid_y: " << compute_with_storage_grid_size_y
@@ -150,6 +151,18 @@ void kernel_main() {
                 if (i >= global_tile_start && i < global_tile_end && j >= global_tile_start && j < global_tile_end) {
                     // Nothing
                 } else {
+                    constexpr uint32_t start_core_id = 0;
+                    constexpr uint32_t leader_core_id = start_core_id;
+
+                    // TODO: PUT BARRIER HERE
+                    sort_barrier(
+                        physical_core_lookup_table_cb_index,
+                        sem_barrier_addr,
+                        core_id,
+                        leader_core_id,
+                        number_of_cores_used,
+                        start_core_id);
+
                     const uint32_t other_core_id = j / number_of_tiles_per_core;
                     const std::pair<uint32_t, uint32_t> remote_core_physical =
                         get_core_physical_coordinates(other_core_id, physical_core_lookup_table_cb_index);
@@ -172,10 +185,8 @@ void kernel_main() {
                     DPRINT << "READER: Tiles have been exchanged" << ENDL();
                 }
                 // }
+
             }  // sub
-
-            // TODO: PUT BARRIER HERE
-
         }  // stages
 
         DPRINT << "READER: AFTER LOGIC:" << ENDL();  // TODO: Remove
