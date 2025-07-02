@@ -83,7 +83,7 @@ Tests:
     patterns:
       - type: unidirectional_linear_multicast
 
-  - name: "HalfRingMulticast"
+  - name: "FullRingMulticast"
     fabric_setup:
       topology: Ring
 
@@ -95,6 +95,19 @@ Tests:
 
     patterns:
       - type: full_ring_multicast
+
+  - name: "HalfRingMulticast"
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: half_ring_multicast
 
   - name: "FullDevicePairingLinear"
     fabric_setup:

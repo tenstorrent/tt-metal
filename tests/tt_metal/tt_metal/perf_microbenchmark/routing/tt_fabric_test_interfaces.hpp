@@ -60,10 +60,11 @@ public:
         const FabricNodeId& src_node_id) const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_unidirectional_linear_mcast_hops(
         const FabricNodeId& src_node_id, uint32_t dim) const = 0;
-    virtual std::unordered_map<RoutingDirection, uint32_t> get_full_ring_mcast_hops(
+    virtual std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(
         const FabricNodeId& src_node_id,
         const FabricNodeId& dst_node_forward_id,
-        const FabricNodeId& dst_node_backward_id) const = 0;
+        const FabricNodeId& dst_node_backward_id,
+        const std::string& patter_type) const = 0;
     virtual std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_multicast_hops(
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
     virtual FabricNodeId get_random_unicast_destination(FabricNodeId src_node_id, std::mt19937& gen) const = 0;

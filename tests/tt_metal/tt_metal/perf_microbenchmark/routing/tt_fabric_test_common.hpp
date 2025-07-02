@@ -288,7 +288,7 @@ public:
             ring_destinations.push_back(get_fabric_node_id(current_coord));
         }
 
-        log_info(
+        log_debug(
             tt::LogTest,
             "src_node: {}, ring_destinations: {}, total_hops: {}",
             src_node_id,
@@ -492,10 +492,11 @@ public:
         return hops;
     }
 
-    std::unordered_map<RoutingDirection, uint32_t> get_full_ring_mcast_hops(
+    std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(
         const FabricNodeId& src_node_id,
         const FabricNodeId& dst_node_forward_id,
-        const FabricNodeId& dst_node_backward_id) const override {
+        const FabricNodeId& dst_node_backward_id,
+        const std::string& patter_type) const override {
         std::unordered_map<RoutingDirection, uint32_t> hops;
         for (const auto& direction : FabricContext::routing_directions) {
             hops[direction] = 0;
@@ -504,10 +505,26 @@ public:
         auto direction_forward = get_forwarding_direction(src_node_id, dst_node_forward_id);
         auto direction_backward = get_forwarding_direction(src_node_id, dst_node_backward_id);
 
+        auto num_forward_hops = 0;
+        auto num_backward_hops = 0;
         // TODO: fix for 6U since this is not a valide config for it.
         uint32_t full_hop_count = mesh_shape_[NS_DIM] * mesh_shape_[EW_DIM] - 1;
-        hops[direction_forward] = full_hop_count;
-        hops[direction_backward] = full_hop_count;
+
+        if (patter_type == "full_ring_multicast") {
+            num_forward_hops = full_hop_count;
+            num_backward_hops = full_hop_count;
+        } else if (patter_type == "half_ring_multicast") {
+            num_forward_hops = tt::div_up(full_hop_count, 2);
+            num_backward_hops = full_hop_count - num_forward_hops;
+            if (src_node_id.chip_id % 2 == 0) {
+                std::swap(num_forward_hops, num_backward_hops);
+            }
+        } else {
+            TT_THROW("high level pattern tyep {}  not supported in full/half ring test", patter_type);
+        }
+
+        hops[direction_forward] = num_forward_hops;
+        hops[direction_backward] = num_backward_hops;
 
         return hops;
     }

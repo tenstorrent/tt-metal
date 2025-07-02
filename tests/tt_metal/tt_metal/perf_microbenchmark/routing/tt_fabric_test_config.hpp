@@ -205,7 +205,8 @@ const std::vector<std::string> supported_high_level_patterns = {
     "full_device_random_pairing",
     "all_to_all_multicast",
     "unidirectional_linear_multicast",
-    "full_ring_multicast"};
+    "full_ring_multicast",
+    "half_ring_multicast"};
 
 inline ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_path) {
     std::ifstream yaml_config(yaml_config_path);
@@ -964,8 +965,8 @@ private:
                 expand_all_to_all_multicast(test, defaults);
             } else if (pattern.type == "unidirectional_linear_multicast") {
                 expand_unidirectional_linear_multicast(test, defaults);
-            } else if (pattern.type == "full_ring_multicast") {
-                expand_full_ring_multicast(test, defaults);
+            } else if (pattern.type == "full_ring_multicast" || pattern.type == "half_ring_multicast") {
+                expand_full_or_half_ring_multicast(test, defaults, pattern.type);
             } else {
                 TT_THROW("Unsupported pattern type: {}", pattern.type);
             }
@@ -1028,8 +1029,9 @@ private:
         }
     }
 
-    void expand_full_ring_multicast(TestConfig& test, const TrafficPatternConfig& base_pattern) {
-        log_info(LogTest, "Expanding full_ring_multicast pattern for test: {}", test.name);
+    void expand_full_or_half_ring_multicast(
+        TestConfig& test, const TrafficPatternConfig& base_pattern, const std::string& patter_type) {
+        log_info(LogTest, "Expanding full_or_half_ring_multicast pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand all_to_all_multicast because no devices were found.");
 
@@ -1050,7 +1052,8 @@ private:
                 dst_node_backward = FabricNodeId{src_node.mesh_id, src_node.chip_id - 1};
             }
 
-            auto hops = this->route_manager_.get_full_ring_mcast_hops(src_node, dst_node_forward, dst_node_backward);
+            auto hops = this->route_manager_.get_full_or_half_ring_mcast_hops(
+                src_node, dst_node_forward, dst_node_backward, patter_type);
 
             TrafficPatternConfig specific_pattern;
             specific_pattern.destination = DestinationConfig{.hops = hops};
