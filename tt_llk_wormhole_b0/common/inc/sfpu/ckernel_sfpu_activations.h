@@ -20,7 +20,7 @@ struct ActivationImpl;
 template <bool APPROXIMATION_MODE>
 struct ActivationImpl<APPROXIMATION_MODE, ActivationType::Celu>
 {
-    static inline void apply(sfpi::vFloat& v, uint param0, uint param1)
+    static inline void apply(sfpi::vFloat& v, float param0, float param1)
     {
         // All params are in FP16_B format
         // param0 = alpha
@@ -31,14 +31,11 @@ struct ActivationImpl<APPROXIMATION_MODE, ActivationType::Celu>
 
         v_if (v < 0.0f)
         {
-            sfpi::vFloat exp_val      = _calculate_exponential_body_<APPROXIMATION_MODE>(v * alpha_recip);
-            sfpi::vFloat result       = v * exp_val;
-            sfpi::vFloat result_alpha = result * alpha;
-            v                         = result_alpha - 1;
-        }
-        v_elseif (v == 0.0f)
-        {
-            v = 0.0f;
+            // Compute exp(x / alpha)
+            sfpi::vFloat exp_val = _calculate_exponential_body_<APPROXIMATION_MODE>(v * alpha_recip);
+
+            // Compute CELU: alpha * (exp(x / alpha) - 1)
+            v = alpha * (exp_val - 1.0f);
         }
         v_endif;
     }
@@ -46,13 +43,13 @@ struct ActivationImpl<APPROXIMATION_MODE, ActivationType::Celu>
 
 // Dispatch wrapper function
 template <bool APPROXIMATION_MODE, ActivationType ACTIVATION_TYPE>
-inline void apply_activation(sfpi::vFloat& v, uint param0, uint param1)
+inline void apply_activation(sfpi::vFloat& v, float param0, float param1)
 {
     ActivationImpl<APPROXIMATION_MODE, ACTIVATION_TYPE>::apply(v, param0, param1);
 }
 
 template <bool APPROXIMATION_MODE, ActivationType ACTIVATION_TYPE, int ITERATIONS = 8>
-inline void _calculate_activation_(uint param0, uint param1)
+inline void _calculate_activation_(float param0, float param1)
 {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
