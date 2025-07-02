@@ -112,7 +112,7 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
 });
 // Optimized string concatenation utility to avoid multiple allocations
 template <typename... Args>
-inline void append_with_separator(std::string& target, const std::string& separator, Args&&... args) {
+inline void append_with_separator(std::string& target, std::string_view separator, Args&&... args) {
     // Calculate total size needed
     size_t total_size = target.size();
     auto add_size = [&total_size, &separator](const auto& arg) {
@@ -1270,14 +1270,16 @@ private:
         std::map<FabricNodeId, std::vector<ParsedTrafficPatternConfig>> generated_senders;
 
         for (const auto& pair : pairs) {
-            FabricNodeId src_node = pair.first;
-            FabricNodeId dst_node = pair.second;
+            const auto& src_node = pair.first;
+            const auto& dst_node = pair.second;
 
             ParsedTrafficPatternConfig specific_pattern;
             specific_pattern.destination = ParsedDestinationConfig{.device = dst_node};
             specific_pattern.ftype = ChipSendType::CHIP_UNICAST;
 
-            generated_senders[src_node].emplace_back(merge_patterns(base_pattern, specific_pattern));
+            // Use try_emplace to avoid creating empty vectors unnecessarily
+            auto [it, inserted] = generated_senders.try_emplace(src_node);
+            it->second.emplace_back(merge_patterns(base_pattern, specific_pattern));
         }
 
         test.senders.reserve(test.senders.size() + generated_senders.size());
