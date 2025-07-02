@@ -168,7 +168,7 @@ class TtBertEncoder(LightweightModule):
         return ffn_out_add_and_norm
 
 
-class PytorchBertEncoder(LightweightModule):
+class PytorchBertEncoder(torch.nn.Module):
     def __init__(self, hugging_face_reference_model):
         super().__init__()
         self.bert_encoder = hugging_face_reference_model.bert.encoder.layer[0]

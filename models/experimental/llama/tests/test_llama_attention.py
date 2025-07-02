@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 import pytest
 import torch
 from loguru import logger
@@ -18,7 +17,7 @@ from models.utility_functions import (
 from models.llama.tt.llama_attention import TtLlamaAttention
 
 
-class PytorchLlamaAttentionModel(LightweightModule):
+class PytorchLlamaAttentionModel(torch.nn.Module):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
         self.attention = hf_reference_model.model.layers[layer_num].self_attn

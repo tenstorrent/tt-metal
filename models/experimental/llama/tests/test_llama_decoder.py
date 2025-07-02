@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 import pytest
 import torch
 import ttnn
@@ -18,7 +17,7 @@ from models.utility_functions import (
 from models.experimental.llama.tt.llama_decoder import TtLlamaDecoderLayer
 
 
-class PytorchLlamaDecoderModel(LightweightModule):
+class PytorchLlamaDecoderModel(torch.nn.Module):
     def __init__(self, hf_reference_model, decoder_id):
         super().__init__()
         self.decoder = hf_reference_model.model.layers[decoder_id]
