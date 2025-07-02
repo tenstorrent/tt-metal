@@ -380,6 +380,9 @@ void MetalContext::teardown_fabric_config() {
     this->fabric_config_ = tt_metal::FabricConfig::DISABLED;
     this->cluster_->configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
+    if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
+        rtoptions_.set_erisc_iram_enabled(false);
+    }
     this->get_control_plane().clear_fabric_context();
 }
 
@@ -410,6 +413,8 @@ void MetalContext::set_fabric_config(
         this->teardown_fabric_config();
         return;
     }
+
+    rtoptions_.set_erisc_iram_enabled(true);
 
     if (num_routing_planes.has_value() && num_routing_planes.value() < this->num_fabric_active_routing_planes_) {
         log_warning(
