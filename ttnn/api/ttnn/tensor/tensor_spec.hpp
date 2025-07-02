@@ -31,11 +31,11 @@ public:
 
     Tile tile() const { return tensor_layout_.get_tile(); }
 
-    TensorSpec sharded_by_dims(
+    TensorSpec sharded_across_dims(
         tt::stl::Span<const int32_t> dims,
         CoreRangeSet grid,
         ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
-    TensorSpec sharded_across_dims(
+    TensorSpec sharded_across_dims_except(
         tt::stl::Span<const int32_t> dims,
         CoreRangeSet grid,
         ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;

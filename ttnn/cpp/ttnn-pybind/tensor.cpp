@@ -203,22 +203,6 @@ void tensor_mem_config_module(py::module& m_tensor) {
                 Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
             )doc")
         .def(
-            "sharded_by_dims",
-            [](const TensorSpec& self,
-               const std::vector<int32_t>& dims,
-               CoreRangeSet grid,
-               ShardOrientation orientation) {
-                return self.sharded_by_dims(tt::stl::Span<const int32_t>(dims), std::move(grid), orientation);
-            },
-            py::arg("dims"),
-            py::arg("grid"),
-            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
-            R"doc(
-                Shard tensor by dimensions.
-                This guarantees that the data along the specified dimensions will get stored within the same core.
-                Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
-            )doc")
-        .def(
             "sharded_across_dims",
             [](const TensorSpec& self,
                const std::vector<int32_t>& dims,
@@ -231,7 +215,24 @@ void tensor_mem_config_module(py::module& m_tensor) {
             py::arg("orientation") = ShardOrientation::ROW_MAJOR,
             R"doc(
                 Shard tensor across dimensions.
-                This guarantees that the data along the specified dimensions will get stored across multiple cores.
+                This splits the data along the specified dimensions across multiple cores.
+                Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
+            )doc")
+        .def(
+            "sharded_across_dims_except",
+            [](const TensorSpec& self,
+               const std::vector<int32_t>& dims,
+               CoreRangeSet grid,
+               ShardOrientation orientation) {
+                return self.sharded_across_dims_except(
+                    tt::stl::Span<const int32_t>(dims), std::move(grid), orientation);
+            },
+            py::arg("dims"),
+            py::arg("grid"),
+            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            R"doc(
+                Shard tensor by all except the specified dimensions.
+                This guarantees that the data along the specified dimensions will get stored within the same core.
                 Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
             )doc")
         .def(
