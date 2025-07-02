@@ -148,7 +148,7 @@ ParallelConfig determine_parallel_config(
     uint32_t effective_tile_height = is_shard_height_tile_multiple ? tt::constants::TILE_HEIGHT : 1;
     uint32_t effective_tile_width = tt::constants::TILE_WIDTH;
     uint32_t out_nhw_ntiles = tt::div_up(batch_size * output_height * output_width, effective_tile_height);
-    log_info(
+    log_debug(
         tt::LogOp,
         "Conv2d: out_nhw_ntiles: {}, batch_size: {}, output_height: {}, output_width: {}, effective_tile_height {}",
         out_nhw_ntiles,
@@ -188,7 +188,7 @@ ParallelConfig determine_parallel_config(
         uint32_t cores_y = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_c : num_cores_nhw;
         CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
         grid = CoreRangeSet({core_range});
-        log_info(
+        log_debug(
             tt::LogOp,
             "Conv2d: Block Sharded Layout with cores_x: {}, cores_y: {}, out_nhw_ntiles: {}",
             cores_x,
@@ -370,7 +370,7 @@ static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
             break;
         }
     }
-    log_info(
+    log_debug(
         LogOp,
         "Determined subblock size: {}x{} for block size {}x{}, split_reader_enabled: {}, fp32_accum: {}",
         subblock_h,

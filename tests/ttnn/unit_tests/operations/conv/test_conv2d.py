@@ -9,46 +9,46 @@ import torch
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize("stride", [1])
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("stride", [2])
+@pytest.mark.parametrize("batch_size", [2])
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, shard_layout, config",
     (
-        # (353, 384, 8, 8, WS, None),
-        (64, 64, 10, 10, BS, None),
-        # (16, 16, 256, 256, HS, None),
+        (353, 384, 8, 8, WS, None),
+        (512, 512, 32, 32, BS, None),
+        (16, 16, 256, 256, HS, {"act_block_h": 32}),
     ),
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat16],
+    [None, ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "output_dtype",
-    [ttnn.bfloat16],
+    [ttnn.bfloat8_b, ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "input_dtype",
-    [ttnn.bfloat16],
+    [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32],
 )
 @pytest.mark.parametrize(
     "fp32_accum",
-    [False],
+    [True, False],
 )
 @pytest.mark.parametrize(
     "packer_l1_acc",
-    [True],
+    [False, True],
 )
 @pytest.mark.parametrize(
     "filter, padding",
     [
-        [3, (0, 0)],
-        # [1, 0],
-        # [5, (2, 4, 3, 5)],
+        [3, (1, 2, 2, 3)],
+        [1, 0],
+        [5, (2, 4, 3, 5)],
     ],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
-@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_conv_features(
     device,
     torch_tensor_map,

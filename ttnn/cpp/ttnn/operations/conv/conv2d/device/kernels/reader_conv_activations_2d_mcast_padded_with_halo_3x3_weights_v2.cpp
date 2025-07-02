@@ -194,8 +194,10 @@ void kernel_main() {
 
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
+                    DPRINT << "wait tilized data: " << act_w_outer_i << ENDL();
                     // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
                     cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
+                    DPRINT << "done wait tilized data: " << act_w_outer_i << ENDL();
 
                     // Now we have the block in the CB address, we can mcast to dests!
                     uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
@@ -224,7 +226,9 @@ void kernel_main() {
                         act_mcast_receiver_semaphore_noc_addr,
                         act_mcast_num_cores + 1);
 
+                    DPRINT << "mcast noc sem wait" << ENDL();
                     noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+                    DPRINT << "done mcast act: " << act_w_outer_i << ENDL();
                 } else {
                     DPRINT << "receive act: " << act_w_outer_i << ENDL();
                     // MCAST RECEIVER: receive entire tilized input from sender core
@@ -248,8 +252,10 @@ void kernel_main() {
 
                     // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+                    DPRINT << "done receive act: " << act_w_outer_i << ENDL();
                 }
                 cb_push_back(cb_id_act, act_block_num_tiles);
+                DPRINT << "pushed block for compute: " << act_w_outer_i << ENDL();
             }  // act_w_num_outer
             cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
         }
