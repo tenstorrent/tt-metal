@@ -1,4 +1,3 @@
-
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -7,7 +6,7 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 #include <magic_enum/magic_enum.hpp>
-#include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "cpp/ttnn/operations/eltwise/ternary/where/where.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"

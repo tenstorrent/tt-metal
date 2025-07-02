@@ -329,6 +329,7 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_topk.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_trigonometry.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_typecast.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_where.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_defs.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary.h
@@ -349,6 +350,7 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_reduce.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_untilize.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_ternary_sfpu.h
             tools/profiler/kernel_profiler.hpp
             # Kernel sources
             impl/dispatch/kernels/cq_dispatch.cpp
