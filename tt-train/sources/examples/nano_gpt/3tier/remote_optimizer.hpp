@@ -7,6 +7,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
 #include "optimizers/optimizer_base.hpp"
+#include "socket_manager.hpp"
 
 using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
 
@@ -40,5 +41,7 @@ private:
     size_t m_steps{0};
     SortedParameters m_sorted_parameters;
     ttml::core::distributed::Rank m_aggregator_rank{0};
-    std::shared_ptr<ttml::autograd::DistributedContext> m_distributed_ctx;
+    std::shared_ptr<ttml::core::distributed::DistributedContext> m_distributed_ctx;
+
+    SocketManager m_socket_manager;
 };

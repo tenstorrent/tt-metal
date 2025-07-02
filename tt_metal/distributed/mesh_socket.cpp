@@ -23,6 +23,12 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
         "{} must only be used for communication between different host ranks, not within the same rank.",
         __func__);
 
+    fmt::print(
+        "Mesh socket on rank {} with sender rank {} and receiver rank {} is being created.\n",
+        *context->rank(),
+        *config.sender_rank,
+        *config.receiver_rank);
+
     bool is_sender = context->rank() == config.sender_rank;
     if (is_sender) {
         socket_endpoint_type_ = SocketEndpoint::SENDER;
@@ -32,7 +38,18 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
         config_buffer_ = create_socket_config_buffer(device, config, socket_endpoint_type_);
         data_buffer_ = create_socket_data_buffer(device, config);
     }
+    fmt::println(
+        "Synchronizing socket on rank {} with sender rank {} and receiver rank {}.",
+        *context->rank(),
+        *config.sender_rank,
+        *config.receiver_rank);
     this->connect_with_peer(context);
+
+    fmt::println(
+        "Socket on rank {} with sender rank {} and receiver rank {} is ready.",
+        *context->rank(),
+        *config.sender_rank,
+        *config.receiver_rank);
 }
 
 void MeshSocket::connect_with_peer(std::shared_ptr<multihost::DistributedContext> context) {

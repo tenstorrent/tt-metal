@@ -18,6 +18,7 @@
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
 #include "datasets/utils.hpp"
+#include "fmt/base.h"
 #include "models/common/transformer_common.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
@@ -512,8 +513,9 @@ int main(int argc, char **argv) {
         auto &ctx = ttml::autograd::ctx();
         ctx.initialize_distributed_context(argc, argv);
 
-        auto &distributed_ctx = ctx.get_distributed_context();
-        fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx.size(), *distributed_ctx.rank());
+        auto distributed_ctx = ctx.get_distributed_context();
+        fmt::print(
+            "Size {}, Rank {}: Initializing MPI context\n", distributed_ctx->size(), distributed_ctx->rank().get());
 
         // disable wandb for now in case of mpi example
         enable_wandb = false;
@@ -607,7 +609,7 @@ int main(int argc, char **argv) {
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
     if (config.enable_mpi) {
-        int rank = *ttml::autograd::ctx().get_distributed_context().rank();
+        int rank = ttml::autograd::ctx().get_distributed_context()->rank().get();
         auto seed = config.seed + static_cast<uint32_t>(rank);
         ttml::autograd::ctx().set_seed(seed);
     }
@@ -746,7 +748,8 @@ int main(int argc, char **argv) {
     std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.vocab_size; }) {
-                arg.vocab_size = round_up_to_tile(tokenizer->get_vocab_size(), (device_config.enable_tp ? num_devices : 1U) * 32U);
+                arg.vocab_size =
+                    round_up_to_tile(tokenizer->get_vocab_size(), (device_config.enable_tp ? num_devices : 1U) * 32U);
             } else {
                 throw std::runtime_error(
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
@@ -834,6 +837,7 @@ int main(int argc, char **argv) {
     auto select_optimizer =
         [&model, &adamw_params, &config](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (config.enable_mpi) {
+            fmt::print("Using RemoteOptimizer with {} workers\n", config.num_mh_workers);
             return std::make_unique<RemoteOptimizer>(get_model_parameters(model), config.num_mh_workers);
         } else if (use_moreh_adamw) {
             return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
@@ -842,7 +846,9 @@ int main(int argc, char **argv) {
         }
     };
 
+    fmt::println("before select optimizer");
     auto optimizer = select_optimizer(config.use_moreh_adamw);
+    fmt::println("after select optimizer");
     auto scheduler = schedule_func(optimizer.get(), config.max_steps);
 
     if (config.enable_mpi) {
@@ -925,7 +931,7 @@ int main(int argc, char **argv) {
                 scheduler->step();
                 auto global_step = optimizer->get_steps();
                 if (config.enable_mpi) {
-                    fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context().rank());
+                    fmt::print("[Rank {}] ", ttml::autograd::ctx().get_distributed_context()->rank().get());
                 }
                 fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 loss_meter.update(gradient_accumulator_helper.average_loss());
@@ -981,9 +987,9 @@ int main(int argc, char **argv) {
 
     if (config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
-        auto &distributed_ctx = ctx.get_distributed_context();
-        distributed_ctx.barrier();
-        fmt::print("Rank {}: Finalizing MPI context\n", *distributed_ctx.rank());
+        auto distributed_ctx = ctx.get_distributed_context();
+        distributed_ctx->barrier();
+        fmt::print("Rank {}: Finalizing MPI context\n", distributed_ctx->rank().get());
     }
 
     if (enable_wandb) {
