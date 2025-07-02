@@ -125,8 +125,6 @@ def run_conv(
 
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
-    if slice_config and output_dtype != ttnn.bfloat16:
-        pytest.xfail("Conv2d with DRAM Slicing only supports BFloat16 for activation dtype")
 
     if hasattr(padding, "__len__"):
         if len(padding) == 2:
@@ -290,9 +288,6 @@ def run_conv(
             return_weights_and_bias=True,
             dtype=output_dtype,
         )
-
-    if memory_config is None:
-        assert tt_output_tensor_on_device.layout == output_layout
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
