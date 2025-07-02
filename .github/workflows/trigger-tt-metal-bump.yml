@@ -1,0 +1,44 @@
+name: Trigger tt-metal CI
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  trigger-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send dispatch event to tt-metal
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          retries: 3
+          retry-exempt-status-codes: 400,401,403,404,422
+          script: |
+            const payload = {
+              event_type: 'trigger-llk-update',
+              client_payload: {
+                source: 'tt-llk',
+                ref: context.ref,
+                sha: context.sha,
+                workflow: context.workflow,
+                actor: context.actor
+              }
+            };
+            console.log('🚀 Triggering CI for tenstorrent/tt-metal...');
+            try {
+              await github.rest.repos.createDispatchEvent({
+                owner: 'tenstorrent',
+                repo: 'tt-metal',
+                ...payload
+              });
+              console.log('✅ Successfully triggered CI for tenstorrent/tt-metal');
+            } catch (error) {
+              console.error('❌ Failed to trigger dispatch:', error.message);
+              throw error;
+            }
