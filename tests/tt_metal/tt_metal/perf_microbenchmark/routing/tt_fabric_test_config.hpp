@@ -201,7 +201,11 @@ private:
 const std::string no_default_test_yaml_config = "";
 
 const std::vector<std::string> supported_high_level_patterns = {
-    "all_to_all_unicast", "full_device_random_pairing", "all_to_all_multicast", "unidirectional_linear_multicast"};
+    "all_to_all_unicast",
+    "full_device_random_pairing",
+    "all_to_all_multicast",
+    "unidirectional_linear_multicast",
+    "full_ring_multicast"};
 
 inline ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_path) {
     std::ifstream yaml_config(yaml_config_path);
@@ -960,6 +964,8 @@ private:
                 expand_all_to_all_multicast(test, defaults);
             } else if (pattern.type == "unidirectional_linear_multicast") {
                 expand_unidirectional_linear_multicast(test, defaults);
+            } else if (pattern.type == "full_ring_multicast") {
+                expand_full_ring_multicast(test, defaults);
             } else {
                 TT_THROW("Unsupported pattern type: {}", pattern.type);
             }
@@ -1017,6 +1023,47 @@ private:
                 specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
 
                 auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
+                test.senders.push_back(SenderConfig{.device = src_node, .patterns = {merged_pattern}});
+            }
+        }
+    }
+
+    void expand_full_ring_multicast(TestConfig& test, const TrafficPatternConfig& base_pattern) {
+        log_info(LogTest, "Expanding full_ring_multicast pattern for test: {}", test.name);
+        std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
+        TT_FATAL(!devices.empty(), "Cannot expand all_to_all_multicast because no devices were found.");
+
+        for (const auto& src_node : devices) {
+            bool is_first_chip = src_node.chip_id == 0;
+            bool is_last_chip = src_node.chip_id == devices.size() - 1;
+            FabricNodeId dst_node_forward = src_node;
+            FabricNodeId dst_node_backward = src_node;
+            // TODO: fix for 6U since this is not a valide config for it.
+            if (is_first_chip) {
+                dst_node_forward = FabricNodeId{src_node.mesh_id, src_node.chip_id + 1};
+                dst_node_backward = FabricNodeId{src_node.mesh_id, devices.size() - 1};
+            } else if (is_last_chip) {
+                dst_node_forward = FabricNodeId{src_node.mesh_id, 0};
+                dst_node_backward = FabricNodeId{src_node.mesh_id, src_node.chip_id - 1};
+            } else {
+                dst_node_forward = FabricNodeId{src_node.mesh_id, src_node.chip_id + 1};
+                dst_node_backward = FabricNodeId{src_node.mesh_id, src_node.chip_id - 1};
+            }
+
+            auto hops = this->route_manager_.get_full_ring_mcast_hops(src_node, dst_node_forward, dst_node_backward);
+
+            TrafficPatternConfig specific_pattern;
+            specific_pattern.destination = DestinationConfig{.hops = hops};
+            specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
+
+            auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
+
+            auto it = std::find_if(
+                test.senders.begin(), test.senders.end(), [&](const SenderConfig& s) { return s.device == src_node; });
+
+            if (it != test.senders.end()) {
+                it->patterns.push_back(merged_pattern);
+            } else {
                 test.senders.push_back(SenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
         }
