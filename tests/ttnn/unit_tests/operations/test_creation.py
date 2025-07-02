@@ -272,12 +272,13 @@ def test_arange_defaults():
 
     output_tensor = ttnn.arange(start, end, step)
     assert output_tensor.shape == [width_dim]
-    assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
-    assert output_tensor.dtype == ttnn.bfloat16
-    assert output_tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG
 
     output_tensor = ttnn.arange(end)
     assert output_tensor.shape == [end]
+
+    output_tensor = ttnn.arange(start, end)
+    assert output_tensor.shape == [end - start]
+
     assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     assert output_tensor.dtype == ttnn.bfloat16
     assert output_tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG

@@ -306,7 +306,7 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
                const Layout layout) -> ttnn::Tensor {
                 return self(start, end, step, dtype, device, memory_config, layout);
             },
-            py::arg("start") = 0,
+            py::arg("start"),
             py::arg("end"),
             py::arg("step") = 1,
             py::kw_only(),
