@@ -93,15 +93,6 @@ def test_demo(device, source, model_type, res, use_weights_from_ultralytics):
             preds = model(im)
         else:
             ttnn_im = im.clone()
-            n, c, h, w = ttnn_im.shape
-            if c == 3:
-                c = 8
-            input_mem_config = ttnn.create_sharded_memory_config(
-                [n, c, h, w],
-                ttnn.CoreGrid(x=8, y=8),
-                ttnn.ShardStrategy.HEIGHT,
-            )
-
             preds = performant_runner.run(ttnn_im)
             preds = ttnn.to_torch(preds, dtype=torch.float32)
         results = postprocess(preds, im, im0s, batch, names)[0]

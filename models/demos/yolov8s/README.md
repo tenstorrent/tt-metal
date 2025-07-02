@@ -26,6 +26,7 @@ Resource link - [source](https://github.com/ultralytics/ultralytics/blob/main/ul
 - The entry point to the yolov8s is located at:`models/demos/yolov8s/tt/ttnn_yolov8s.py`
 - Batch Size :1
 - Supported Input Resolution - (640,640) (Height,Width)
+- Dataset used for evaluation - **coco-2017**
 
 ### How to Run:
 
@@ -51,6 +52,14 @@ pytest --disable-warnings models/demos/yolov8s/tests/test_e2e_performant.py
 ```
 pytest models/demos/yolov8s/demo/demo.py
 ```
+
+### Performant evaluation with Trace+2CQ
+Use the following command to run the performant evaluation with Trace+2CQs:
+
+```
+pytest models/experimental/yolo_eval/evaluate.py::test_yolov8s[res0-device_params0-tt_model]
+```
+Note: The model is evaluated with 500 samples.
 
 #### Note: The post-processing is performed using PyTorch.
 
