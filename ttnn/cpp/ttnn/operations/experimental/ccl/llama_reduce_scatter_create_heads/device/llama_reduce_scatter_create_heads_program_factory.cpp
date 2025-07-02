@@ -242,6 +242,24 @@ uint32_t max_shards_per_worker(const std::vector<std::vector<ReadRequest>>& sche
     return max_shards_per_worker;
 }
 
+CoreRangeSet get_custom_cores(const CoreRangeSet& available_cores, const uint32_t num_workers, bool row_wise) {
+    CoreRangeSet worker_cores;
+    std::vector<CoreRange> desired_core_range = {CoreRange({5, 3}, {6, 3}), CoreRange({2, 8}, {3, 8})};
+    for (const auto& cr : desired_core_range) {
+        auto cores = corerange_to_cores(cr, std::nullopt, row_wise);
+        for (const auto& core : cores) {
+            worker_cores = worker_cores.merge(CoreRangeSet(CoreRange(core, core)));
+            if (worker_cores.num_cores() == num_workers) {
+                break;
+            }
+        }
+        if (worker_cores.num_cores() == num_workers) {
+            break;
+        }
+    }
+    return worker_cores;
+}
+
 CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_t num_workers, bool row_wise) {
     CoreRangeSet worker_cores;
     for (const auto& cr : available_cores.ranges()) {
@@ -291,6 +309,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     using namespace ttnn::ccl;
     // uint32_t ring_size = operation_attributes.ring_devices;
     // uint32_t num_devices = ring_size;
+
+    bool use_custom_worker_core_placement = true;
 
     const auto& input_tensor = tensor_args.input_tensor;
     // tt::tt_metal::IDevice* device = input_tensor.device();
@@ -450,8 +470,15 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     auto available_cores = sub_device_cores.subtract(packet_worker_cores_grid);
 
-    auto sender_core_grid = detail::rs_heads_fusion::get_worker_cores(
-        available_cores, num_workers_per_link * num_links, input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto sender_core_grid = use_custom_worker_core_placement
+                                ? detail::rs_heads_fusion::get_custom_cores(
+                                      available_cores,
+                                      num_workers_per_link * num_links,
+                                      input_shard_spec.orientation == ShardOrientation::ROW_MAJOR)
+                                : detail::rs_heads_fusion::get_worker_cores(
+                                      available_cores,
+                                      num_workers_per_link * num_links,
+                                      input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     auto all_cores_grid = packet_worker_cores_grid.merge(sender_core_grid);
 
     auto schedule = detail::rs_heads_fusion::distribute_work_evenly(
