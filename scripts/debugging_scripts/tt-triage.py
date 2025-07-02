@@ -591,7 +591,6 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
         "ProcessorTypes": {
             "ERISC": idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
             "ERISC0": idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
-            "ERISC1": idle_erisc_elf.enumerators["EthProcessorTypes::DM1"].value,
         },
         "dispatch_core_processor_classes": {
             "ERISC": idle_erisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"].value,
@@ -599,6 +598,9 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
             "ERISC1": idle_erisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM1"].value,
         },
     }
+
+    if type(dev) == BlackholeDevice:
+        enum_values_eth["ProcessorTypes"]["ERISC1"] = idle_erisc_elf.enumerators["EthProcessorTypes::DM1"].value
 
     # Getting running ops tables
     running_ops_table_tensix = get_running_ops_table(
