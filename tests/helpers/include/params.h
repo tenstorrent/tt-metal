@@ -90,6 +90,9 @@ constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::RSHFT;
 #ifdef SFPU_OP_LSHFT
 constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::LSHFT;
 #endif
+#ifdef SFPU_OP_LOGICAL_RSHFT
+constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::LOGICAL_RSHFT;
+#endif
 
 #ifdef SFPU_OP_SQRT
 constexpr auto SFPU_OPERATION = SfpuType::sqrt;

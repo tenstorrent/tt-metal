@@ -53,6 +53,7 @@ float_ops = [
 int_ops = [
     MathOperation.SfpuElwRightShift,
     MathOperation.SfpuElwLeftShift,
+    MathOperation.SfpuElwLogicalRightShift,
 ]
 
 float_params = generate_params(

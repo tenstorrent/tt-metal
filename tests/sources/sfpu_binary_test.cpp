@@ -60,6 +60,9 @@ void call_binary_sfpu_operation(BinaryOp operation)
         case BinaryOp::LSHFT:
             _calculate_binary_left_shift_<false, 32, INT32, false>(1);
             break;
+        case BinaryOp::LOGICAL_RSHFT:
+            _calculate_logical_right_shift_<false, 32, INT32, false>(1);
+            break;
         default:
             return;
     }

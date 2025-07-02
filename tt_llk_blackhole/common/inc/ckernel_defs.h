@@ -231,15 +231,16 @@ enum class ActivationType
 
 enum class BinaryOp : uint8_t
 {
-    ADD   = 0,
-    SUB   = 1,
-    MUL   = 2,
-    DIV   = 3,
-    RSUB  = 4,
-    POW   = 5,
-    XLOGY = 6,
-    RSHFT = 7,
-    LSHFT = 8
+    ADD           = 0,
+    SUB           = 1,
+    MUL           = 2,
+    DIV           = 3,
+    RSUB          = 4,
+    POW           = 5,
+    XLOGY         = 6,
+    RSHFT         = 7,
+    LSHFT         = 8,
+    LOGICAL_RSHFT = 9
 };
 
 } // namespace ckernel

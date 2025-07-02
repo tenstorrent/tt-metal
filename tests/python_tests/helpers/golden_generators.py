@@ -176,6 +176,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             MathOperation.SfpuXlogy: self._xlogy,
             MathOperation.SfpuElwRightShift: self._right_shift,
             MathOperation.SfpuElwLeftShift: self._left_shift,
+            MathOperation.SfpuElwLogicalRightShift: self._logical_right_shift,
         }
 
     def __call__(self, operation, operand1, operand2, data_format):
@@ -196,6 +197,12 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
     def _left_shift(self, t1, t2):
         return torch.bitwise_left_shift(t1, t2)
+
+    def _logical_right_shift(self, t1, t2):
+        # Perform logical right shift by treating t1 as unsigned 32-bit
+        t1_uint = t1.to(torch.int64) & 0xFFFFFFFF
+        result = (t1_uint >> t2).to(torch.int32)
+        return result
 
 
 @register_golden
