@@ -20,7 +20,7 @@ inline void llk_math_eltwise_binary_sfpu_shift_init() {
 template <bool APPROXIMATE, InstrModLoadStore INSTRUCTION_MODE = INT32, bool SIGN_MAGNITUDE_FORMAT = false>
 inline void llk_math_eltwise_binary_sfpu_left_shift(
     uint dst_index0, uint32_t dst_index1, int vector_mode = VectorMode::RC) {
-    llk_math_eltwise_binary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_binary_left_shift<APPROXIMATE, 8, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>,
         dst_index0,
         dst_index1,
@@ -30,7 +30,7 @@ inline void llk_math_eltwise_binary_sfpu_left_shift(
 template <bool APPROXIMATE, InstrModLoadStore INSTRUCTION_MODE = INT32, bool SIGN_MAGNITUDE_FORMAT = false>
 inline void llk_math_eltwise_binary_sfpu_right_shift(
     uint dst_index0, uint32_t dst_index1, int vector_mode = VectorMode::RC) {
-    llk_math_eltwise_binary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_binary_right_shift<APPROXIMATE, 8, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>,
         dst_index0,
         dst_index1,
