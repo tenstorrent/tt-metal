@@ -165,7 +165,6 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        // todo: call fabric-scatter-write
                         pkt_hdr->to_noc_unicast_scatter_write(
                             tt::tt_fabric::NocUnicastScatterCommandHeader{
                                 remote_noc0_dest_noc_addr,
@@ -180,7 +179,6 @@ void kernel_main() {
 
                     } else {
                         ASSERT(num_pages_to_write == 1);
-                        // todo: call fabric-write
                         pkt_hdr->to_noc_unicast_write(
                             tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, payload_size_bytes);
                         dir_fabric_connection->wait_for_empty_write_slot();
