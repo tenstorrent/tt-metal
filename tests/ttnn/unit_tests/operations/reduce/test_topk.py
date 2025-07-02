@@ -157,7 +157,9 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
     [
         ttnn.CoreRangeSet(
             [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)
+                ),  # Note: for TG llama we use 1,0 to 3,9 but this requires TGs (non-harvested) and "dispatch_core_axis": ttnn.DispatchCoreAxis.COL
             ]
         ),
     ],
