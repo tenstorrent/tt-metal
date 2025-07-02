@@ -22,8 +22,7 @@ from functools import reduce
         ((4096, 640), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.950),
     ],
 )
-@pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
-def test_geglu(device, input_shape, module_path, pcc, use_program_cache, reset_seeds, transformer_weights_dtype):
+def test_geglu(device, input_shape, module_path, pcc, reset_seeds):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
@@ -40,7 +39,7 @@ def test_geglu(device, input_shape, module_path, pcc, use_program_cache, reset_s
     assert torch_geglu is not None, f"{module_path} is not a valid UNet module"
 
     model_config = ModelOptimisations()
-    tt_geglu = TtGEGLU(device, state_dict, module_path, model_config, weights_dtype=transformer_weights_dtype)
+    tt_geglu = TtGEGLU(device, state_dict, module_path, model_config)
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch_geglu(torch_input_tensor)

@@ -90,7 +90,6 @@ def test_llama_model_inference(
     page_params,
     optimizations,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):

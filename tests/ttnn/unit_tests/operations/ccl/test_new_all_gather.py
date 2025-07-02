@@ -113,7 +113,6 @@ def run_all_gather_impl(
     num_links,
     input_dtype,
     layout,
-    use_program_cache,
     function_level_defaults,
     all_gather_topology,
     num_iters=1,
@@ -219,13 +218,20 @@ def run_all_gather_impl(
                             tile_id += 1
 
         output_tensor_goldens_list.append(output_tensor)
-        input_tensors = torch.chunk(output_tensor, num_devices, dim)
-        tt_input_tensors = []
-        for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout))
-            logger.info(f"using device {mesh_device.get_device_ids()[i]}")
 
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
+        input_tensor_mesh = ttnn.from_torch(
+            output_tensor,
+            device=mesh_device,
+            layout=layout,
+            dtype=input_dtype,
+            memory_config=input_mem_config,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                mesh_device,
+                ttnn.MeshMapperConfig(
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+                ),
+            ),
+        )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -336,7 +342,6 @@ def test_all_gather(
     layout,
     mem_config,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_impl(
@@ -347,7 +352,6 @@ def test_all_gather(
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
@@ -448,7 +452,6 @@ def test_all_gather_sharded(
     input_dtype,
     layout,
     num_iters,
-    use_program_cache,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
@@ -467,7 +470,6 @@ def test_all_gather_sharded(
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
@@ -517,7 +519,6 @@ def test_all_gather_sharded_ring(
     input_dtype,
     layout,
     num_iters,
-    use_program_cache,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
@@ -536,7 +537,6 @@ def test_all_gather_sharded_ring(
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
@@ -584,7 +584,6 @@ def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=1,
@@ -601,7 +600,6 @@ def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
@@ -647,7 +645,6 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     mesh_device,
     replication_factor,
@@ -665,7 +662,6 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
@@ -725,7 +721,6 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
     input_dtype,
     layout2,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     replication_factor1,
     replication_factor2,
@@ -743,7 +738,6 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
         input_dtype,
         layout1,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor1,
@@ -761,7 +755,6 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
         input_dtype,
         layout2,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor2,

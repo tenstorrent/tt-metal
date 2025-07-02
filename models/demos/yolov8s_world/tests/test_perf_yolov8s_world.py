@@ -42,7 +42,10 @@ def get_expected_times(name):
         True,
     ],
 )
-def test_perf(device, use_pretrained_weight, use_program_cache):
+def test_perf(device, use_pretrained_weight):
+    # https://github.com/tenstorrent/tt-metal/issues/23288
+    device.disable_and_clear_program_cache()
+
     disable_persistent_kernel_cache()
     torch_input = torch.randn(1, 3, 640, 640)
 

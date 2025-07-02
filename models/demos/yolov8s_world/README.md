@@ -35,7 +35,7 @@ Use the following command to run the model :
 pytest --disable-warnings tests/ttnn/integration_tests/yolov8s_world/test_ttnn_yolov8s_world.py::test_YoloModel
 ```
 ### Performant Model with Trace+2CQ
-- end-2-end perf is 55 FPS
+- end-2-end perf is 57 FPS
 
 Use the following command to run the performant Model with Trace+2CQs:
 
@@ -54,6 +54,6 @@ pytest --disable-warnings models/demos/yolov8s_world/demo/demo.py
 Use the following command to run the performant evaluation with Trace+2CQs:
 
 ```
-pytest models/experimental/yolo_evaluation/yolo_common_evaluation.py::test_yolov8s_world[res0-device_params0-tt_model]
+pytest models/experimental/yolo_eval/evaluate.py::test_yolov8s_world[res0-device_params0-tt_model]
 ```
 Note: The model is evaluated with 500 samples.

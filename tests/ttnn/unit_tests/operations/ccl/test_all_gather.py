@@ -124,7 +124,6 @@ def run_all_gather_impl(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     all_gather_topology,
     num_iters=1,
@@ -187,7 +186,6 @@ def run_all_gather_on_n300_impl(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     all_gather_topology,
     num_iters=1,
@@ -211,7 +209,6 @@ def run_all_gather_on_n300_impl(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=all_gather_topology,
         num_iters=num_iters,
@@ -229,7 +226,6 @@ def run_all_gather_on_t3000_impl(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     all_gather_topology,
     num_iters=1,
@@ -253,7 +249,6 @@ def run_all_gather_on_t3000_impl(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=all_gather_topology,
         num_iters=num_iters,
@@ -271,7 +266,6 @@ def run_all_gather_on_t3000_impl_tight_loop(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     all_gather_topology,
     num_iters,
@@ -287,7 +281,6 @@ def run_all_gather_on_t3000_impl_tight_loop(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=all_gather_topology,
         num_iters=num_iters,
@@ -340,7 +333,6 @@ def test_all_gather_on_t3000_post_commit_looping(
     layout,
     mem_config,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_on_t3000_impl_tight_loop(
@@ -352,7 +344,6 @@ def test_all_gather_on_t3000_post_commit_looping(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
@@ -395,7 +386,6 @@ def test_all_gather_on_t3000_nightly_commit_looping(
     layout,
     mem_config,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_on_t3000_impl_tight_loop(
@@ -407,7 +397,6 @@ def test_all_gather_on_t3000_nightly_commit_looping(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
@@ -450,7 +439,6 @@ def test_all_gather_on_t3000_nightly_commit_looping_4chip_ring(
     layout,
     mem_config,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_on_t3000_impl_tight_loop(
@@ -462,7 +450,6 @@ def test_all_gather_on_t3000_nightly_commit_looping_4chip_ring(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
@@ -498,7 +485,6 @@ def test_all_gather_on_t3000_post_commit_for_profiler_regression(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_on_t3000_impl(
@@ -510,7 +496,6 @@ def test_all_gather_on_t3000_post_commit_for_profiler_regression(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
     )
@@ -577,7 +562,6 @@ def test_all_gather_on_t3000_post_commit(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_on_t3000_impl(
@@ -589,7 +573,6 @@ def test_all_gather_on_t3000_post_commit(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
     )
@@ -635,7 +618,6 @@ def test_all_gather_on_t3000_post_commit_4chip_ring(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_on_t3000_impl(
@@ -647,7 +629,6 @@ def test_all_gather_on_t3000_post_commit_4chip_ring(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
     )
@@ -697,7 +678,6 @@ def test_line_all_gather_on_t3000_post_commit(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -713,7 +693,6 @@ def test_line_all_gather_on_t3000_post_commit(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
@@ -757,7 +736,6 @@ def test_line_all_gather_on_t3000_post_commit_4chip_ring(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -773,7 +751,6 @@ def test_line_all_gather_on_t3000_post_commit_4chip_ring(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
@@ -821,7 +798,6 @@ def test_line_all_gather_on_t3000_nightly(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -837,7 +813,6 @@ def test_line_all_gather_on_t3000_nightly(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
@@ -975,7 +950,6 @@ def test_all_gather_on_t3000_nightly(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_on_t3000_impl(
@@ -987,7 +961,6 @@ def test_all_gather_on_t3000_nightly(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
     )
@@ -1025,7 +998,6 @@ def test_all_gather_on_t3000_nightly_pcie(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
 ):
     if (
@@ -1081,7 +1053,6 @@ def test_all_gather_on_t3000_nightly_pcie(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
     )
@@ -1100,7 +1071,6 @@ def run_all_gather_sharded(
     tensor_layout,
     tensor_mem_layout,
     # num_cores,
-    use_program_cache,
     function_level_defaults,
     all_gather_topology,
     n_worker=None,
@@ -1128,8 +1098,6 @@ def run_all_gather_sharded(
                         tile_id += 1
 
     unchunked_input_tensor = unchunked_input_tensor.bfloat16()
-
-    input_tensors = torch.chunk(unchunked_input_tensor, num_devices, dim)
 
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"unchunked_input_shape: {unchunked_input_shape}")
@@ -1174,11 +1142,15 @@ def run_all_gather_sharded(
     ):
         pytest.skip("Unsupported test case")
 
-    tt_input_tensors = []
-    for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(tensor=t, data_type=input_dtype, tile=ttnn.Tile(tile)).to(tensor_layout))
-
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
+    input_tensor_mesh = ttnn.from_torch(
+        unchunked_input_tensor,
+        device=mesh_device,
+        layout=tensor_layout,
+        dtype=input_dtype,
+        memory_config=input_mem_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
+        tile=ttnn.Tile(tile),
+    )
 
     if trace_mode:
         tt_out_tensor = run_with_trace(
@@ -1250,7 +1222,6 @@ def run_all_gather_sharded_t3k(
     tensor_layout,
     tensor_mem_layout,
     # num_cores,
-    use_program_cache,
     function_level_defaults,
     all_gather_topology,
     n_worker=None,
@@ -1275,7 +1246,6 @@ def run_all_gather_sharded_t3k(
         tensor_layout,
         tensor_mem_layout,
         # num_cores,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology,
         n_worker,
@@ -1299,7 +1269,6 @@ def run_all_gather_sharded_n300(
     tensor_layout,
     tensor_mem_layout,
     # num_cores,
-    use_program_cache,
     function_level_defaults,
     all_gather_topology,
     n_worker=None,
@@ -1323,7 +1292,6 @@ def run_all_gather_sharded_n300(
         tensor_layout,
         tensor_mem_layout,
         # num_cores,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology,
         n_worker,
@@ -1395,7 +1363,6 @@ def test_all_gather_sharded_post_commit(
     tensor_layout,
     tensor_mem_layout,
     # num_cores,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_sharded_t3k(
@@ -1411,7 +1378,6 @@ def test_all_gather_sharded_post_commit(
         tensor_layout,
         tensor_mem_layout,
         # num_cores,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
     )
@@ -1482,7 +1448,6 @@ def test_all_gather_height_sharded_post_commit(
     tensor_layout,
     tensor_mem_layout,
     # num_cores,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_sharded_t3k(
@@ -1498,7 +1463,6 @@ def test_all_gather_height_sharded_post_commit(
         tensor_layout,
         tensor_mem_layout,
         # num_cores,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
     )
@@ -1563,7 +1527,6 @@ def test_all_gather_block_sharded_post_commit(
     tensor_layout,
     tensor_mem_layout,
     # num_cores,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_sharded_t3k(
@@ -1579,7 +1542,6 @@ def test_all_gather_block_sharded_post_commit(
         tensor_layout,
         tensor_mem_layout,
         # num_cores,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
     )
@@ -1652,7 +1614,6 @@ def test_line_all_gather_sharded_post_commit(
     tensor_layout,
     tensor_mem_layout,
     # num_cores,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_sharded_t3k(
@@ -1668,7 +1629,6 @@ def test_line_all_gather_sharded_post_commit(
         tensor_layout,
         tensor_mem_layout,
         # num_cores,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
     )
@@ -1812,7 +1772,6 @@ def test_sharded_all_gather_nightly(
     tensor_layout,
     tensor_mem_layout,
     # num_cores,
-    use_program_cache,
     function_level_defaults,
     all_gather_topology,
 ):
@@ -1829,7 +1788,6 @@ def test_sharded_all_gather_nightly(
         tensor_layout,
         tensor_mem_layout,
         # num_cores,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=all_gather_topology,
     )
@@ -1850,7 +1808,7 @@ def test_sharded_all_gather_nightly(
 )
 @pytest.mark.parametrize("num_links", [1, 2])
 def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686 ... need to tag with post_commit
-    mesh_device, input_shape, dim, num_links, layout, mem_config, use_program_cache, function_level_defaults
+    mesh_device, input_shape, dim, num_links, layout, mem_config, function_level_defaults
 ):
     if (layout == ttnn.ROW_MAJOR_LAYOUT or num_links == 2) and mem_config.buffer_type == ttnn.BufferType.DRAM:
         pytest.skip("All gather tests are hanging for RM in DRAM")
@@ -1864,12 +1822,19 @@ def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686
     if input_shape[dim] % num_devices != 0 or (dim == 3 and input_shape[dim] // num_devices % 32 != 0):
         pytest.skip("Unsupported test case")
 
-    input_tensors = torch.chunk(input_tensor, num_devices, dim)
-    tt_input_tensors = []
-    for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(t, ttnn.float32).to(layout))
-
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, mem_config)
+    input_tensor_mesh = ttnn.from_torch(
+        input_tensor,
+        device=mesh_device,
+        layout=layout,
+        dtype=ttnn.float32,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            mesh_device,
+            ttnn.MeshMapperConfig(
+                [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+            ),
+        ),
+    )
     tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
@@ -1928,7 +1893,6 @@ def test_tiny_all_gather_sharded_post_commit(
     tensor_layout,
     tensor_mem_layout,
     # num_cores,
-    use_program_cache,
     function_level_defaults,
     tile_h,
 ):
@@ -1945,7 +1909,6 @@ def test_tiny_all_gather_sharded_post_commit(
         tensor_layout,
         tensor_mem_layout,
         # num_cores,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         tile=(tile_h, 32),
@@ -1981,7 +1944,6 @@ def test_tiny_line_all_gather_post_commit(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     tile_h,
     num_iters=1,
@@ -1998,7 +1960,6 @@ def test_tiny_line_all_gather_post_commit(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,

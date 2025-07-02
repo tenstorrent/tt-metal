@@ -645,9 +645,7 @@ def test_moreh_layer_norm_backward_compute_kernel_options(
         ([6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH], 2),  # test 3d
     ],
 )
-def test_moreh_layer_norm_callback(
-    input_shape_normalized_dims, elementwise_affine, eps, dtype, device, use_program_cache
-):
+def test_moreh_layer_norm_callback(input_shape_normalized_dims, elementwise_affine, eps, dtype, device):
     torch.manual_seed(2024)
     if dtype == ttnn.bfloat8_b:
         pytest.skip(f"bfloat8_b is not supported in the kernel")
@@ -686,9 +684,7 @@ def test_moreh_layer_norm_callback(
         ([6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH], 2),  # test 3d
     ],
 )
-def test_moreh_layer_norm_backward_callback(
-    input_shape_normalized_dims, elementwise_affine, eps, dtype, device, use_program_cache
-):
+def test_moreh_layer_norm_backward_callback(input_shape_normalized_dims, elementwise_affine, eps, dtype, device):
     torch.manual_seed(2024)
     if dtype == ttnn.bfloat8_b:
         pytest.skip(f"bfloat8_b is not supported in the kernel")

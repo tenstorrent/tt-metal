@@ -766,14 +766,32 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 
             writer_runtime_args.push_back(forward_fabric_connection);
             if (forward_fabric_connection) {
+                const auto target_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+                const auto forward_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device->id(), forward_device.value()->id(), link_idx, program, core, writer_runtime_args);
+                    target_device_fabric_node_id,
+                    forward_device_fabric_node_id,
+                    link_idx,
+                    program,
+                    core,
+                    writer_runtime_args);
             }
 
             writer_runtime_args.push_back(backward_fabric_connection);
             if (backward_fabric_connection) {
+                const auto target_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+                const auto backward_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device->id(), backward_device.value()->id(), link_idx, program, core, writer_runtime_args);
+                    target_device_fabric_node_id,
+                    backward_device_fabric_node_id,
+                    link_idx,
+                    program,
+                    core,
+                    writer_runtime_args);
             }
 
             link_idx++;

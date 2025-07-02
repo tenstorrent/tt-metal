@@ -127,9 +127,8 @@ TEST_F(MeshDeviceT3000Test, CreateSubmeshes) {
 }
 
 TEST(GetOptimalDramBankToLogicalWorkerAssignmentAPI, UnitMeshes) {
-    auto num_devices = GetNumAvailableDevices();
-    std::vector<int> device_ids(num_devices);
-    std::iota(device_ids.begin(), device_ids.end(), 0);
+    auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
     auto devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
     for (auto& [_, dev] : devs) {
         auto assignment = dev->get_optimal_dram_bank_to_logical_worker_assignment();

@@ -58,6 +58,7 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
 )
 
 
+@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices",
@@ -176,8 +177,6 @@ def test_all_gather_6u_llama(
 ):
     if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
-    if not is_RING_6U:
-        pytest.skip("This test is only for 6U TG devices")
     if input_shard_grid is not None and input_shard_shape is not None:
         input_shard_spec = ttnn.ShardSpec(
             input_shard_grid,
@@ -225,6 +224,7 @@ def test_all_gather_6u_llama(
 
 
 # Enumerate the post-commit cases explicitly
+@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices",
@@ -335,7 +335,6 @@ def test_all_gather_tg_llama(
     num_links,
     input_dtype,
     layout,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters,
@@ -373,7 +372,6 @@ def test_all_gather_tg_llama(
         input_dtype,
         layout,
         ttnn.BufferType.L1,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
@@ -388,6 +386,7 @@ def test_all_gather_tg_llama(
     )
 
 
+@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set, input_dtype, output_dtype",
@@ -443,7 +442,6 @@ def test_all_reduce_tg_llama(
     num_iters,
     warmup_iters,
     trace_mode,
-    use_program_cache,
     function_level_defaults,
     ensure_devices_tg,
 ):
@@ -468,6 +466,7 @@ def test_all_reduce_tg_llama(
     )
 
 
+@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set, input_dtype, output_dtype",
@@ -526,8 +525,6 @@ def test_all_reduce_6U_llama(
     use_program_cache,
     function_level_defaults,
 ):
-    if not is_RING_6U:
-        pytest.skip("This test is only for 6U TG devices")
     profiler = BenchmarkProfiler()
 
     run_all_reduce_impl(

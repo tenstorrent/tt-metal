@@ -77,6 +77,7 @@ enum class ClusterType : std::uint8_t {
     P150_X4 = 9,                 // 4 Blackhole single card, ethernet connected
     SIMULATOR_WORMHOLE_B0 = 10,  // Simulator Wormhole B0
     SIMULATOR_BLACKHOLE = 11,    // Simulator Blackhole
+    N300_2x2 = 12,               // 2 N300 cards, ethernet connected to form 2x2
 };
 
 enum class EthRouterMode : uint32_t {
