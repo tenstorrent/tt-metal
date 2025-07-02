@@ -343,6 +343,34 @@ public:
         return hops;
     }
 
+    std::unordered_map<RoutingDirection, uint32_t> get_unidirectional_linear_mcast_hops(
+        const FabricNodeId& src_node_id, uint32_t dim) const override {
+        std::unordered_map<RoutingDirection, uint32_t> hops;
+        for (const auto& direction : FabricContext::routing_directions) {
+            hops[direction] = 0;
+        }
+
+        const auto src_coord = get_device_coord(src_node_id);
+
+        if (dim == NS_DIM) {
+            if (src_coord[NS_DIM] < mesh_shape_[NS_DIM] / 2) {
+                hops[RoutingDirection::S] = mesh_shape_[NS_DIM] - src_coord[NS_DIM] - 1;
+            } else {
+                hops[RoutingDirection::N] = src_coord[NS_DIM];
+            }
+        } else if (dim == EW_DIM) {
+            if (src_coord[EW_DIM] < mesh_shape_[EW_DIM] / 2) {
+                hops[RoutingDirection::E] = mesh_shape_[EW_DIM] - src_coord[EW_DIM] - 1;
+            } else {
+                hops[RoutingDirection::W] = src_coord[EW_DIM];
+            }
+        } else {
+            TT_THROW("input mesh dim is not supported: {}", dim);
+        }
+
+        return hops;
+    }
+
     std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_multicast_hops(
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const override {
         std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_hops;

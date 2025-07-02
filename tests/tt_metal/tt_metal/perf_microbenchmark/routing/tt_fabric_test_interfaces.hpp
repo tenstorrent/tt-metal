@@ -43,6 +43,8 @@ public:
 
 class IRouteManager {
 public:
+    static constexpr uint32_t NUM_MESH_DIMS = 2;
+
     virtual ~IRouteManager() = default;
     virtual std::vector<FabricNodeId> get_dst_node_ids_from_hops(
         FabricNodeId src_node_id,
@@ -56,6 +58,8 @@ public:
         std::mt19937& gen) const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_full_mcast_hops(
         const FabricNodeId& src_node_id) const = 0;
+    virtual std::unordered_map<RoutingDirection, uint32_t> get_unidirectional_linear_mcast_hops(
+        const FabricNodeId& src_node_id, uint32_t dim) const = 0;
     virtual std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_multicast_hops(
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
     virtual FabricNodeId get_random_unicast_destination(FabricNodeId src_node_id, std::mt19937& gen) const = 0;

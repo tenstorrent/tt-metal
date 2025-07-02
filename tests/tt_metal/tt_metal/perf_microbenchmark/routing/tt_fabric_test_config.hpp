@@ -201,7 +201,7 @@ private:
 const std::string no_default_test_yaml_config = "";
 
 const std::vector<std::string> supported_high_level_patterns = {
-    "all_to_all_unicast", "full_device_random_pairing", "all_to_all_multicast"};
+    "all_to_all_unicast", "full_device_random_pairing", "all_to_all_multicast", "unidirectional_linear_multicast"};
 
 inline ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_path) {
     std::ifstream yaml_config(yaml_config_path);
@@ -958,6 +958,8 @@ private:
                 expand_full_device_random_pairing(test, defaults);
             } else if (pattern.type == "all_to_all_multicast") {
                 expand_all_to_all_multicast(test, defaults);
+            } else if (pattern.type == "unidirectional_linear_multicast") {
+                expand_unidirectional_linear_multicast(test, defaults);
             } else {
                 TT_THROW("Unsupported pattern type: {}", pattern.type);
             }
@@ -996,6 +998,25 @@ private:
             if (it != test.senders.end()) {
                 it->patterns.push_back(merged_pattern);
             } else {
+                test.senders.push_back(SenderConfig{.device = src_node, .patterns = {merged_pattern}});
+            }
+        }
+    }
+
+    void expand_unidirectional_linear_multicast(TestConfig& test, const TrafficPatternConfig& base_pattern) {
+        log_info(LogTest, "Expanding all_to_all_multicast pattern for test: {}", test.name);
+        std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
+        TT_FATAL(!devices.empty(), "Cannot expand all_to_all_multicast because no devices were found.");
+
+        for (const auto& src_node : devices) {
+            for (uint32_t dim = 0; dim < this->route_manager_.NUM_MESH_DIMS; ++dim) {
+                auto hops = this->route_manager_.get_unidirectional_linear_mcast_hops(src_node, dim);
+
+                TrafficPatternConfig specific_pattern;
+                specific_pattern.destination = DestinationConfig{.hops = hops};
+                specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
+
+                auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
                 test.senders.push_back(SenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
         }
