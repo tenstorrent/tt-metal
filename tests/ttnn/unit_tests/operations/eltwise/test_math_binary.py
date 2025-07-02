@@ -126,6 +126,7 @@ def test_hypot(device, h, w):
     ],
 )
 def test_addalpha_subalpha(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, device):
+    random.seed(0)
     torch_input_tensor_a = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
     torch_input_tensor_b = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-150, 150)
     alpha = random.uniform(-100.0, 100.0)

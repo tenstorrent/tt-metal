@@ -289,13 +289,8 @@ struct ExecuteAddalpha {
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         float alpha,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 struct ExecuteSubalpha {
@@ -304,13 +299,8 @@ struct ExecuteSubalpha {
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         float alpha,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 struct ExecuteMaximum {

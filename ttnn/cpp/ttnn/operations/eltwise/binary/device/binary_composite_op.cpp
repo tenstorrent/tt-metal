@@ -53,14 +53,9 @@ Tensor ExecuteAddalpha::invoke(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     float alpha,
-    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    SmallVector<unary::UnaryWithParam> modified_rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    const std::optional<Tensor>& optional_output_tensor) {
+    SmallVector<unary::UnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
     return BinaryOperation<operations::binary::BinaryOpType::ADD>::invoke(
         queue_id,
         input_tensor_a,
@@ -68,9 +63,9 @@ Tensor ExecuteAddalpha::invoke(
         std::nullopt,
         memory_config,
         optional_output_tensor,
-        post_activations,
-        lhs_activations,
-        modified_rhs_activations,
+        {},
+        {},
+        rhs_activations,
         false);
 }
 
@@ -80,14 +75,9 @@ Tensor ExecuteSubalpha::invoke(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     float alpha,
-    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    SmallVector<unary::UnaryWithParam> modified_rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    const std::optional<Tensor>& optional_output_tensor) {
+    SmallVector<unary::UnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
     return BinaryOperation<operations::binary::BinaryOpType::SUB>::invoke(
         queue_id,
         input_tensor_a,
@@ -95,9 +85,9 @@ Tensor ExecuteSubalpha::invoke(
         std::nullopt,
         memory_config,
         optional_output_tensor,
-        post_activations,
-        lhs_activations,
-        modified_rhs_activations,
+        {},
+        {},
+        rhs_activations,
         false);
 }
 
