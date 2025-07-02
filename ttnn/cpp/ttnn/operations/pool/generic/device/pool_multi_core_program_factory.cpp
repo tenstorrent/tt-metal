@@ -623,8 +623,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         sync_cb_id1,
         sync_cb_id2,
         sync_cb_id3,
-        sync_cb_id4,
-        sync_cb_id5};
+        sync_cb_id4};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,

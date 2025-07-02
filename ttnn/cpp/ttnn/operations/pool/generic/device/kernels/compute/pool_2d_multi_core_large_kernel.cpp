@@ -18,15 +18,10 @@
 template <
     uint32_t max_tiles_per_iter,
     uint32_t num_faces_in_input_tile,
-    uint32_t num_faces_in_output_tile,
     uint32_t unpA_face_r_dim,
     bool neginf_srca_maxpool,
     bool zero_srca_avgpool>
-inline void reduce_h_fused(
-    const uint32_t in_cb_id,
-    const uint32_t in_scalar_cb_id,
-    const uint32_t output_row_index,
-    const uint32_t out_cb_id) {
+inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_id) {
     constexpr uint32_t num_out_rows = 1;
 
     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
@@ -75,8 +70,6 @@ void MAIN {
         get_compile_time_arg_val(20);  // signal to reader 0 that compute needs CBs reset or to output written
     constexpr uint32_t sync_cb_id4 =
         get_compile_time_arg_val(21);  // signal to reader 1 that compute needs CBs reset or to output written
-    constexpr uint32_t sync_cb_id5 =
-        get_compile_time_arg_val(22);  // sync PACK and UNPACK threads between intermediate and final reduction
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -126,38 +119,22 @@ void MAIN {
             // next level of reduction.
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
-                uint32_t max_rows_interm_remainder =
-                    chunk % (max_rows_for_reduction - 1);  // reduce 31 interm rows at a time
-
                 cb_wait_front(curr_in_cb_id, 1);
                 reduce_h_fused<
                     max_tiles_per_iter,
                     num_faces_in_input_tile,
-                    num_faces_in_output_tile,
                     face_r_dim,
                     neginf_srca_maxpool,
-                    zero_srca_avgpool>(
-                    curr_in_cb_id,
-                    curr_scalar_cb_id,
-                    max_rows_interm_remainder + 1,  // skip the first row where we are accumulating
-                    interm_cb_id);
+                    zero_srca_avgpool>(curr_in_cb_id, curr_scalar_cb_id);
                 cb_pop_front(curr_in_cb_id, 1);
             }
             tile_regs_commit();
-
-            // sync PACK and UNPACK so intermediate reduction gets packed before the final reduction is unpacked
-            cb_reserve_back(sync_cb_id5, 1);
-            cb_push_back(sync_cb_id5, 1);
-            cb_wait_front(sync_cb_id5, 1);
-            cb_pop_front(sync_cb_id5, 1);
-
             tile_regs_wait();
+            cb_reserve_back(curr_sync_cb_id, 1);
             pack_untilize_dst<max_tiles_per_iter>(
                 interm_cb_id, 1 /*out_subblock_h*/, 0, 1, num_faces_in_output_tile); /* pack 1 row (1x16 or 1x32) */
             tile_regs_release();
-
             cb_push_back(curr_sync_cb_id, 1);
-            cb_reserve_back(curr_sync_cb_id, 1);
         }
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);
