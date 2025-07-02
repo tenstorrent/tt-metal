@@ -7,8 +7,6 @@ import pytest
 import torch
 from loguru import logger
 
-from models.common.lightweightmodule import LightweightModule
-
 # Set flags for CI, if CI environment is setup
 if os.getenv("CI") == "true":
     os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
@@ -34,7 +32,7 @@ from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-class TorchRMSNorm(LightweightModule):
+class TorchRMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-5):
         super().__init__()
         self.eps = eps
@@ -48,7 +46,7 @@ class TorchRMSNorm(LightweightModule):
         return output * self.weight
 
 
-class RefModel(LightweightModule):
+class RefModel(torch.nn.Module):
     def __init__(self, dim: int):
         super().__init__()
         self.rmsnorm = TorchRMSNorm(dim=dim)
