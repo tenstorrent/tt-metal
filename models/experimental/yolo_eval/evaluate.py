@@ -637,7 +637,7 @@ def test_yolov8s(device, model_type, res, reset_seeds):
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov11n(device, model_type, res, use_program_cache, reset_seeds):
+def test_yolov11n(device, model_type, res, reset_seeds):
     from models.experimental.yolov11.runner.performant_runner import YOLOv11PerformantRunner
 
     if model_type == "torch_model":
