@@ -4,7 +4,7 @@
 
 
 
-from models.perf.perf_utils import check_perf_results, merge_perf_files, today, prep_perf_report
+from models.perf.perf_utils import check_perf_results, merge_perf_files, today
 import sys
 expected_cols = [
     "Model",
