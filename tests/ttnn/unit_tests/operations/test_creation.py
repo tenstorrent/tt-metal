@@ -309,6 +309,7 @@ def test_arange_tile_layout(device, start, end, step):
     assert output_tensor.layout == ttnn.TILE_LAYOUT
     assert output_tensor.padded_shape == [ttnn.TILE_SIZE, math.ceil(width_dim / ttnn.TILE_SIZE) * ttnn.TILE_SIZE]
     assert output_tensor.shape == [width_dim]
+    assert output_tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE
 
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)

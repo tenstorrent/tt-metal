@@ -62,16 +62,14 @@ Tensor arange_impl(
             owned_buffer[index++] = static_cast<T>(value);
         }
     }
+    using namespace tt::tt_metal;
 
-    auto output = Tensor(
-        tt::tt_metal::HostBuffer(std::move(owned_buffer)),
-        ttnn::Shape{static_cast<uint32_t>(size)},
-        data_type,
-        Layout::ROW_MAJOR);
-    output = ttnn::to_layout(output, layout);
-    if (device.has_value()) {
-        return output.to_device(&device->get(), output_mem_config);
-    }
+    TensorSpec spec{
+        ttnn::Shape{static_cast<uint32_t>(size)}, TensorLayout{data_type, PageConfig{layout}, output_mem_config}};
+
+    auto output = Tensor::from_vector(
+        owned_buffer, spec, device.has_value() ? std::addressof(device->get()) : nullptr);  // do we need to pass cq_id
+
     return output;
 }
 
