@@ -5,9 +5,11 @@
 import json
 import os
 
+import cv2
 import numpy as np
 import torch
 import torchvision.transforms as transforms
+from loguru import logger
 from PIL import Image
 from sklearn.linear_model import LinearRegression
 from tqdm import tqdm
@@ -116,28 +118,29 @@ class LaneEval(object):
 
 
 class LaneTestDataset(torch.utils.data.Dataset):
-    def __init__(self, path, list_path, img_transform=None, crop_size=None):
+    def __init__(self, path, img_transform=None, crop_size=None):
         super(LaneTestDataset, self).__init__()
         self.path = path
         self.img_transform = img_transform
         self.crop_size = crop_size
-        with open(list_path, "r") as f:
-            self.list = f.readlines()
-        self.list = [l[1:] if l[0] == "/" else l for l in self.list]
+        self.image_files = [
+            os.path.join(self.path, f)
+            for f in os.listdir(self.path)
+            if os.path.isfile(os.path.join(self.path, f)) and f.lower().endswith((".png", ".jpg", ".jpeg"))
+        ]
 
     def __getitem__(self, index):
-        name = self.list[index].split()[0]
-        img_path = os.path.join(self.path, name)
+        img_path = self.image_files[index]
         img = loader_func(img_path)
 
         if self.img_transform is not None:
             img = self.img_transform(img)
         img = img[:, -self.crop_size :, :]
 
-        return img, name
+        return img, os.path.basename(img_path)
 
     def __len__(self):
-        return len(self.list)
+        return len(self.image_files)
 
 
 def get_test_loader(batch_size, data_root, dataset, distributed, crop_ratio, train_width, train_height):
@@ -151,7 +154,6 @@ def get_test_loader(batch_size, data_root, dataset, distributed, crop_ratio, tra
         )
         test_dataset = LaneTestDataset(
             os.path.join(data_root, "images"),
-            os.path.join(data_root, "input_images.txt"),
             img_transform=img_transforms,
             crop_size=train_height,
         )
@@ -272,19 +274,31 @@ def run_test_tusimple(
     num_lane_on_row=4,
     num_lane_on_col=4,
     num_grid_row=100,
+    n_images=100,
+    is_overlay=False,
+    json_path="models/demos/ufld_v2/demo/image_data/test_label.json",
+    is_eval=False,
 ):
     output_path = os.path.join(work_dir, exp_name + ".txt")
     fp = open(output_path, "w")
-    loader = get_test_loader(batch_size, data_root, "Tusimple", distributed, crop_ratio, train_width, train_height)
+    if is_overlay:
+        os.makedirs(os.path.join(data_root, f"{exp_name}"), exist_ok=True)
+
+    if is_eval:
+        loader = get_test_loader_from_json(
+            batch_size, data_root, json_path, n_images, train_width, train_height, crop_ratio
+        )
+    else:
+        loader = get_test_loader(batch_size, data_root, "Tusimple", distributed, crop_ratio, train_width, train_height)
 
     dim1 = num_grid_row * num_cls_row * num_lane_on_row
     dim2 = num_grid_col * num_cls_col * num_lane_on_col
     dim3 = 2 * num_cls_row * num_lane_on_row
     dim4 = 2 * num_cls_col * num_lane_on_col
     performant_runner = None
-    for data in tqdm(loader, desc="Processing images", ncols=100):
+    for data in tqdm(loader, desc="Processing images", ncols=n_images):
         imgs, names = data
-        if exp_name == "reference_model_results":
+        if exp_name == "reference_model_results" or exp_name == "reference_model_results_dataset":
             with torch.no_grad():
                 out, pred = net(imgs)
         else:
@@ -372,6 +386,108 @@ def run_test_tusimple(
             tmp_dict["raw_file"] = name
             tmp_dict["run_time"] = 10
             json_str = json.dumps(tmp_dict)
-
             fp.write(json_str + "\n")
+            if is_overlay:
+                if exp_name == "reference_model_results" or exp_name == "ttnn_model_results":
+                    folder = "images"
+                    full_path = os.path.join(data_root, f"{exp_name}", name)
+                else:
+                    folder = "image_data"
+                    parts = name.split(os.sep)
+                    partial_dir = os.path.join(data_root, exp_name, parts[0], parts[1], parts[2])
+                    os.makedirs(partial_dir, exist_ok=True)
+                    full_path = os.path.join(data_root, f"{exp_name}", parts[0], parts[1], parts[2], parts[3])
+
+                overlay_lanes(
+                    os.path.join(data_root, folder, name),
+                    tmp_dict,
+                    full_path,
+                )
     fp.close()
+
+
+def overlay_lanes(image_path, res, output_path, radius=5, point_length=2, mask_constant=-2):
+    img = cv2.imread(image_path)
+    if img is None:
+        raise FileNotFoundError(f"Image not found: {image_path}")
+
+    lanes = res["lanes"]
+    h_samples = res["h_samples"]
+
+    h_samples = np.array(h_samples)
+    colors = [(0, 255, 0), (0, 0, 255), (255, 0, 0)]  # green, red, blue
+
+    thickness = 3
+
+    for lane_idx, lane_xs in enumerate(lanes):
+        lane_xs = np.array(lane_xs)
+
+        valid_mask = lane_xs != mask_constant
+        valid_xs = lane_xs[valid_mask]
+        valid_ys = h_samples[valid_mask]
+
+        points = np.array([valid_xs, valid_ys]).T.astype(np.int32)
+
+        if len(points) >= point_length:
+            cv2.polylines(img, [points], isClosed=False, color=colors[lane_idx % len(colors)], thickness=thickness)
+
+        for x, y in points:
+            cv2.circle(img, (x, y), radius=radius, color=colors[lane_idx % len(colors)], thickness=-1)
+    cv2.imwrite(output_path, img)
+    logger.info(f"Saved overlay image to {output_path}")
+
+
+class LaneTestDatasetFromJSON(torch.utils.data.Dataset):
+    def __init__(self, data_root, json_path, n_images=100, img_transform=None, crop_size=None):
+        super(LaneTestDatasetFromJSON, self).__init__()
+        self.data_root = data_root
+        self.img_transform = img_transform
+        self.crop_size = crop_size
+        self.annotations = []
+        with open(json_path, "r") as f:
+            for line in f:
+                if len(self.annotations) >= n_images:
+                    break
+                line = line.strip()
+                if line:
+                    try:
+                        self.annotations.append(json.loads(line))
+                    except json.JSONDecodeError as e:
+                        logger.info(f"Skipping invalid JSON line: {e}")
+
+    def __getitem__(self, index):
+        ann = self.annotations[index]
+        img_rel_path = ann["raw_file"].replace("\\", "/")
+        img_path = os.path.join(self.data_root, "image_data", img_rel_path)
+        img = loader_func(img_path)
+
+        if self.img_transform is not None:
+            img = self.img_transform(img)
+        if self.crop_size is not None:
+            img = img[:, -self.crop_size :, :]
+
+        return img, img_rel_path
+
+    def __len__(self):
+        return len(self.annotations)
+
+
+def get_test_loader_from_json(batch_size, data_root, json_path, n_images, train_width, train_height, crop_ratio=1.0):
+    img_transforms = transforms.Compose(
+        [
+            transforms.Resize((int(train_height / crop_ratio), train_width)),
+            transforms.ToTensor(),
+            transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ]
+    )
+    test_dataset = LaneTestDatasetFromJSON(
+        data_root=data_root,
+        json_path=json_path,
+        n_images=n_images,
+        img_transform=img_transforms,
+        crop_size=train_height,
+    )
+
+    sampler = torch.utils.data.SequentialSampler(test_dataset)
+    loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, sampler=sampler, num_workers=0)
+    return loader

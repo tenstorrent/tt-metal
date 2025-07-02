@@ -49,7 +49,13 @@ class TtnnResnet34:
             conv_args.layer4[2], conv_pth.layer4_2, device=self.device, is_downsample=False, blk_sharded=True
         )
 
-    def __call__(self, x, batch_size=1):
+    def __call__(self, input, batch_size=1, min_channels=8):
+        n, c, h, w = input.shape
+        channel_padding_needed = min_channels - c
+        x = ttnn.pad(input, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        ttnn.deallocate(input)
+        x = ttnn.permute(x, (0, 2, 3, 1))
+        x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
         x1, out_ht, out_wdth = self.conv1(x)
         x1 = ttnn.max_pool2d(
             x1,

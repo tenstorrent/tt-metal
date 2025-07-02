@@ -2,10 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 
 import ttnn
-from models.demos.ufld_v2.tests.ufld_v2_test_infra import UFLDPerformanceRunnerInfra
+from models.demos.ufld_v2.runner.performant_runner_infra import UFLDPerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -96,17 +95,8 @@ class UFLDPerformantRunner:
         torch_output_tensor = self.runner_infra.torch_output_tensor_1
         assert_with_pcc(torch_output_tensor, result_output_tensor, self.runner_infra.valid_pcc)
 
-    def run(self, torch_input_tensor):
-        n, c, h, w = torch_input_tensor.shape
-        torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
-        torch_input_tensor = torch.nn.functional.pad(torch_input_tensor, (0, 13))
-        torch_input_tensor = torch_input_tensor.reshape(
-            1,
-            1,
-            (torch_input_tensor.shape[0] * torch_input_tensor.shape[1] * torch_input_tensor.shape[2]),
-            torch_input_tensor.shape[3],
-        )
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    def run(self, torch_input_tensor=None):
+        tt_inputs_host, _ = self.runner_infra.setup_l1_sharded_input(self.device, torch_input_tensor)
         output = self._execute_ufldv2_trace_2cqs_inference(tt_inputs_host)
         return output
 

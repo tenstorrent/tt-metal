@@ -25,7 +25,7 @@ from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import custom_prepro
 
 
 def get_expected_times(name):
-    base = {"ufld_v2": (36.6, 0.28)}
+    base = {"ufld_v2": (36.6, 0.1)}
     return base[name]
 
 
@@ -49,7 +49,7 @@ def get_expected_times(name):
         # "pretrained_weight_true",
     ],
 )
-def test_ufld_v2_perf(device, batch_size, input_channels, height, width, use_pretrained_weight):
+def test_ufld_v2_perf(device, batch_size, input_channels, height, width, use_pretrained_weight, min_channels=8):
     disable_persistent_kernel_cache()
     torch_input_tensor = torch.randn((batch_size, input_channels, height, width))
     reference_model = TuSimple34(input_height=height, input_width=width)
@@ -73,18 +73,20 @@ def test_ufld_v2_perf(device, batch_size, input_channels, height, width, use_pre
         model=reference_model, run_model=lambda model: reference_model(torch_input_tensor), device=device
     )
     ttnn_model = TtnnUFLDv2(conv_args=parameters.conv_args, conv_pth=parameters, device=device)
-    ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    ttnn_input_tensor = ttnn_input_tensor.reshape(
-        1,
-        1,
-        (ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2]),
-        ttnn_input_tensor.shape[3],
+    n, c, h, w = torch_input_tensor.shape
+    if c == 3:  # for sharding config of padded input
+        c = min_channels
+    input_mem_config = ttnn.create_sharded_memory_config(
+        [n, c, h, w],
+        ttnn.CoreGrid(x=8, y=8),
+        ttnn.ShardStrategy.HEIGHT,
     )
-    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     durations = []
     for i in range(2):
+        ttnn_input_tensor_sharded = ttnn_input_tensor.to(device, input_mem_config)
         start = time.time()
-        ttnn_model_output = ttnn_model(ttnn_input_tensor, batch_size=batch_size)
+        ttnn_model_output = ttnn_model(ttnn_input_tensor_sharded, batch_size=batch_size)
         end = time.time()
         durations.append(end - start)
         ttnn.deallocate(ttnn_model_output)
