@@ -135,7 +135,9 @@ void MAIN {
             reconfig_data_format(cb_x, cb_ex);
         }
 
+#ifndef FUSE_PRE_ADD
         binary_op_init_common(cb_x, cb_ex, cb_xmm);
+#endif
         cb_wait_front(cb_ex, 1);  // should have 1 tile
         cb_reserve_back(cb_xmm, Wt);
         sub_bcast_cols_init_short(cb_x, cb_ex);
