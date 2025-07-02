@@ -291,7 +291,7 @@ run_yolov7_demo() {
 
 run_flux1_schnell() {
 
-  MESH_DEVICE=N300 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/stable_diffusion_35_large/demo.py  --timeout 600
+  MESH_DEVICE=N300 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/flux/demo.py  --timeout 600
 
 }
 
