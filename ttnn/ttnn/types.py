@@ -40,6 +40,7 @@ TILE_SIZE = 32
 Tile = ttnn._ttnn.tensor.Tile
 
 Shape = ttnn._ttnn.types.Shape
+TensorSpec = ttnn._ttnn.tensor.TensorSpec
 Tensor = ttnn._ttnn.tensor.Tensor
 
 

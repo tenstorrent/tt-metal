@@ -32,6 +32,9 @@ public:
 
     const Tile& get_tile() const;
 
+    Alignment get_required_shard_shape_alignment() const;
+    Alignment get_recommended_shard_shape_alignment(DataType dtype, BufferType buffer_type) const;
+
     bool operator==(const RowMajorPageConfig&) const = default;
     bool operator!=(const RowMajorPageConfig&) const = default;
 
@@ -59,6 +62,9 @@ public:
     size_t get_page_size_bytes(const Shape2D& page_size, DataType dtype) const;
 
     const Tile& get_tile() const;
+
+    Alignment get_required_shard_shape_alignment() const;
+    Alignment get_recommended_shard_shape_alignment(DataType dtype, BufferType buffer_type) const;
 
     bool operator==(const TilePageConfig&) const = default;
     bool operator!=(const TilePageConfig&) const = default;
@@ -91,6 +97,9 @@ public:
     Tile get_tile() const;
 
     Layout get_layout() const;
+
+    Alignment get_required_shard_shape_alignment() const;
+    Alignment get_recommended_shard_shape_alignment(DataType dtype, BufferType buffer_type) const;
 
     bool operator==(const PageConfig&) const = default;
     bool operator!=(const PageConfig&) const = default;

@@ -120,6 +120,25 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
     supported_layout();
 }
 
+Shape align_shard_shape_required(const Shape& shard_shape, const PageConfig& page_config) {
+    auto alignment = page_config.get_required_shard_shape_alignment();
+    Shape result = shard_shape;
+    for (int dim = 1; dim <= alignment.size(); dim++) {
+        result[-dim] = round_up(result[-dim], alignment[-dim]);
+    }
+    return result;
+}
+
+Shape align_shard_shape_recommended(
+    const Shape& shard_shape, const PageConfig& page_config, DataType dtype, BufferType buffer_type) {
+    auto alignment = page_config.get_recommended_shard_shape_alignment(dtype, buffer_type);
+    Shape result = shard_shape;
+    for (int dim = 1; dim <= alignment.size(); dim++) {
+        result[-dim] = round_up(result[-dim], alignment[-dim]);
+    }
+    return result;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -139,6 +158,77 @@ TensorSpec TensorSpec::with_memory_config(MemoryConfig memory_config) const {
     result.tensor_layout_ = tensor_layout_.with_memory_config(std::move(memory_config));
     result.populate_sharding_specs();
     return result;
+}
+
+TensorSpec TensorSpec::sharded_across_dims(
+    tt::stl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
+    Shape shard_shape = padded_shape();
+    for (auto dim : dims) {
+        shard_shape[dim] = 1;
+    }
+    auto buffer_type = memory_config().buffer_type();
+    shard_shape =
+        CMAKE_UNIQUE_NAMESPACE::align_shard_shape_recommended(shard_shape, page_config(), data_type(), buffer_type);
+    MemoryConfig new_mem_config(buffer_type, NdShardSpec(std::move(shard_shape), std::move(grid), orientation));
+    TensorLayout new_layout(data_type(), page_config(), new_mem_config);
+    return TensorSpec(logical_shape(), std::move(new_layout));
+}
+
+TensorSpec TensorSpec::sharded_across_dims_except(
+    tt::stl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
+    const auto& padded_shape = this->padded_shape();
+    Shape shard_shape = Shape().to_rank(padded_shape.rank());
+    for (auto dim : dims) {
+        shard_shape[dim] = padded_shape[dim];
+    }
+    auto buffer_type = memory_config().buffer_type();
+    shard_shape =
+        CMAKE_UNIQUE_NAMESPACE::align_shard_shape_recommended(shard_shape, page_config(), data_type(), buffer_type);
+    MemoryConfig new_mem_config(buffer_type, NdShardSpec(std::move(shard_shape), std::move(grid), orientation));
+    TensorLayout new_layout(data_type(), page_config(), new_mem_config);
+    return TensorSpec(logical_shape(), std::move(new_layout));
+}
+
+TensorSpec TensorSpec::height_sharded(CoreRangeSet grid, ShardOrientation orientation) const {
+    auto num_cores = grid.num_cores();
+    auto buffer_type = memory_config().buffer_type();
+    auto shard_height = div_up(physical_shape().height(), num_cores);
+    auto shard_shape = CMAKE_UNIQUE_NAMESPACE::align_shard_shape_required(
+        Shape({shard_height, physical_shape().width()}), page_config());
+
+    MemoryConfig new_mem_config(
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        buffer_type,
+        ShardSpec(grid, {shard_shape[0], shard_shape[1]}, orientation));
+    TensorLayout new_layout(data_type(), page_config(), new_mem_config);
+    return TensorSpec(logical_shape(), std::move(new_layout));
+}
+
+TensorSpec TensorSpec::width_sharded(CoreRangeSet grid, ShardOrientation orientation) const {
+    auto num_cores = grid.num_cores();
+    auto buffer_type = memory_config().buffer_type();
+    auto shard_width = div_up(physical_shape().width(), num_cores);
+    auto shard_shape = CMAKE_UNIQUE_NAMESPACE::align_shard_shape_required(
+        Shape({physical_shape().height(), shard_width}), page_config());
+
+    MemoryConfig new_mem_config(
+        TensorMemoryLayout::WIDTH_SHARDED, buffer_type, ShardSpec(grid, {shard_shape[0], shard_shape[1]}, orientation));
+    TensorLayout new_layout(data_type(), page_config(), new_mem_config);
+    return TensorSpec(logical_shape(), std::move(new_layout));
+}
+
+TensorSpec TensorSpec::block_sharded(CoreRange grid) const {
+    auto grid_size = grid.grid_size();
+    auto shard_height = div_up(physical_shape().height(), grid_size.y);
+    auto shard_width = div_up(physical_shape().width(), grid_size.x);
+    auto buffer_type = memory_config().buffer_type();
+    auto shard_shape = CMAKE_UNIQUE_NAMESPACE::align_shard_shape_recommended(
+        Shape({shard_height, shard_width}), page_config(), data_type(), buffer_type);
+
+    MemoryConfig new_mem_config(
+        TensorMemoryLayout::BLOCK_SHARDED, buffer_type, ShardSpec(grid, {shard_shape[0], shard_shape[1]}));
+    TensorLayout new_layout(data_type(), page_config(), new_mem_config);
+    return TensorSpec(logical_shape(), std::move(new_layout));
 }
 
 void TensorSpec::populate_sharding_specs() {
