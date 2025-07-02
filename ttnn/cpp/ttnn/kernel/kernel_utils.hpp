@@ -13,6 +13,7 @@
 
 #include <utility>
 #include "compile_time_args.h"
+#include "ttnn/kernel/kernel_common_utils.hpp"  // SerializableKernelArgs
 
 namespace ttnn::kernel_utils {
 template <typename KernelArgsStruct, uint32_t... I>
