@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 import torch
 from torch import nn
 
@@ -229,7 +228,7 @@ class ttBatchNorm:
 
 
 # pytorch
-class PytorchBatchNorm1D(LightweightModule):
+class PytorchBatchNorm1D(torch.nn.Module):
     def __init__(self, input_dim):
         super(PytorchBatchNorm1D, self).__init__()
 
