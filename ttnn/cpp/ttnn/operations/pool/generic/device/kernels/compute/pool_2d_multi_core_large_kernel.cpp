@@ -127,8 +127,6 @@ void MAIN {
                 uint32_t max_rows_interm_remainder =
                     chunk % (max_rows_for_reduction - 1);  // reduce 31 interm rows at a time
 
-                DPRINT << "interm reduction" << ENDL();
-
                 cb_wait_front(curr_in_cb_id, 1);
                 reduce_h_fused<
                     max_tiles_per_iter,
@@ -145,15 +143,11 @@ void MAIN {
             }
             tile_regs_commit();
 
-            DPRINT << "final reduction wait" << ENDL();
-
             // sync PACK and UNPACK so intermediate reduction gets packed before the final reduction is unpacked
             cb_reserve_back(sync_cb_id5, 1);
             cb_push_back(sync_cb_id5, 1);
             cb_wait_front(sync_cb_id5, 1);
             cb_pop_front(sync_cb_id5, 1);
-
-            DPRINT << "final reduction" << ENDL();
 
             tile_regs_wait();
             pack_untilize_dst<max_tiles_per_iter>(
@@ -162,8 +156,6 @@ void MAIN {
 
             cb_push_back(curr_sync_cb_id, 1);
             cb_reserve_back(curr_sync_cb_id, 1);
-
-            DPRINT << "done" << ENDL();
         }
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);
