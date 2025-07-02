@@ -520,6 +520,8 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     // Semaphores
     const uint32_t semaphore_exchange_readers = CreateSemaphore(program, core_range, 0);
     const uint32_t semaphore_exchange_writers = CreateSemaphore(program, core_range, 0);
+    const uint32_t semaphore_barrier = CreateSemaphore(program, core_range, 0);
+
     // Kernels
     const std::vector<uint32_t> reader_compile_time_args = {
         compute_with_storage_grid_size.x,
@@ -540,6 +542,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         all_core_utilization_count,
         !attributes.descending,
         semaphore_exchange_readers,
+        semaphore_barrier,
     };
     const std::string reader_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
@@ -642,7 +645,7 @@ uint32_t SortProgramFactoryHybrid::get_number_of_tiles_per_core(
         index_dtype == DataType::INT32 || index_dtype == DataType::UINT32) {
         return 64;
     }
-    return 8;
+    return 128;
 }
 
 // Single row - multi core

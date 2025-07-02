@@ -39,7 +39,7 @@ void sort_noc_exchange_Wt_tiles(
     for (uint32_t w = 0, sem_counter = 1; w < Wt; w++, sem_counter += 2) {
         // Received tile, now sending it to compute
 
-        DPRINT << "READER: exchanging tile " << w << "/" << Wt << ENDL();
+        // DPRINT << "READER: exchanging tile " << w << "/" << Wt << ENDL();
         cb_reserve_back(cb_value_peer_index, ONE_TILE);
         cb_reserve_back(cb_index_peer_index, ONE_TILE);
 
@@ -56,9 +56,9 @@ void sort_noc_exchange_Wt_tiles(
         noc_semaphore_wait(sem_self_ptr, sem_counter);
 
         // Send local indices and values to peer
-        DPRINT << "READER: waiting for own input " << w << "/" << Wt << ENDL();
+        // DPRINT << "READER: waiting for own input " << w << "/" << Wt << ENDL();
         cb_wait_front(value_tensor_this_cb_index, ONE_TILE);
-        DPRINT << "READER: waiting for own indices " << w << "/" << Wt << ENDL();
+        // DPRINT << "READER: waiting for own indices " << w << "/" << Wt << ENDL();
         cb_wait_front(index_tensor_this_cb_index, ONE_TILE);
         uint32_t value_cb_self_read_addr = get_read_ptr(value_tensor_this_cb_index);
         uint32_t index_cb_self_read_addr = get_read_ptr(index_tensor_this_cb_index);
@@ -71,7 +71,7 @@ void sort_noc_exchange_Wt_tiles(
         cb_pop_front(value_tensor_this_cb_index, ONE_TILE);
         cb_pop_front(index_tensor_this_cb_index, ONE_TILE);
 
-        DPRINT << "READER: increasing semaphore timestamp" << ENDL();
+        // DPRINT << "READER: increasing semaphore timestamp" << ENDL();
         noc_semaphore_inc(sem_noc_addr, 1);  // increment semaphore timestamp
         noc_semaphore_wait(sem_self_ptr, sem_counter + 1);
 
@@ -81,9 +81,6 @@ void sort_noc_exchange_Wt_tiles(
 
     noc_semaphore_set(sem_self_ptr, 0);  // reset semaphore timestamp
 }
-
-FORCE_INLINE
-void sort_barrier() {}
 
 FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
     const uint32_t core_id, const uint32_t lookup_table_buffer_cb_index, const uint32_t tile_size = 1024) {
@@ -102,4 +99,46 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
     core_y = ptr[core_id * 2 + 1];
 
     return {core_x, core_y};
+}
+
+FORCE_INLINE
+void sort_barrier(
+    uint32_t physical_core_lookup_table_cb_index,
+    uint32_t sem_barrier_addr,
+    uint32_t this_core_id,
+    uint32_t leader_core_id,
+    uint32_t num_cores,
+    uint32_t start_core_id) {
+    // Naive version: iterate on all cores (not scalable)
+    if (num_cores == 1) {
+        return;
+    }
+
+    sem_ptr_t sem_self_barrier_ptr = reinterpret_cast<sem_ptr_t>(sem_barrier_addr);
+
+    if (this_core_id == leader_core_id) {
+        noc_semaphore_wait(sem_self_barrier_ptr, num_cores - 1);
+        noc_semaphore_set(sem_self_barrier_ptr, 0);
+
+        // Broadcast to all other cores
+        for (uint32_t core_id = start_core_id; core_id < num_cores; core_id++) {
+            if (core_id == this_core_id) {
+                continue;
+            }
+
+            const std::pair<uint32_t, uint32_t> remote_core_physical =
+                get_core_physical_coordinates(core_id, physical_core_lookup_table_cb_index);
+            uint64_t sem_barrier_noc_addr =
+                get_noc_addr(remote_core_physical.first, remote_core_physical.second, sem_barrier_addr);
+            noc_semaphore_inc(sem_barrier_noc_addr, 1);
+        }
+    } else {
+        const std::pair<uint32_t, uint32_t> remote_core_physical =
+            get_core_physical_coordinates(leader_core_id, physical_core_lookup_table_cb_index);
+        uint64_t sem_barrier_noc_addr =
+            get_noc_addr(remote_core_physical.first, remote_core_physical.second, sem_barrier_addr);
+        noc_semaphore_inc(sem_barrier_noc_addr, 1);
+        noc_semaphore_wait(sem_self_barrier_ptr, 1);
+        noc_semaphore_set(sem_self_barrier_ptr, 0);
+    }
 }
