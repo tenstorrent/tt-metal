@@ -6,9 +6,6 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-import os
-
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 
 class TtLlamaAttention(LightweightModule):
@@ -288,7 +285,7 @@ class TtLlamaAttention(LightweightModule):
         ) = self.tt_ccl.llama_rs_create_heads(
             xqkv_fused_sharded,
             cluster_axis=1,
-            num_links=4 if is_RING_6U else 3,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
             dim=3,
             qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
         )
@@ -362,7 +359,7 @@ class TtLlamaAttention(LightweightModule):
             attn_output_1G4D_sharded,
             dim=1,
             cluster_axis=1,
-            num_links=4 if is_RING_6U else 3,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"],
             num_heads=self.n_local_heads,
         )
@@ -385,7 +382,7 @@ class TtLlamaAttention(LightweightModule):
         dense_out_reduced = self.tt_ccl.line_all_reduce(
             dense_out_ttnn,
             cluster_axis=0,
-            num_links=4 if is_RING_6U else 3,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
         ttnn.deallocate(dense_out_ttnn)

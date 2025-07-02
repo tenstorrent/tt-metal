@@ -112,6 +112,7 @@ class TtTransformer(LightweightModule):
             args,
             args.is_galaxy,
             tt_ccl=self.tt_ccl,
+            ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
 
         self.lm_head = LMHead(
