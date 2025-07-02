@@ -79,12 +79,14 @@
 // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no mechanism
 // to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on Blackhole by
 // writing the value to be written to local L1 first and then issue a noc async write.
-#define MEM_L1_INLINE_BASE 32  // MEM_L1_ARC_FW_SCRATCH + MEM_L1_ARC_FW_SCRATCH_SIZE
 // Each noc has 16B to store value written out by inline writes.
-// Base address for each noc to store the value to be written will be `MEM_L1_INLINE_BASE + (noc_index * 16)`
+// Base address for each noc to store the value to be written will be `MEM_{E,B,NC}RISC_L1_INLINE_BASE + (noc_index *
+// 16)`
 #define MEM_L1_INLINE_SIZE_PER_NOC 16
+#define MEM_L1_INLINE_BASE 32  // MEM_L1_ARC_FW_SCRATCH + MEM_L1_ARC_FW_SCRATCH_SIZE
+
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
-#define MEM_MAILBOX_BASE 64  // (MEM_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2))  // 2 nocs
+#define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
 #define MEM_MAILBOX_SIZE 12640
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)

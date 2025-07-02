@@ -66,7 +66,7 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Auto
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
     auto out = autograd::create_tensor();
 
-    constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+    constexpr ttsl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
     out->set_value(
         ttnn::add(a->get_value(), b->get_value(), std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
     autograd::GradFunction grad = [a, b, out]() {

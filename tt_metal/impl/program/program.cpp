@@ -47,7 +47,6 @@
 #include "dev_msgs.h"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
-#include "dprint_server.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
@@ -1299,7 +1298,7 @@ void Program::generate_dispatch_commands(IDevice* device, bool use_prefetcher_ca
     auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
     if (!cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device)[0];
+        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
@@ -1341,7 +1340,7 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
     auto& trace_cached_program_command_sequences = get_trace_cached_program_command_sequences();
     if (!trace_cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device)[0];
+        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
@@ -1389,7 +1388,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     bool profile_kernel = getDeviceProfilerState();
     std::vector<std::shared_future<void>> events;
-    DprintServerSetProfilerState(profile_kernel);
 
     auto sync_events = [&events] {
         for (auto& event : events) {
