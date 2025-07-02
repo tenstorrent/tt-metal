@@ -245,6 +245,12 @@ void py_module(py::module& module) {
                Enable program cache across all devices in the mesh.
            )doc")
         .def(
+            "clear_program_cache",
+            &MeshDevice::clear_program_cache,
+            R"doc(
+               Clear program cache across all devices in the mesh.
+           )doc")
+        .def(
             "disable_and_clear_program_cache",
             &MeshDevice::disable_and_clear_program_cache,
             R"doc(
@@ -315,28 +321,6 @@ void py_module(py::module& module) {
 
                Returns:
                    SubDeviceManagerId: The ID of the created sub-device manager.
-           )doc")
-        .def(
-            "create_sub_device_manager_with_fabric",
-            [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
-                return self.create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
-            },
-            py::arg("sub_devices"),
-            py::arg("local_l1_size"),
-            R"doc(
-               Creates a sub-device manager for the given mesh device. This will automatically create a sub-device of ethernet cores for use with fabric.
-               Note that this is a temporary API until migration to actual fabric is complete.
-
-
-               Args:
-                   sub_devices (List[ttnn.SubDevice]): The sub-devices to include in the sub-device manager. No ethernet cores should be included in this list.
-                   This configuration will be used for each device in the MeshDevice.
-                   local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
-
-
-               Returns:
-                   SubDeviceManagerId: The ID of the created sub-device manager.
-                   SubDeviceId: The ID of the sub-device that will be used for fabric.
            )doc")
         .def(
             "load_sub_device_manager",
@@ -426,10 +410,20 @@ void py_module(py::module& module) {
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
 
     auto py_placement_shard = static_cast<py::class_<MeshMapperConfig::Shard>>(module.attr("PlacementShard"));
-    py_placement_shard.def(py::init([](size_t dim) { return MeshMapperConfig::Shard{dim}; }));
+    py_placement_shard.def(py::init([](int dim) { return MeshMapperConfig::Shard{dim}; }))
+        .def("__repr__", [](const MeshMapperConfig::Shard& shard) {
+            std::ostringstream str;
+            str << shard;
+            return str.str();
+        });
     auto py_placement_replicate =
         static_cast<py::class_<MeshMapperConfig::Replicate>>(module.attr("PlacementReplicate"));
-    py_placement_replicate.def(py::init([]() { return MeshMapperConfig::Replicate{}; }));
+    py_placement_replicate.def(py::init([]() { return MeshMapperConfig::Replicate{}; }))
+        .def("__repr__", [](const MeshMapperConfig::Replicate& replicate) {
+            std::ostringstream str;
+            str << replicate;
+            return str.str();
+        });
     auto py_mesh_mapper_config = static_cast<py::class_<MeshMapperConfig>>(module.attr("MeshMapperConfig"));
 
     py_mesh_mapper_config

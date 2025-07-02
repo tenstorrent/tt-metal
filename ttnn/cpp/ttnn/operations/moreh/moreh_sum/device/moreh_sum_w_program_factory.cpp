@@ -16,7 +16,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto input = tensor_args.input;
-    auto output = output_tensor;
+    const auto& output = output_tensor;
 
     auto memory_config = operation_attributes.memory_config;
     const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
@@ -25,7 +25,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     tt::tt_metal::ReduceOpDim reduce_dim = tt::tt_metal::ReduceOpDim::W;
     float scaler = 1.0f;
 
-    const auto shape = input.padded_shape();
+    const auto& shape = input.padded_shape();
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
 
     uint32_t HW = H * W;
@@ -33,7 +33,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     uint32_t Ht = H / tt::constants::TILE_HEIGHT;
 
     // check mask for w-dim
-    const auto input_shape_without_padding = input.logical_shape();
+    const auto& input_shape_without_padding = input.logical_shape();
     const auto origin_W = input_shape_without_padding[-1];
     const bool do_mask_w = (origin_W % tt::constants::TILE_WIDTH) != 0;
     const auto mask_w = do_mask_w ? origin_W % tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH;

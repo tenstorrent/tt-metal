@@ -339,8 +339,7 @@ void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shap
 }
 
 void validate_input_with_dim(const Tensor& input, const int64_t& dim) {
-    auto input_shape = input.padded_shape();
-    auto input_shape_wo_padding = input.logical_shape();
+    const auto& input_shape = input.padded_shape();
     const auto input_rank = input_shape.rank();
     log_debug(LogOp, "{}:{} input_rank {}", __func__, __LINE__, input_rank);
     TT_FATAL(
@@ -356,8 +355,8 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
     const auto input_rank = input_shape_wo_padding.rank();
     auto padded_dim = dim + input_shape.rank() - input_shape_wo_padding.rank();
 
-    const auto output_shape = output.padded_shape();
-    const auto output_shape_wo_padding = output.logical_shape();
+    const auto& output_shape = output.padded_shape();
+    const auto& output_shape_wo_padding = output.logical_shape();
     const auto output_rank = output_shape_wo_padding.rank();
 
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);

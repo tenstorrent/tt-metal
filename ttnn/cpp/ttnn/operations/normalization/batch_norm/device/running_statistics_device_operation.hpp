@@ -62,7 +62,7 @@ struct RunningStatistics {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& batch_mean,
         const Tensor& batch_var,
-        const float momentum,
+        float momentum,
         std::optional<Tensor> running_mean,
         std::optional<Tensor> running_var,
         const std::optional<MemoryConfig>& memory_config);

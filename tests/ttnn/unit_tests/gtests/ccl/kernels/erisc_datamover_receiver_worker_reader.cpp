@@ -6,7 +6,7 @@
 #include <array>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
+#include "ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 
 void kernel_main() {
     constexpr uint32_t eth_receiver_l1_base_addr = get_compile_time_arg_val(0);

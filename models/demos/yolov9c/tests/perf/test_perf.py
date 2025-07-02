@@ -49,13 +49,15 @@ def dealloc_output(output_tensor):
     "model_task",
     [
         "segment",  # To run the test for instance segmentation
-        # "detect",  # Uncomment to run the test for Object Detection
+        "detect",  # To run the test for Object Detection
     ],
+    ids=["segment", "detect"],
 )
 def test_perf(device, model_task, use_weights_from_ultralytics):
     disable_persistent_kernel_cache()
-
     enable_segment = model_task == "segment"
+    # https://github.com/tenstorrent/tt-metal/issues/23288
+    device.disable_and_clear_program_cache()
 
     torch_input, ttnn_input = create_yolov9c_input_tensors(device, model=True)
     batch_size = torch_input.shape[0]
@@ -98,14 +100,21 @@ def test_perf(device, model_task, use_weights_from_ultralytics):
     "batch_size",
     [1],
 )
-@pytest.mark.parametrize("model_task", ["segment", "detect"])
+@pytest.mark.parametrize(
+    "model_task",
+    [
+        "segment",  # To run the test for instance segmentation
+        "detect",  # To run the test for Object Detection
+    ],
+    ids=["segment", "detect"],
+)
 @pytest.mark.models_device_performance_bare_metal
 def test_perf_device_bare_metal_yolov9c(model_task, batch_size):
     subdir = "ttnn_yolov9c"
     num_iterations = 1
     margin = 0.03
     enable_segment = model_task == "segment"
-    expected_perf = 52 if enable_segment else 52.8
+    expected_perf = 53.70 if enable_segment else 53.90
 
     command = f"pytest tests/ttnn/integration_tests/yolov9c/test_ttnn_yolov9c.py::test_yolov9c"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

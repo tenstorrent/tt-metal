@@ -14,7 +14,7 @@ using std::string;
 
 namespace tt {
 namespace utils {
-bool run_command(const string& cmd, const string& log_file, const bool verbose);
+bool run_command(const string& cmd, const string& log_file, bool verbose);
 void create_file(const string& file_path_str);
 const std::string& get_reports_dir();
 

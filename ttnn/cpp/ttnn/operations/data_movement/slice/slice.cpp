@@ -61,7 +61,7 @@ ttnn::Tensor SliceOperation::invoke(
     auto ret_adjustment([&](const ttnn::Tensor& input_tensor) {
         if (input_tensor.storage_type() == StorageType::DEVICE) {
             auto tensor = ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
-            tensor = ttnn::to_layout(tensor, input_layout, std::nullopt, std::nullopt, (IDevice*)nullptr);
+            tensor = ttnn::to_layout(tensor, input_layout);
             return tensor;
         }
         return input_tensor;
@@ -115,7 +115,7 @@ ttnn::Tensor SliceOperation::invoke(
         TT_FATAL(
             input.dtype() != DataType::UINT16,
             "This slice requires an implicit Tile->RM conversion and that is not currently supported for uint16");
-        input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config, (IDevice*)nullptr);
+        input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config);
         if (one_dimensional) {
             std::cout << "ONE D" << std::endl;
         }

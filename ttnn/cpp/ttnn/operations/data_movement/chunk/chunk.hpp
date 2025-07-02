@@ -9,7 +9,7 @@ namespace ttnn {
 namespace operations::data_movement {
 
 struct ChunkOperation {
-    static std::vector<ttnn::Tensor> invoke(const ttnn::Tensor& input_tensor, const uint32_t num_chunks, const int dim);
+    static std::vector<ttnn::Tensor> invoke(const ttnn::Tensor& input_tensor, uint32_t num_chunks, int dim);
 };
 
 }  // namespace operations::data_movement

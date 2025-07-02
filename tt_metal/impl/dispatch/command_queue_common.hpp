@@ -7,6 +7,8 @@
 #include <stdint.h>
 
 #include <umd/device/types/cluster_descriptor_types.h>
+#include "device.hpp"
+#include "sub_device_types.hpp"
 
 namespace tt::tt_metal {
 
@@ -68,5 +70,8 @@ uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_
 
 template <bool addr_16B>
 uint32_t get_cq_completion_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
+
+// Return the expected number of workers to be in the finished state
+uint32_t calculate_expected_workers_to_finish(const tt::tt_metal::IDevice* device, const SubDeviceId& sub_device_id, tt::tt_metal::HalProgrammableCoreType core_type);
 
 }  // namespace tt::tt_metal

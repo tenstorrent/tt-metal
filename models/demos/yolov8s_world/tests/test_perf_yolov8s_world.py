@@ -6,114 +6,75 @@ import time
 
 import pytest
 import torch
+import torch.nn.functional as F
 from loguru import logger
-from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.yolov8s_world.reference import yolov8s_world
-from models.demos.yolov8s_world.tt.ttnn_yolov8s_world import TtYOLOWorld
-from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
-    attempt_load,
-    create_custom_preprocessor,
-    move_to_device,
-)
+from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    is_wormhole_b0,
-    run_for_wormhole_b0,
-)
+from models.utility_functions import is_wormhole_b0, run_for_wormhole_b0
 
 
 def get_expected_times(name):
-    base = {"yolov8s_world": (183.7, 0.4)}
+    base = {"yolov8s_world": (183.7, 0.015)}
     return base[name]
 
 
 @run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "use_pretrained_weight",
+    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype",
+    ((1, ttnn.bfloat16, ttnn.bfloat8_b),),
+)
+@pytest.mark.parametrize(
+    "resolution",
     [
-        False,
-        True,
+        (640, 640),
     ],
 )
-def test_perf(device, use_pretrained_weight, use_program_cache):
-    disable_persistent_kernel_cache()
-    torch_input = torch.randn(1, 3, 640, 640)
-
-    ttnn_input = torch_input.permute(0, 2, 3, 1)
-    ttnn_input = ttnn.from_torch(
-        ttnn_input,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-
-    batch_size = torch_input.shape[0]
-
-    state_dict = None
-    if use_pretrained_weight:
-        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
-        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
-
-        state_dict = weights_torch_model.state_dict()
-        ds_state_dict = {k: v for k, v in state_dict.items()}
-        new_state_dict = {}
-        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
-            new_state_dict[name1] = parameter2
-
-        torch_model.load_state_dict(new_state_dict)
-        torch_model = torch_model.model
-    else:
-        torch_model = yolov8s_world.YOLOWorld()
-        state_dict = torch_model.state_dict()
-        torch_model = torch_model.model
-
-    state_dict = torch_model.state_dict() if state_dict is None else state_dict
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device)
-    )
-
-    for i in [12, 15, 19, 22]:
-        parameters["model"][i]["attn"]["gl"]["weight"] = ttnn.to_device(
-            parameters["model"][i]["attn"]["gl"]["weight"], device=device
-        )
-        parameters["model"][i]["attn"]["gl"]["bias"] = ttnn.to_device(
-            parameters["model"][i]["attn"]["gl"]["bias"], device=device
-        )
-        parameters["model"][i]["attn"]["bias"] = ttnn.to_device(parameters["model"][i]["attn"]["bias"], device=device)
-
-    parameters["model"][16] = move_to_device(parameters["model"][16], device)
-
-    parameters["model"][23]["cv4"] = move_to_device(parameters["model"][23]["cv4"], device)
-
-    ttnn_model = TtYOLOWorld(
+@pytest.mark.models_performance_bare_metal
+def test_perf_yolov8s_world(
+    device,
+    batch_size,
+    act_dtype,
+    weight_dtype,
+    model_location_generator,
+    resolution,
+):
+    performant_runner = YOLOv8sWorldPerformantRunner(
         device,
-        parameters,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        resolution=resolution,
+        model_location_generator=None,
     )
+    performant_runner._capture_yolov8s_world_trace_2cqs()
+    input_shape = (1, *resolution, 3)
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+    torch_input_tensor = F.pad(torch_input_tensor, (0, 29), mode="constant", value=0)
+    tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-    durations = []
+    iterations = 32
+    t0 = time.time()
+    for _ in range(iterations):
+        _ = performant_runner._execute_yolov8s_world_trace_2cqs_inference(tt_inputs_host)
+    ttnn.synchronize_device(device)
+    t1 = time.time()
 
-    for i in range(2):
-        start = time.time()
-        ttnn_model_output, ttnn_model_output_x = ttnn_model(ttnn_input)
-        end = time.time()
-        durations.append(end - start)
-        ttnn.deallocate(ttnn_model_output)
-        for i in range(len(ttnn_model_output_x)):
-            ttnn.deallocate(ttnn_model_output_x[i])
-        enable_persistent_kernel_cache()
+    performant_runner.release()
 
-    inference_and_compile_time, inference_time, *_ = durations
+    inference_time = round((t1 - t0) / iterations, 6)
+    inference_and_compile_time = inference_time  # Don't care about compile time
+
+    logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
+    logger.info(f"Inference time: {inference_time}")
+    logger.info(f"Samples per second: {1 / inference_time * batch_size}")
 
     expected_compile_time, expected_inference_time = get_expected_times("yolov8s_world")
-
     prep_perf_report(
         model_name="models/demos/yolov8s_world",
         batch_size=batch_size,
@@ -125,10 +86,6 @@ def test_perf(device, use_pretrained_weight, use_program_cache):
         inference_time_cpu=0.0,
     )
 
-    logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
-    logger.info(f"Inference time: {inference_time}")
-    logger.info(f"Samples per second: {1 / inference_time * batch_size}")
-
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
@@ -138,7 +95,7 @@ def test_perf(device, use_pretrained_weight, use_program_cache):
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_perf_device_bare_metal_yolov8s_world(batch_size, expected_perf):
+def test_perf_device_yolov8s_world(batch_size, expected_perf):
     subdir = "ttnn_yolov8s_world"
     num_iterations = 1
     margin = 0.03

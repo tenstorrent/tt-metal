@@ -31,7 +31,7 @@ from collections import namedtuple
 import time
 import os
 import sys
-from parse_inspector_logs import get_kernels, get_programs, get_devices_in_use
+from parse_inspector_logs import InspectorData
 
 RST = "\033[0m"
 BLUE = "\033[34m"  # For good values
@@ -44,8 +44,6 @@ VERBOSE_CLR = "\033[94m"  # For verbose output
 VERBOSE = False
 VVERBOSE = False
 context = None
-
-InspectorData = namedtuple("InspectorData", ["kernels", "programs", "devices_in_use"])
 
 try:
     from tabulate import tabulate, TableFormat, Line, DataRow
@@ -360,7 +358,7 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
         return
 
     # Get brisc.elf which we will use to get to the important offsets.
-    a_kernel_path = inspector_data.kernels[0].path
+    a_kernel_path = next(iter(inspector_data.kernels.values())).path
     brisc_elf_path = a_kernel_path + "../../../firmware/brisc/brisc.elf"
     brisc_elf_path = os.path.realpath(brisc_elf_path)
 
@@ -445,7 +443,7 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
                 )[0][0]
                 & 0xFFFF
             )  # enum dispatch_core_processor_classes
-            kernel = next((k for k in inspector_data.kernels if k.watcher_kernel_id == watcher_kernel_id), None)
+            kernel = inspector_data.kernels.get(watcher_kernel_id)
             kernel_name = kernel.name if kernel else ""
 
             cs = []
@@ -560,10 +558,7 @@ def main(argv=None):
         )
         inspector_data = None
     else:
-        programs = get_programs(log_directory)
-        kernels = get_kernels(log_directory)
-        devices_in_use = get_devices_in_use(programs)
-        inspector_data = InspectorData(kernels=kernels, programs=programs, devices_in_use=devices_in_use)
+        inspector_data = InspectorData(log_directory)
 
     # Populate integer array with device ids
     if len(args["--dev"]) == 1 and args["--dev"][0].lower() == "all":

@@ -5,8 +5,8 @@
 #include "moreh_linear_backward.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "cpp/ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
-#include "cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
+#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
 namespace ttnn::operations::moreh::moreh_linear_backward {
 

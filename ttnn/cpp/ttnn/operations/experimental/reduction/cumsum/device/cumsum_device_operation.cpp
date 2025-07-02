@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,13 +10,14 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 
 CumSumDeviceOperation::program_factory_t CumSumDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Scaffolding / WIP => only single core program for now
-    return CumSumDeviceOperation::SingleCore();
+    return CumSumDeviceOperation::ProgramFactory();
 }
 
 void CumSumDeviceOperation::validate_on_program_cache_miss(

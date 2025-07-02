@@ -622,6 +622,11 @@ int main(int argc, char** argv) {
             0,
             0,
             0,
+            0,
+            0,
+            0,
+            0,
+            0,
             true,  // is_dram_variant
             true,  // is_host_variant
         };
@@ -666,6 +671,7 @@ int main(int argc, char** argv) {
         configure_kernel_variant<true, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            {},
             dispatch_compile_args,
             dispatch_core,
             phys_dispatch_core,

@@ -4,7 +4,7 @@
 
 #include <tt-metalium/buffer.hpp>
 
-#include "cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
+#include "ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -19,8 +19,8 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks bcast_multi_core_hw(
     const Tensor& a, const Tensor& b, const Tensor& output, BcastOpMath bcast_math, bool inplace) {
-    const auto ashape = a.padded_shape();
-    const auto bshape = b.padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];

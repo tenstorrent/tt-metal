@@ -10,7 +10,6 @@
 #include "ttnn/operations/experimental/bcast_to/device/bcast_to_device_operation.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {

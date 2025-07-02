@@ -26,7 +26,6 @@
 #include "device.hpp"
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
-#include "dprint_server.hpp"
 #include "hal_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "tt-metalium/program.hpp"
@@ -120,10 +119,10 @@ void EnqueueProgramCommand::process() {
     // Compute the total number of workers this program uses
     uint32_t num_workers = 0;
     if (program.runs_on_noc_multicast_only_cores()) {
-        num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, this->sub_device_id);
+        num_workers += calculate_expected_workers_to_finish(device, sub_device_id, HalProgrammableCoreType::TENSIX);
     }
     if (program.runs_on_noc_unicast_only_cores()) {
-        num_workers += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, this->sub_device_id);
+        num_workers += calculate_expected_workers_to_finish(device, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
     }
     // Reserve space for this program in the kernel config ring buffer
     program_dispatch::reserve_space_in_kernel_config_buffer(
@@ -342,7 +341,7 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     // If in testing mode, don't need to check dprint/watcher errors, since the tests will induce/handle them.
     if (!MetalContext::instance().rtoptions().get_test_mode_enabled()) {
         TT_FATAL(
-            !(DPrintServerHangDetected()),
+            !(MetalContext::instance().dprint_server() and MetalContext::instance().dprint_server()->hang_detected()),
             "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
         TT_FATAL(
             !(tt::watcher_server_killed_due_to_error()),

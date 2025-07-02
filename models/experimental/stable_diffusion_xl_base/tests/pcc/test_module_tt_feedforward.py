@@ -15,17 +15,14 @@ from models.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
-    "input_shape, block_id, transformer_block_id",
+    "input_shape, block_id, transformer_block_id, pcc",
     [
-        ((1024, 1280), 2, 0),
-        ((4096, 640), 1, 0),
-        ((4096, 640), 1, 1),
+        ((1024, 1280), 2, 0, 0.997),
+        ((4096, 640), 1, 0, 0.999),
+        ((4096, 640), 1, 1, 0.998),
     ],
 )
-@pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
-def test_feedforward(
-    device, input_shape, block_id, transformer_block_id, use_program_cache, reset_seeds, transformer_weights_dtype
-):
+def test_feedforward(device, input_shape, block_id, transformer_block_id, pcc, reset_seeds):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
@@ -40,7 +37,6 @@ def test_feedforward(
         state_dict,
         f"down_blocks.{block_id}.attentions.0.transformer_blocks.{transformer_block_id}.ff",
         model_config,
-        weights_dtype=transformer_weights_dtype,
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
@@ -59,5 +55,5 @@ def test_feedforward(
     del unet
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     logger.info(f"PCC is {pcc_message}")

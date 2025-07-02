@@ -9,6 +9,7 @@
 #include "compute_kernel_api/pack.h"
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/cb_api.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 extern uint32_t tt_l1_ptr* rta_l1_base;
 extern uint32_t tt_l1_ptr* crta_l1_base;

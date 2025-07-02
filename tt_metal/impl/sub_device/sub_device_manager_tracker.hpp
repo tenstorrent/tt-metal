@@ -37,9 +37,6 @@ public:
 
     SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
 
-    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
-
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
 
     void clear_loaded_sub_device_manager();

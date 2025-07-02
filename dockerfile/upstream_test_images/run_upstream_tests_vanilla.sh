@@ -63,9 +63,10 @@ test_suite_bh_single_pcie_llama_demo_tests() {
 test_suite_bh_llmbox_metal_unit_tests() {
     echo "[upstream-tests] Running BH LLMBox metal unit tests"
 
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/test_system_health
+    ./build/test/tt_metal/unit_tests_eth
 }
 
 test_suite_bh_llmbox_llama_demo_tests() {
@@ -106,8 +107,6 @@ test_suite_wh_6u_llama_demo_tests() {
 
     verify_llama_dir_
 
-    # TODO: to remove...
-    pip install -r models/tt_transformers/requirements.txt
     pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick"
     pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py
     pytest models/demos/llama3_subdevices/demo/text_demo.py -k "repeat"
@@ -123,8 +122,6 @@ test_suite_wh_6u_llama_long_stress_tests() {
 
     verify_llama_dir_
 
-    # TODO: to remove...
-    pip install -r models/tt_transformers/requirements.txt
     # This will take almost 3 hours. Ensure that the tensors are cached in the LLAMA_DIR.
     pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "stress-test and not mini-stress-test"
 }

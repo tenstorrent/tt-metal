@@ -4,9 +4,6 @@
 
 import ttnn
 import torch
-import os
-
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 
 class TT_CCL:
@@ -30,6 +27,9 @@ class TT_CCL:
         self.from_remote_semaphore_handles = []
         self.to_remote_semaphore_handles = []
         self.all_gather_concat_inter_tensor = self.get_all_gather_concat_inter_buffer()
+        self.max_top_k = model_args.max_top_k
+        self.max_batch_size = model_args.max_batch_size
+        self.cluster_shape = model_args.cluster_shape
 
         # Double buffered on each axis
         self.gather_semaphore_handles = [[], []]
@@ -171,10 +171,11 @@ class TT_CCL:
 
         # Sampling values
         tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, 32, 256)),  # TODO: fix for k > 32, see issue #22925
+            torch.zeros((1, 1, self.max_batch_size, self.max_top_k * self.cluster_shape[0])),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            # dtype=ttnn.bfloat8_b,  # TODO: use bfp8_b when issue #23644 is fixed
+            dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
@@ -182,7 +183,7 @@ class TT_CCL:
 
         # Sampling indices
         tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, 32, 256)),  # TODO: fix for k > 32!
+            torch.zeros((1, 1, self.max_batch_size, self.max_top_k * self.cluster_shape[0])),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.uint16,
@@ -193,7 +194,7 @@ class TT_CCL:
 
         # Binary Mult + Silu
         tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, 32, 3584)),
+            torch.zeros((1, 1, self.max_batch_size, 3584)),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
@@ -444,7 +445,15 @@ class TT_CCL:
         return ag_persistent_buffers_all
 
     def line_all_reduce(
-        self, input_tensor_mesh, cluster_axis, num_links, memory_config, dtype=None, lm_head=False, buffer_key=None
+        self,
+        input_tensor_mesh,
+        cluster_axis,
+        num_links,
+        memory_config,
+        dtype=None,
+        lm_head=False,
+        buffer_key=None,
+        use_noc1_only=False,
     ):
         if self.mode == "decode":
             if lm_head:
@@ -463,8 +472,9 @@ class TT_CCL:
                 num_links=num_links,
                 memory_config=memory_config,
                 dtype=dtype,
-                topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
+                topology=self.model_config["CCL_TOPOLOGY"],
                 subdevice_id=self.worker_sub_device_id,
+                use_noc1_only=use_noc1_only,
             )
 
             if lm_head:
@@ -524,6 +534,7 @@ class TT_CCL:
         batch_offset,
         slice_size,
         dtype=None,
+        use_noc1_only=False,
     ):
         (
             xqkv_reduced,
@@ -538,7 +549,7 @@ class TT_CCL:
             multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             num_heads=num_heads,
             memory_config=memory_config,
-            topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
+            topology=self.model_config["CCL_TOPOLOGY"],
             num_links=num_links,
             subdevice_id=self.worker_sub_device_id,
             num_kv_heads=num_kv_heads,
@@ -546,6 +557,7 @@ class TT_CCL:
             batch_offset=batch_offset,
             slice_size=slice_size,
             dtype=dtype,
+            use_noc1_only=use_noc1_only,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return xqkv_reduced, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
@@ -571,6 +583,7 @@ class TT_CCL:
         buffer_key=None,
         RS_memory_config=None,
         cluster_axis=1,
+        use_noc1_only=False,
     ):
         persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
             self.reduce_scatter_buffer_idx[cluster_axis]
@@ -592,7 +605,8 @@ class TT_CCL:
             program_config=program_config,
             memory_config_mm=memory_config,
             global_cb=global_cb,
-            topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
+            topology=self.model_config["CCL_TOPOLOGY"],
+            use_noc1_only=use_noc1_only,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         self.reduce_scatter_buffer_idx[cluster_axis] = (self.reduce_scatter_buffer_idx[cluster_axis] + 1) % self.num_cbs
@@ -606,6 +620,7 @@ class TT_CCL:
         cluster_axis,
         dim,
         qkv_memory_config,
+        use_noc1_only=False,
     ):
         persistent_interim_buffer = self.rs_create_heads_buffers[cluster_axis]
         (
@@ -620,12 +635,13 @@ class TT_CCL:
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=1,
             mesh_device=self.mesh_device,
-            topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
+            topology=self.model_config["CCL_TOPOLOGY"],
             num_links=num_links,
             num_heads=8,
             num_kv_heads=1,
             memory_config=qkv_memory_config,
             qkv_memory_config=qkv_memory_config,
+            use_noc1_only=use_noc1_only,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
@@ -639,6 +655,7 @@ class TT_CCL:
         num_links=1,
         math_op=ttnn.ReduceType.Sum,
         buffer_key=None,
+        use_noc1_only=False,
     ):
         if self.mode == "prefill":
             # reshape input to [1, 1, S, x]
@@ -689,7 +706,8 @@ class TT_CCL:
                 mesh_device=self.mesh_device,
                 num_links=num_links,
                 memory_config=memory_config,
-                topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
+                topology=self.model_config["CCL_TOPOLOGY"],
+                use_noc1_only=use_noc1_only,
             )
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
             self.reduce_scatter_buffer_idx[cluster_axis] = (
@@ -716,7 +734,7 @@ class TT_CCL:
                     else self.all_gather_buffers[seqlen].get(buffer_key, None)
                 )
         else:
-            topology = ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear
+            topology = self.model_config["CCL_TOPOLOGY"]
             assert buffer_key is not None, "buffer_key is None"
             persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
@@ -740,19 +758,22 @@ class TT_CCL:
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out
 
-    def all_gather_concat(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, num_heads=8):
+    def all_gather_concat(
+        self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, num_heads=8, use_noc1_only=False
+    ):
         ttnn_tensor_out = ttnn.experimental.all_gather_concat(
             input_tensor_mesh,
             self.all_gather_concat_inter_tensor[0],
             dim,
             cluster_axis=cluster_axis,
             mesh_device=self.mesh_device,
-            topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
+            topology=self.model_config["CCL_TOPOLOGY"],
             multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             num_links=num_links,
             num_heads=num_heads,
             memory_config=memory_config,
             subdevice_id=self.worker_sub_device_id,
+            use_noc1_only=use_noc1_only,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
@@ -869,6 +890,8 @@ def tt_sharded_distributed_rmsnorm(
     ln_sharded_stats_memcfg,
     tt_ccl=None,
     output_mem_config=None,
+    use_noc1_only=False,
+    ccl_topology=None,
 ):
     # inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
@@ -882,13 +905,14 @@ def tt_sharded_distributed_rmsnorm(
         cluster_axis,
         tt_ccl.mesh_device,
         semaphore,
-        topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
+        topology=ccl_topology,
         residual_input_tensor=res,
         num_links=1,
         epsilon=epsilon,
         weight=gamma,
         stats=persistent_buffer,
         memory_config=output_mem_config,
+        use_noc1_only=use_noc1_only,
     )
     tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
     return tt_out, res

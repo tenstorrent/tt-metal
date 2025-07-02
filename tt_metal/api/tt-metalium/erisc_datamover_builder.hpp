@@ -65,14 +65,32 @@ enum class FabricEriscDatamoverType {
     Invalid = 5,
 };
 
-// enable extra buffer slots configuration based on sender/receiver channel and EDM type.
-struct FabricEriscDatamoverOptions {
-    FabricEriscDatamoverType edm_type = FabricEriscDatamoverType::Default;
+enum class FabricEriscDatamoverAxis : std::size_t {
+    Short = 0,
+    Long = 1,
+    Invalid = 2,
+};
+
+enum class FabricEriscDatamoverContextSwitchType : uint8_t {
+    // Context switch at the interval only if idle for a certain number of cycles
+    WAIT_FOR_IDLE = 0,
+    // Context switch every interval
+    INTERVAL = 1,
+};
+
+struct FabricRouterBufferConfig {
     bool enable_dateline_sender_extra_buffer_slots = false;
     bool enable_dateline_receiver_extra_buffer_slots = false;
     bool enable_dateline_upstream_sender_extra_buffer_slots = false;
     bool enable_dateline_upstream_receiver_extra_buffer_slots = false;
     bool enable_dateline_upstream_adjacent_sender_extra_buffer_slots = false;
+};
+
+// enable extra buffer slots configuration based on sender/receiver channel and EDM type.
+struct FabricEriscDatamoverOptions {
+    FabricEriscDatamoverType edm_type = FabricEriscDatamoverType::Default;
+    FabricEriscDatamoverAxis edm_axis = FabricEriscDatamoverAxis::Short;
+    FabricRouterBufferConfig edm_buffer_config = FabricRouterBufferConfig{};
 };
 
 struct FabricEriscDatamoverConfig {
@@ -81,11 +99,15 @@ struct FabricEriscDatamoverConfig {
     static constexpr uint32_t WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
     static constexpr uint32_t AT_CMD_BUF = 3;      // for atomics
     static constexpr uint32_t DEFAULT_NOC_VC = 2;
-    static constexpr uint32_t MAX_EDM_NOC_VC = 3;
+    static constexpr uint32_t NUM_EDM_NOC_VCS = 2;
 
     static constexpr uint32_t DEFAULT_RECEIVER_FORWARDING_NOC = 1;
     static constexpr uint32_t DEFAULT_RECEIVER_LOCAL_WRITE_NOC = 1;
     static constexpr uint32_t DEFAULT_SENDER_ACK_NOC = 0;
+
+    // If a mesh axis spans eight or more devices, use more buffer slot configuration.
+    // Threshold (8 devices) was determined empirically.
+    static constexpr std::size_t MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD = 8;
 
     static constexpr std::size_t dateline_sender_channel_skip_idx = 2;
     static constexpr std::size_t dateline_receiver_channel_skip_idx = 0;
@@ -291,6 +313,7 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
 class FabricEriscDatamoverBuilder {
 public:
     static constexpr size_t default_firmware_context_switch_interval = 10000;
+    static constexpr auto default_firmware_context_switch_type = FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE;
     // payload only, no header
     static constexpr size_t default_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
     static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 2;
@@ -364,6 +387,7 @@ public:
             tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE) const;
 
     void set_firmware_context_switch_interval(size_t interval);
+    void set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type);
     void set_wait_for_host_signal(bool wait_for_host_signal);
 
     //    protected:
@@ -428,6 +452,7 @@ public:
 
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
+    FabricEriscDatamoverContextSwitchType firmware_context_switch_type = default_firmware_context_switch_type;
     bool enable_first_level_ack = false;
     bool fuse_receiver_flush_and_completion_ptr = true;
     bool dateline_connection = false;
