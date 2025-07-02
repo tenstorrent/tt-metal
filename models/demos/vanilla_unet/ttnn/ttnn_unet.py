@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
-from models.experimental.functional_vanilla_unet.ttnn.common import Conv, ConvTranspose, ConvSplit
+
+import ttnn
+from models.demos.vanilla_unet.ttnn.common import Conv, ConvSplit, ConvTranspose
 
 
 def torch_to_ttnn(input, device=None):

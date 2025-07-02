@@ -6,11 +6,11 @@ import os
 import random
 
 import numpy as np
+import torch
 from medpy.filter.binary import largest_connected_component
 from skimage.exposure import rescale_intensity
 from skimage.io import imread
 from skimage.transform import resize
-import torch
 from torch.utils.data import Dataset
 
 
