@@ -198,8 +198,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     uint32_t max_target_noc_addresses_per_packet = 2;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    uint32_t l1_scratch_cb_page_size_bytes = page_size;
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
     uint32_t tile_granularity = num_tiles_to_write_per_packet < 4 ? 4 * num_tiles_to_write_per_packet : 8;
@@ -556,9 +556,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
 
     // Get worker cores
     // 2 sender (reader + core + writer), 1 forward 1 backward
-    uint32_t num_senders_per_link = 2;
+    uint32_t num_senders_per_routing_plane = 2;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_senders_per_link, mesh_device, sub_device_id, core_grid_offset);
+        choose_worker_cores(num_links, num_senders_per_routing_plane, mesh_device, sub_device_id, core_grid_offset);
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
 
@@ -612,10 +612,10 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in4;
     static constexpr auto num_packet_headers_storable = 4;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes * 2,
+            num_packet_headers_storable * packet_header_size_bytes,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     auto reserved_packet_header_CB_handle =
@@ -630,7 +630,13 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     const auto num_batches = input_tensor_shape[0];
     const auto batch_slice_num_pages = input_tensor_num_pages / ring_size / num_batches;
 
-    TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
+    TT_FATAL(
+        !(input_tensor_shape[3] % tt::constants::TILE_WIDTH),
+        "Error, The number of tiles at input tensor dimension {} should be divisible by tile_width but the number of "
+        "tiles is {} and the tile_width is {}",
+        3,
+        input_tensor_shape[3] / tt::constants::TILE_WIDTH,
+        tt::constants::TILE_WIDTH);
     uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
 
     // KERNEL CREATION
@@ -638,8 +644,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     std::vector<KernelHandle> reader_kernel_ids;
     std::vector<KernelHandle> writer_kernel_ids;
     std::vector<KernelHandle> reduce_kernel_ids;
-    for (uint32_t core_idx = 0; core_idx < num_senders_per_link; core_idx++) {
-        const bool is_forward = core_idx % num_senders_per_link;
+    for (uint32_t core_idx = 0; core_idx < num_senders_per_routing_plane; core_idx++) {
+        const bool is_forward = core_idx % num_senders_per_routing_plane;
 
         /**
          * Every chip has a final reduction step. On the ends, there is only one input to reduce.
@@ -731,7 +737,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             intermediate_cb_index,
             compute_output_cb_index,
             batch_slice_num_pages,
-            (8 < tile_granularity ? 8 : tile_granularity),  // TODO: Point of this?
+            tile_granularity,
             ring_size,
             num_batches,
             num_links,
@@ -754,8 +760,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     uint32_t fwd_bwd_semaphore_address = tt::tt_metal::CreateSemaphore(program, sender_worker_core_range, 0);
     CoreCoord drain_sync_core;
     for (uint32_t link = 0; link < num_links; link++) {
-        for (uint32_t core_idx = 0; core_idx < num_senders_per_link; core_idx++) {
-            const bool is_forward = core_idx % num_senders_per_link;
+        for (uint32_t core_idx = 0; core_idx < num_senders_per_routing_plane; core_idx++) {
+            const bool is_forward = core_idx % num_senders_per_routing_plane;
 
             CoreCoord core = sender_worker_cores[link * 2 + core_idx];
             // FWD core needs BWD core coordinate for fwd/bwd final reduction sync.
@@ -791,7 +797,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 fwd_bwd_semaphore_address,
                 opposite_core_coord.x,
                 opposite_core_coord.y};
-            if (core_idx % num_senders_per_link) {  // forward
+            if (core_idx % num_senders_per_routing_plane) {  // forward
                 writer_rt_args.push_back(forward_device.has_value());
                 if (forward_device.has_value()) {
                     tt::tt_fabric::append_fabric_connection_rt_args(
@@ -814,7 +820,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     }
 
     auto override_runtime_arguments_callback =
-        [reader_kernel_ids, writer_kernel_ids, sender_worker_cores, num_senders_per_link](
+        [reader_kernel_ids, writer_kernel_ids, sender_worker_cores, num_senders_per_routing_plane](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -827,7 +833,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             // update senders
             std::vector<std::vector<std::vector<RuntimeArgsData>>> reader_runtime_args_by_core;
             std::vector<std::vector<std::vector<RuntimeArgsData>>> writer_runtime_args_by_core;
-            for (uint32_t core_idx = 0; core_idx < num_senders_per_link; core_idx++) {
+            for (uint32_t core_idx = 0; core_idx < num_senders_per_routing_plane; core_idx++) {
                 reader_runtime_args_by_core.push_back(GetRuntimeArgs(program, reader_kernel_ids[core_idx]));
                 writer_runtime_args_by_core.push_back(GetRuntimeArgs(program, writer_kernel_ids[core_idx]));
             }
@@ -835,13 +841,13 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 CoreCoord core = sender_worker_cores[i];
                 // sender reader
                 auto& worker_reader_sender_runtime_args =
-                    reader_runtime_args_by_core[i % num_senders_per_link][core.x][core.y];
+                    reader_runtime_args_by_core[i % num_senders_per_routing_plane][core.x][core.y];
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
                 worker_reader_sender_runtime_args[1] = intermed.buffer()->address();
                 worker_reader_sender_runtime_args[2] = output.buffer()->address();
                 // sender writer
                 auto& worker_writer_sender_runtime_args =
-                    writer_runtime_args_by_core[i % num_senders_per_link][core.x][core.y];
+                    writer_runtime_args_by_core[i % num_senders_per_routing_plane][core.x][core.y];
                 worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
                 worker_writer_sender_runtime_args[1] = output.buffer()->address();
             }
