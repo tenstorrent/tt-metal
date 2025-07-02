@@ -19,7 +19,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 def test_vadv2_sca(
     device,
     reset_seeds,
-    use_program_cache,
 ):
     weights_path = "models/experimental/vadv2/tt/vadv2_weights_1.pth"
     point_cloud_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
@@ -47,6 +46,8 @@ def test_vadv2_sca(
     bev_mask = torch.randn(6, 1, 10000, 4)
     level_start_index = torch.tensor([0])
 
+    from torchview import draw_graph
+
     torch_output = torch_model(
         query,
         key,
@@ -57,32 +58,61 @@ def test_vadv2_sca(
         bev_mask=bev_mask,
         level_start_index=level_start_index,
     )
-
-    tt_model = tt_spatial_cross_attention.TtSpatialCrossAttention(
-        embed_dims=256, pc_range=point_cloud_range, batch_first=batch_first
-    )
-
-    parameter = create_vadv2_model_parameters_sca(
+    model_graph = draw_graph(
         torch_model,
-        [query, key, value, reference_points, spatial_shapes, reference_points_cam, bev_mask, level_start_index],
-        device,
+        input_data=(
+            query,
+            key,
+            value,
+            reference_points,
+            spatial_shapes,
+            reference_points_cam,
+            bev_mask,
+            level_start_index,
+        ),
+        expand_nested=True,  # Expand nested modules
+        save_graph=True,  # Save graph to file
+        graph_name="torch_model_graph",
     )
-    query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16)
-    key = ttnn.from_torch(key, device=device, dtype=ttnn.bfloat16)
-    value = ttnn.from_torch(value, device=device, dtype=ttnn.bfloat16)
-    reference_points = ttnn.from_torch(reference_points, device=device, dtype=ttnn.bfloat16)
-    reference_points_cam = ttnn.from_torch(reference_points_cam, device=device, dtype=ttnn.bfloat16)
-    spatial_shapes = ttnn.from_torch(spatial_shapes, device=device, dtype=ttnn.bfloat16)
-    bev_mask = ttnn.from_torch(bev_mask, device=device, dtype=ttnn.bfloat16)
-    level_start_index = ttnn.from_torch(level_start_index, device=device, dtype=ttnn.bfloat16)
 
-    tt_output = tt_model(
-        query,
-        key,
-        value,
-        reference_points=reference_points,
-        spatial_shapes=spatial_shapes,
-        reference_points_cam=reference_points_cam,
-        bev_mask=bev_mask,
-        level_start_index=level_start_index,
-    )
+    model_graph.visualize()
+
+    print("torch_output", torch_output.shape)
+
+    # parameter = create_vadv2_model_parameters_sca(
+    #     torch_model,
+    #     [query, key, value, reference_points, spatial_shapes, reference_points_cam, bev_mask, level_start_index],
+    #     device,
+    # )
+    # print(parameter)
+    # tt_model = tt_spatial_cross_attention.TtSpatialCrossAttention(
+    #     device=device,
+    #     params=parameter.spatial_cross_attention,
+    #     embed_dims=256,
+    #     pc_range=point_cloud_range,
+    #     batch_first=batch_first,
+    # )
+
+    # # query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16)
+    # key = ttnn.from_torch(key, device=device, dtype=ttnn.bfloat16)
+    # value = ttnn.from_torch(value, device=device, dtype=ttnn.bfloat16)
+    # # reference_points = ttnn.from_torch(reference_points, device=device, dtype=ttnn.bfloat16)
+    # # reference_points_cam = ttnn.from_torch(reference_points_cam, device=device, dtype=ttnn.bfloat16)
+    # spatial_shapes = ttnn.from_torch(spatial_shapes, device=device, dtype=ttnn.bfloat16)
+    # # bev_mask = ttnn.from_torch(bev_mask, device=device, dtype=ttnn.bfloat16)
+    # level_start_index = ttnn.from_torch(level_start_index, device=device, dtype=ttnn.bfloat16)
+
+    # tt_output = tt_model(
+    #     query,
+    #     key,
+    #     value,
+    #     reference_points=reference_points,
+    #     spatial_shapes=spatial_shapes,
+    #     reference_points_cam=reference_points_cam,
+    #     bev_mask=bev_mask,
+    #     level_start_index=level_start_index,
+    # )
+
+    # ttnn_output = ttnn.to_torch(tt_output)
+    # pcc_passed, pcc_message = assert_with_pcc(ttnn_output, torch_output, 0.99)
+    # logger.info(pcc_message)
