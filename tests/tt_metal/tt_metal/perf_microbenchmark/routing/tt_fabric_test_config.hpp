@@ -1191,9 +1191,9 @@ private:
             });
 
             if (it != test.senders.end()) {
-                it->patterns.push_back(merged_pattern);
+                it->patterns.emplace_back(std::move(merged_pattern));
             } else {
-                test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
+                test.senders.emplace_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
         }
     }
@@ -1277,12 +1277,12 @@ private:
             specific_pattern.destination = ParsedDestinationConfig{.device = dst_node};
             specific_pattern.ftype = ChipSendType::CHIP_UNICAST;
 
-            generated_senders[src_node].push_back(merge_patterns(base_pattern, specific_pattern));
+            generated_senders[src_node].emplace_back(merge_patterns(base_pattern, specific_pattern));
         }
 
         test.senders.reserve(test.senders.size() + generated_senders.size());
         for (const auto& [src_node, patterns] : generated_senders) {
-            test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = patterns});
+            test.senders.emplace_back(ParsedSenderConfig{.device = src_node, .patterns = patterns});
         }
     }
 
@@ -1320,11 +1320,11 @@ private:
                     for (const auto& split_hop : split_hops_vec) {
                         ParsedTrafficPatternConfig new_pattern = pattern;
                         new_pattern.destination->hops = split_hop;
-                        new_patterns.push_back(new_pattern);
+                        new_patterns.emplace_back(std::move(new_pattern));
                     }
                 } else if (sender_was_modified) {
                     // We are in copy-mode because a previous pattern was split.
-                    new_patterns.push_back(pattern);
+                    new_patterns.emplace_back(pattern);
                 }
             }
 
