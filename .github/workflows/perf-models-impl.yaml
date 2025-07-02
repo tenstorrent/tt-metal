@@ -23,7 +23,7 @@ jobs:
         test-info: [
           {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "perf-no-reset-grayskull"], machine-type: "bare_metal"},
         ]
-        model-type: [cnn_javelin, other]
+        model-type: [cnn_javelin, other2]
     name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
     defaults:
       run:
@@ -671,6 +671,24 @@ jobs:
           run_args: |
             env pytest -n auto models/demos/roberta/tests/test_performance.py -m models_performance_bare_metal
             env python3 models/perf/merge_perf_results.py roberta
+      - name: Merge Perf Reports
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: |
+            env python3 models/perf/merge_perf_results.py
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
       #  if: ${{ failure() }}
@@ -680,7 +698,6 @@ jobs:
         id: check-perf-report
         if: ${{ !cancelled() }}
         run: |
-          env python3 models/perf/merge_perf_results.py
           ls -hal
           export PERF_REPORT_FILENAME=Models_Perf_$(date +%Y_%m_%d).csv
           ls -hal $PERF_REPORT_FILENAME
