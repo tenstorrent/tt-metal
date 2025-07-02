@@ -9,10 +9,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.lightweightmodule import LightweightModule
 
 
-class HostEmbedding(LightweightModule):
+class HostEmbedding(torch.nn.Module):
     def __init__(self, model_args):
         super().__init__()
         self.emb = torch.nn.Embedding(model_args.vocab_size, model_args.dim)
