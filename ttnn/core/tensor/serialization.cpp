@@ -269,7 +269,9 @@ DistributedStorage load_multi_device_host_storage(
 DistributedStorage load_storage(
     FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, MeshDevice* device) {
     if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::DEVICE) {
-        TT_FATAL(device != nullptr, "Device is required for multi-device host storage");
+        // TODO: #22262 - Migrate to the new serialization format that embeds the required information into the tensor
+        // file.
+        TT_FATAL(device != nullptr, "MeshDevice is required for loading multi-device host storage");
         return load_multi_device_host_storage(input_file, data_type, layout, *device);
     }
     return DistributedStorage{load_host_storage(input_file, data_type), ReplicateTensor{}};
