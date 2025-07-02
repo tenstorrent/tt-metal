@@ -855,6 +855,7 @@ void MetalContext::initialize_firmware(
     // Initialize each entry in the launch_msg ring buffer with DISPATCH_MODE_NONE during firmware initialization.
     // At this time, specifying the actual dispatch mode is misleading since the launch message is not needed
     // for the workers during firmware initialization. The actual dispatch mode will be set later when needed.
+    // We also set enables = 0 to ensure no kernels are executed during initialization.
     //
     // For reference, during program execution, cores that don't get a valid launch_message need to have
     // the correct dispatch mode configured as follows:
@@ -868,6 +869,8 @@ void MetalContext::initialize_firmware(
     // When using Slow Dispatch, all cores initialized with DISPATCH_MODE_HOST
     launch_msg_t initial_buffer_msg = *launch_msg;
     initial_buffer_msg.kernel_config.mode = DISPATCH_MODE_NONE;
+    // Ensure no kernels execute during initialization
+    initial_buffer_msg.kernel_config.enables = 0;
     // Initialize the buffer using the temporary message
     std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, initial_buffer_msg);
     auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
