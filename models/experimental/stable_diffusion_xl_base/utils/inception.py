@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common.lightweightmodule import LightweightModule
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -19,7 +18,7 @@ FID_WEIGHTS_URL = (
 )
 
 
-class InceptionV3(LightweightModule):
+class InceptionV3(nn.Module):
     """Pretrained InceptionV3 network returning feature maps"""
 
     # Index of default block of inception to return,
