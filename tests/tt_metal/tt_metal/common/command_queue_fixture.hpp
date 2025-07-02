@@ -186,6 +186,59 @@ protected:
     std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
 };
 
+class UnitMeshCommandQueueSingleCardFixture : virtual public DispatchFixture {
+protected:
+    void SetUp() override {
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->create_devices();
+    }
+
+    void TearDown() override {
+        for (auto& device : devices_) {
+            device.reset();
+        }
+    }
+
+    bool validate_dispatch_mode() {
+        this->slow_dispatch_ = false;
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch) {
+            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            this->slow_dispatch_ = false;
+            return false;
+        }
+        return true;
+    }
+
+    void create_devices(std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+        const auto& dispatch_core_config =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const chip_id_t mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        std::vector<chip_id_t> chip_ids;
+        auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
+        if (enable_remote_chip or
+            tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB) {
+            for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+                chip_ids.push_back(id);
+            }
+        } else {
+            chip_ids.push_back(mmio_device_id);
+        }
+        auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
+            chip_ids, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, dispatch_core_config);
+        for (const auto& [id, device] : reserved_devices) {
+            this->devices_.push_back(device);
+        }
+    }
+
+    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
+};
+
+class UnitMeshCommandQueueSingleCardProgramFixture : virtual public UnitMeshCommandQueueSingleCardFixture {};
+
 class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture {};
 
 class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture {
