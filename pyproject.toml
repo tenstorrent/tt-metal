@@ -50,6 +50,6 @@ line-length = 120
 [tool.setuptools_scm]
 
 [tool.cibuildwheel]
-build = "cp310-manylinux_x86_64*"
+build = "cp310-manylinux_x86_64* cp312-manylinux_x86_64*"
 skip = "*-musllinux_*"
 build-verbosity = 2
