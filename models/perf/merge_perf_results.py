@@ -27,6 +27,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         my_arg = sys.argv[1]
         fname = f"perf_models_demos_{my_arg}_{today}.csv"
+        merge_perf_files(fname, "perf", expected_cols)
         check_perf_results(fname, expected_cols, check_cols)
     else:
         print("No argument provided.")
