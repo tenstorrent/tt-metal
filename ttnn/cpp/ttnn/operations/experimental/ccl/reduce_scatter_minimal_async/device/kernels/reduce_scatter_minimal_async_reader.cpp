@@ -70,7 +70,7 @@ void kernel_main() {
         .data_format = get_dataformat(cb_input_id)};
 
     for (uint32_t b = 0; b < num_batches; b++) {
-        if (fuse_op) {
+        if constexpr (fuse_op) {
             matmul_receiver.wait_for_matmul_batch(b);
         }
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
@@ -87,7 +87,7 @@ void kernel_main() {
             uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
 
             uint32_t actual_slice_idx;
-            if (direction) {
+            if constexpr (direction) {
                 actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
             } else {
                 actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
@@ -103,7 +103,7 @@ void kernel_main() {
             uint32_t tiles_read = start_tiles_read;
             uint32_t tiles_to_read = start_tiles_to_read;
 
-            if (!direction) {
+            if constexpr (!direction) {
                 uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
                 tiles_read += backwards_offset;
                 pages_read_in_row += backwards_offset;
@@ -122,12 +122,16 @@ void kernel_main() {
              */
             if (do_reduce) {
                 while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) <= i - 1);
+                if (i == (ring_size - 1)) {
+                    // Reset the semaphore before the next batch
+                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) = 0;
+                }
             }
             while (tiles_read < tiles_to_read) {
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
 
                 uint32_t tiles_to_read_in_current_direction = 0;
-                if (direction) {
+                if constexpr (direction) {
                     tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read / 2, tile_granularity);
                 } else {
                     tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
@@ -177,7 +181,7 @@ void kernel_main() {
                 tiles_remaining_to_read = tiles_to_read - tiles_read;
                 if (tiles_remaining_to_read > 0) {
                     uint32_t tiles_to_read_in_other_direction = 0;
-                    if (!direction) {
+                    if constexpr (!direction) {
                         tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read / 2, tile_granularity);
                     } else {
                         tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read, tile_granularity);
@@ -194,7 +198,7 @@ void kernel_main() {
             }
 
             // Next slice idx
-            if (direction) {
+            if constexpr (direction) {
                 slice_idx--;
             } else {
                 slice_idx++;
