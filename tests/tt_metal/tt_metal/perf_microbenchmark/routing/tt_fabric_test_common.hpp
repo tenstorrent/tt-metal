@@ -190,7 +190,17 @@ public:
 
     bool use_dynamic_routing() const override { return routing_type_ == RoutingType::Dynamic; }
 
-    std::vector<FabricNodeId> get_ring_path_destinations(
+    /**
+     * This function takes hop information and computes the actual destination nodes that would be visited during a ring
+     * traversal multicast.
+     *
+     * For ring topology, nodes are arranged in a serpentine pattern where:
+     * - Traffic flows in a ring/circular pattern around the mesh
+     * - The direction of turn (at mesh boundaries) depends on the current row/position
+     * - Upper rows: East → South, Lower rows: East → North
+     * - Left columns: South → East, Right columns: South → West
+     */
+    std::vector<FabricNodeId> get_ring_topology_dst_node_ids_from_hops(
         const FabricNodeId& src_node_id, RoutingDirection initial_direction, uint32_t total_hops) const {
         std::vector<FabricNodeId> ring_destinations;
         ring_destinations.reserve(total_hops);
@@ -301,6 +311,8 @@ public:
     // ======================================================================================
     // IRouteManager methods
     // ======================================================================================
+    uint32_t get_num_mesh_dims() const override { return NUM_MESH_DIMS; }
+
     // TODO: instead of parsing ChipSendType, this should only care about unicast/mcast
     // or capturing every device in the path or not
     std::vector<FabricNodeId> get_dst_node_ids_from_hops(
@@ -317,7 +329,7 @@ public:
                 }
             }
             TT_FATAL(total_hops != 0, "all directions has 0 hops");
-            return get_ring_path_destinations(src_node, initial_direction, total_hops);
+            return get_ring_topology_dst_node_ids_from_hops(src_node, initial_direction, total_hops);
         }
 
         std::vector<FabricNodeId> dst_nodes;
@@ -464,6 +476,18 @@ public:
         return hops;
     }
 
+    /**
+     * Unlike traditional multicast that sends in all directions from a source, unidirectional
+     * linear multicast divides the mesh into halves and only sends in ONE direction per source:
+     *
+     * **Horizontal Division:**
+     * - Left half of mesh (x < mesh_width/2): multicasts EAST to right half
+     * - Right half of mesh (x >= mesh_width/2): multicasts WEST to left half
+     *
+     * **Vertical Division:**
+     * - Upper half of mesh (y < mesh_height/2): multicasts SOUTH to lower half
+     * - Lower half of mesh (y >= mesh_height/2): multicasts NORTH to upper half
+     */
     std::unordered_map<RoutingDirection, uint32_t> get_unidirectional_linear_mcast_hops(
         const FabricNodeId& src_node_id, uint32_t dim) const override {
         std::unordered_map<RoutingDirection, uint32_t> hops;
@@ -490,6 +514,28 @@ public:
         }
 
         return hops;
+    }
+
+    std::pair<FabricNodeId, FabricNodeId> get_wrap_around_mesh_ring_neighbors(
+        const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const override {
+        bool is_first_chip = src_node.chip_id == 0;
+        bool is_last_chip = src_node.chip_id == devices.size() - 1;
+
+        FabricNodeId dst_node_forward = src_node, dst_node_backward = src_node;
+
+        // TODO: fix for 6U since this is not a valid config for it.
+        if (is_first_chip) {
+            dst_node_forward = FabricNodeId{src_node.mesh_id, src_node.chip_id + 1};
+            dst_node_backward = FabricNodeId{src_node.mesh_id, static_cast<chip_id_t>(devices.size() - 1)};
+        } else if (is_last_chip) {
+            dst_node_forward = FabricNodeId{src_node.mesh_id, 0};
+            dst_node_backward = FabricNodeId{src_node.mesh_id, src_node.chip_id - 1};
+        } else {
+            dst_node_forward = FabricNodeId{src_node.mesh_id, src_node.chip_id + 1};
+            dst_node_backward = FabricNodeId{src_node.mesh_id, src_node.chip_id - 1};
+        }
+
+        return std::make_pair(dst_node_forward, dst_node_backward);
     }
 
     std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(

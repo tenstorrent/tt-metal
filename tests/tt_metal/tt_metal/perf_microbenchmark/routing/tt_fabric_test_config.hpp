@@ -1016,7 +1016,8 @@ private:
         TT_FATAL(!devices.empty(), "Cannot expand all_to_all_multicast because no devices were found.");
 
         for (const auto& src_node : devices) {
-            for (uint32_t dim = 0; dim < this->route_manager_.NUM_MESH_DIMS; ++dim) {
+            // instantiate N/S E/W traffic on seperate senders to avoid bottlnecking on sender.
+            for (uint32_t dim = 0; dim < this->route_manager_.get_num_mesh_dims(); ++dim) {
                 auto hops = this->route_manager_.get_unidirectional_linear_mcast_hops(src_node, dim);
 
                 TrafficPatternConfig specific_pattern;
@@ -1036,21 +1037,9 @@ private:
         TT_FATAL(!devices.empty(), "Cannot expand all_to_all_multicast because no devices were found.");
 
         for (const auto& src_node : devices) {
-            bool is_first_chip = src_node.chip_id == 0;
-            bool is_last_chip = src_node.chip_id == devices.size() - 1;
-            FabricNodeId dst_node_forward = src_node;
-            FabricNodeId dst_node_backward = src_node;
             // TODO: fix for 6U since this is not a valide config for it.
-            if (is_first_chip) {
-                dst_node_forward = FabricNodeId{src_node.mesh_id, src_node.chip_id + 1};
-                dst_node_backward = FabricNodeId{src_node.mesh_id, devices.size() - 1};
-            } else if (is_last_chip) {
-                dst_node_forward = FabricNodeId{src_node.mesh_id, 0};
-                dst_node_backward = FabricNodeId{src_node.mesh_id, src_node.chip_id - 1};
-            } else {
-                dst_node_forward = FabricNodeId{src_node.mesh_id, src_node.chip_id + 1};
-                dst_node_backward = FabricNodeId{src_node.mesh_id, src_node.chip_id - 1};
-            }
+            auto [dst_node_forward, dst_node_backward] =
+                this->route_manager_.get_wrap_around_mesh_ring_neighbors(src_node, devices);
 
             auto hops = this->route_manager_.get_full_or_half_ring_mcast_hops(
                 src_node, dst_node_forward, dst_node_backward, patter_type);
