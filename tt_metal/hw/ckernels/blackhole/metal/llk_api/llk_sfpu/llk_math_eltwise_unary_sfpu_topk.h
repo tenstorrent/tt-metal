@@ -15,37 +15,10 @@ namespace ckernel {
 
 SFPU_INIT_ONLY_WITH_TYPE(topk, topk_local_sort, sfpu::topk_init)
 
-SFPU_UNARY_PARAMS_KERNEL_WITH_CUSTOM_CALC(
-    topk_local_sort,
-    RC_custom,
-    ckernel::sfpu::calculate_bitonic_topk_phases_steps,
-    int idir,
-    int i_end_phase,
-    int i_start_phase,
-    int i_end_step,
-    int i_start_step,
-    idir,
-    i_end_phase,
-    i_start_phase,
-    i_end_step,
-    i_start_step)
+SFPU_TOPK_LOCAL_SORT_KERNEL(topk_local_sort)
 
-SFPU_UNARY_PARAMS_KERNEL_WITH_EXTRA_TEMPLATE(
-    topk_merge, RC_custom, ckernel::sfpu::calculate_bitonic_topk_merge, bool idir = false, int m_iter, int k, m_iter, k)
+SFPU_TOPK_MERGE_KERNEL(topk_merge)
 
-SFPU_UNARY_PARAMS_KERNEL_WITH_CUSTOM_CALC(
-    topk_rebuild,
-    RC_custom,
-    ckernel::sfpu::calculate_bitonic_topk_rebuild,
-    bool idir,
-    int m_iter,
-    int k,
-    int logk,
-    int skip_second,
-    idir,
-    m_iter,
-    k,
-    logk,
-    skip_second)
+SFPU_TOPK_REBUILD_KERNEL(topk_rebuild)
 
 }  // namespace ckernel

@@ -37,6 +37,14 @@
         llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(CALC_CB<APPROXIMATE>, dst_index, vector_mode, EXTRA_ARG_PASS); \
     }
 
+// For unary kernels with multiple extra arguments and a custom compute callback
+#define SFPU_UNARY_PARAMS_KERNEL_CUSTOM_ARGS(OP, MODE, CALC_CB, EXTRA_DECLS, EXTRA_PASS)                           \
+    template <bool APPROXIMATE>                                                                                    \
+    inline void llk_math_eltwise_unary_sfpu_##OP(                                                                  \
+        uint dst_index, EXTRA_DECLS, int vector_mode = (int)VectorMode::MODE) {                                    \
+        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(CALC_CB<APPROXIMATE>, dst_index, vector_mode, EXTRA_PASS); \
+    }
+
 // For init-only kernels using SfpuType::unused
 #define SFPU_UNARY_KERNEL_INIT_UNUSED(OP)                                  \
     template <bool APPROXIMATE>                                            \
@@ -112,19 +120,6 @@
             ckernel::sfpu::calculate_##OP<APPROXIMATE>, dst_index, vector_mode, EXTRA_ARG_PASS); \
     }
 
-// For a pair of compute‐only ops that switch on an enum
-#define SFPU_DIM_DUALTYPE_SWITCH_KERNEL(OP, ENUM, TYPE0A, TYPE0B, CALC0, MODE0, CALC1, MODE1)                       \
-    template <bool APPROXIMATE>                                                                                     \
-    inline void llk_math_eltwise_unary_sfpu_##OP(uint dst_index, ENUM dim, int vector_mode = (int)VectorMode::RC) { \
-        if (dim == ENUM::TYPE0A || dim == ENUM::TYPE0B) {                                                           \
-            llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                        \
-                ckernel::sfpu::CALC0<APPROXIMATE>, dst_index, vector_mode);                                         \
-        } else if (dim == ENUM::MODE1) {                                                                            \
-            llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                        \
-                ckernel::sfpu::CALC1<APPROXIMATE>, dst_index, vector_mode);                                         \
-        }                                                                                                           \
-    }
-
 // For ops with two implementations that select compute callback based on an enum argument
 #define SFPU_DIM_DUALTYPE_SWITCH_KERNEL(OP, ENUM, TYPE0A, TYPE0B, CALC0, MODE0, CALC1, MODE1) \
     template <bool APPROXIMATE>                                                               \
@@ -195,6 +190,71 @@
         llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                       \
             ckernel::sfpu::calculate_unary_##OP<APPROXIMATE>, dst_index, vector_mode, param0); \
     }                                                                                          \
+    }
+
+#define SFPU_TOPK_LOCAL_SORT_KERNEL(OP)                                      \
+    template <bool APPROXIMATE>                                              \
+    inline void llk_math_eltwise_unary_sfpu_##OP(                            \
+        uint dst_index,                                                      \
+        int idir,                                                            \
+        int i_end_phase,                                                     \
+        int i_start_phase,                                                   \
+        int i_end_step,                                                      \
+        int i_start_step,                                                    \
+        int vector_mode = (int)VectorMode::RC_custom) {                      \
+        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                     \
+            ckernel::sfpu::calculate_bitonic_topk_phases_steps<APPROXIMATE>, \
+            dst_index,                                                       \
+            vector_mode,                                                     \
+            idir,                                                            \
+            i_end_phase,                                                     \
+            i_start_phase,                                                   \
+            i_end_step,                                                      \
+            i_start_step);                                                   \
+    }
+
+// Macro for topk_merge which expects multiple arguments and a custom compute callback
+#define SFPU_TOPK_MERGE_KERNEL(OP)                                                                              \
+    template <bool APPROXIMATE, bool idir = false>                                                              \
+    inline void llk_math_eltwise_unary_sfpu_##OP(                                                               \
+        uint dst_index, int m_iter, int k, int vector_mode = (int)VectorMode::RC_custom) {                      \
+        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                                        \
+            ckernel::sfpu::calculate_bitonic_topk_merge<APPROXIMATE, idir>, dst_index, vector_mode, m_iter, k); \
+    }
+
+#define SFPU_TOPK_REBUILD_KERNEL(OP)                                    \
+    template <bool APPROXIMATE>                                         \
+    inline void llk_math_eltwise_unary_sfpu_##OP(                       \
+        uint dst_index,                                                 \
+        bool idir,                                                      \
+        int m_iter,                                                     \
+        int k,                                                          \
+        int logk,                                                       \
+        int skip_second,                                                \
+        int vector_mode = (int)VectorMode::RC_custom) {                 \
+        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                \
+            ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROXIMATE>, \
+            dst_index,                                                  \
+            vector_mode,                                                \
+            idir,                                                       \
+            m_iter,                                                     \
+            k,                                                          \
+            logk,                                                       \
+            skip_second);                                               \
+    }
+
+// For ops where init callback is custom and compute callback uses an extra template parameter
+#define SFPU_INIT_AND_UNARY_PARAMS_KERNEL_WITH_EXTRA_TEMPLATE_ARG(                           \
+    OP, TYPE, INIT_CB, MODE, CALC_CB, EXTRA_TEMPLATE, EXTRA_ARG_DECL, EXTRA_ARG_PASS)        \
+    template <bool APPROXIMATE>                                                              \
+    inline void llk_math_eltwise_unary_sfpu_##OP##_init() {                                  \
+        llk_math_eltwise_unary_sfpu_init<SfpuType::TYPE, APPROXIMATE>(INIT_CB<APPROXIMATE>); \
+    }                                                                                        \
+    template <bool APPROXIMATE>                                                              \
+    inline void llk_math_eltwise_unary_sfpu_##OP(                                            \
+        uint dst_index, EXTRA_ARG_DECL, int vector_mode = (int)VectorMode::MODE) {           \
+        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(                                     \
+            CALC_CB<APPROXIMATE, EXTRA_TEMPLATE>, dst_index, vector_mode, EXTRA_ARG_PASS);   \
     }
 
 // For ops that need a custom init callback but no extra arguments

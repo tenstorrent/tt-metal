@@ -15,7 +15,14 @@ namespace ckernel {
 
 SFPU_INIT_LITERAL_KERNEL(log, sfpu::log_init, 0)
 
-SFPU_UNARY_PARAMS_KERNEL_WITH_EXTRA_TEMPLATE_ARG(
-    log_with_base, RC, ckernel::sfpu::calculate_log, true, uint base_scale, base_scale)
+SFPU_INIT_AND_UNARY_PARAMS_KERNEL_WITH_EXTRA_TEMPLATE_ARG(
+    log_with_base,                 // OP
+    log_with_base,                 // TYPE
+    sfpu::log_init,                // INIT_CB
+    RC,                            // MODE
+    ckernel::sfpu::calculate_log,  // CALC_CB
+    true,                          // EXTRA_TEMPLATE (base_flag = true)
+    uint base_scale,               // EXTRA_ARG_DECL
+    base_scale)                    // EXTRA_ARG_PASS
 
 }  // namespace ckernel

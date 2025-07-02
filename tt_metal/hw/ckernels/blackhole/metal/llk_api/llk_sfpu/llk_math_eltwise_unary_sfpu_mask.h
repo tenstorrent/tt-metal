@@ -15,7 +15,8 @@ namespace ckernel {
 
 SFPU_UNARY_KERNEL_INIT_ONLY(mask)
 
-SFPU_DIM_DUALTYPE_SWITCH_KERNEL(mask, DataFormat, calculate_mask, Float16_b, calculate_int_mask, Int32)
+SFPU_DIM_DUALTYPE_SWITCH_KERNEL(
+    mask, DataFormat, Float16_b, Float16, calculate_mask, Float16, calculate_int_mask, Int32)
 
 SFPU_UNARY_KERNEL_NO_INIT(mask_posinf)
 
