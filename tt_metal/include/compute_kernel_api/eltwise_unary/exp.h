@@ -59,7 +59,7 @@ template <
     int iterations = 8>
 ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = 0x3F80) {
     MATH((llk_math_eltwise_unary_sfpu_exponential<approx, fast_and_approx, scale_en, skip_positive_check, iterations>(
-        idst, vector_mode, iterations, scale)));
+        idst, vector_mode, scale)));
 }
 
 }  // namespace ckernel
