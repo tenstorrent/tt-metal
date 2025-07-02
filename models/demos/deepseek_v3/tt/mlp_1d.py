@@ -12,10 +12,8 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
-    AllGatherConfig,
     FromWeightConfig,
     LinearConfig,
-    MeshDeviceStub,
     ModelDecodeConfig,
     ModelPrefillConfig,
     MulConfig,
@@ -29,8 +27,8 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     TILE_SIZE,
     dequantize,
+    dram_matmul_config,
     dram_shard_core_grid_for_k_and_n,
-    dram_sharded_matmul_config,
     dram_sharded_weight_config,
     find_prefill_grid,
     matmul_config,
@@ -286,33 +284,32 @@ class MLP1D(AbstractModule):
 
         config: ModelDecodeConfig = {}
 
+        rows = TILE_SIZE * int(math.ceil(MLP1D.MAX_BATCH_SIZE / TILE_SIZE))
+        mlp1_core_grid = dram_shard_core_grid_for_k_and_n(dim, hidden_dim // num_devices)
+        mlp2_core_grid = dram_shard_core_grid_for_k_and_n(hidden_dim // num_devices, dim)
+
         # Decode mode configurations
         config["w1"] = config["w3"] = LinearConfig(
             input_tensor_b=FromWeightConfig(),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            program_config=dram_sharded_matmul_config(dim, hidden_dim, mesh_device),
+            program_config=dram_matmul_config(rows, dim, hidden_dim // num_devices, mlp1_core_grid.num_cores),
             compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,  # FP16 accumulation saves L1
         )
 
-        tile_padded_batch_rows = TILE_SIZE * int(math.ceil(MLP1D.MAX_BATCH_SIZE / TILE_SIZE))
-        mlp2_core_grid = dram_shard_core_grid_for_k_and_n(hidden_dim // num_devices, dim)
-        config["w2_reshard"] = AllGatherConfig(
-            memory_config=ttnn.create_sharded_memory_config(
-                (
-                    tile_padded_batch_rows,
-                    hidden_dim // num_devices // mlp2_core_grid.num_cores,
-                ),
-                mlp2_core_grid,
-                ttnn.ShardStrategy.WIDTH,
-                ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
+        config["w2_reshard"] = ttnn.create_sharded_memory_config(
+            (
+                rows,
+                hidden_dim // num_devices // mlp2_core_grid.num_cores,
             ),
-            mesh_device=MeshDeviceStub(tuple(mesh_device.shape)),
+            mlp2_core_grid,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
         )
         config["w2"] = LinearConfig(
             input_tensor_b=FromWeightConfig(),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            program_config=dram_sharded_matmul_config(hidden_dim // num_devices, dim, mesh_device),
+            program_config=dram_matmul_config(rows, hidden_dim // num_devices, dim, mlp2_core_grid.num_cores),
             compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
         )
 
@@ -339,25 +336,25 @@ class MLP1D(AbstractModule):
         config["pc_gen"] = MLP1D.MLPProgramConfigData(dim=dim, hidden_dim=hidden_dim, num_devices=num_devices)
 
         # Memory configs for input and output tensors (decode mode uses sharded configs)
-        tile_padded_batch_rows = TILE_SIZE * int(math.ceil(MLP1D.MAX_BATCH_SIZE / TILE_SIZE))
-        residual_grid = dram_shard_core_grid_for_k_and_n(dim // num_devices, dim)
-
         # Input memory config (not sharded across devices)
+        # RMSNorm must provide this shard spec as its output
         config["input_memory_config"] = ttnn.create_sharded_memory_config(
             (
-                tile_padded_batch_rows,
-                dim // residual_grid.num_cores,
+                rows,
+                dim // mlp1_core_grid.num_cores,
             ),
-            residual_grid,
+            mlp1_core_grid,
             ttnn.ShardStrategy.WIDTH,
             ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
 
-        # Output memory config (sharded across devices)
+        # Output memory config (sharded across devices, back to residual grid)
+        residual_grid = dram_shard_core_grid_for_k_and_n(dim // num_devices, dim)
+
         config["output_memory_config"] = ttnn.create_sharded_memory_config(
             (
-                tile_padded_batch_rows,
+                rows,
                 dim // residual_grid.num_cores // num_devices,
             ),
             residual_grid,
@@ -426,12 +423,14 @@ class MLP1D(AbstractModule):
         w3_out = ttnn.linear(x, program_config=cls._get_w1_w3_pc(current_seq_len, **cfg["pc_gen"]), **cfg["w3"])
         ttnn.deallocate(x)
 
+        # add reduce-scatter here to gather intermediates
+
         # Apply activation and multiply
         activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
-        # Down projection with dynamic program configs
+        # Down projection with dynamic program configs, no need to reshard as we are using dram activations
         output = ttnn.linear(activated, program_config=cls._get_w2_pc(current_seq_len, **cfg["pc_gen"]), **cfg["w2"])
         ttnn.deallocate(activated)
 
@@ -442,7 +441,7 @@ class MLP1D(AbstractModule):
         if original_shape is not None:
             output = ttnn.reshape(output, original_shape)
 
-        # Convert output to expected memory config
+        # Convert output to expected memory config FIXME: do we need this?
         output = ttnn.to_memory_config(output, cfg["output_memory_config"])
 
         return output
@@ -455,13 +454,15 @@ class MLP1D(AbstractModule):
         w3_out = ttnn.linear(x, **cfg["w3"])
         ttnn.deallocate(x)
 
+        # add reduce-scatter here to gather intermediates
+
         # Apply activation and multiply
         activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
         # w2 may use a different core grid, this is a no-op if they already match
-        activated = ttnn.to_memory_config(activated, **cfg["w2_reshard"])
+        activated = ttnn.to_memory_config(activated, cfg["w2_reshard"])
 
         # Down projection
         output = ttnn.linear(activated, **cfg["w2"])
@@ -470,7 +471,5 @@ class MLP1D(AbstractModule):
         # Convert output to expected memory config
         output = ttnn.to_memory_config(output, cfg["output_memory_config"])
 
-        return output
-
-        # All-reduce across devices to sum partial results
         # return ttnn.reduce_scatter(output, **cfg["reduce_scatter"])
+        return output

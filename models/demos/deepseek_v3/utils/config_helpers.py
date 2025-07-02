@@ -394,23 +394,6 @@ def dram_sharded_weight_config(k, n, dram_grid_size):
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
 
-def dram_sharded_matmul_config(k, n, mesh_device):
-    """Generate dram-sharded matmul configuration.
-
-    Args:
-        k: Input dimension
-        n: Output dimension
-        mesh_device: TTNN mesh device
-
-    Returns:
-        DRAM sharded matmul program config
-    """
-    core_grid = dram_shard_core_grid_for_k_and_n(k, n)
-    return dram_matmul_config(
-        m=TILE_SIZE, k=k, n=n, num_cores=core_grid.num_cores  # Single sequence position in decode
-    )
-
-
 def matmul_config(
     m: int,
     k: int,
