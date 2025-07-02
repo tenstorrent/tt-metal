@@ -17,6 +17,7 @@ import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
+    PagedAttention,
     PagedAttentionConfig,
     create_tt_model,
     preprocess_inputs_prefill,
@@ -93,20 +94,6 @@ def load_inputs(user_input, batch, instruct):
     return in_prompt
 
 
-def create_tt_page_table(global_batch_size, data_parallel, paged_attention_config: PagedAttentionConfig):
-    page_table = None
-
-    if paged_attention_config:
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation).repeat(data_parallel)
-        page_table = reverse_permutation.reshape(
-            global_batch_size, paged_attention_config.max_num_blocks // (global_batch_size // data_parallel)
-        )
-    return page_table
-
-
 def prepare_generator_args(
     num_devices,
     data_parallel,
@@ -150,11 +137,10 @@ def prepare_generator_args(
         model.append(model_i)
         tt_kv_cache.append(tt_kv_cache_i)
 
-    page_table = create_tt_page_table(
-        global_batch_size=global_batch_size,
-        data_parallel=data_parallel,
-        paged_attention_config=paged_attention_config,
-    )
+    paged_attn = PagedAttention(page_params=page_params, model_args=model_args[0])
+
+    page_table = paged_attn.create_page_table(data_parallel=data_parallel)
+
     # Host code, safe to reuse tokenizer from the 1st model
     tokenizer = model_args[
         0

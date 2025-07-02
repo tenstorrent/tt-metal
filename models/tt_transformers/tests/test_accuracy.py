@@ -10,7 +10,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, preprocess_inputs_prefill
+from models.tt_transformers.tt.common import (
+    PagedAttention,
+    PagedAttentionConfig,
+    get_prefill_rot_mat,
+    preprocess_inputs_prefill,
+)
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
@@ -181,23 +186,17 @@ def test_tt_model_acc(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
         )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+
+        paged_attn = PagedAttention(page_params=page_params, model_args=model_args)
+
+        mesh_mapper = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, -2) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            mesh_shape=model_args.cluster_shape,
         )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=(None, -2) if batch_size > 1 else (None, None),
-                mesh_shape=model_args.cluster_shape,
-            ),
+
+        _, page_table_tt = paged_attn.create_page_table(
+            device=mesh_device, mesh_mapper=mesh_mapper, per_device_group=False, return_tt=True
         )
 
     # Initialize TT model

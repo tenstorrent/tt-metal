@@ -9,9 +9,6 @@ import ttnn
 import json
 import pandas as pd
 from collections import defaultdict
-from models.demos.llama3_subdevices.tt.llama_common import (
-    PagedAttentionConfig,
-)
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf
 from tt_metal.tools.profiler.process_model_log import (
@@ -112,14 +109,6 @@ def test_llama_demo(
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    if paged_attention:
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
-    else:
-        paged_attention_config = None
-
     return run_llama3_demo(
         user_input=input_prompts,
         mesh_device=mesh_device,
@@ -127,7 +116,7 @@ def test_llama_demo(
         batch_size=batch_size,
         num_batches=repeat_batches,
         paged_attention=paged_attention,
-        paged_attention_config=paged_attention_config,
+        page_params=page_params,
         max_generated_tokens=max_generated_tokens,
         optimizations=optimizations,
         sampling_params=sampling_params,

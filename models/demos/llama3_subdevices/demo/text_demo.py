@@ -17,10 +17,7 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 from models.demos.llama3_subdevices.tt.generator import Generator, SamplingParams
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.tt_transformers.tt.common import (
-    preprocess_inputs_prefill,
-    PagedAttentionConfig,
-)
+from models.tt_transformers.tt.common import preprocess_inputs_prefill, PagedAttentionConfig, PagedAttention
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.utility_functions import (
     comp_pcc,
@@ -122,17 +119,10 @@ def create_tt_model(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
         )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            max_batch_size, paged_attention_config.max_num_blocks // max_batch_size
-        )
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
+
+        paged_attn = PagedAttention(page_params=page_params, model_args=tt_model_args)
+
+        page_table, _ = paged_attn.create_page_table()
 
     model = TtTransformer(
         args=tt_model_args,
