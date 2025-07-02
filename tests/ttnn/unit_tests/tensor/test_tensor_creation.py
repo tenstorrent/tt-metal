@@ -316,13 +316,13 @@ core_ranges = ttnn.num_cores_to_corerangeset(56, grid_size, True)
         ),
         # Sharding using TensorSpec methods
         # Batch sharding
-        ttnn.TensorSpec((2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1).sharded_by_dims(
-            [0], core_ranges
-        ),
+        ttnn.TensorSpec(
+            (2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+        ).sharded_across_dims_except([0], core_ranges),
         # Sharding preserving last two dimensions
-        ttnn.TensorSpec((2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1).sharded_by_dims(
-            [-1, -2], core_ranges
-        ),
+        ttnn.TensorSpec(
+            (2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+        ).sharded_across_dims_except([-1, -2], core_ranges),
         # Sharding across last dimension
         ttnn.TensorSpec(
             (2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
