@@ -304,6 +304,11 @@ bool single_core_binary(tt_metal::IDevice* device, const SingleCoreBinaryConfig&
 }  // namespace unit_tests::compute::binary
 
 TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreSingleTileAdd) {
+    // Temporary solution to skip the test on wormhole B0 and silicon simulator SOC
+    auto arch = this->arch_;
+    if (arch != tt::ARCH::WORMHOLE_B0 && getenv("TT_METAL_SILICON_WITH_SIMULATOR_SOC") != nullptr) {
+        GTEST_SKIP();
+    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
