@@ -614,11 +614,11 @@ uint32_t Device::num_sub_devices() const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices();
 }
 
-CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel) const {
+CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel, NOC noc) const {
     return tt::tt_metal::MetalContext::instance()
         .get_cluster()
         .get_soc_desc(id_)
-        .get_preferred_worker_core_for_dram_view(dram_channel);
+        .get_preferred_worker_core_for_dram_view(dram_channel, noc);
 }
 
 CoreCoord Device::logical_core_from_dram_channel(uint32_t dram_channel) const {
@@ -635,9 +635,12 @@ uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) c
 
 uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
-    for (uint32_t channel = 0; channel < this->num_dram_channels(); ++channel) {
-        if (soc_desc.get_preferred_worker_core_for_dram_view(channel) == virtual_core) {
-            return channel;
+    uint32_t num_nocs = MetalContext::instance().hal().get_num_nocs();
+    for (uint32_t noc = 0; noc < num_nocs; noc++) {
+        for (uint32_t channel = 0; channel < this->num_dram_channels(); ++channel) {
+            if (soc_desc.get_preferred_worker_core_for_dram_view(channel, noc) == virtual_core) {
+                return channel;
+            }
         }
     }
     TT_THROW("Virtual core {} is not a DRAM core", virtual_core.str());
@@ -850,7 +853,7 @@ void Device::reset_sub_device_stall_group() {
     sub_device_manager_tracker_->get_active_sub_device_manager()->reset_sub_device_stall_group();
 }
 
-std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment() {
+std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
     // Top level function that users (ex: Op Writers) can use to assign Tensix Worker cores
     // as DRAM readers or writers. Returns logical coordinates of optimally placed workers.
     // This function queries Physical Coordinates (only exposed directly to the Device class)
@@ -873,7 +876,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id());
         std::vector<CoreCoord> dram_phy_coords;
         for (int i = 0; i < num_dram_banks; ++i) {
-            auto dram_core = dram_core_from_dram_channel(i);
+            auto dram_core = this->dram_core_from_dram_channel(i, noc);
             if (dram_is_virtualized) {
                 tt::umd::CoreCoord umd_dram_coord = soc_d.translate_coord_to(
                     tt_xy_pair(dram_core.x, dram_core.y), CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
@@ -901,14 +904,20 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         }
         // Get optimal placement of worker cores interfacing with DRAM Controllers in physical coordinate space
         auto physical_worker_cores = get_optimal_dram_to_physical_worker_assignment(this->arch(), dram_phy_coords, full_grid_size_x, full_grid_size_y, worker_phy_x, worker_phy_y);
+
+        const metal_SocDescriptor& soc_desc =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
         // Convert to physical worker coordinates to logical. This gets returned to the user.
-        for (int i = 0; i < physical_worker_cores.size(); ++i) {
-            for (int j = 0; j < all_worker_cores_logical.size(); ++j) {
-                auto core = this->physical_worker_core_from_logical_core(all_worker_cores_logical[j]);
-                if (physical_worker_cores[i] == core) {
-                    this->optimal_dram_bank_to_logical_worker_assignment_.push_back(all_worker_cores_logical[j]);
-                }
-            }
+        for (auto physical_worker_core : physical_worker_cores) {
+            tt::umd::CoreCoord logical_coord_translated =
+                soc_desc.translate_coord_to(physical_worker_core, CoordSystem::PHYSICAL, CoordSystem::LOGICAL);
+            this->optimal_dram_bank_to_logical_worker_assignment_.push_back(
+                CoreCoord(logical_coord_translated.x, logical_coord_translated.y));
+            TT_ASSERT(
+                logical_coord_translated.core_type == CoreType::TENSIX,
+                "Worker dram interface core {} should be a Tensix core, algorithm to place DRAM interfacing workers is "
+                "invalid",
+                logical_coord_translated.str());
         }
     }
     return this->optimal_dram_bank_to_logical_worker_assignment_;
