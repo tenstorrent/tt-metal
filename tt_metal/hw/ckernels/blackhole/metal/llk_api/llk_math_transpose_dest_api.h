@@ -9,7 +9,7 @@
 
 template <bool transpose_of_faces = true, bool is_32bit = false>
 inline void llk_math_transpose_dest(uint dst_index) {
-    _llk_math_transpose_dest_<transpose_of_faces, is_32bit>(dst_index);
+    _llk_math_transpose_dest_<DST_ACCUM_MODE, transpose_of_faces, is_32bit>(dst_index);
 }
 
 template <bool transpose_of_faces = true, bool is_32bit = false>
