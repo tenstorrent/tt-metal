@@ -23,6 +23,12 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
         "{} must only be used for communication between different host ranks, not within the same rank.",
         __func__);
 
+    fmt::print(
+        "Mesh socket on rank {} with sender rank {} and receiver rank {} is being created.\n",
+        *context->rank(),
+        *config.sender_rank,
+        *config.receiver_rank);
+
     bool is_sender = context->rank() == config.sender_rank;
     if (is_sender) {
         socket_endpoint_type_ = SocketEndpoint::SENDER;

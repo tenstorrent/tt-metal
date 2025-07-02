@@ -8,13 +8,22 @@
 
 RemoteOptimizer::RemoteOptimizer(ttml::serialization::NamedParameters parameters, int aggregator_rank) :
     ttml::optimizers::OptimizerBase(std::move(parameters)), m_socket_manager(SocketType::MPI) {
+    fmt::println("RemoteOptimizer creation starts with {} parameters", m_parameters.size());
+
     m_aggregator_rank = ttml::core::distributed::Rank{aggregator_rank};
     m_sorted_parameters = SortedParameters(m_parameters.begin(), m_parameters.end());
 
     auto workers_and_aggregator_ranks =
         three_tier_arch::get_workers_and_aggregator_ranks(static_cast<uint32_t>(*m_aggregator_rank));
+    fmt::println("Remote optimizer before sub context creation");
     m_distributed_ctx =
         ttml::autograd::ctx().get_distributed_context()->create_sub_context(workers_and_aggregator_ranks);
+    fmt::println("Remote optimizer after sub context creation");
+    fmt::println(
+        "RemoteOptimizer created with {} parameters, aggregator rank: {}, distributed context: {}",
+        m_sorted_parameters.size(),
+        *m_aggregator_rank,
+        m_distributed_ctx->rank());
 }
 
 void RemoteOptimizer::zero_grad() {
