@@ -72,6 +72,7 @@ void MAIN {
 #else
     binary_op_init_common(cb_in, cb_in, cb_xmm2);
 #endif
+    init_sfpu(cb_xmm2, cb_xmm2);
 
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
@@ -133,6 +134,8 @@ void MAIN {
         if constexpr (FLOAT32_DTYPE) {
             reconfig_data_format(cb_x, cb_ex);
         }
+
+        binary_op_init_common(cb_x, cb_ex, cb_xmm);
         cb_wait_front(cb_ex, 1);  // should have 1 tile
         cb_reserve_back(cb_xmm, Wt);
         sub_bcast_cols_init_short(cb_x, cb_ex);
@@ -169,7 +172,7 @@ void MAIN {
             REL();
         }
 
-        pairwise_reduce_cb(cb_xmm2, cb_scaler, cb_xmm2, cb_ex2, Wt, 4);
+        pairwise_reduce_cb<true>(cb_xmm2, cb_scaler, cb_xmm2, cb_ex2, Wt, 4);
 
         if constexpr (FLOAT32_DTYPE) {
             reconfig_data_format(cb_ex2, cb_eps);

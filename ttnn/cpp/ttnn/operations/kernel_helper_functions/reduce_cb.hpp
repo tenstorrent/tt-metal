@@ -86,7 +86,6 @@ void pairwise_reduce_cb(
             }
             cb_wait_front(cb_intermediate, 2);
             add_tiles(cb_intermediate, cb_intermediate, 0, 1, dstreg);
-            // dprint_tensix_dest_reg(dstreg);
             cb_pop_front(cb_intermediate, 2);
             // If we have an odd cb_length, we want to add the third tile to the result of the first two
             if (i == 0 && (cb_length & 1) == 1) {
