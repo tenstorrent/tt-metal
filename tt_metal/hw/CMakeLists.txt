@@ -284,6 +284,12 @@ target_sources(
         FILES
             ${blackhole_kernels}
             ${wormhole_kernels}
+            inc/accessor/args_location.h
+            inc/accessor/array_wrapper.h
+            inc/accessor/const.h
+            inc/accessor/dspec.h
+            inc/accessor/helpers.h
+            inc/accessor/tensor_accessor.h
             inc/atomic_rwptr.h
             inc/bit_utils.h
             inc/blackhole/c_tensix_core.h
