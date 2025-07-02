@@ -320,7 +320,11 @@ public:
     // Returns the string representation for hash computation.
     inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) const {
         switch (feature) {
-            case RunTimeDebugFeatureDprint: return std::to_string(get_feature_enabled(feature));
+            case RunTimeDebugFeatureDprint: {
+                std::string hash_str = std::to_string(get_feature_enabled(feature));
+                hash_str += std::to_string(get_feature_all_chips(feature));
+                return hash_str;
+            }
             case RunTimeDebugFeatureReadDebugDelay:
             case RunTimeDebugFeatureWriteDebugDelay:
             case RunTimeDebugFeatureAtomicDebugDelay:
