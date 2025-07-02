@@ -73,6 +73,7 @@ from models.utility_functions import skip_for_blackhole
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
+            "fabric_config": True,
         }
     ],
     indirect=True,

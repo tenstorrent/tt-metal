@@ -78,6 +78,7 @@ from tqdm import tqdm
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
             "worker_l1_size": 1344544,
+            "fabric_config": True,
         }
     ],
     indirect=True,

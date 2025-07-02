@@ -301,6 +301,7 @@ def create_tt_model(
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
+            "fabric_config": True,
         }
     ],
     indirect=True,

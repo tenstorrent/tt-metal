@@ -49,6 +49,7 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": True,
         }
     ],
     indirect=True,
@@ -88,7 +89,11 @@ def test_llama_rms_norm_inference(
 
     # Wrap it in DistributedNorm
     tt_model = DistributedNorm(
-        tt_inner_norm, model_args, TG=model_args.is_galaxy, tt_ccl=tt_ccl, ccl_topology=model_args["CCL_TOPOLOGY"]
+        tt_inner_norm,
+        model_args,
+        TG=model_args.is_galaxy,
+        tt_ccl=tt_ccl,
+        ccl_topology=model_args.model_config["CCL_TOPOLOGY"],
     )
 
     # Create reference model (unchanged)

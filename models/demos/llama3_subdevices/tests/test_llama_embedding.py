@@ -38,7 +38,11 @@ from models.demos.llama3_subdevices.tt.llama_common import HostEmbedding
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{}],
+    [
+        {
+            "fabric_config": True,
+        }
+    ],
     indirect=True,
 )
 def test_llama_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc):

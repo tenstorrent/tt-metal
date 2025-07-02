@@ -43,6 +43,7 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": True,
         }
     ],
     indirect=True,

@@ -436,6 +436,7 @@ def run_llama3_decode_performance(
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
+            "fabric_config": True,
         }
     ],
     indirect=True,

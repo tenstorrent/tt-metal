@@ -210,6 +210,7 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 31744,
             "worker_l1_size": 1344544,
+            "fabric_config": True,
         }
     ],
     indirect=True,
