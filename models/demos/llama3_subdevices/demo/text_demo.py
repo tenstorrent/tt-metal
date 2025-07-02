@@ -197,7 +197,7 @@ def create_tt_model(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, pcc_check, prefill_profile, num_layers",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -298,7 +298,7 @@ def create_tt_model(
             False,  # print_outputs
         ),
         (  # CI Run for PCC check for 1 Layer: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
-            "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
             True,  # instruct mode
             True,  # instruct mode
             1,  # repeat_batches
@@ -315,7 +315,7 @@ def create_tt_model(
             1,  # num layers
         ),
         (  # CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
-            "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
