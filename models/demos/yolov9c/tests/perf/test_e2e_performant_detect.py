@@ -46,7 +46,7 @@ def test_e2e_performant(
         model_location_generator=None,
     )
     performant_runner._capture_yolov9_trace_2cqs()
-    input_shape = (1, *resolution, 3)
+    input_shape = (1, 3, *resolution)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
     inference_times = []
