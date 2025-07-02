@@ -74,9 +74,9 @@ ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uin
     }
 }
 
-std::pair<float, uint32_t> get_transaction_bw(
-    uint32_t transaction_size, const std::unordered_map<uint32_t, float>& dict) {
+std::pair<float, uint32_t> get_transaction_bw(uint32_t transaction_size, const std::map<uint32_t, float>& dict) {
     for (const auto& [key, val] : dict) {
+        printf("key: %u, val: %f\n", key, val);
         if (key >= transaction_size && transaction_size <= 65536) {
             return {val, key};
         }
@@ -87,9 +87,10 @@ std::pair<float, uint32_t> get_transaction_bw(
     return {0.0f, 0};
 }
 
-uint32_t get_cycles_for_read_transaction_size(uint32_t transaction_size, bool is_dram, uint32_t num_transactions) {
+uint32_t get_cycles_for_read_transaction_size(
+    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions) {
     // for wh, add for other machines
-    std::unordered_map<uint32_t, float> dram_bw = {
+    std::map<uint32_t, float> dram_bw = {
         {16, 0.436},
         {32, 0.868},
         {64, 1.736},
@@ -104,7 +105,7 @@ uint32_t get_cycles_for_read_transaction_size(uint32_t transaction_size, bool is
         {32768, 27.758},
         {65536, 28.694}};
 
-    std::unordered_map<uint32_t, float> l1_read_bw = {
+    std::map<uint32_t, float> l1_read_far_bw = {
         {16, 0.868},
         {32, 1.724},
         {64, 3.477},
@@ -118,18 +119,41 @@ uint32_t get_cycles_for_read_transaction_size(uint32_t transaction_size, bool is
         {16384, 28.7},
         {32768, 28.618},
         {65536, 28.7}};
-    auto result = get_transaction_bw(transaction_size, is_dram ? dram_bw : l1_read_bw);
+    std::map<uint32_t, float> l1_read_local_bw = {
+        {16, 0.868},
+        {32, 1.724},
+        {64, 3.477},
+        {128, 6.899},
+        {256, 13.791},
+        {512, 27.594},
+        {1024, 27.696},
+        {2048, 27.911},
+        {4096, 27.811},
+        {8192, 27.808},
+        {16384, 27.814},
+        {32768, 27.805},
+        {65536, 27.84}};
+    auto transaction_type = is_local ? l1_read_local_bw : l1_read_far_bw;
+    if (is_dram) {
+        transaction_type = dram_bw;
+    }
+    printf("transaction size: %u\n", transaction_size);
+    auto result = get_transaction_bw(transaction_size, transaction_type);
     float transaction_bw = result.first;
     uint32_t transaction_size_mul_32 = result.second;
     // double check  this value
     float device_frequency_hz = 1e9;  // 1 GHz
-    uint32_t cycles = (num_transactions * transaction_size_mul_32) / (transaction_bw * 1e9) * device_frequency_hz;
+    printf("transaction size mul 32: %u\n", transaction_size_mul_32);
+    printf("transaction bw: %f\n", transaction_bw);
+    uint32_t cycles = std::ceil(
+        (float)(num_transactions * transaction_size_mul_32) / (float)(transaction_bw * 1e9) * device_frequency_hz);
     return cycles;
 }
 
-uint32_t get_cycles_for_write_transaction_size(uint32_t transaction_size, bool is_dram, uint32_t num_transactions) {
+uint32_t get_cycles_for_write_transaction_size(
+    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions) {
     // for wh, add for other machines
-    std::unordered_map<uint32_t, float> dram_bw = {
+    std::map<uint32_t, float> dram_bw = {
         {16, 0.436},
         {32, 0.868},
         {64, 1.736},
@@ -144,7 +168,7 @@ uint32_t get_cycles_for_write_transaction_size(uint32_t transaction_size, bool i
         {32768, 27.758},
         {65536, 28.694}};
 
-    std::unordered_map<uint32_t, float> l1_write_bw = {
+    std::map<uint32_t, float> l1_write_far_bw = {
         {16, 0.681},
         {32, 1.254},
         {64, 2.709},
@@ -158,12 +182,32 @@ uint32_t get_cycles_for_write_transaction_size(uint32_t transaction_size, bool i
         {16384, 27.808},
         {32768, 27.811},
         {65536, 28.808}};
-    auto result = get_transaction_bw(transaction_size, is_dram ? dram_bw : l1_write_bw);
+    // assume read local l1 and write local l1 are the same
+    std::map<uint32_t, float> l1_write_local_bw = {
+        {16, 0.868},
+        {32, 1.724},
+        {64, 3.477},
+        {128, 6.899},
+        {256, 13.791},
+        {512, 27.594},
+        {1024, 27.696},
+        {2048, 27.911},
+        {4096, 27.811},
+        {8192, 27.808},
+        {16384, 27.814},
+        {32768, 27.805},
+        {65536, 27.84}};
+    auto transaction_type = is_local ? l1_write_local_bw : l1_write_far_bw;
+    if (is_dram) {
+        transaction_type = dram_bw;
+    }
+    auto result = get_transaction_bw(transaction_size, transaction_type);
     float transaction_bw = result.first;
     uint32_t transaction_size_mul_32 = result.second;
     // double check  this value
     float device_frequency_hz = 1e9;  // 1 GHz
-    uint32_t cycles = (num_transactions * transaction_size_mul_32) / (transaction_bw * 1e9) * device_frequency_hz;
+    uint32_t cycles = std::ceil(
+        (float)(num_transactions * transaction_size_mul_32) / (float)(transaction_bw * 1e9) * device_frequency_hz);
     return cycles;
 }
 

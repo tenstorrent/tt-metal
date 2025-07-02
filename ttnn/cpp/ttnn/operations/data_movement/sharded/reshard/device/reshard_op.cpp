@@ -85,7 +85,7 @@ ReshardDeviceOperation::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    printf("create_op_performance_model\n");
+    printf("In create_op_performance_model for reshard op\n");
     const auto& input_tensor = input_tensors.at(0);
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         log_warning(tt::LogOp, "Input tensor not on DEVICE?!");
@@ -104,13 +104,24 @@ ReshardDeviceOperation::create_op_performance_model(
     //  for now assuming we are using all cores, different DRAM channels might be used
     auto arch = input_tensor.device()->arch();
     const int num_cores = (arch == tt::ARCH::WORMHOLE_B0) ? 64 : 108;
-
     // initial assumptions: divide transactions over all cores
-    // alternative: use only shard grid cores: read transactions are now near, write transactions still far
     uint32_t total_read_cycles = get_cycles_for_read_transaction_size(
-        input_transaction_size, is_dram, std::ceil((float)num_read_transactions / (float)num_cores));
+        input_transaction_size, is_dram, false, std::ceil((float)num_read_transactions / (float)num_cores));
 
     const auto& output_tensor = output_tensors.at(0);
+    // Assuming parallelization over shard grid cores:
+    // First pick the worker cores to be the max between the input and output shard grid cores
+    /*
+    auto input_num_cores = input_tensor.memory_config().shard_spec().value().grid.num_cores();
+    auto output_num_cores = output_tensor.memory_config().shard_spec().value().grid.num_cores();
+    num_cores = std::max(input_num_cores, output_num_cores);
+    auto is_local = true;
+    if (input_num_cores < output_num_cores) {
+        is_local = false;
+    }
+    uint32_t total_read_cycles = get_cycles_for_read_transaction_size(
+        input_transaction_size, is_dram, is_local, std::ceil((float)num_read_transactions / (float)num_cores));
+    */
     if (output_tensor.storage_type() != StorageType::DEVICE) {
         log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
@@ -120,7 +131,11 @@ ReshardDeviceOperation::create_op_performance_model(
     uint32_t output_transaction_size = is_tiled ? single_tile_size : output_shard_shape[-1] * element_size_bytes;
     uint32_t num_write_transactions = std::ceil((float)output_size_bytes / (float)output_transaction_size);
     uint32_t total_write_cycles = get_cycles_for_write_transaction_size(
-        output_transaction_size, is_dram, std::ceil((float)num_write_transactions / (float)num_cores));
+        output_transaction_size, is_dram, false, std::ceil((float)num_write_transactions / (float)num_cores));
+    /*
+    uint32_t total_read_cycles = get_cycles_for_read_transaction_size(
+        input_transaction_size, is_dram, !is_local, std::ceil((float)num_read_transactions / (float)num_cores));
+    */
 
     // do we just add cycles for read and write?
     int ideal_dev_clock_cycles = total_read_cycles + total_write_cycles;

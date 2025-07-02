@@ -169,7 +169,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> Untilize
     auto arch = input_tensor.device()->arch();
     const int num_cores = (arch == tt::ARCH::WORMHOLE_B0) ? 64 : 108;
     uint32_t total_read_cycles = get_cycles_for_read_transaction_size(
-        input_transaction_size, is_dram, std::ceil((float)num_read_transactions / (float)num_cores));
+        input_transaction_size, is_dram, false, std::ceil((float)num_read_transactions / (float)num_cores));
 
     const auto& output_tensor = output_tensors.at(0);
     if (output_tensor.storage_type() != StorageType::DEVICE) {
@@ -183,7 +183,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> Untilize
         is_sharded ? row_size : output_tensor.memory_config().shard_spec().value().shape[-1] * element_size_bytes;
     uint32_t num_write_transactions = std::ceil((float)output_size_bytes / (float)output_transaction_size);
     uint32_t total_write_cycles = get_cycles_for_write_transaction_size(
-        output_transaction_size, is_dram, std::ceil((float)num_write_transactions / (float)num_cores));
+        output_transaction_size, is_dram, false, std::ceil((float)num_write_transactions / (float)num_cores));
 
     // do we just add cycles for read and write?
     int ideal_dev_clock_cycles = total_read_cycles + total_write_cycles;
