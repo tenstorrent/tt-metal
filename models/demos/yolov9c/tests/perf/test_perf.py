@@ -5,44 +5,34 @@
 import time
 
 import pytest
+import torch
+import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from models.demos.yolov9c.demo.demo_utils import load_torch_model
-from models.demos.yolov9c.tt import ttnn_yolov9c
-from models.demos.yolov9c.tt.model_preprocessing import create_yolov9c_input_tensors, create_yolov9c_model_parameters
+from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    run_for_wormhole_b0,
-)
+from models.utility_functions import run_for_wormhole_b0
 
 
 def get_expected_times(name):
-    base = {"yolov9c": (114.21, 1.3)}
+    base = {"yolov9c": (114.21, 40)}
     return base[name]
 
 
-def dealloc_output(output_tensor):
-    ttnn.deallocate(output_tensor[0])
-    for t in output_tensor[1]:
-        if isinstance(t, list):
-            for sub_t in t:
-                ttnn.deallocate(sub_t)
-        else:
-            ttnn.deallocate(t)
-
-
 @run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype",
+    ((1, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+)
+@pytest.mark.parametrize(
+    "resolution",
     [
-        # "False",
-        "True",
+        (640, 640),
     ],
 )
 @pytest.mark.parametrize(
@@ -53,29 +43,43 @@ def dealloc_output(output_tensor):
     ],
     ids=["segment", "detect"],
 )
-def test_perf(device, model_task, use_weights_from_ultralytics):
-    disable_persistent_kernel_cache()
-    enable_segment = model_task == "segment"
-    # https://github.com/tenstorrent/tt-metal/issues/23288
-    device.disable_and_clear_program_cache()
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
+def test_perf(
+    device,
+    batch_size,
+    act_dtype,
+    weight_dtype,
+    model_task,
+    model_location_generator,
+    resolution,
+):
+    performant_runner = YOLOv9PerformantRunner(
+        device,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        model_task=model_task,
+        resolution=resolution,
+        model_location_generator=None,
+    )
+    performant_runner._capture_yolov9_trace_2cqs()
+    input_shape = (1, *resolution, 3)
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+    torch_input_tensor = F.pad(torch_input_tensor, (0, 29), mode="constant", value=0)
+    tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-    torch_input, ttnn_input = create_yolov9c_input_tensors(device, model=True)
-    batch_size = torch_input.shape[0]
-    torch_model = load_torch_model(use_weights_from_ultralytics=use_weights_from_ultralytics, model_task=model_task)
-    parameters = create_yolov9c_model_parameters(torch_model, torch_input, device=device)
-    ttnn_model = ttnn_yolov9c.YoloV9(device, parameters, enable_segment=enable_segment)
+    iterations = 32
+    t0 = time.time()
+    for _ in range(iterations):
+        _ = performant_runner._execute_yolov9_trace_2cqs_inference(tt_inputs_host)
+    ttnn.synchronize_device(device)
+    t1 = time.time()
 
-    durations = []
+    performant_runner.release()
 
-    for i in range(2):
-        start = time.time()
-        ttnn_model_output = ttnn_model(ttnn_input)
-        end = time.time()
-        durations.append(end - start)
-        dealloc_output(ttnn_model_output)
-        enable_persistent_kernel_cache()
-
-    inference_and_compile_time, inference_time, *_ = durations
+    inference_time = round((t1 - t0) / iterations, 4)
+    inference_and_compile_time = inference_time  # Don't care about compile time
 
     expected_compile_time, expected_inference_time = get_expected_times("yolov9c")
 
@@ -90,9 +94,8 @@ def test_perf(device, model_task, use_weights_from_ultralytics):
         inference_time_cpu=0.0,
     )
 
-    logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
-    logger.info(f"Inference time: {inference_time}")
-    logger.info(f"Samples per second: {1 / inference_time * batch_size}")
+    logger.info(f"Inference time: {inference_time * 1000.0} ms")
+    logger.info(f"Samples per second: {1 / inference_time * batch_size} fps")
 
 
 @run_for_wormhole_b0()
@@ -109,7 +112,7 @@ def test_perf(device, model_task, use_weights_from_ultralytics):
     ids=["segment", "detect"],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_perf_device_bare_metal_yolov9c(model_task, batch_size):
+def test_perf_device(model_task, batch_size):
     subdir = "ttnn_yolov9c"
     num_iterations = 1
     margin = 0.03
