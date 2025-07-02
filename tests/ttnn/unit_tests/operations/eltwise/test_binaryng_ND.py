@@ -83,7 +83,7 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
     )
 
     golden_fn = ttnn.get_golden_function(ttnn_fn)
-    
+
     if ttnn_fn in (ttnn.addalpha, ttnn.subalpha):
         alpha = random.uniform(-10.0, 10.0)
         torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b, alpha)

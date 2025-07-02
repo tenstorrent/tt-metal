@@ -617,9 +617,7 @@ void bind_binary_with_float_param(
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
@@ -664,38 +662,17 @@ void bind_binary_with_float_param(
                const Tensor& input_tensor_a,
                const Tensor& input_tensor_b,
                float alpha,
-               const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
-                return self(
-                    queue_id,
-                    input_tensor_a,
-                    input_tensor_b,
-                    alpha,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy);
+                return self(queue_id, input_tensor_a, input_tensor_b, alpha, memory_config, output_tensor);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::arg("alpha") = 1.0f,
             py::kw_only(),
-            py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
 
