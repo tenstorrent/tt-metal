@@ -170,6 +170,30 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
         std::accumulate(result_shape.begin(), result_shape.end(), 1, std::multiplies<size_t>());
     XtensorAdapter<DataType> result(std::vector<DataType>(result_volume), std::move(result_shape));
 
+    // An optimization for concatenating along the outer dimension.
+    if (normalized_dims.size() == 1) {
+        // Check if all dimensions before the concat dimension have size 1.
+        bool can_use_memcpy = true;
+        for (int d = 0; d < normalized_dims[0]; ++d) {
+            if (expected_shape[d] != 1) {
+                can_use_memcpy = false;
+                break;
+            }
+        }
+
+        if (can_use_memcpy) {
+            DataType* result_ptr = result.data().data();
+            const size_t chunk_size =
+                std::accumulate(expected_shape.begin(), expected_shape.end(), 1, std::multiplies<size_t>());
+            size_t offset = 0;
+            for (const auto& expr : expressions) {
+                std::memcpy(result_ptr + offset, expr.data(), chunk_size * sizeof(DataType));
+                offset += chunk_size;
+            }
+            return result;
+        }
+    }
+
     // Get the size of each piece along concatenation dimensions
     tt::stl::SmallVector<size_t> piece_sizes(dims.size());
     for (size_t i = 0; i < dims.size(); ++i) {
