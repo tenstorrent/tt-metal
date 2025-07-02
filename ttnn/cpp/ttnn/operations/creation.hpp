@@ -67,8 +67,7 @@ Tensor arange_impl(
     TensorSpec spec{
         ttnn::Shape{static_cast<uint32_t>(size)}, TensorLayout{data_type, PageConfig{layout}, output_mem_config}};
 
-    auto output = Tensor::from_vector(
-        owned_buffer, spec, device.has_value() ? std::addressof(device->get()) : nullptr);  // do we need to pass cq_id
+    auto output = Tensor::from_vector(owned_buffer, spec, device.has_value() ? std::addressof(device->get()) : nullptr);
 
     return output;
 }
