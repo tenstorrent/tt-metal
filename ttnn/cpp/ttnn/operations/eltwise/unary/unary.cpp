@@ -255,6 +255,21 @@ Tensor Eqz::invoke(
     return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
+Tensor Hardshrink::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const float lambda,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::HARDSHRINK;
+    return detail::unary_impl(
+        queue_id,
+        input_tensor,
+        {UnaryWithParam{op_type, static_cast<float>(lambda)}},
+        memory_config,
+        optional_output_tensor);
+}
+
 Tensor Unary_chain::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,

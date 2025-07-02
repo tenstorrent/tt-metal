@@ -74,7 +74,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::FMOD:
         case UnaryOpType::MINIMUM:
         case UnaryOpType::MAXIMUM:
-        case UnaryOpType::LOG1P: return true;
+        case UnaryOpType::LOG1P:
+        case UnaryOpType::HARDSHRINK: return true;
         default: return false;
     }
     return false;

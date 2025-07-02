@@ -67,6 +67,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::FMOD: return "SFPU_OP_FMOD_INCLUDE";
         case UnaryOpType::FILL: return "SFPU_OP_FILL_INCLUDE";
         case UnaryOpType::LOG1P: return "SFPU_OP_LOG1P_INCLUDE";
+        case UnaryOpType::HARDSHRINK: return "SFPU_OP_ACTIVATIONS_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -317,6 +318,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     "unary_min_tile_init();",
                     fmt::format("unary_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
+            break;
+        case UnaryOpType::HARDSHRINK:
+            op_init_and_name = {
+                "hardshrink_tile_init();",
+                fmt::format("hardshrink_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             break;
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };

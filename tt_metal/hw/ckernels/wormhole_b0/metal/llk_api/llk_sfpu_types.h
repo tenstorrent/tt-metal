@@ -111,4 +111,5 @@ enum SfpuType {
     cpy_values,
     gcd,
     lcm,
+    hardshrink,
 };
