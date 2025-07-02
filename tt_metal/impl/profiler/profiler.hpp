@@ -342,7 +342,7 @@ public:
     ZoneDetails getZoneDetails(uint16_t timer_id) const;
 };
 
-bool useFastDispatchForControlBuffers(ProfilerDumpState state);
+bool useFastDispatchForControlBuffers(const IDevice* device, ProfilerDumpState state);
 
 void writeToCoreControlBuffer(
     IDevice* device, const CoreCoord& virtual_core, ProfilerDumpState state, const std::vector<uint32_t>& data);
