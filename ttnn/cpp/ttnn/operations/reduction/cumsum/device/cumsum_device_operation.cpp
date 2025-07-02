@@ -12,7 +12,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::operations::reduction {
 
 CumSumDeviceOperation::program_factory_t CumSumDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -91,4 +91,4 @@ CumSumDeviceOperation::invoke(
         tensor_args_t{.input_tensor = input_tensor, .preallocated_output = std::move(preallocated_output)}};
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::operations::reduction

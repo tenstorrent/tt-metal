@@ -122,9 +122,9 @@ def test_cumsum(size, dim, dtypes, device):
 
     # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
     if not is_supported(size, dim, expected_output_dtype):
-        pytest.skip("Unsupported configuration by ttnn.experimental.cumsum")
+        pytest.skip("Unsupported configuration by ttnn.cumsum")
 
-    output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
+    output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
 
     assert output_tensor.dtype == expected_output_dtype
     assert output_tensor.shape == (size)
@@ -200,14 +200,14 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
 
     # For now, test_cumsum_with_preallocated_output ony support bfloat16 and float32
     if expected_output_dtype == ttnn.int32 or expected_output_dtype == ttnn.uint32:
-        pytest.skip("ttnn.experimental.cumsum with preallocated output does not support integer types")
+        pytest.skip("ttnn.cumsum with preallocated output does not support integer types")
 
     if not is_supported(size, dim, expected_output_dtype):
-        pytest.skip("Unsupported configuration by ttnn.experimental.cumsum")
+        pytest.skip("Unsupported configuration by ttnn.cumsum")
 
     preallocated_output_tensor = ttnn.zeros_like(input_tensor, dtype=ttnn_dtype, layout=ttnn.Layout.TILE)
 
-    output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype, output=preallocated_output_tensor)
+    output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype, output=preallocated_output_tensor)
     torch_output = ttnn.to_torch(output_tensor, dtype=torch_dtype)
 
     expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
@@ -259,10 +259,10 @@ def test_cumsum_callback(size, dim, dtypes, device):
 
     # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
     if not is_supported(size, dim, expected_output_dtype):
-        pytest.skip("Unsupported configuration by ttnn.experimental.cumsum")
+        pytest.skip("Unsupported configuration by ttnn.cumsum")
 
     for _ in range(0, 2):  # Test with program cache
-        output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
+        output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
 
         assert output_tensor.dtype == expected_output_dtype
         assert output_tensor.shape == (size)
@@ -340,7 +340,7 @@ def test_cumsum_backward(size, dim, dtypes, device):
 
     tensor_rank = len(size)
     # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
-    if not is_supported(tensor_rank, dim, expected_output_dtype):
+    if not is_supported(size, dim, expected_output_dtype):
         return
 
     (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(size, size, device)
@@ -350,19 +350,14 @@ def test_cumsum_backward(size, dim, dtypes, device):
 
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     # tt_input_grad_cpu = (
-    #     ttnn.experimental.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad)
+    #     ttnn.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad)
     #     .cpu()
     #     .to(cpu_layout)
     #     .unpad_from_tile(size)
     #     .to_torch()
     # )
 
-    tt_input_grad_cpu = ttnn.to_torch(ttnn.experimental.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad))
-
-    # Verify tensor shapes
-    print(f"tt output = \n{tt_output_grad}")
-    print(f"tt input grad = \n{tt_input_grad_cpu}, shape = {tt_input_grad_cpu.shape}")
-    print(f"tt input grad = \n{torch_input_tensor.grad}, shape = {torch_input_tensor.shape}")
+    tt_input_grad_cpu = ttnn.to_torch(ttnn.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad))
 
     assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
     # assert tt_input_grad_cpu.dtype == torch_input_tensor.grad.dtype

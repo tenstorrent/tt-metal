@@ -23,7 +23,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "tt-metalium/work_split.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::operations::reduction {
 
 CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -88,9 +88,9 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
     uint32_t num_tiles = output_tensor.physical_volume() / tile.get_tile_hw();
 
     const uint32_t xy_volume = tensor_shape[-1] * tensor_shape[-2];  // W * H
-    const uint32_t num_tiles_per_row = tensor_shape[dim];      // each row contains N independent tiles
-    const uint32_t num_rows = num_tiles / num_tiles_per_row;   // total number of rows in tensor
-    const uint32_t HtWt = xy_volume / tile.get_tile_hw();      // padded shape => xy_volume is multiple of tile_size
+    const uint32_t num_tiles_per_row = tensor_shape[dim];            // each row contains N independent tiles
+    const uint32_t num_rows = num_tiles / num_tiles_per_row;         // total number of rows in tensor
+    const uint32_t HtWt = xy_volume / tile.get_tile_hw();  // padded shape => xy_volume is multiple of tile_size
 
     // Depending on tensor rank and dim parameter, we may have to iterative on several tensor axis, with varying offset
     // To solve this problem (and generalize the approach), we can compute two offsets: for dimensions > dim and for
@@ -160,7 +160,7 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
     ////////////////////////////////////////////////////////////////////////////
     KernelHandle cumsum_reader_handle_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/reduction/cumsum/device/kernels/dataflow/cumsum_reader.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/cumsum/device/kernels/dataflow/cumsum_reader.cpp",
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -169,7 +169,7 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
 
     KernelHandle cumsum_writer_handle_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/reduction/cumsum/device/kernels/dataflow/cumsum_writer.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/cumsum/device/kernels/dataflow/cumsum_writer.cpp",
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -189,7 +189,7 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
 
     KernelHandle cumsum_compute_handle_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/reduction/cumsum/device/kernels/compute/cumsum_compute.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/cumsum/device/kernels/compute/cumsum_compute.cpp",
         all_cores,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
@@ -279,4 +279,4 @@ void CumSumDeviceOperation::ProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::operations::reduction

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/reduction/cumsum/cumsum.hpp"
+#include "ttnn/operations/reduction/cumsum/cumsum.hpp"
 #include <algorithm>
 #include <iterator>
 #include <tt-logger/tt-logger.hpp>
@@ -14,13 +14,13 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/experimental/reduction/cumsum/device/cumsum_device_operation.hpp"
+#include "ttnn/operations/reduction/cumsum/device/cumsum_device_operation.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::operations::reduction {
 
 uint64_t compute_padded_volume(const Shape& logical_shape, const tt::tt_metal::Tile& tile) {
     unsigned tile_width = tile.get_width();
@@ -209,4 +209,4 @@ Tensor CumSumBackwardOperation::invoke(
     return CumSumOperation::invoke(queue_id, input, dim, dtype, optional_output_tensor, true, memory_config);
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::operations::reduction

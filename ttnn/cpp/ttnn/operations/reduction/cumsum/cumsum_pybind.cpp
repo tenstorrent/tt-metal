@@ -11,12 +11,12 @@
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/experimental/reduction/cumsum/device/cumsum_device_operation.hpp"
-#include "ttnn/operations/experimental/reduction/cumsum/cumsum.hpp"
+#include "ttnn/operations/reduction/cumsum/device/cumsum_device_operation.hpp"
+#include "ttnn/operations/reduction/cumsum/cumsum.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::experimental::reduction::detail {
+namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
 
 void bind_cumsum_operation(py::module& module) {
@@ -71,19 +71,19 @@ void bind_cumsum_operation(py::module& module) {
             torch_input = torch.rand([2, 3, 4])
             tensor_input = ttnn.from_torch(torch_input, device=device)
 
-            # Apply ttnn.experimental.cumsum() on dim=0
-            tensor_output = ttnn.experimental.cumsum(tensor_input, dim=0)
+            # Apply ttnn.cumsum() on dim=0
+            tensor_output = ttnn.cumsum(tensor_input, dim=0)
 
             # With preallocated output and dtype
             preallocated_output = ttnn.from_torch(torch.rand([2, 3, 4]), dtype=ttnn.bfloat16, device=device)
 
-            tensor_output = ttnn.experimental.cumsum(tensor_input, dim=0, dtype=torch.bfloat16, output=preallocated_output)
+            tensor_output = ttnn.cumsum(tensor_input, dim=0, dtype=torch.bfloat16, output=preallocated_output)
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::cumsum);
+    using OperationType = decltype(ttnn::cumsum);
     bind_registered_operation(
         module,
-        ttnn::experimental::cumsum,
+        ttnn::cumsum,
         docstring,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -103,10 +103,10 @@ void bind_cumsum_operation(py::module& module) {
 void bind_cumsum_backward_operation(py::module& module) {
     auto docstring = "Returns backward cumulative sum of `input` along dimension `dim`";
 
-    using OperationType = decltype(ttnn::experimental::cumsum_backward);
+    using OperationType = decltype(ttnn::cumsum_backward);
     bind_registered_operation(
         module,
-        ttnn::experimental::cumsum_backward,
+        ttnn::cumsum_backward,
         docstring,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -127,4 +127,4 @@ void bind_cumsum_backward_operation(py::module& module) {
             py::arg("queueId") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::experimental::reduction::detail
+}  // namespace ttnn::operations::reduction::detail

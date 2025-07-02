@@ -194,6 +194,12 @@ def test_moreh_cumsum_callback(input_shape, dim, device):
 @pytest.mark.parametrize(
     "input_shape",
     (
+        ([TILE_WIDTH - 1]),
+        ([TILE_HEIGHT, TILE_WIDTH + 1]),
+        ([10, TILE_HEIGHT, TILE_WIDTH + 1]),
+        ([10, 10, TILE_HEIGHT - 1, TILE_WIDTH]),
+        ([10, 10, 5, TILE_HEIGHT - 1, TILE_WIDTH - 1]),
+        ([10, 10, 5, 5, TILE_HEIGHT + 1, TILE_WIDTH - 1]),
         ([1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1]),
         ([4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1]),
     ),

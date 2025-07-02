@@ -12,7 +12,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::operations::reduction {
 
 struct CumSumDeviceOperation {
     struct operation_attributes_t {
@@ -71,11 +71,11 @@ struct CumSumDeviceOperation {
         const bool& flip);
 };
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::operations::reduction
 
 namespace ttnn::prim {
 
 constexpr auto cumsum =
-    ttnn::register_operation<"ttnn::prim::cumsum", ttnn::operations::experimental::reduction::CumSumDeviceOperation>();
+    ttnn::register_operation<"ttnn::prim::cumsum", ttnn::operations::reduction::CumSumDeviceOperation>();
 
 }  // namespace ttnn::prim

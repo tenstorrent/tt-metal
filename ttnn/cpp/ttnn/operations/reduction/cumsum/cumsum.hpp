@@ -9,7 +9,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::operations::reduction {
 
 struct CumSumOperation {
     static Tensor invoke(
@@ -31,14 +31,12 @@ struct CumSumBackwardOperation {
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::operations::reduction
 
-namespace ttnn::experimental {
-constexpr auto cumsum = decorators::
-    register_operation<"ttnn::experimental::cumsum", ttnn::operations::experimental::reduction::CumSumOperation>();
+namespace ttnn {
+constexpr auto cumsum = decorators::register_operation<"ttnn::cumsum", ttnn::operations::reduction::CumSumOperation>();
 
-constexpr auto cumsum_backward = decorators::register_operation<
-    "ttnn::experimental::cumsum_backward",
-    ttnn::operations::experimental::reduction::CumSumBackwardOperation>();
+constexpr auto cumsum_backward =
+    decorators::register_operation<"ttnn::cumsum_backward", ttnn::operations::reduction::CumSumBackwardOperation>();
 
-}  // namespace ttnn::experimental
+}  // namespace ttnn
