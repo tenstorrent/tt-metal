@@ -71,15 +71,24 @@ std::vector<ttnn::TensorSpec> Reduce::compute_output_specs(const std::vector<Ten
 
     auto output_mem_config = this->output_mem_config;
     if (output_mem_config.is_sharded()) {
-        auto nd_shard_spec = input_tensor.nd_shard_spec().value();
-        auto tile = input_tensor.tensor_spec().tile().get_tile_shape();
-        if (dim == ReduceOpDim::W || dim == ReduceOpDim::HW) {
-            nd_shard_spec.shard_shape[-1] = tile[1];
+        if (input_tensor.shard_spec().has_value()) {
+            auto shard_spec = input_tensor.shard_spec().value();
+            shard_spec.shape[0] = output_padded_shape.volume() / output_padded_shape[-1];
+            output_mem_config = output_mem_config.with_shard_spec(shard_spec);
+        } else {
+            TT_FATAL(
+                input_tensor.nd_shard_spec().has_value(),
+                "Sharded input needs nd shard spec when there is no shard spec");
+            auto nd_shard_spec = input_tensor.nd_shard_spec().value();
+            auto tile = input_tensor.tensor_spec().tile().get_tile_shape();
+            if (dim == ReduceOpDim::W || dim == ReduceOpDim::HW) {
+                nd_shard_spec.shard_shape[-1] = tile[1];
+            }
+            if ((dim == ReduceOpDim::H || dim == ReduceOpDim::HW) && nd_shard_spec.shard_shape.rank() > 1) {
+                nd_shard_spec.shard_shape[-2] = tile[0];
+            }
+            output_mem_config = MemoryConfig(output_mem_config.buffer_type(), nd_shard_spec);
         }
-        if ((dim == ReduceOpDim::H || dim == ReduceOpDim::HW) && nd_shard_spec.shard_shape.rank() > 1) {
-            nd_shard_spec.shard_shape[-2] = tile[0];
-        }
-        output_mem_config = MemoryConfig(output_mem_config.buffer_type(), nd_shard_spec);
     }
 
     return {ttnn::TensorSpec(
