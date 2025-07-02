@@ -9,12 +9,7 @@
  * Test printing from a kernel running on BRISC.
  */
 
- void halt() {
-    asm volatile("ebreak");
- }
-
 void kernel_main() {
     DPRINT << "Test Debug Print: ERISC" << ENDL();
-    halt();
     print_test_data();
 }
