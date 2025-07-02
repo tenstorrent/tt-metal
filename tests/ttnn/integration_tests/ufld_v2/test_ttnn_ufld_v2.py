@@ -360,7 +360,7 @@ def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_ufld_v2_model(device, batch_size, input_channels, height, width, use_pretrained_weight):
+def test_ufld_v2_model(device, batch_size, input_channels, height, width, use_pretrained_weight, min_channels=8):
     torch_model = TuSimple34(input_height=height, input_width=width)
     torch_model.to(torch.bfloat16)
     torch_model.eval()
@@ -376,16 +376,16 @@ def test_ufld_v2_model(device, batch_size, input_channels, height, width, use_pr
                 new_key = key.replace("model.", "res_model.")
                 new_state_dict[new_key] = value
             torch_model.load_state_dict(new_state_dict)
-
-    ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    ttnn_input_tensor = ttnn_input_tensor.reshape(
-        1,
-        1,
-        (ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2]),
-        ttnn_input_tensor.shape[3],
+    n, c, h, w = torch_input_tensor.shape
+    if c == 3:  # for sharding config of padded input
+        c = min_channels
+    input_mem_config = ttnn.create_sharded_memory_config(
+        [n, c, h, w],
+        ttnn.CoreGrid(x=8, y=8),
+        ttnn.ShardStrategy.HEIGHT,
     )
-
-    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input_tensor = ttnn_input_tensor.to(device, input_mem_config)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
         custom_preprocessor=custom_preprocessor_whole_model,

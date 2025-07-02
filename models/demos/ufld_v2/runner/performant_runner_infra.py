@@ -5,7 +5,6 @@
 import os
 
 import torch
-import torch.nn.functional as F
 from loguru import logger
 from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_parameters
 
@@ -76,7 +75,7 @@ class UFLDPerformanceRunnerInfra:
         self.ttnn_ufld_v2_model = load_ttnn_model(self.device, self.torch_model, self.torch_input_tensor)
         self.torch_output_tensor_1, self.torch_output_tensor_2 = self.torch_model(self.torch_input_tensor)
 
-    def setup_l1_sharded_input(self, device, torch_input_tensor=None):
+    def setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=8):
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
@@ -84,22 +83,12 @@ class UFLDPerformanceRunnerInfra:
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
 
         n, c, h, w = torch_input_tensor.shape
-        num_cores = core_grid.x * core_grid.y
-        shard_h = (n * w * h + num_cores - 1) // num_cores
-        grid_size = core_grid
-        grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, 16), ttnn.ShardOrientation.ROW_MAJOR)
-        input_mem_config = ttnn.MemoryConfig(
-            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-        )
-        torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
-        torch_input_tensor = F.pad(torch_input_tensor, (0, 13))
-        torch_input_tensor = torch_input_tensor.reshape(
-            1,
-            1,
-            (torch_input_tensor.shape[0] * torch_input_tensor.shape[1] * torch_input_tensor.shape[2]),
-            torch_input_tensor.shape[3],
+        if c == 3:  # for sharding config of padded input
+            c = min_channels
+        input_mem_config = ttnn.create_sharded_memory_config(
+            [n, c, h, w],
+            ttnn.CoreGrid(x=8, y=8),
+            ttnn.ShardStrategy.HEIGHT,
         )
         tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         return tt_inputs_host, input_mem_config
