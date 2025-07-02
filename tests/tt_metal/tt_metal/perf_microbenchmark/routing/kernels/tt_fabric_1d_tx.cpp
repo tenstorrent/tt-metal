@@ -96,8 +96,7 @@ inline void setup_header_routing_2d(
         }
     }
 }
-// NocUnicastAtomicIncCommandHeader(uint64_t notify addr, uint16_t counter, uint16_t
-// std::numeric_limits<uint16_t>::max(), bool flush = true) : flush requires all preceding commands must be finished
+
 inline void setup_header_noc_unicast_write(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint32_t packet_payload_size_bytes,
@@ -321,6 +320,7 @@ void kernel_main() {
 #endif
     }
 
+    /* Use atomic increment to flush writes for simplicity*/
     if (use_dram_dst) {
         // Ensure all DRAM packets are written before sending notification
         noc_async_write_barrier();
