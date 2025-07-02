@@ -173,12 +173,12 @@ def run_latency_test(
         (0, 2, False, 7250, 7240, 7840, 710),
         (0, 3, False, 5900, 5850, 6200, 720),
         (0, 4, False, 4480, 4130, 4975, 740),
-        (0, 5, False, 3000, 2750, 3200, 790),
+        (0, 5, False, 3000, 2750, 3200, 730),
         (0, 6, False, 1520, 1420, 1680, 760),
         (16, 6, False, 1520, 1400, 1605, 760),
         (16, 6, True, 1535, 1425, 1700, 770),
         (1024, 6, False, 1900, 1820, 2150, 1000),
-        (2048, 6, False, 2120, 2150, 2290, 1120),
+        (2048, 6, False, 2120, 2150, 2290, 1070),
         (4096, 6, False, 2600, 2520, 2770, 1300),
     ],
 )
@@ -229,7 +229,7 @@ def test_1D_line_fabric_latency_on_uncongested_fabric(
     "latency_ping_message_size_bytes,latency_measurement_worker_line_index,enable_fused_payload_with_sync, expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns,expected_avg_hop_latency_ns",
     [
         (0, 0, False, 3100, 2880, 3250, 760),
-        (16, 0, False, 3000, 2840, 3400, 780),
+        (16, 0, False, 3000, 2840, 3400, 740),
         (16, 0, True, 3000, 2860, 3180, 750),
         (1024, 0, False, 3700, 3580, 4010, 923),
         (2048, 0, False, 4250, 4220, 4730, 1050),
