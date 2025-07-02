@@ -11,7 +11,6 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
-from models.common.lightweightmodule import LightweightModule
 from models.demos.wormhole.mamba.reference.args import ModelMode
 from models.demos.wormhole.mamba.reference.decode_model import MambaPretrainedModelName
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba
@@ -21,7 +20,7 @@ from models.utility_functions import skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
-class MambaPytorch(LightweightModule):
+class MambaPytorch(torch.nn.Module):
     def __init__(self, hf_reference_model, num_layers=None):
         super().__init__()
         self.embedding = hf_reference_model.embedding
