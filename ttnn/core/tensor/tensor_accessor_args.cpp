@@ -11,8 +11,8 @@ namespace tt::tt_metal {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-template <bool IsRuntime>
-void append_sharded_args(const Buffer& buffer, tensor_accessor::ArgsConfig args_config, std::vector<uint32_t>& args) {
+void append_sharded_args(
+    const Buffer& buffer, tensor_accessor::ArgsConfig args_config, std::vector<uint32_t>& args, bool is_runtime) {
     TT_FATAL(buffer.buffer_distribution_spec(), "Buffer must have a buffer distribution spec");
 
     const auto& buffer_distribution_spec = buffer.buffer_distribution_spec().value();
@@ -20,11 +20,11 @@ void append_sharded_args(const Buffer& buffer, tensor_accessor::ArgsConfig args_
     const auto& shard_shape = buffer_distribution_spec.get_shard_shape_in_pages();
     const auto& bank_coords = buffer_distribution_spec.get_cores();
 
-    auto add_rank = args_config.test(tensor_accessor::ArgConfig::RuntimeRank) == IsRuntime;
-    auto add_num_banks = args_config.test(tensor_accessor::ArgConfig::RuntimeNumBanks) == IsRuntime;
-    auto add_tensor_shape = args_config.test(tensor_accessor::ArgConfig::RuntimeTensorShape) == IsRuntime;
-    auto add_shard_shape = args_config.test(tensor_accessor::ArgConfig::RuntimeShardShape) == IsRuntime;
-    auto add_bank_coords = args_config.test(tensor_accessor::ArgConfig::RuntimeBankCoords) == IsRuntime;
+    auto add_rank = args_config.test(tensor_accessor::ArgConfig::RuntimeRank) == is_runtime;
+    auto add_num_banks = args_config.test(tensor_accessor::ArgConfig::RuntimeNumBanks) == is_runtime;
+    auto add_tensor_shape = args_config.test(tensor_accessor::ArgConfig::RuntimeTensorShape) == is_runtime;
+    auto add_shard_shape = args_config.test(tensor_accessor::ArgConfig::RuntimeShardShape) == is_runtime;
+    auto add_bank_coords = args_config.test(tensor_accessor::ArgConfig::RuntimeBankCoords) == is_runtime;
 
     size_t rank = tensor_shape.size();
     size_t n_banks = bank_coords.size();
@@ -35,12 +35,12 @@ void append_sharded_args(const Buffer& buffer, tensor_accessor::ArgsConfig args_
 
     size_t n_args =
         add_rank + add_num_banks + rank * add_tensor_shape + rank * add_shard_shape + n_banks * add_bank_coords;
-    if (!IsRuntime) {
+    if (!is_runtime) {
         n_args += 1;  // +1 for the args_config config
     }
     args.reserve(n_args);
 
-    if constexpr (!IsRuntime) {
+    if (!is_runtime) {
         args.push_back(args_config.raw());
     }
 
@@ -104,8 +104,8 @@ TensorAccessorArgs::TensorAccessorArgs(const Buffer& buffer, tensor_accessor::Ar
 void TensorAccessorArgs::append_args(
     std::vector<uint32_t>& compile_time_args, std::vector<uint32_t>& common_runtime_args) const {
     if (args_config_.test(tensor_accessor::ArgConfig::Sharded)) {
-        CMAKE_UNIQUE_NAMESPACE::append_sharded_args</* IsRuntime */ false>(*buffer_, args_config_, compile_time_args);
-        CMAKE_UNIQUE_NAMESPACE::append_sharded_args</* IsRuntime */ true>(*buffer_, args_config_, common_runtime_args);
+        CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, compile_time_args, /* is_runtime */ false);
+        CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, common_runtime_args, /* is_runtime */ true);
     } else {
         compile_time_args.push_back(args_config_.raw());
     }
@@ -117,7 +117,7 @@ void TensorAccessorArgs::append_args(std::vector<uint32_t>& compile_time_args) c
         "Common runtime arguments are required for ArgsConfig {}",
         args_config_.raw());
     if (args_config_.test(tensor_accessor::ArgConfig::Sharded)) {
-        CMAKE_UNIQUE_NAMESPACE::append_sharded_args</* IsRuntime */ false>(*buffer_, args_config_, compile_time_args);
+        CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, compile_time_args, /* is_runtime */ false);
     } else {
         compile_time_args.push_back(args_config_.raw());
     }
@@ -126,7 +126,7 @@ void TensorAccessorArgs::append_args(std::vector<uint32_t>& compile_time_args) c
 std::vector<uint32_t> TensorAccessorArgs::get_compile_time_args() const {
     std::vector<uint32_t> compile_time_args;
     if (args_config_.test(tensor_accessor::ArgConfig::Sharded)) {
-        CMAKE_UNIQUE_NAMESPACE::append_sharded_args</* IsRuntime */ false>(*buffer_, args_config_, compile_time_args);
+        CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, compile_time_args, /* is_runtime */ false);
     } else {
         compile_time_args.push_back(args_config_.raw());
     }
@@ -136,7 +136,7 @@ std::vector<uint32_t> TensorAccessorArgs::get_compile_time_args() const {
 std::vector<uint32_t> TensorAccessorArgs::get_common_runtime_args() const {
     std::vector<uint32_t> common_runtime_args;
     if (args_config_.test(tensor_accessor::ArgConfig::Sharded)) {
-        CMAKE_UNIQUE_NAMESPACE::append_sharded_args</* IsRuntime */ true>(*buffer_, args_config_, common_runtime_args);
+        CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, common_runtime_args, /* is_runtime */ true);
     }
     return common_runtime_args;
 }
