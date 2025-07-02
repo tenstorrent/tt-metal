@@ -23,7 +23,7 @@ from helpers.test_config import run_test
 from helpers.utils import passed_test
 
 # SUPPORTED FORMATS FOR TEST
-supported_float_formats = [DataFormat.Float16_b]  # , DataFormat.Float16]
+supported_float_formats = [DataFormat.Float16_b, DataFormat.Float16]
 supported_int_formats = [DataFormat.Int32]
 
 #   INPUT-OUTPUT FORMAT SWEEP
@@ -80,7 +80,7 @@ param_ids = generate_param_ids(all_params)
 )
 def test_sfpu_binary(testname, formats, dest_acc, mathop):
 
-    input_dimensions = [32, 32]
+    input_dimensions = [64, 64]
 
     chip_arch = get_chip_architecture()
     if chip_arch == ChipArchitecture.WORMHOLE and mathop == MathOperation.SfpuElwsub:
@@ -98,12 +98,17 @@ def test_sfpu_binary(testname, formats, dest_acc, mathop):
 
     unpack_to_dest = formats.input_format.is_32_bit()
 
+    # Blackhole needs this for some reason
+    if formats.input_format == DataFormat.Float16:
+        dest_acc = DestAccumulation.Yes
+
     test_config = {
         "formats": formats,
         "testname": testname,
         "dest_acc": dest_acc,
         "mathop": mathop,
         "unpack_to_dest": unpack_to_dest,
+        "tile_cnt": tile_cnt,
     }
 
     run_test(test_config)
