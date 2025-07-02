@@ -39,6 +39,7 @@
 #include "sfpu/ckernel_sfpu_shift.h"
 #include "sfpu/ckernel_sfpu_sigmoid.h"
 #include "sfpu/ckernel_sfpu_sign.h"
+#include "sfpu/ckernel_sfpu_silu.h"
 #include "sfpu/ckernel_sfpu_sqrt.h"
 #include "sfpu/ckernel_sfpu_square.h"
 #include "sfpu/ckernel_sfpu_sub_int.h"
