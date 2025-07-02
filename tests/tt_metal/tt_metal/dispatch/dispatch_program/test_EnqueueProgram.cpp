@@ -1763,12 +1763,22 @@ TEST_F(UnitMeshCommandQueueFixture, TestLogicalCoordinatesEth) {
 
 // Ensure the data movement core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(UnitMeshMultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesDataMovement) {
-    // for (const auto& device : devices_) {
-    local_test_functions::test_my_coordinates(device_, tt::RISCV::BRISC);
-    local_test_functions::test_my_coordinates(device_, tt::RISCV::BRISC, 1);
-    local_test_functions::test_my_coordinates(device_, tt::RISCV::NCRISC);
-    local_test_functions::test_my_coordinates(device_, tt::RISCV::NCRISC, 1);
-    //}
+    std::cout << devices_.size() << " devices in test" << std::endl;
+    std::cout << num_cqs_ << " command queues in test" << std::endl;
+    for (const auto& device : devices_) {
+        // std::cout<< "test 1 begin" << std::endl;
+        local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC);
+        // std::cout<< "test 1 end" << std::endl;
+        // std::cout << "test 2 begin" << std::endl;
+        local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC, 1);
+        // std::cout << "test 2 end" << std::endl;
+        // std::cout << "test 3 begin" << std::endl;
+        local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC);
+        // std::cout << "test 3 end" << std::endl;
+        // std::cout << "test 4 begin" << std::endl;
+        local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC, 1);
+        std::cout << "test 4 end" << std::endl;
+    }
 }
 
 // // Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
