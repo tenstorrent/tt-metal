@@ -10,23 +10,20 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::experimental::reduction {
+namespace operations::reduction {
 
 struct CumprodOperation {
     static Tensor invoke(
+        const QueueId& queue_id,
         const Tensor& input_tensor,
         const int32_t& dim,
         std::optional<DataType>& dtype,
         std::optional<Tensor> optional_out,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const QueueId& queue_id = DefaultQueueId);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace operations::experimental::reduction
+}  // namespace operations::reduction
 
-namespace experimental {
-constexpr auto cumprod = ttnn::
-    register_operation<"ttnn::experimental::cumprod", ttnn::operations::experimental::reduction::CumprodOperation>();
+constexpr auto cumprod = ttnn::register_operation<"ttnn::cumprod", ttnn::operations::reduction::CumprodOperation>();
 
-}  // namespace experimental
 }  // namespace ttnn
