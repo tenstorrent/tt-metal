@@ -80,6 +80,9 @@ void call_sfpu_operation(SfpuType operation)
         case SfpuType::celu:
             ckernel::sfpu::_calculate_activation_<APPROX_MODE, ActivationType::Celu, iterations>(10, 1 / 10);
             break;
+        case SfpuType::silu:
+            ckernel::sfpu::_calculate_silu_<APPROX_MODE, iterations>();
+            break;
         default:
             return;
     }
