@@ -1,0 +1,332 @@
+name: Uplift LLK Submodule
+
+on:
+  workflow_call:
+    inputs:
+      workflow_timeout:
+        description: 'Timeout for workflows in minutes'
+        required: false
+        type: number
+        default: 60
+      skip_draft:
+        description: 'Skip creating PR as draft'
+        required: false
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [trigger-llk-update]
+
+env:
+  BRANCH_NAME: llk-update-submodule
+  SUBMODULE_PATH: tt_metal/third_party/tt_llk
+
+jobs:
+  update-submodule:
+    runs-on: ubuntu-latest
+    outputs:
+      pr-number: ${{ steps.create-pr.outputs.pull-request-number }}
+      should-run-wormhole: ${{ steps.analyze-changes.outputs.should-run-wormhole }}
+      should-run-blackhole: ${{ steps.analyze-changes.outputs.should-run-blackhole }}
+      old-sha: ${{ steps.update-submodule.outputs.old-sha }}
+      new-sha: ${{ steps.update-submodule.outputs.new-sha }}
+      has-changes: ${{ steps.update-submodule.outputs.has-changes }}
+      changed-files: ${{ steps.analyze-changes.outputs.changed-files }}
+
+    steps:
+      - name: Checkout parent repo
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Update submodule
+        id: update-submodule
+        run: |
+          cd ${{ env.SUBMODULE_PATH }}
+          OLD_SHA=$(git rev-parse HEAD)
+          echo "old-sha=$OLD_SHA" >> $GITHUB_OUTPUT
+
+          git fetch origin main
+          git checkout main
+          git pull origin main
+
+          NEW_SHA=$(git rev-parse HEAD)
+          echo "new-sha=$NEW_SHA" >> $GITHUB_OUTPUT
+
+          if [ "$OLD_SHA" = "$NEW_SHA" ]; then
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No changes detected (SHA unchanged)"
+          else
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+            echo "✅ Changes detected: $OLD_SHA -> $NEW_SHA"
+          fi
+
+      - name: Analyze changes and generate PR body
+        id: analyze-changes
+        if: steps.update-submodule.outputs.has-changes == 'true'
+        run: |
+          cd ${{ env.SUBMODULE_PATH }}
+          OLD_SHA="${{ steps.update-submodule.outputs.old-sha }}"
+          NEW_SHA="${{ steps.update-submodule.outputs.new-sha }}"
+
+          # Get changed files once
+          CHANGED_FILES=$(git diff --name-only ${OLD_SHA}..${NEW_SHA})
+          echo "changed-files<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Check for architecture-specific changes
+          if echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole/"; then
+            echo "should-run-wormhole=true" >> $GITHUB_OUTPUT
+            echo "✅ Detected Wormhole changes"
+          else
+            echo "should-run-wormhole=false" >> $GITHUB_OUTPUT
+          fi
+
+          if echo "$CHANGED_FILES" | grep -q "^tt_llk_blackhole/"; then
+            echo "should-run-blackhole=true" >> $GITHUB_OUTPUT
+            echo "✅ Detected Blackhole changes"
+          else
+            echo "should-run-blackhole=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Generate PR body
+          cat > ../../../llk_commit_log.txt << EOF
+          ## LLK Submodule Update
+
+          **Previous SHA:** \`$OLD_SHA\`
+          **New SHA:** \`$NEW_SHA\`
+
+          ### Commits Uplifted:
+          $(git log --pretty=format:"- [\`%h\`](https://github.com/tenstorrent/tt_llk/commit/%H) %s (%an)" ${OLD_SHA}..${NEW_SHA})
+
+          ### Files Changed:
+          $(echo "$CHANGED_FILES" | sed 's/^/- /')
+          EOF
+
+      - name: Create Pull Request
+        id: create-pr
+        if: steps.update-submodule.outputs.has-changes == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update LLK submodule to ${{ steps.update-submodule.outputs.new-sha }}"
+          title: "chore: update LLK submodule to ${{ steps.update-submodule.outputs.new-sha }}"
+          branch: ${{ env.BRANCH_NAME }}
+          delete-branch: true
+          body-path: llk_commit_log.txt
+          draft: ${{ !inputs.skip_draft }}
+          labels: |
+            llk-update
+            automated
+
+      - name: No changes summary
+        if: steps.update-submodule.outputs.has-changes == 'false'
+        run: |
+          echo "🎉 LLK submodule is already up to date!"
+          echo "Current SHA: ${{ steps.update-submodule.outputs.old-sha }}"
+
+  trigger-and-monitor-workflows:
+    needs: [update-submodule]
+    if: needs.update-submodule.outputs.has-changes == 'true' && (needs.update-submodule.outputs.should-run-wormhole == 'true' || needs.update-submodule.outputs.should-run-blackhole == 'true')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout for GitHub CLI
+        uses: actions/checkout@v4
+
+      - name: Trigger and monitor workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TIMEOUT_SECONDS=$((${{ inputs.workflow_timeout }} * 60))
+          # Build workflow list based on detected changes
+          declare -a WORKFLOWS=()
+
+          if [ "${{ needs.update-submodule.outputs.should-run-wormhole }}" == "true" ]; then
+            WORKFLOWS+=("all-post-commit-workflows.yaml:Wormhole Post-Commit:🔁")
+          fi
+
+          if [ "${{ needs.update-submodule.outputs.should-run-blackhole }}" == "true" ]; then
+            WORKFLOWS+=("blackhole-post-commit.yaml:Blackhole Post-Commit:🕳️")
+          fi
+
+          if [ ${#WORKFLOWS[@]} -eq 0 ]; then
+            echo "No workflows to trigger"
+            exit 0
+          fi
+
+          # Function to trigger workflow with retry
+          trigger_workflow() {
+            local workflow_file="$1"
+            local workflow_name="$2"
+            local max_retries=3
+
+            for ((i=1; i<=max_retries; i++)); do
+              if curl -s -f -X POST \
+                -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository }}/actions/workflows/${workflow_file}/dispatches" \
+                -d "{\"ref\":\"${{ env.BRANCH_NAME }}\",\"inputs\":{}}"; then
+                echo "✅ Successfully triggered $workflow_name"
+                return 0
+              fi
+
+              if [ $i -lt $max_retries ]; then
+                echo "❌ Failed to trigger $workflow_name (attempt $i/$max_retries), retrying..."
+                sleep $((i * 5))
+              fi
+            done
+
+            echo "🚫 Failed to trigger $workflow_name after $max_retries attempts"
+            return 1
+          }
+
+          # Function to wait for workflow completion
+          wait_for_workflow() {
+            local workflow_file="$1"
+            local workflow_name="$2"
+            local emoji="$3"
+            local start_time=$(date +%s)
+
+            echo "🔍 Waiting for $workflow_name to start..."
+
+            # Wait for workflow to appear
+            local run_id=""
+            for ((i=0; i<30; i++)); do
+              run_id=$(gh run list \
+                --branch ${{ env.BRANCH_NAME }} \
+                --workflow "$workflow_file" \
+                --json databaseId,status \
+                --jq '.[0].databaseId // empty' 2>/dev/null)
+
+              if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
+                break
+              fi
+              sleep 10
+            done
+
+            if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+              echo "❌ Failed to find $workflow_name run"
+              return 1
+            fi
+
+            local run_url="https://github.com/${{ github.repository }}/actions/runs/$run_id"
+            echo "📋 Monitoring $workflow_name: $run_url"
+
+            # Comment on PR with workflow link
+            gh pr comment "${{ needs.update-submodule.outputs.pr-number }}" \
+              --body "$emoji **$workflow_name** triggered: [View run]($run_url)" \
+              --repo "${{ github.repository }}"
+
+            # Monitor workflow completion
+            local status=""
+            while [ "$status" != "completed" ]; do
+              local current_time=$(date +%s)
+              local elapsed=$((current_time - start_time))
+
+              if [ $elapsed -ge $TIMEOUT_SECONDS ]; then
+                echo "⏰ $workflow_name timed out after $((TIMEOUT_SECONDS/60)) minutes"
+                gh pr comment "${{ needs.update-submodule.outputs.pr-number }}" \
+                  --body "⏰ **$workflow_name** timed out after $((TIMEOUT_SECONDS/60)) minutes. [View run]($run_url)" \
+                  --repo "${{ github.repository }}"
+                return 1
+              fi
+
+              status=$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || echo "")
+              if [ "$status" != "completed" ]; then
+                echo "⌛ $workflow_name status: $status (${elapsed}s/${TIMEOUT_SECONDS}s)"
+                sleep 30
+              fi
+            done
+
+            # Check final result
+            local conclusion=$(gh run view "$run_id" --json conclusion --jq '.conclusion')
+            if [ "$conclusion" = "success" ]; then
+              echo "✅ $workflow_name completed successfully"
+              gh pr comment "${{ needs.update-submodule.outputs.pr-number }}" \
+                --body "✅ **$workflow_name** passed! [View run]($run_url)" \
+                --repo "${{ github.repository }}"
+              return 0
+            else
+              echo "❌ $workflow_name failed with conclusion: $conclusion"
+              gh pr comment "${{ needs.update-submodule.outputs.pr-number }}" \
+                --body "❌ **$workflow_name** failed with conclusion: \`$conclusion\` [View run]($run_url)" \
+                --repo "${{ github.repository }}"
+              return 1
+            fi
+          }
+
+          # Trigger all workflows first
+          echo "🚀 Triggering workflows..."
+          TRIGGERED_WORKFLOWS=()
+          for workflow_info in "${WORKFLOWS[@]}"; do
+            IFS=':' read -r workflow_file workflow_name emoji <<< "$workflow_info"
+            if trigger_workflow "$workflow_file" "$workflow_name"; then
+              TRIGGERED_WORKFLOWS+=("$workflow_info")
+            fi
+          done
+
+          if [ ${#TRIGGERED_WORKFLOWS[@]} -eq 0 ]; then
+            echo "❌ Failed to trigger any workflows"
+            exit 1
+          fi
+
+          # Wait for all triggered workflows
+          echo "⏳ Monitoring ${#TRIGGERED_WORKFLOWS[@]} workflow(s)..."
+          ALL_SUCCESS=true
+
+          for workflow_info in "${TRIGGERED_WORKFLOWS[@]}"; do
+            IFS=':' read -r workflow_file workflow_name emoji <<< "$workflow_info"
+            if ! wait_for_workflow "$workflow_file" "$workflow_name" "$emoji"; then
+              ALL_SUCCESS=false
+            fi
+          done
+
+          if [ "$ALL_SUCCESS" != "true" ]; then
+            echo "💥 One or more workflows failed"
+            exit 1
+          fi
+
+          echo "🎉 All workflows completed successfully"
+
+  finalize:
+    needs: [update-submodule, trigger-and-monitor-workflows]
+    if: always() && needs.update-submodule.outputs.has-changes == 'true' && needs.update-submodule.result == 'success' && (needs.trigger-and-monitor-workflows.result == 'success' || needs.trigger-and-monitor-workflows.result == 'skipped')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Auto-merge PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🚀 Finalizing PR merge..."
+
+          PR_NUMBER="${{ needs.update-submodule.outputs.pr-number }}"
+
+          # Mark PR as ready if it was created as draft
+          if [ "${{ inputs.skip_draft }}" != "true" ]; then
+            echo "📝 Marking PR as ready for review..."
+            gh pr ready "$PR_NUMBER" --repo "${{ github.repository }}"
+          fi
+
+          # Auto-merge with squash
+          echo "🔀 Auto-merging PR #$PR_NUMBER..."
+          if gh pr merge "$PR_NUMBER" \
+            --auto \
+            --squash \
+            --delete-branch \
+            --repo "${{ github.repository }}"; then
+            echo "✅ PR #$PR_NUMBER merged successfully!"
+          else
+            echo "❌ Failed to merge PR #$PR_NUMBER"
+            gh pr comment "$PR_NUMBER" \
+              --body "❌ **Auto-merge failed** - manual intervention required" \
+              --repo "${{ github.repository }}"
+            exit 1
+          fi
