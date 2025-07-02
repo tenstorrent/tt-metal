@@ -1,19 +1,22 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import numpy as np
-import torch.nn as nn
 import copy
 import warnings
-
-from models.experimental.vadv2.reference.ffn import FFN
-
-from models.experimental.vadv2.reference.temporal_self_attention import TemporalSelfAttention
-
-from models.experimental.vadv2.reference.spatial_cross_attention import SpatialCrossAttention
+import ttnn
+from models.experimental.vadv2.tt.tt_temporal_self_attention import TtTemporalSelfAttention
+from models.experimental.vadv2.tt.tt_spatial_cross_attention import TtSpatialCrossAttention
+from models.experimental.vadv2.tt.tt_ffn import TtFFN
 
 
-class BEVFormerEncoder(nn.Module):
+class TtBEVFormerEncoder:
     def __init__(
         self,
+        params,
+        device,
         num_layers=3,
         pc_range=None,
         num_points_in_pillar=4,
@@ -27,7 +30,9 @@ class BEVFormerEncoder(nn.Module):
         ffn_dropout=0.1,
         operation_order=("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
     ):
-        super(BEVFormerEncoder, self).__init__()
+        super(TtBEVFormerEncoder, self).__init__()
+        self.device = device
+        self.params = params
         self.return_intermediate = return_intermediate
         self.num_points_in_pillar = num_points_in_pillar
         self.pc_range = pc_range
@@ -56,9 +61,9 @@ class BEVFormerEncoder(nn.Module):
             operation_order=operation_order,
         )
 
-        self.layers = nn.ModuleList()
-        for _ in range(self.num_layers):
-            self.layers.append(BEVFormerLayer(**transformer_layers))
+        self.layers = []
+        for i in range(self.num_layers):
+            self.layers.append(TtBEVFormerLayer(self.device, params.layers[f"layer{i}"], **transformer_layers))
 
     @staticmethod
     def get_reference_points(H, W, Z=8, num_points_in_pillar=4, dim="3d", bs=1, device="cuda", dtype=torch.float):
@@ -147,7 +152,7 @@ class BEVFormerEncoder(nn.Module):
         return reference_points_cam, bev_mask
 
     # TODO Handle fp16
-    def forward(
+    def __call__(
         self,
         bev_query,
         key,
@@ -163,24 +168,6 @@ class BEVFormerEncoder(nn.Module):
         shift=0.0,
         **kwargs,
     ):
-        """Forward function for `TransformerDecoder`.
-        Args:
-            bev_query (Tensor): Input BEV query with shape
-                `(num_query, bs, embed_dims)`.
-            key & value (Tensor): Input multi-cameta features with shape
-                (num_cam, num_value, bs, embed_dims)
-            reference_points (Tensor): The reference
-                points of offset. has shape
-                (bs, num_query, 4) when as_two_stage,
-                otherwise has shape ((bs, num_query, 2).
-            valid_ratios (Tensor): The radios of valid
-                points on the feature map, has shape
-                (bs, num_levels, 2)
-        Returns:
-            Tensor: Results with shape [1, num_query, bs, embed_dims] when
-                return_intermediate is `False`, otherwise it has shape
-                [num_layers, num_query, bs, embed_dims].
-        """
         output = bev_query
         intermediate = []
 
@@ -201,21 +188,26 @@ class BEVFormerEncoder(nn.Module):
 
         reference_points_cam, bev_mask = self.point_sampling(ref_3d, self.pc_range, kwargs["img_metas"])
 
-        # bug: this code should be 'shift_ref_2d = ref_2d.clone()', we keep this bug for reproducing our results in paper.
-        # shift_ref_2d = ref_2d  # .clone()
-        shift_ref_2d = ref_2d.clone()
-        shift_ref_2d += shift[:, None, None, :]
+        bev_mask = ttnn.from_torch(bev_mask, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        ref_2d = ttnn.from_torch(ref_2d, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        bev_query = ttnn.from_torch(bev_query, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
 
-        # (num_query, bs, embed_dims) -> (bs, num_query, embed_dims)
-        bev_query = bev_query.permute(1, 0, 2)
-        bev_pos = bev_pos.permute(1, 0, 2)
+        shift_ref_2d = ttnn.clone(ref_2d, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        shift = ttnn.reshape(shift, (shift.shape[0], 1, 1, shift.shape[1]))
+        shift_ref_2d = shift_ref_2d + shift
+
+        bev_query = ttnn.permute(bev_query, (1, 0, 2))
+        bev_pos = ttnn.permute(bev_pos, (1, 0, 2))
         bs, len_bev, num_bev_level, _ = ref_2d.shape
         if prev_bev is not None:
-            prev_bev = prev_bev.permute(1, 0, 2)
-            prev_bev = torch.stack([prev_bev, bev_query], 1).reshape(bs * 2, len_bev, -1)
-            hybird_ref_2d = torch.stack([shift_ref_2d, ref_2d], 1).reshape(bs * 2, len_bev, num_bev_level, 2)
+            prev_bev = ttnn.permute(prev_bev, (1, 0, 2))
+            prev_bev = ttnn.stack([prev_bev, bev_query], 1)
+            prev_bev = ttnn.reshape(prev_bev, (bs * 2, len_bev, -1))
+            hybird_ref_2d = ttnn.stack([shift_ref_2d, ref_2d], 1)
+            hybird_ref_2d = ttnn.reshape(hybird_ref_2d, (bs * 2, len_bev, num_bev_level, 2))
         else:
-            hybird_ref_2d = torch.stack([ref_2d, ref_2d], 1).reshape(bs * 2, len_bev, num_bev_level, 2)
+            hybird_ref_2d = ttnn.stack([ref_2d, ref_2d], 1)
+            hybird_ref_2d = ttnn.reshape(hybird_ref_2d, (bs * 2, len_bev, num_bev_level, 2))
         for lid, layer in enumerate(self.layers):
             output = layer(
                 bev_query,
@@ -240,15 +232,26 @@ class BEVFormerEncoder(nn.Module):
                 intermediate.append(output)
 
         if self.return_intermediate:
-            return torch.stack(intermediate)
+            return ttnn.stack(intermediate)
 
         return output
 
 
-class BEVFormerLayer(nn.Module):
-    def __init__(self, attn_cfgs, feedforward_channels, ffn_dropout=0.0, operation_order=None, ffn_num_fcs=2, **kwargs):
-        super(BEVFormerLayer, self).__init__()
-
+class TtBEVFormerLayer:
+    def __init__(
+        self,
+        device,
+        params,
+        attn_cfgs,
+        feedforward_channels,
+        ffn_dropout=0.0,
+        operation_order=None,
+        ffn_num_fcs=2,
+        **kwargs,
+    ):
+        super(TtBEVFormerLayer, self).__init__()
+        self.params = params
+        self.device = device
         self.attn_cfgs = attn_cfgs
         self.feedforward_channels = feedforward_channels
         self.ffn_dropout = ffn_dropout
@@ -256,7 +259,7 @@ class BEVFormerLayer(nn.Module):
         self.ffn_num_fcs = ffn_num_fcs
         self.fp16_enabled = False
         self.batch_first = True
-        self.attentions = nn.ModuleList()
+        self.attentions = []
         index = 0
         for operation_name in self.operation_order:
             if operation_name in ["self_attn", "cross_attn"]:
@@ -266,11 +269,11 @@ class BEVFormerLayer(nn.Module):
                     attn_cfgs[index]["batch_first"] = self.batch_first
                 if attn_cfgs[index]["type"] == "TemporalSelfAttention":
                     type = attn_cfgs[index].pop("type")
-                    attention = TemporalSelfAttention(**attn_cfgs[index])
+                    attention = TtTemporalSelfAttention(device, params.attentions[f"attn0"], **attn_cfgs[index])
                     attn_cfgs[index]["type"] = "TemporalSelfAttention"
                 elif attn_cfgs[index]["type"] == "SpatialCrossAttention":
                     type = attn_cfgs[index].pop("type")
-                    attention = SpatialCrossAttention(**attn_cfgs[index])
+                    attention = TtSpatialCrossAttention(device, params.attentions[f"attn1"], **attn_cfgs[index])
                     attn_cfgs[index]["type"] = "SpatialCrossAttention"
 
                 self.attentions.append(attention)
@@ -292,21 +295,16 @@ class BEVFormerLayer(nn.Module):
             )
 
         self.num_attn = num_attn
-        self.ffns = nn.ModuleList()
+        self.ffns = []
         num_ffns = operation_order.count("ffn")
 
-        for ffn_index in range(num_ffns):
-            self.ffns.append(FFN(self.embed_dims))
-
-        self.norms = nn.ModuleList()
-        num_norms = operation_order.count("norm")
-        for _ in range(num_norms):
-            self.norms.append(nn.LayerNorm(self.embed_dims))
+        for i in range(num_ffns):
+            self.ffns.append(TtFFN(params.ffn[f"ffn{i}"], self.device))
 
         assert len(operation_order) == 6
         assert set(operation_order) == set(["self_attn", "norm", "cross_attn", "ffn"])
 
-    def forward(
+    def __call__(
         self,
         query,
         key,
@@ -328,13 +326,14 @@ class BEVFormerLayer(nn.Module):
         prev_bev=None,
         **kwargs,
     ):
+        bev_mask = kwargs.get("bev_mask", None)
         norm_index = 0
         attn_index = 0
         ffn_index = 0
         identity = query
         if attn_masks is None:
             attn_masks = [None for _ in range(self.num_attn)]
-        elif isinstance(attn_masks, torch.Tensor):
+        elif isinstance(attn_masks, ttnn.Tensor):
             attn_masks = [copy.deepcopy(attn_masks) for _ in range(self.num_attn)]
             warnings.warn(f"Use same attn_mask in all attentions in " f"{self.__class__.__name__} ")
         else:
@@ -347,6 +346,11 @@ class BEVFormerLayer(nn.Module):
 
         for layer in self.operation_order:
             if layer == "self_attn":
+                print("self_attn")
+                spatial_shapes_1 = torch.tensor([[bev_h, bev_w]])
+                spatial_shapes_1 = ttnn.from_torch(
+                    spatial_shapes_1, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                )
                 query = self.attentions[attn_index](
                     query,
                     prev_bev,
@@ -357,8 +361,8 @@ class BEVFormerLayer(nn.Module):
                     attn_mask=attn_masks[attn_index],
                     key_padding_mask=query_key_padding_mask,
                     reference_points=ref_2d,
-                    spatial_shapes=torch.tensor([[bev_h, bev_w]], device=query.device),
-                    level_start_index=torch.tensor([0], device=query.device),
+                    spatial_shapes=spatial_shapes_1,
+                    level_start_index=level_start_index,
                     **kwargs,
                 )
                 attn_index += 1
@@ -366,8 +370,17 @@ class BEVFormerLayer(nn.Module):
                 identity = query
 
             elif layer == "norm":
-                query = self.norms[norm_index](query)
+                print("norm")
+                query = ttnn.layer_norm(
+                    query,
+                    weight=self.params.norms[f"norm{norm_index}"].weight,
+                    bias=self.params.norms[f"norm{norm_index}"].bias,
+                )
+                ttnn.deallocate(self.params.norms[f"norm{norm_index}"].weight)
+                ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
                 norm_index += 1
+
+                print("norm_output", query)
 
             # spaital cross attention
             elif layer == "cross_attn":
@@ -391,6 +404,7 @@ class BEVFormerLayer(nn.Module):
                 identity = query
 
             elif layer == "ffn":
+                print("ffn")
                 query = self.ffns[ffn_index](query, identity if self.pre_norm else None)
 
                 ffn_index += 1

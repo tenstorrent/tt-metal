@@ -45,28 +45,22 @@ class SpatialCrossAttention(nn.Module):
         **kwargs,
     ):
         if key is None:
-            print("2")
             key = query
         if value is None:
-            print("3")
             value = key
 
         if residual is None:
-            print("4")
             inp_residual = query
             slots = torch.zeros_like(query)
         if query_pos is not None:
-            print("5")
             query = query + query_pos
 
         bs, num_query, _ = query.size()
-        print(bs, num_query)
 
         D = reference_points_cam.size(3)
         indexes = []
         for i, mask_per_img in enumerate(bev_mask):
             index_query_per_img = mask_per_img[0].sum(-1).nonzero().squeeze(-1)
-            print(index_query_per_img.shape)
             indexes.append(index_query_per_img)
         max_len = max([len(each) for each in indexes])
 
@@ -77,6 +71,7 @@ class SpatialCrossAttention(nn.Module):
         for j in range(bs):
             for i, reference_points_per_img in enumerate(reference_points_cam):
                 index_query_per_img = indexes[i]
+
                 queries_rebatch[j, i, : len(index_query_per_img)] = query[j, index_query_per_img]
                 reference_points_rebatch[j, i, : len(index_query_per_img)] = reference_points_per_img[
                     j, index_query_per_img
@@ -86,7 +81,6 @@ class SpatialCrossAttention(nn.Module):
 
         key = key.permute(2, 0, 1, 3).reshape(bs * self.num_cams, l, self.embed_dims)
         value = value.permute(2, 0, 1, 3).reshape(bs * self.num_cams, l, self.embed_dims)
-        print("7---------------------------")
         queries = self.deformable_attention(
             query=queries_rebatch.view(bs * self.num_cams, max_len, self.embed_dims),
             key=key,
@@ -95,7 +89,6 @@ class SpatialCrossAttention(nn.Module):
             spatial_shapes=spatial_shapes,
             level_start_index=level_start_index,
         ).view(bs, self.num_cams, max_len, self.embed_dims)
-        print("8----------------------------")
         for j in range(bs):
             for i, index_query_per_img in enumerate(indexes):
                 slots[j, index_query_per_img] += queries[j, i, : len(index_query_per_img)]
@@ -168,7 +161,6 @@ class MSDeformableAttention3D(nn.Module):
         level_start_index=None,
         **kwargs,
     ):
-        print("start deformable attention")
         if value is None:
             value = query
         if identity is None:
@@ -184,16 +176,13 @@ class MSDeformableAttention3D(nn.Module):
         bs, num_query, _ = query.shape
         bs, num_value, _ = value.shape
         assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
-        print("3")
         value = self.value_proj(value)
         if key_padding_mask is not None:
             value = value.masked_fill(key_padding_mask[..., None], 0.0)
         value = value.view(bs, num_value, self.num_heads, -1)
-        print("1 linear")
         sampling_offsets = self.sampling_offsets(query).view(
             bs, num_query, self.num_heads, self.num_levels, self.num_points, 2
         )
-        print("2 linear")
         attention_weights = self.attention_weights(query).view(
             bs, num_query, self.num_heads, self.num_levels * self.num_points
         )
@@ -234,7 +223,5 @@ class MSDeformableAttention3D(nn.Module):
         output = multi_scale_deformable_attn_pytorch(value, spatial_shapes, sampling_locations, attention_weights)
         if not self.batch_first:
             output = output.permute(1, 0, 2)
-
-        print("end deformable attention")
 
         return output
