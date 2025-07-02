@@ -9,6 +9,8 @@
 
 #include "../common.hpp"
 
+#include "dprint_pages.h"
+
 using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
 using tt::tt_fabric::NocUnicastCommandHeader;
 using tt::tt_fabric::WorkerToFabricEdmSender;
@@ -57,8 +59,8 @@ inline uint32_t get_device_idx_from_batch_idx(const uint32_t b) {
 }
 
 // output per device is [K, B/replicate_group, 1, H]
-template <uint32_t BatchSize, uint32_t MeshCols, uint32_t MeshRows, ReplicateGroup Axis>
-inline uint32_t get_output_page_idx(const uint32_t b, const uint32_t k) {
+template <uint32_t BatchSize, uint32_t SeqSize, uint32_t MeshCols, uint32_t MeshRows, ReplicateGroup Axis>
+inline uint32_t get_output_page_idx(const uint32_t b, const uint32_t s, const uint32_t k) {
     uint32_t batch_devices;
     if constexpr (Axis == ReplicateGroup::NONE) {
         batch_devices = MeshCols * MeshRows;
@@ -69,7 +71,8 @@ inline uint32_t get_output_page_idx(const uint32_t b, const uint32_t k) {
     }
 
     const uint32_t batch_per_device = BatchSize / batch_devices;
-    return k * batch_per_device + b % batch_per_device;
+    const uint32_t bidx= b % batch_per_device;
+    return k * batch_per_device *SeqSize + bidx*SeqSize+s;
 }
 
 // commonize me!
@@ -181,18 +184,18 @@ void kernel_main() {
     constexpr uint32_t local_experts_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t data_cb_id = get_compile_time_arg_val(3);
-
     constexpr uint32_t batch_size = get_compile_time_arg_val(4);
-    constexpr uint32_t selected_experts_k = get_compile_time_arg_val(5);
-    constexpr uint32_t num_local_experts = get_compile_time_arg_val(6);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(7);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(8);
-    constexpr uint32_t data_size_bytes = get_compile_time_arg_val(9);  // hidden dim * datum size
-    constexpr uint32_t alignment = get_compile_time_arg_val(10);
-    constexpr uint32_t output_is_dram = get_compile_time_arg_val(11);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(12);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(13);  // ew_dim
-    constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(14);
+    constexpr uint32_t seq_size = get_compile_time_arg_val(5);
+    constexpr uint32_t selected_experts_k = get_compile_time_arg_val(6);
+    constexpr uint32_t num_local_experts = get_compile_time_arg_val(7);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(8);
+    constexpr uint32_t src_chip_id = get_compile_time_arg_val(9);
+    constexpr uint32_t data_size_bytes = get_compile_time_arg_val(10);  // hidden dim * datum size
+    constexpr uint32_t alignment = get_compile_time_arg_val(11);
+    constexpr uint32_t output_is_dram = get_compile_time_arg_val(12);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(13);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(14);  // ew_dim
+    constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(15);
 
 #ifdef REPLICATE_GROUP_AXIS
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
@@ -229,7 +232,8 @@ void kernel_main() {
     cb_wait_front(local_experts_cb_id,1);
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(local_experts_cb_id));
 
-    for (uint32_t b = 0; b < batch_size; ++b) {
+    for (uint32_t b = 0; b < batch_size; ++b)
+    for (uint32_t s = 0; s <seq_size; ++s){
         cb_wait_front(metadata_cb_id, 1);
         const uint32_t metadata_l1_addr = get_write_ptr(metadata_cb_id);
         auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(metadata_l1_addr);
@@ -244,7 +248,7 @@ void kernel_main() {
 
                 // figure out output page index, noc address.
                 const uint32_t output_page_idx =
-                    detail::get_output_page_idx<batch_size, mesh_cols, mesh_rows, replicate_axis>(b, k);
+                    detail::get_output_page_idx<batch_size, seq_size, mesh_cols, mesh_rows, replicate_axis>(b,s,k);
                 const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
 
                 // figure out which device to send data to and routing

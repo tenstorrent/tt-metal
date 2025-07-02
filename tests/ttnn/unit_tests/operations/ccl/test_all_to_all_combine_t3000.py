@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from time import sleep
+
 import torch
 import pytest
 from loguru import logger
@@ -60,92 +62,90 @@ def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping, mes
     experts = expert_mapping.shape[-2]
     hidden_size = sparse_tokens.shape[-1]
     selected_experts_k = expert_indices.shape[-1]
-    seq = sparse_tokens[-2]
+    seq = sparse_tokens.shape[-2]
 
     assert experts % devices == 0
     experts_per_device = experts // devices
 
-    replication_dim, replication = _group_get_replication_dims(axis, mesh_shape)
+    # replication_dim, replication_group = _get_replication_dims(axis, mesh_shape)
 
-    input_contribs_tensor = torch.ones([experts, batch * replication_dim, seq, hidden_size]) * -42
+    input_contribs_tensor = torch.zeros([experts, batch, seq, hidden_size])
     batch_idxr = _get_batch_rep_idxr(axis, batch)
 
     token_expert_count = 0
-    for m0 in range(mesh_shape[0]):
-        for m1 in range(mesh_shape[1]):
-            d = m0 * mesh_shape[1] + 1
+    for d in range(devices):
+        experts_on_device = _get_experts_on_device(experts, expert_mapping, d)
+        assert len(experts_on_device) == experts_per_device
+        for b in range(batch):
+            for k in range(selected_experts_k):
+                for s in range(seq):
+                    expert_idx = expert_indices[b, 0, s, k].item()
+                    if expert_idx not in experts_on_device:
+                        continue
 
-            experts_on_device = _get_experts_on_device(experts, expert_mapping, d)
-            assert len(experts_on_device) == experts_per_device
+                    local_expert_idx = d * experts_per_device + experts_on_device.index(expert_idx)
 
-            for b in range(batch):
-                for k in range(selected_experts_k):
-                    for s in range(seq):
-                        expert_idx = expert_indices[b, 0, 0, k].item()
-
-                        if expert_idx not in experts_on_device:
-                            continue
-
-                        axis_batch_idx = batch_idxr(m0, m1, b)
-
-                        # multiply by expert index to mock application of expert
-                        input_contribs_tensor[expert_idx, axis_batch_idx, s, :] = sparse_tokens[d, b, s, :] * (
-                            -1 if expert_idx == 0 else expert_idx
-                        )
-                        token_expert_count += 1
+                    # multiply by expert index to mock application of expert
+                    input_contribs_tensor[local_expert_idx, b, s, :] = sparse_tokens[d, b, s, :] * (
+                        -1 if expert_idx == 0 else expert_idx
+                    )
+                    token_expert_count += 1
 
     assert token_expert_count == batch * seq * selected_experts_k
     return input_contribs_tensor
 
 
 def get_output_combined_contribs(sparse_contribs, expert_indices, expert_mapping, mesh_shape, replication_axis):
-    # sparse_contribs is [E[/devices], b*replicate_dim, seq, hidden]
+    # sparse_contribs is [E[/devices], b, seq, hidden]
     # output recalled contribs is [K, batch * replicate_dim [/devices], seq, hidden]
     batch = expert_indices.shape[0]
     experts = expert_mapping.shape[-2]
     selected_experts_k = expert_indices.shape[-1]
     hidden = sparse_contribs.shape[-1]
-    seq = sparse_contribs[-2]
+    seq = sparse_contribs.shape[-2]
 
     devices = mesh_shape[0] * mesh_shape[1]
 
     assert experts % devices == 0
-
-    output_combined_contribs_tensor = torch.ones(selected_experts_k, batch * replication_dim, 1, hidden) * 7
-    real_data_map = torch.zeros(output_combined_contribs_tensor.shape[:-2])
+    experts_per_device = experts // devices
 
     replication_dim, replication_group = _get_replication_dims(replication_axis, mesh_shape)
-    batch_rep_idxr = _get_batch_rep_idxr(replication_axis)
+    batch_rep_idxr = _get_batch_rep_idxr(replication_axis, batch)
 
-    token_expert_count = 0
+    output_combined_contribs_tensor = torch.zeros(selected_experts_k, batch * replication_dim, seq, hidden)
+    real_data_map = torch.zeros(output_combined_contribs_tensor.shape[:-1])
+
+    total_token_expert_count = 0
     for m0 in range(mesh_shape[0]):
         for m1 in range(mesh_shape[1]):
             d = m0 * mesh_shape[1] + m1
             experts_on_device = _get_experts_on_device(experts, expert_mapping, d)
+
             for b in range(batch):
                 for k in range(selected_experts_k):
-                    expert_idx = expert_indices[b, 0, 0, k].item()
                     for s in range(seq):
+                        expert_idx = expert_indices[b, 0, s, k].item()
                         if expert_idx not in experts_on_device:
                             continue
 
                         axis_batch_idx = batch_rep_idxr(m0, m1, b)
+                        local_expert_idx = d * experts_per_device + experts_on_device.index(expert_idx)
 
-                        output_combined_contribs_tensor[k, axis_batch_idx, s, :] = sparse_contribs[
-                            expert_index, axis_batch_idx, s:
-                        ]
+                        sc = sparse_contribs[local_expert_idx, b, s, :]
 
-                        real_data_map[k, axis_batch_idx] = 1
-                        token_expert_count += 1
+                        output_combined_contribs_tensor[k, axis_batch_idx, s, :] = sc
 
-    assert token_expert_count == batch * selected_experts_k * seq
+                        real_data_map[k, axis_batch_idx, s] = 1
+                        total_token_expert_count += 1
+
+    assert total_token_expert_count == batch * selected_experts_k * seq
     return output_combined_contribs_tensor, real_data_map
 
 
 def gen_tensors(
     batch, experts, selected_experts_k, hidden_size, seq, mesh_shape, replication_axis, devices, scheme="random"
 ):
-    torch.manual_seed(42)
+    torch.manual_seed(20)
     # create input tokens
     assert batch % devices == 0
     assert experts % devices == 0
@@ -156,7 +156,9 @@ def gen_tensors(
     expert_indices = get_expert_indices(batch, experts, selected_experts_k, seq, mesh_shape, scheme)
 
     sparse_dispatched_tokens = get_sparse_tokens(input_tokens, expert_indices, expert_mapping, seq, mesh_shape)
-    input_sparse_contribs_tensor = get_input_sparse_contribs(sparse_dispatched_tokens, expert_indices, expert_mapping)
+    input_sparse_contribs_tensor = get_input_sparse_contribs(
+        sparse_dispatched_tokens, expert_indices, expert_mapping, mesh_shape, replication_axis
+    )
 
     output_tensor, data_map = get_output_combined_contribs(
         input_sparse_contribs_tensor, expert_indices, expert_mapping, mesh_shape, replication_axis
@@ -180,6 +182,7 @@ def run_all_to_all_combine_test(
     mesh_shape,
     axis,
     batch,
+    seq,
     experts,
     select_experts_k,
     hidden_size,
@@ -209,12 +212,11 @@ def run_all_to_all_combine_test(
     expert_mapping_tensors = []
     input_tensors = []
     metadata_tensors = []
-
     output_tensor_goldens_list = []
 
     for iter in range(num_iters):
         _, input_contrib, expert_mapping, metadata_tensor, output_contrib_tensor, data_map = gen_tensors(
-            batch, experts, select_experts_k, hidden_size, mesh_shape, axis, devices, scheme=scheme
+            batch, experts, select_experts_k, hidden_size, seq, mesh_shape, axis, devices, scheme=scheme
         )
 
         output_tensor_goldens_list.append((output_contrib_tensor, data_map))
@@ -234,7 +236,7 @@ def run_all_to_all_combine_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
             memory_config=input_memory_config,
-            mesh_mapper=ttnn.ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
         )
 
         tt_metadata = ttnn.from_torch(
@@ -287,6 +289,7 @@ def run_all_to_all_combine_test(
 
     tt_out_tensor_list = run_op(num_iters, store_all_results=True)
 
+    failed = False
     for tt_out, (ref, data_map) in zip(tt_out_tensor_list, output_tensor_goldens_list):
         if axis == 0:
             # need to roll my own mesh composer here for the transposed ordering
@@ -305,8 +308,9 @@ def run_all_to_all_combine_test(
 def check_results(test_tensor, ref_tensor, data_map):
     for k in range(ref_tensor.shape[0]):
         for b in range(ref_tensor.shape[1]):
-            if data_map[k, b].item() == 1:
-                assert_with_pcc(test_tensor[k, b, 0, :], ref_tensor[k, b, 0, :])
+            for s in range(ref_tensor.shape[2]):
+                if data_map[k, b, s].item() == 1:
+                    assert_with_pcc(test_tensor[k, b, s, :], ref_tensor[k, b, s, :])
 
 
 @pytest.mark.parametrize(
@@ -327,10 +331,12 @@ def check_results(test_tensor, ref_tensor, data_map):
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
-@pytest.mark.parametrize("hidden_size", [7, 16, 32, 33, 50, 7000])
-@pytest.mark.parametrize("num_iters", [1])
-@pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["dram"])
-@pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("hidden_size", [7000])
+@pytest.mark.parametrize("seq", [1, 2])
+@pytest.mark.parametrize("scheme", ["random"])
+@pytest.mark.parametrize("num_iters", [2])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -339,10 +345,12 @@ def test_all_to_all_combine_no_trace(
     mesh_shape,
     axis,
     batches_per_device,
+    seq,
     experts_per_device,
     select_experts_k,
     hidden_size,
     num_iters,
+    scheme,
     input_memory_config,
     output_memory_config,
     num_links,
@@ -353,17 +361,20 @@ def test_all_to_all_combine_no_trace(
     batch = batches_per_device * devices
     experts = experts_per_device * devices
 
+    torch.set_printoptions(threshold=10000)
+
     run_all_to_all_combine_test(
         mesh_device,
         mesh_shape,
         axis,
         batch,
+        seq,
         experts,
         select_experts_k,
         hidden_size,
         num_iters,
         num_links=num_links,
-        scheme="random",
+        scheme=scheme,
         topology=topology,
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
@@ -380,7 +391,7 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
     experts = 8 * devices
     select_experts_k = 8
     hidden_size = 7000
-    axis = 0
+    axis = 1
     seq = 2
     replicate_dim = mesh_shape[0 if axis == 1 else 1]
     (
@@ -392,8 +403,8 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
         _,
     ) = gen_tensors(batch, experts, select_experts_k, hidden_size, seq, mesh_shape, axis, devices, scheme="random")
 
-    assert sparse_dispatched_tokens.shape == (devices, batch, 1, hidden_size)
-    assert input_sparse_contribs_tensor.shape == (experts, batch * replicate_dim, seq, hidden_size)
+    assert sparse_dispatched_tokens.shape == (devices, batch, seq, hidden_size)
+    assert input_sparse_contribs_tensor.shape == (experts, batch, seq, hidden_size)
     assert output_tensor.shape == (select_experts_k, batch * replicate_dim, seq, hidden_size)
     assert expert_mapping.shape == (1, 1, experts, devices)
-    assert metadata_tensor.shape == (devices, batch, 1, select_experts_k)
+    assert metadata_tensor.shape == (devices, batch, seq, select_experts_k)

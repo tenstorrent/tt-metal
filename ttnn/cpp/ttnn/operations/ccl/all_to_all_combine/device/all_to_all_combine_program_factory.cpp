@@ -76,10 +76,11 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const uint32_t num_devices = mesh_view.num_devices();
     const uint32_t hidden_size = input_shape[-1];
     const uint32_t batch_size = metadata_shape[1];
+    const uint32_t seq_size = metadata_shape[2];
     const uint32_t selected_experts_k = metadata_shape[-1];
     const uint32_t experts = mapping_shape[-2];
 
-    TT_ASSERT(experts % num_devices == 0, "Currently assuming that experts are evenly split among devices");
+    TT_FATAL(experts % num_devices == 0, "Currently assuming that experts are evenly split among devices");
     const uint32_t experts_per_device = experts / num_devices;
 
     const auto& input_spec = input_tensor.get_tensor_spec();
@@ -181,6 +182,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         data_cb_id,
         experts_per_device,
         batch_size,
+        seq_size,
         experts,  // same as num_mapping_pages
         flat_mesh_idx,
         input_page_size_bytes,
@@ -213,6 +215,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         client_interface_cb_id,
         data_cb_id,
         batch_size,
+        seq_size,
         selected_experts_k,
         experts_per_device,
         num_devices,
