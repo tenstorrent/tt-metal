@@ -423,7 +423,8 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
         if VERBOSE:
             row = [loc.to_str("logical")]
 
-        for proc_name in enum_values["ProcessorTypes"].keys():
+        for risc_name in block.risc_names:
+            proc_name = risc_name.upper()
             proc_type = enum_values["ProcessorTypes"][proc_name]
             proc_class = enum_values["dispatch_core_processor_classes"][proc_name]
 
@@ -589,6 +590,8 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
     enum_values_eth = {
         "ProcessorTypes": {
             "ERISC": idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
+            "ERISC0": idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
+            "ERISC1": idle_erisc_elf.enumerators["EthProcessorTypes::DM1"].value,
         },
         "dispatch_core_processor_classes": {
             "ERISC": idle_erisc_elf.enumerators["dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"].value,
