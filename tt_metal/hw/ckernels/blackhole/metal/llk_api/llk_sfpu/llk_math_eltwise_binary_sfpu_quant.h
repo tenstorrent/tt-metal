@@ -21,11 +21,8 @@ inline void llk_math_eltwise_binary_sfpu_quant_int32_init(const uint zero_point)
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_quant_int32(uint dst_index0, uint dst_index1, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_binary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_quant_int32<APPROXIMATE>,
-        dst_index0,
-        dst_index1,
-        vector_mode);
+    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_quant_int32<APPROXIMATE>, dst_index0, dst_index1, vector_mode);
 }
 
 template <bool APPROXIMATE>
@@ -37,11 +34,8 @@ inline void llk_math_eltwise_binary_sfpu_requant_int32_init(const uint zero_poin
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_requant_int32(uint dst_index0, uint dst_index1, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_binary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_requant_int32<APPROXIMATE>,
-        dst_index0,
-        dst_index1,
-        vector_mode);
+    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_requant_int32<APPROXIMATE>, dst_index0, dst_index1, vector_mode);
 }
 
 template <bool APPROXIMATE>
@@ -53,11 +47,8 @@ inline void llk_math_eltwise_binary_sfpu_dequant_int32_init(const uint zero_poin
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_dequant_int32(uint dst_index0, uint dst_index1, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_binary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_dequant_int32<APPROXIMATE>,
-        dst_index0,
-        dst_index1,
-        vector_mode);
+    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_dequant_int32<APPROXIMATE>, dst_index0, dst_index1, vector_mode);
 }
 
 }  // namespace ckernel
