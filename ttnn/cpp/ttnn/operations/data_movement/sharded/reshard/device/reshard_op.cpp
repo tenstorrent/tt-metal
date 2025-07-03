@@ -92,7 +92,7 @@ ReshardDeviceOperation::create_op_performance_model(
     }
     const auto& input_shape = input_tensor.logical_shape();
     auto element_size_bytes = input_tensor.element_size();
-    uint32_t input_size_bytes = input_shape.volume() * element_size_bytes;
+    uint32_t input_size_bytes = input_tensor.physical_volume() * element_size_bytes;
     const auto& input_shard_shape = input_tensor.memory_config().shard_spec().value().shape;
     bool is_tiled = input_tensor.layout() == Layout::TILE;
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -105,8 +105,8 @@ ReshardDeviceOperation::create_op_performance_model(
     auto arch = input_tensor.device()->arch();
     const int num_cores = (arch == tt::ARCH::WORMHOLE_B0) ? 64 : 108;
     // initial assumptions: divide transactions over all cores
-    uint32_t total_read_cycles = get_cycles_for_read_transaction_size(
-        input_transaction_size, is_dram, false, std::ceil((float)num_read_transactions / (float)num_cores));
+    uint32_t total_read_cycles =
+        get_cycles_for_read_transaction_size(input_transaction_size, is_dram, false, num_read_transactions, num_cores);
 
     const auto& output_tensor = output_tensors.at(0);
     // Assuming parallelization over shard grid cores:
@@ -126,12 +126,12 @@ ReshardDeviceOperation::create_op_performance_model(
         log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
     const auto& output_shape = output_tensor.logical_shape();
-    uint32_t output_size_bytes = output_shape.volume() * element_size_bytes;
+    uint32_t output_size_bytes = output_tensor.physical_volume() * element_size_bytes;
     const auto& output_shard_shape = output_tensor.memory_config().shard_spec().value().shape;
     uint32_t output_transaction_size = is_tiled ? single_tile_size : output_shard_shape[-1] * element_size_bytes;
     uint32_t num_write_transactions = std::ceil((float)output_size_bytes / (float)output_transaction_size);
     uint32_t total_write_cycles = get_cycles_for_write_transaction_size(
-        output_transaction_size, is_dram, false, std::ceil((float)num_write_transactions / (float)num_cores));
+        output_transaction_size, is_dram, false, num_write_transactions, num_cores);
     /*
     uint32_t total_read_cycles = get_cycles_for_read_transaction_size(
         input_transaction_size, is_dram, !is_local, std::ceil((float)num_read_transactions / (float)num_cores));

@@ -73,7 +73,7 @@ ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uin
         return squeeze_shape_to_ND(shape, n);
     }
 }
-
+/*
 std::pair<float, uint32_t> get_transaction_bw(uint32_t transaction_size, const std::map<uint32_t, float>& dict) {
     for (const auto& [key, val] : dict) {
         printf("key: %u, val: %f\n", key, val);
@@ -86,9 +86,27 @@ std::pair<float, uint32_t> get_transaction_bw(uint32_t transaction_size, const s
     }
     return {0.0f, 0};
 }
+*/
+float interpolate_transaction_bw(uint32_t transaction_size, const std::map<uint32_t, float>& dict) {
+    auto it = dict.lower_bound(transaction_size);
+    if (it == dict.begin()) {
+        return it->second;
+    }
+    if (it == dict.end()) {
+        return std::prev(it)->second;
+    }
+    if (it->first == transaction_size) {
+        return it->second;
+    }
+    auto upper = it;
+    auto lower = std::prev(it);
+    float bw = lower->second + (upper->second - lower->second) *
+                                   (float(transaction_size - lower->first) / float(upper->first - lower->first));
+    return bw;
+}
 
 uint32_t get_cycles_for_read_transaction_size(
-    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions) {
+    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions, uint32_t num_cores) {
     // for wh, add for other machines
     std::map<uint32_t, float> dram_bw = {
         {16, 0.436},
@@ -138,20 +156,30 @@ uint32_t get_cycles_for_read_transaction_size(
         transaction_type = dram_bw;
     }
     printf("transaction size: %u\n", transaction_size);
-    auto result = get_transaction_bw(transaction_size, transaction_type);
-    float transaction_bw = result.first;
-    uint32_t transaction_size_mul_32 = result.second;
-    // double check  this value
+    auto transaction_bw = interpolate_transaction_bw(transaction_size, transaction_type);
+    // auto result = get_transaction_bw(transaction_size, transaction_type);
+    // float transaction_bw = result.first;
+    // uint32_t transaction_size_mul_32 = result.second;
+    //  double check  this value
     float device_frequency_hz = 1e9;  // 1 GHz
-    printf("transaction size mul 32: %u\n", transaction_size_mul_32);
+    printf("num transactions: %u\n", num_transactions);
     printf("transaction bw: %f\n", transaction_bw);
-    uint32_t cycles = std::ceil(
-        (float)(num_transactions * transaction_size_mul_32) / (float)(transaction_bw * 1e9) * device_frequency_hz);
+    uint32_t cycles = 1;
+    if (is_dram) {
+        cycles = std::ceil(
+            (float)(num_transactions * transaction_size * device_frequency_hz) /
+            (float)(transaction_bw * 1e9 * std::sqrt(num_cores)));
+    } else {
+        cycles = std::ceil(
+            (float)(num_transactions * transaction_size * device_frequency_hz) /
+            (float)(transaction_bw * 1e9 * std::sqrt(num_cores)));
+    }
+
     return cycles;
 }
 
 uint32_t get_cycles_for_write_transaction_size(
-    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions) {
+    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions, uint32_t num_cores) {
     // for wh, add for other machines
     std::map<uint32_t, float> dram_bw = {
         {16, 0.436},
@@ -201,13 +229,24 @@ uint32_t get_cycles_for_write_transaction_size(
     if (is_dram) {
         transaction_type = dram_bw;
     }
-    auto result = get_transaction_bw(transaction_size, transaction_type);
-    float transaction_bw = result.first;
-    uint32_t transaction_size_mul_32 = result.second;
+    // auto result = get_transaction_bw(transaction_size, transaction_type);
+    // float transaction_bw = result.first;
+    // uint32_t transaction_size_mul_32 = result.second;
+    auto transaction_bw = interpolate_transaction_bw(transaction_size, transaction_type);
     // double check  this value
     float device_frequency_hz = 1e9;  // 1 GHz
-    uint32_t cycles = std::ceil(
-        (float)(num_transactions * transaction_size_mul_32) / (float)(transaction_bw * 1e9) * device_frequency_hz);
+    printf("num transactions: %u\n", num_transactions);
+    printf("transaction bw: %f\n", transaction_bw);
+    uint32_t cycles = 1;
+    if (is_dram) {
+        cycles = std::ceil(
+            (float)(num_transactions * transaction_size * device_frequency_hz) /
+            (float)(transaction_bw * 1e9 * std::sqrt(num_cores) * 12));
+    } else {
+        cycles = std::ceil(
+            (float)(num_transactions * transaction_size * device_frequency_hz) /
+            (float)(transaction_bw * 1e9 * std::sqrt(num_cores) * 2));
+    }
     return cycles;
 }
 

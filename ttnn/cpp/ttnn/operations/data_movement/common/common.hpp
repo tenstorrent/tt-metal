@@ -25,9 +25,9 @@ ttnn::Shape unsqueeze_shape_to_nd(const ttnn::Shape& shape, uint32_t n);
 
 ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, uint32_t n);
 uint32_t get_cycles_for_read_transaction_size(
-    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions);
+    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions, uint32_t num_cores);
 uint32_t get_cycles_for_write_transaction_size(
-    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_tramsactions);
+    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_tramsactions, uint32_t num_cores);
 
 uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,

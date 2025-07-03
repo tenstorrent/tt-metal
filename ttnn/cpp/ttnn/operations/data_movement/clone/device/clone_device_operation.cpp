@@ -78,7 +78,7 @@ CloneOperation::create_op_performance_model(
     const auto& input_shape = input_tensor.logical_shape();
     auto element_size_bytes = input_tensor.element_size();
     printf("element size bytes: %u\n", element_size_bytes);
-    uint32_t input_size_bytes = input_shape.volume() * element_size_bytes;
+    uint32_t input_size_bytes = input_tensor.physical_volume() * element_size_bytes;
     printf("input size bytes: %u\n", input_size_bytes);
     bool is_sharded = input_tensor.memory_config().shard_spec().has_value();
     printf("is sharded: %s\n", is_sharded ? "true" : "false");
@@ -105,8 +105,8 @@ CloneOperation::create_op_performance_model(
     int num_cores = (arch == tt::ARCH::WORMHOLE_B0) ? 64 : 108;
     printf("num cores: %d\n", num_cores);
     // initial assumptions: divide transactions over all cores
-    uint32_t total_read_cycles = get_cycles_for_read_transaction_size(
-        input_transaction_size, is_dram, false, std::ceil((float)num_read_transactions / (float)num_cores));
+    uint32_t total_read_cycles =
+        get_cycles_for_read_transaction_size(input_transaction_size, is_dram, false, num_read_transactions, num_cores);
     printf("total read cycles: %u\n", total_read_cycles);
     const auto& output_tensor = output;
     // Assuming parallelization over shard grid cores:
@@ -124,13 +124,13 @@ CloneOperation::create_op_performance_model(
         }
     }
     total_read_cycles = get_cycles_for_read_transaction_size(
-        input_transaction_size, is_dram, is_local, std::ceil((float)num_read_transactions / (float)num_cores));
+        input_transaction_size, is_dram, is_local, num_read_transactions, num_cores);
 
     if (output_tensor.storage_type() != StorageType::DEVICE) {
         log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
     const auto& output_shape = output_tensor.logical_shape();
-    uint32_t output_size_bytes = output_shape.volume() * element_size_bytes;
+    uint32_t output_size_bytes = output_tensor.physical_volume() * element_size_bytes;
     printf("output size bytes: %u\n", output_size_bytes);
     uint32_t output_transaction_size = is_tiled ? single_tile_size : output_shape[-1] * element_size_bytes;
     printf("output transaction size: %u\n", output_transaction_size);
@@ -144,7 +144,7 @@ CloneOperation::create_op_performance_model(
     printf("num write transactions: %u\n", num_write_transactions);
 
     uint32_t total_write_cycles = get_cycles_for_read_transaction_size(
-        output_transaction_size, is_dram, !is_local, std::ceil((float)num_write_transactions / (float)num_cores));
+        output_transaction_size, is_dram, !is_local, num_write_transactions, num_cores);
 
     printf("total write cycles: %u\n", total_write_cycles);
 
