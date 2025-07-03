@@ -15,27 +15,6 @@
 #include "debug/dprint_tensix.h"
 #endif
 
-template <
-    uint32_t max_tiles_per_iter,
-    uint32_t num_faces_in_input_tile,
-    uint32_t unpA_face_r_dim,
-    bool neginf_srca_maxpool,
-    bool zero_srca_avgpool>
-inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_id) {
-    constexpr uint32_t num_out_rows = 1;
-
-    unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-        in_cb_id,
-        in_scalar_cb_id,
-        max_tiles_per_iter,
-        0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-        num_faces_in_input_tile /* unpack 1 or 2 faces ) */,
-        unpA_face_r_dim);
-    for (uint32_t c_i = 0; c_i < max_tiles_per_iter; ++c_i) {
-        reduce_tile_math(c_i, num_faces_in_input_tile /* reduce 1 or 2 faces */);
-    }
-}
-
 namespace NAMESPACE {
 
 void MAIN {
@@ -113,26 +92,31 @@ void MAIN {
             cb_wait_front(curr_scalar_cb_id, 1);
         }
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
+            bool last_c_block = c_i == in_nblocks_c - 1;
+            uint32_t tiles_to_reduce = last_c_block ? partial_iter_output_tiles : max_tiles_per_iter;
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
-                reduce_h_fused<
+                unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                    curr_in_cb_id,
+                    curr_scalar_cb_id,
                     max_tiles_per_iter,
+                    0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
                     num_faces_in_input_tile,
-                    face_r_dim,
-                    neginf_srca_maxpool,
-                    zero_srca_avgpool>(curr_in_cb_id, curr_scalar_cb_id);
+                    face_r_dim);
+                for (uint32_t math_tile_idx = 0; math_tile_idx < max_tiles_per_iter; ++math_tile_idx) {
+                    reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
+                }
                 cb_pop_front(curr_in_cb_id, 1);
             }
             tile_regs_commit();
             tile_regs_wait();
-            if (c_i < in_nblocks_c - 1) {
-                pack_untilize_dst<max_tiles_per_iter>(out_cb_id, 1 /*out_subblock_h*/, 0, 1, num_faces_in_output_tile);
-                cb_push_back(out_cb_id, max_tiles_per_iter);
-            } else {
-                pack_untilize_dst<partial_iter_output_tiles>(
-                    out_cb_id, 1 /*out_subblock_h*/, 0, 1, num_faces_in_output_tile);
+            if (last_c_block) {
+                pack_untilize_dst<partial_iter_output_tiles>(out_cb_id, 1, 0, num_out_rows, num_faces_in_output_tile);
                 cb_push_back(out_cb_id, partial_iter_output_tiles);
+            } else {
+                pack_untilize_dst<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_rows, num_faces_in_output_tile);
+                cb_push_back(out_cb_id, max_tiles_per_iter);
             }
             tile_regs_release();
         }
