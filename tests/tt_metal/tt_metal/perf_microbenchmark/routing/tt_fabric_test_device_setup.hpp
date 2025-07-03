@@ -58,7 +58,7 @@ public:
 protected:
     CoreCoord logical_core_;
     uint32_t worker_id_;
-    std::string_view kernel_src_;
+    std::string kernel_src_;
     TestDevice* test_device_ptr_;
 };
 
@@ -137,13 +137,15 @@ inline TestWorker::TestWorker(
     CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     logical_core_(logical_core), test_device_ptr_(test_device_ptr) {
     if (kernel_src.has_value()) {
-        this->kernel_src_ = kernel_src.value();
+        this->kernel_src_ = std::string(kernel_src.value());
     }
 
     // populate worker id
 }
 
-inline void TestWorker::set_kernel_src(const std::string_view& kernel_src) { this->kernel_src_ = kernel_src; }
+inline void TestWorker::set_kernel_src(const std::string_view& kernel_src) {
+    this->kernel_src_ = std::string(kernel_src);
+}
 
 inline void TestWorker::create_kernel(
     const MeshCoordinate& device_coord,
@@ -152,7 +154,7 @@ inline void TestWorker::create_kernel(
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear) const {
     auto kernel_handle = tt::tt_metal::CreateKernel(
         this->test_device_ptr_->get_program_handle(),
-        std::string(this->kernel_src_),
+        this->kernel_src_,
         {this->logical_core_},
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -239,7 +241,9 @@ inline TestReceiver::TestReceiver(
     // TODO: init mem map?
 }
 
-inline void TestReceiver::add_config(TestTrafficReceiverConfig config) { this->configs_.push_back(config); }
+inline void TestReceiver::add_config(TestTrafficReceiverConfig config) {
+    this->configs_.emplace_back(std::move(config));
+}
 
 inline bool TestReceiver::is_shared_receiver() { return this->is_shared_; }
 
@@ -373,20 +377,23 @@ inline void TestDevice::create_sender_kernels() {
 
         std::vector<uint32_t> traffic_config_args;
         if (!sender.configs_.empty()) {
-            const auto& first_traffic_args = sender.configs_[0].first.get_args();
+            // Estimate total size based on first config to reduce reallocations
+            const auto first_traffic_args = sender.configs_[0].first.get_args();
             traffic_config_args.reserve(sender.configs_.size() * first_traffic_args.size());
             traffic_config_args.insert(traffic_config_args.end(), first_traffic_args.begin(), first_traffic_args.end());
 
             for (size_t i = 1; i < sender.configs_.size(); ++i) {
-                const auto& traffic_args = sender.configs_[i].first.get_args();
+                const auto traffic_args = sender.configs_[i].first.get_args();
                 traffic_config_args.insert(traffic_config_args.end(), traffic_args.begin(), traffic_args.end());
             }
         }
 
+        // Pre-calculate total rt_args size to avoid reallocations
+        const size_t total_rt_args_size = memory_allocator_args.size() + fabric_connection_args.size() +
+                                          traffic_config_to_fabric_connection_args.size() + traffic_config_args.size();
+
         std::vector<uint32_t> rt_args;
-        rt_args.reserve(
-            memory_allocator_args.size() + fabric_connection_args.size() +
-            traffic_config_to_fabric_connection_args.size() + traffic_config_args.size());
+        rt_args.reserve(total_rt_args_size);
         rt_args.insert(rt_args.end(), memory_allocator_args.begin(), memory_allocator_args.end());
         rt_args.insert(rt_args.end(), fabric_connection_args.begin(), fabric_connection_args.end());
         rt_args.insert(
@@ -396,7 +403,7 @@ inline void TestDevice::create_sender_kernels() {
         rt_args.insert(rt_args.end(), traffic_config_args.begin(), traffic_config_args.end());
 
         // create kernel
-        sender.create_kernel(coord_, ct_args, rt_args, {});
+        sender.create_kernel(coord_, std::move(ct_args), std::move(rt_args), {});
         log_info(tt::LogTest, "created sender kernel on core: {}", core);
     }
 }
@@ -409,12 +416,13 @@ inline void TestDevice::create_receiver_kernels() {
 
         std::vector<uint32_t> traffic_config_args;
         if (!receiver.configs_.empty()) {
-            const auto& first_traffic_args = receiver.configs_[0].get_args();
+            // Estimate total size based on first config to reduce reallocations
+            const auto first_traffic_args = receiver.configs_[0].get_args();
             traffic_config_args.reserve(receiver.configs_.size() * first_traffic_args.size());
             traffic_config_args.insert(traffic_config_args.end(), first_traffic_args.begin(), first_traffic_args.end());
 
             for (size_t i = 1; i < receiver.configs_.size(); ++i) {
-                const auto& traffic_args = receiver.configs_[i].get_args();
+                const auto traffic_args = receiver.configs_[i].get_args();
                 traffic_config_args.insert(traffic_config_args.end(), traffic_args.begin(), traffic_args.end());
             }
         }
@@ -423,7 +431,7 @@ inline void TestDevice::create_receiver_kernels() {
         rt_args.reserve(traffic_config_args.size());
         rt_args.insert(rt_args.end(), traffic_config_args.begin(), traffic_config_args.end());
 
-        receiver.create_kernel(coord_, ct_args, rt_args, {});
+        receiver.create_kernel(coord_, std::move(ct_args), std::move(rt_args), {});
         log_info(tt::LogTest, "created receiver kernel on core: {}", core);
     }
 }
