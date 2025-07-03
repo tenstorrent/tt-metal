@@ -75,6 +75,7 @@ jobs:
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/segformer/tests -m models_device_performance_bare_metal
           else
             echo "Running CIv2 compatible tests"
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/swin_s/tests/perf/test_perf.py -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov11/tests -m models_device_performance_bare_metal
             pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
             pytest models/demos/distilbert/tests -m models_device_performance_bare_metal
