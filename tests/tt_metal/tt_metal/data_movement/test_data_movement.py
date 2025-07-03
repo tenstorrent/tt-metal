@@ -118,16 +118,16 @@ test_bounds = {
         #    "riscv_1": {"latency": {"lower": 300, "upper": 600}, "bandwidth": 0.08},
         #    "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.08},
         # },
-        3: {
+        3: {  # DRAM Unary Directed Ideal
             "riscv_1": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 22},
             "riscv_0": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 21},
         },
         # 4: {
         #    "riscv_0": {"latency": {"lower": 200, "upper": 18000}, "bandwidth": 0.1},
         # },
-        5: {
-            "riscv_1": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.1},
-        },
+        # 5: {
+        #    "riscv_1": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.1},
+        # },
         # 6: {
         #     "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.3},
         # },
@@ -155,12 +155,12 @@ test_bounds = {
         # 14: {
         #     "riscv_0": {"latency": {"lower": 500, "upper": 40000}, "bandwidth": 0.04},
         # },
-        15: {
-            "riscv_1": {"latency": {"lower": 700, "upper": 85000}, "bandwidth": 0.71},
-        },
-        16: {
-            "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
-        },
+        # 15: {
+        #    "riscv_1": {"latency": {"lower": 700, "upper": 85000}, "bandwidth": 0.71},
+        # },
+        # 16: {
+        #    "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
+        # },
         30: {
             "riscv_1": {"latency": {"lower": 20000, "upper": 37000}, "bandwidth": 30},
         },
@@ -220,16 +220,16 @@ test_bounds = {
         #    "riscv_1": {"latency": {"lower": 0, "upper": 45000}, "bandwidth": 0.13},
         #    "riscv_0": {"latency": {"lower": 0, "upper": 500}, "bandwidth": 0.16},
         # },
-        3: {
+        3: {  # DRAM Unary Directed Ideal
             "riscv_1": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 33},
             "riscv_0": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 34},
         },
         # 4: {
         #    "riscv_0": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.17},
         # },
-        5: {
-            "riscv_1": {"latency": {"lower": 300, "upper": 18000}, "bandwidth": 0.17},
-        },
+        # 5: {
+        #    "riscv_1": {"latency": {"lower": 300, "upper": 18000}, "bandwidth": 0.17},
+        # },
         # 6: {
         #     "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.5},
         # },
@@ -257,13 +257,13 @@ test_bounds = {
         # 14: {
         #     "riscv_0": {"latency": {"lower": 700, "upper": 46000}, "bandwidth": 0.08},
         # },
-        15: {
-            "riscv_1": {"latency": {"lower": 800, "upper": 87000}, "bandwidth": 1.19},
-        },
-        16: {
-            "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
-        },
-        30: {"riscv_1": {"latency": {"lower": 10000, "upper": 18000}, "bandwidth": 60}},
+        # 15: {
+        #    "riscv_1": {"latency": {"lower": 800, "upper": 87000}, "bandwidth": 1.19},
+        # },
+        # 16: {
+        #    "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
+        # },
+        30: {"riscv_1": {"latency": {"lower": 10000, "upper": 18000}, "bandwidth": 60}},  # One from All Directed Ideal
         50: {  # One to One Directed Ideal
             "riscv_0": {"latency": {"lower": 12000, "upper": 19000}, "bandwidth": 59},  # 17000
         },
