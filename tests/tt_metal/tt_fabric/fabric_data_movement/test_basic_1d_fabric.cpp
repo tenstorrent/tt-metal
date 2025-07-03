@@ -206,7 +206,7 @@ void RunTestLineMcast(
 
     // common compile time args for sender and receiver
     // Note: Fabric Mcast with NOC writes to DRAM provides redudant coverage,
-    // so use_dram_dst is set to 0; see run_unicast_dw_chips() for DRAM coverage
+    // so use_dram_dst is set to 0; see run_unicast_bw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
