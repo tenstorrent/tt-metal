@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>

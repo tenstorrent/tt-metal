@@ -31,6 +31,7 @@
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tile.hpp>
