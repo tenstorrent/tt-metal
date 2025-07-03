@@ -284,17 +284,27 @@ def from_torch(
     if memory_config is not None and device is None:
         raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
 
-    return ttnn.Tensor(
+    result = ttnn.Tensor(
         tensor=tensor,
         data_type=dtype,
         device=device,
-        layout=layout,
+        # If dtype is specified explicitly create the tensor in tile layout for the
+        # typecast operation.
+        layout=ttnn.TILE_LAYOUT if dtype else layout,
         mem_config=memory_config,
         tile=tile,
         cq_id=cq_id,
         pad_value=pad_value,
         mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
     )
+
+    if dtype:
+        assert result.layout == ttnn.TILE_LAYOUT
+        result = ttnn.typecast(result, dtype=dtype)
+        if layout != ttnn.TILE_LAYOUT:
+            result = ttnn.to_layout(result, layout)
+
+    return result
 
 
 def _golden_function(tensor, *, torch_rank=None, **kwargs):
@@ -345,6 +355,25 @@ def to_torch(
     """
     import torch
 
+    on_device_typecast = False
+
+    if dtype is not None:
+        torch_dtype_to_ttnn_dtype = {
+            torch.uint8: ttnn.uint8,
+            torch.int16: ttnn.uint16,
+            torch.int32: ttnn.int32,
+            torch.int64: ttnn.uint32,
+            torch.bfloat16: ttnn.bfloat16,
+            torch.float32: ttnn.float32,
+        }
+
+        if dtype in torch_dtype_to_ttnn_dtype:
+            if tensor.layout != ttnn.TILE_LAYOUT:
+                tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
+
+            tensor = ttnn.typecast(tensor, dtype=torch_dtype_to_ttnn_dtype[dtype])
+            on_device_typecast = True
+
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
@@ -358,7 +387,7 @@ def to_torch(
 
     torch_tensor = tensor
 
-    if dtype is not None:
+    if dtype is not None and not on_device_typecast:
         torch_tensor = torch_tensor.to(dtype=dtype)
 
     return torch_tensor
