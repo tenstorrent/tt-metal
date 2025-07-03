@@ -65,7 +65,6 @@ def test_reduce_scatter_async(
     mem_config_rs,
     enable_trace,
     num_iters,
-    use_program_cache,
     rs_topology,
 ):
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
@@ -80,7 +79,6 @@ def test_reduce_scatter_async(
         layout,
         mem_config_input,
         mem_config_rs,
-        use_program_cache=use_program_cache,
         rs_topology=rs_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
