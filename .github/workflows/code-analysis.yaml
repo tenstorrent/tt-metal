@@ -1,7 +1,6 @@
 name: Uplift LLK Submodule
 
 on:
-  workflow_dispatch:
   workflow_call:
     inputs:
       workflow_timeout:
@@ -73,6 +72,11 @@ jobs:
           else
             echo "has-changes=true" >> $GITHUB_OUTPUT
             echo "✅ Changes detected: $OLD_SHA -> $NEW_SHA"
+            
+            # Stage the submodule changes in the parent repo
+            cd ../../..
+            git add ${{ env.SUBMODULE_PATH }}
+            echo "📝 Staged submodule changes"
           fi
 
       - name: Analyze changes and generate PR body
@@ -104,6 +108,20 @@ jobs:
             echo "should-run-blackhole=false" >> $GITHUB_OUTPUT
           fi
 
+          # Generate commits table
+          echo "| Commit | Message | Author | PR |" > ../../../commits_table.txt
+          echo "|--------|---------|---------|-----|" >> ../../../commits_table.txt
+          
+          git log --pretty=format:"%h%n%s%n%an%n%H" ${OLD_SHA}..${NEW_SHA} | while read -r short_hash && read -r message && read -r author && read -r full_hash; do
+            # Try to get the PR number from the commit message
+            pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
+            if [ -n "$pr_number" ]; then
+              echo "| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | [#$pr_number](https://github.com/tenstorrent/tt_llk/pull/$pr_number) |" >> ../../../commits_table.txt
+            else
+              echo "| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | - |" >> ../../../commits_table.txt
+            fi
+          done
+
           # Generate PR body
           cat > ../../../llk_commit_log.txt << EOF
           ## LLK Submodule Update
@@ -113,17 +131,7 @@ jobs:
           | \`$OLD_SHA\` | \`$NEW_SHA\` |
 
           ### Commits Uplifted:
-          | Commit | Message | Author | PR |
-          |--------|---------|---------|-----|
-          $(git log --pretty=format:"%h%n%s%n%an%n%H" ${OLD_SHA}..${NEW_SHA} | while read -r short_hash && read -r message && read -r author && read -r full_hash; do
-            # Try to get the PR number from the commit message
-            pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
-            if [ -n "$pr_number" ]; then
-              echo "| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | [#$pr_number](https://github.com/tenstorrent/tt_llk/pull/$pr_number) |"
-            else
-              echo "| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | - |"
-            fi
-          done)
+          $(cat ../../../commits_table.txt)
 
           ### Files Changed:
           $(echo "$CHANGED_FILES" | sed 's/^/- /')
@@ -140,12 +148,14 @@ jobs:
           branch: ${{ env.BRANCH_NAME }}
           delete-branch: true
           body-path: llk_commit_log.txt
+          add-paths: |
+            ${{ env.SUBMODULE_PATH }}
           draft: ${{ !inputs.skip_draft }}
           labels: |
             llk-update
             automated
 
-      - name: Update PR body with PR link
+      - name: Update PR body with changes information
         if: steps.update-submodule.outputs.has-changes == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -170,17 +180,7 @@ jobs:
           | \`$OLD_SHA\` | \`$NEW_SHA\` |
 
           ### Commits Uplifted:
-          | Commit | Message | Author | PR |
-          |--------|---------|---------|-----|
-          $(git log --pretty=format:"%h%n%s%n%an%n%H" ${OLD_SHA}..${NEW_SHA} | while read -r short_hash && read -r message && read -r author && read -r full_hash; do
-            # Try to get the PR number from the commit message
-            pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
-            if [ -n "$pr_number" ]; then
-              echo "| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | [#$pr_number](https://github.com/tenstorrent/tt_llk/pull/$pr_number) |"
-            else
-              echo "| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | - |"
-            fi
-          done)
+          $(cat ../../../commits_table.txt)
 
           ### Files Changed:
           $(echo "$CHANGED_FILES" | sed 's/^/- /')
@@ -361,19 +361,11 @@ jobs:
             fi
           fi
 
-          # Auto-merge with squash
-          echo "🔀 Auto-merging PR #$PR_NUMBER..."
-          if gh pr merge "$PR_NUMBER" \
-            --auto \
-            --squash \
-            --delete-branch \
-            --repo "${{ github.repository }}"; then
-            echo "✅ PR #$PR_NUMBER merged successfully!"
-          else
-            echo "⚠️ Failed to auto-merge PR #$PR_NUMBER - this may be due to permission limitations or branch protection rules"
-            gh pr comment "$PR_NUMBER" \
-              --body "⚠️ **Auto-merge not available** - This may be due to permission limitations or branch protection rules. Please review and merge manually if needed." \
-              --repo "${{ github.repository }}" || echo "⚠️ Also unable to comment on PR - insufficient permissions"
+          # Comment on PR that it's ready for review
+          echo "📝 PR #$PR_NUMBER is ready for review and merge"
+          gh pr comment "$PR_NUMBER" \
+            --body "🎉 **LLK submodule update completed successfully!** 
+            All workflows have passed. This PR is ready for review and merge." \
+            --repo "${{ github.repository }}" || echo "⚠️ Unable to comment on PR - insufficient permissions"
 
-            echo "ℹ️ Workflow completed successfully, but manual merge may be required"
-          fi
+          echo "✅ Workflow completed successfully - PR #$PR_NUMBER is ready for manual review"
