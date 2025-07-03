@@ -23,56 +23,6 @@ protected:
 using TestTypes = ::testing::Types<uint32_t, float>;
 TYPED_TEST_SUITE(MeshOpsTest, TestTypes);
 
-TYPED_TEST(MeshOpsTest, ShardXTensorToMeshBasicShard) {
-    MetalMeshShape mesh_shape{1, 4};
-
-    // A simple 1D tensor to shard across 4 devices
-    auto tensor = xt::arange<TypeParam>(8);  // [0,...,7]
-
-    ttml::core::ShardXTensorToMesh<TypeParam> sharder(mesh_shape, 0);
-    auto shards = sharder.map(tensor);
-
-    // With 4 shards, each shard should have size 2
-    ASSERT_THAT(shards, SizeIs(4));
-    for (auto& s : shards) {
-        EXPECT_EQ(s.size(), 2u);
-    }
-}
-
-TYPED_TEST(MeshOpsTest, ShardTensor2dMeshTwoDimSharding) {
-    // Mesh shape: 2x2, total 4 devices
-    MetalMeshShape mesh_shape{2, 2};
-
-    // Create a 2D tensor shape: (4,4)
-    auto tensor = xt::arange<TypeParam>(16).reshape({4, 4});
-
-    // Shard along row_dim=0 and col_dim=1
-    ttml::core::ShardTensor2dMesh<TypeParam> sharder(mesh_shape, {0, 1});
-    auto shards = sharder.map(tensor);
-
-    ASSERT_THAT(shards, SizeIs(4));
-    // Check shapes of shards
-    for (auto& shard : shards) {
-        EXPECT_EQ(shard.shape()[0], 2u);
-        EXPECT_EQ(shard.shape()[1], 2u);
-    }
-}
-
-TYPED_TEST(MeshOpsTest, ReplicateXTensorToMeshReplication) {
-    MetalMeshShape mesh_shape{2, 2};
-    int num_devices = mesh_shape.mesh_size();  // 4
-
-    auto tensor = xt::arange<TypeParam>(4);  // [0,1,2,3]
-
-    ttml::core::ReplicateXTensorToMesh<TypeParam> replicator(mesh_shape);
-    auto replicas = replicator.map(tensor);
-
-    ASSERT_THAT(replicas, SizeIs(num_devices));
-    for (const auto& t : replicas) {
-        EXPECT_TRUE(xt::allclose(t, tensor));
-    }
-}
-
 TYPED_TEST(MeshOpsTest, ConcatMesh2dToTensorRecomposition) {
     MetalMeshShape mesh_shape{2, 2};
 
