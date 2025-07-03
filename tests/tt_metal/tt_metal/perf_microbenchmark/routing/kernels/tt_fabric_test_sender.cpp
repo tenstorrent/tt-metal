@@ -28,6 +28,7 @@ void kernel_main() {
     uint64_t total_packets_sent = 0;
     uint64_t total_elapsed_cycles = 0;
 
+    // Round-robin packet sending: send one packet from each config per iteration
     while (packets_left_to_send) {
         packets_left_to_send = false;
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
@@ -39,7 +40,8 @@ void kernel_main() {
             // TODO: might want to check if the buffer has wrapped or not
             // if wrapped, then wait for credits from the receiver
 
-            traffic_config->send_packets<BENCHMARK_MODE>();
+            // Always send exactly one packet per config per round
+            traffic_config->send_one_packet<BENCHMARK_MODE>();
             packets_left_to_send |= traffic_config->has_packets_to_send();
         }
     }
