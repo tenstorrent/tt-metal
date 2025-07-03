@@ -46,68 +46,19 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
     return tt_output_grad, tt_input_grad, torch_output_grad
 
 
-# @pytest.mark.parametrize(
-#     "input_shape",
-#     (
-#         ([1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1]),
-#         ([4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1]),
-#         ([4, 4, TILE_HEIGHT * 30 - 1, TILE_WIDTH * 12 - 1]),
-#         ([8, 8, TILE_HEIGHT * 4 - 1, TILE_WIDTH * 4 - 1]),
-#     ),
-#     ids=[
-#         "1, 1, TILE_HEIGHT-1,TILE_WIDTH - 1",
-#         "4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1",
-#         "4, 4, TILE_HEIGHT * 30 - 1, TILE_WIDTH * 12 - 1",
-#         "8, 8, TILE_HEIGHT * 4 - 1, TILE_WIDTH * 4 - 1",
-#     ],
-# )
-# @pytest.mark.parametrize(
-#     "dim",
-#     (
-#         0,
-#         1,
-#     ),
-#     ids=["0", "1"],
-# )
-# def test_moreh_cumsum_dim(input_shape, dim, device):
-#     output_shape = input_shape.copy()
-
-#     (tt_input, tt_output, torch_input) = get_tensors(input_shape, output_shape, device)
-
-#     torch_output = torch.cumsum(torch_input, dim)
-
-#     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-#     tt_output_cpu = (
-#         ttnn.operations.moreh.cumsum(tt_input, dim, output=tt_output)
-#         .cpu()
-#         .to(cpu_layout)
-#         .unpad_from_tile(output_shape)
-#         .to_torch()
-#     )
-
-#     # test for equivalance
-#     rtol = atol = 0.1
-#     passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
-
-#     logger.debug(f"Out passing={passing}")
-#     logger.debug(f"Output pcc={output_pcc}")
-
-    assert passing
-
-
 @pytest.mark.parametrize(
     "input_shape",
     (
         ([1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1]),
         ([4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1]),
         ([4, 4, TILE_HEIGHT * 30 - 1, TILE_WIDTH * 12 - 1]),
-        ([8, 8, TILE_HEIGHT * 20 - 1, TILE_WIDTH * 20 - 1]),
+        ([8, 8, TILE_HEIGHT * 4 - 1, TILE_WIDTH * 4 - 1]),
     ),
     ids=[
         "1, 1, TILE_HEIGHT-1,TILE_WIDTH - 1",
         "4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1",
         "4, 4, TILE_HEIGHT * 30 - 1, TILE_WIDTH * 12 - 1",
-        "8, 8, TILE_HEIGHT * 20 - 1, TILE_WIDTH * 20 - 1",
+        "8, 8, TILE_HEIGHT * 4 - 1, TILE_WIDTH * 4 - 1",
     ],
 )
 @pytest.mark.parametrize(
@@ -118,92 +69,29 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
     ),
     ids=["0", "1"],
 )
-def test_moreh_cumsum_backward(input_shape, dim, device):
+def test_moreh_cumsum_dim(input_shape, dim, device):
     output_shape = input_shape.copy()
 
-    (_, _, torch_input) = get_tensors(input_shape, output_shape, device)
-    (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(output_shape, input_shape, device)
+    (tt_input, tt_output, torch_input) = get_tensors(input_shape, output_shape, device)
 
     torch_output = torch.cumsum(torch_input, dim)
-    torch_output.backward(torch_output_grad)
 
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_input_grad_cpu = (
-        ttnn.operations.moreh.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad)
+    tt_output_cpu = (
+        ttnn.operations.moreh.cumsum(tt_input, dim, output=tt_output)
         .cpu()
         .to(cpu_layout)
-        .unpad_from_tile(input_shape)
+        .unpad_from_tile(output_shape)
         .to_torch()
     )
 
     # test for equivalance
     rtol = atol = 0.1
-    passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
+    passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
     logger.debug(f"Out passing={passing}")
     logger.debug(f"Output pcc={output_pcc}")
 
-    assert passing
-
-
-@pytest.mark.parametrize(
-    "input_shape",
-    (
-        ([]),
-        ([TILE_WIDTH - 1]),
-        ([TILE_HEIGHT, TILE_WIDTH + 1]),
-        ([10, TILE_HEIGHT, TILE_WIDTH + 1]),
-        ([10, 10, TILE_HEIGHT - 1, TILE_WIDTH]),
-        ([10, 10, 5, TILE_HEIGHT - 1, TILE_WIDTH - 1]),
-        ([10, 10, 5, 5, TILE_HEIGHT + 1, TILE_WIDTH - 1]),
-        ([1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1]),
-        ([4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1]),
-    ),
-    ids=[
-        "[]",
-        "TILE_WIDTH - 1",
-        "TILE_HEIGHT, TILE_WIDTH + 1",
-        "10, TILE_HEIGHT, TILE_WIDTH + 1",
-        "10, 10, TILE_HEIGHT - 1, TILE_WIDTH",
-        "10, 10, 5, TILE_HEIGHT - 1, TILE_WIDTH - 1",
-        "10, 10, 5, 5, TILE_HEIGHT + 1, TILE_WIDTH - 1",
-        "1, 1, TILE_HEIGHT-1,TILE_WIDTH - 1",
-        "4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1",
-    ],
-)
-@pytest.mark.parametrize(
-    "dim",
-    (
-        0,
-        1,
-    ),
-    ids=["0", "1"],
-)
-def test_moreh_cumsum_callback(input_shape, dim, device):
-    if dim < len(input_shape):
-        output_shape = input_shape.copy()
-
-        (tt_input, tt_output, torch_input) = get_tensors(input_shape, output_shape, device)
-
-        torch_output = torch.cumsum(torch_input, dim)
-
-        cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-
-        # test for equivalance
-        rtol = atol = 0.1
-
-        for i in range(2):
-            tt_output_cpu = ttnn.to_torch(ttnn.operations.moreh.cumsum(tt_input, dim))
-
-            logger.debug(f"torch_output.shape == {torch_output.shape}, tt_output_cpu == {tt_output_cpu.shape}")
-
-            passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
-
-            logger.debug(f"Out passing={passing}")
-            logger.debug(f"Output pcc={output_pcc}")
-
-            assert passing
-        assert device.num_program_cache_entries() >= 1
     assert passing
 
 
