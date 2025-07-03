@@ -16,15 +16,14 @@
      - [2.2.3 Attention](#223-attention)
      - [2.2.4 MLP](#224-mlp)
    - [2.3 VAE](#23-vae)
-   - [2.4 Pipeline](#24-pipeline)
--  [Parallelization](#3-parallelization)
+-  [3. Parallelization](#3-parallelization)
    - [3.1 CFG Parallelism](#31-cfg-parallelism)
    - [3.2 Non-attention Parallelism (TP, SP)](#32-non-attention-parallelism-tp-sp)
    - [3.3 Attention Parallelism (Ring + Head)](#33-attention-parallelism-ring--head)
    - [3.4 Topology Mapping](#34-topology-mapping)
-- [Hardware Optimizations](#4-hardware-optimizations)
+- [4. Hardware Optimizations](#4-hardware-optimizations)
    - [4.1 Memory Management](#41-memory-management)
-- [Testing and Demo](#5-testing-and-demo)
+- [5. Testing and Demo](#5-testing-and-demo)
    - [5.1 Performance Testing](#51-performance-testing)
    - [5.2 Demo Usage](#52-demo-usage)
 
@@ -62,7 +61,7 @@ This document describes the full technical implementation of Stable Diffusion (S
 
 ### 2.1 Encoder
 
-#### 2.1.1 CLIP
+### 2.1.1 CLIP
 
 **Two separate CLIP encoders** `text_encoder_1` and `text_encoder_2` process identical prompts. Both are instances of `CLIPTextModelWithProjection` from Huggingface transformers, and run on CPU using PyTorch.
 
@@ -78,10 +77,10 @@ self._text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(checkpoint, s
 
 Both outputs are converted to TT-NN tensors using `from_torch_fast()`.
 
-The two **sequence embeddings** are concatenated along the sequence dimension and later fused with the T5 encoder output, followed by projection to a common transformer dimension. The two **pooled embeddings** are concatenated to form pooled projection for time conditioning.
+The two **sequence embeddings** are concatenated along the sequence dimension. The two **pooled embeddings** are concatenated to form pooled projection for time conditioning.
 
 
-#### 2.1.2 T5
+### 2.1.2 T5
 
 The T5 encoder implementation `TtT5Encoder` is a custom module built for TT hardware using TT-NN. It processes the same raw user prompt as the CLIP encoders and outputs an extended **sequence embedding**, up to 256 tokens.
 
@@ -93,8 +92,8 @@ Each T5 block contains two sequential layers:
 class TtT5Block:
    def __init__(self, parameters: TtT5BlockParameters, *, num_heads: int, layer_norm_epsilon: float) -> None:
        self._attention = TtT5LayerSelfAttention(
-           parameters.attention, num_heads=num_heads, layer_norm_epsilon=layer_norm_epsilon
-       )
+           parameters.attention, num_heads=num_heads, layer_norm_epsilon=layer_norm_epsilon)
+
        self._ff = TtT5LayerFF(parameters.ff, layer_norm_epsilon=layer_norm_epsilon)
 ```
 The encoder outputs:
@@ -106,13 +105,13 @@ This sequence embedding is concatenated with the two CLIP sequence embeddings. T
 
 ### 2.2 Transformer
 
-#### 2.2.1 Architecture
+### 2.2.1 Architecture
 
-The architecture consists of 24 transformer blocks processing multimodal inputs (spatial + text) through joint attention mechanisms.
+The architecture consists of **24 transformer blocks** processing multimodal inputs (spatial + text) through joint attention mechanisms.
 
 Each transformer block takes as input:
-- **Spatial embeddings**: Derived from the VAE latent space (the image's tokens)
-	The latent space is divided into fixed-size patches and linearly projected into **spatial tokens**, each representing a localized region of the compressed image.
+- **Spatial embeddings**: Derived from the VAE latent space (the image's tokens).
+	- The latent space is divided into fixed-size patches and linearly projected into **spatial tokens**, each representing a localized region of the compressed image.
 - **Prompt embeddings**: Token-level embeddings produced by the CLIP encoders.
 - **Time embedding** (`time_embed`): A conditioning vector representing the current diffusion timestep, formed by summing two learned projections.
 
@@ -124,7 +123,7 @@ If the block includes spatial self-attention, the spatial time embedding is chun
 - **Dual attention** (shift, scale, gate)
 - **Feed-forward** (shift, scale, gate)
 - **Spatial attention** (shift, scale, gate)
-If the block has no spatial attention, only 6 chunks are used (dual attention and feed-forward only)
+    - If the block has no spatial attention, only 6 chunks are used (dual attention and feed-forward only).
 
 In context-pre-only mode (used in later blocks), prompt tokens receive only 2 chunks: shift and scale for attention. In full mode, prompt tokens receive 6 chunks (shift, scale, gate for both attention and feed-forward).
 
@@ -132,9 +131,9 @@ This chunking method supports multiple SD3.5 variants with minimal branching in 
 
 The output of the transformer stack is a set of **denoised spatial tokens**, i.e., the cleaned image in latent space.
 
-#### 2.2.2 Decoder
+### 2.2.2 Decoder
 
-The decoder converts the output of the transformer blocks - **spatial tokens** - back into a 2D spatial format suitable for decoding by the VAE.
+The decoder converts the output of the transformer blocks - **spatial tokens** - back into a 2D spatial format suitable for the VAE.
 
 It takes a flat sequence of 4096 spatial tokens per image as input, each with a transformer dimension of 2432 (SD 3.5 large).
 
@@ -145,33 +144,33 @@ spatial = sd_layer_norm(spatial, parameters.norm_out) * (1 + scale) + shift
 return sd_linear(spatial, parameters.proj_out)
 ```
 
-#### 2.2.3 Attention
+### 2.2.3 Attention
 
 
-Each transformer block has **dual attention paths**: one for **spatial tokens** (image) and one for **prompt tokens** (text). These paths are processed separately but interact through joint attention operations
+Each transformer block has **dual attention paths**: one for **spatial tokens** (image) and one for **prompt tokens** (text). These paths are processed separately but interact through joint attention operations.
 
 Some blocks have an additional **spatial self-attention**, where spatial tokens attend only to each other. Before attention, the spatial tokens are conditioned with time-dependent parameters. The attention output is then gated. This path uses **spatial** specific **time embedding chunks**, and is only active in blocks where `parameters.spatial_attn` is not None.
 
 The core of each block is the **dual attention** module, which jointly attends over both spatial and prompt tokens. The joint attention is implemented in `sd_joint_attention()` which processes both spatial and prompt tokens in parallel.
 
 Each attention stream (spatial and prompt) goes through:
-- **QKV projection**: a single fused matmul (`_merge_qkv_proj`) for all Q, K, V weights, followed by splitting. This is an optimization that reduces matmul overhead and improves perf 3x over separate matmuls
-- **Multihead reshape**: The qkv tensor is split and reshaped for multihead attention
+- **QKV projection**: a single fused matmul (`_merge_qkv_proj`) for all Q, K, V weights, followed by splitting. This is an optimization that reduces matmul overhead and improves perf 3x over separate matmuls.
+- **Multi-head reshape**: The qkv tensor is split and reshaped for multihead attention.
 
 ```py
 num_local_heads = num_heads // parallel_config.tensor_parallel.factor
+
 q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
    qkv,
    num_heads=num_local_heads,
    transpose_key=False)
 ```
 
-#### 2.2.4 MLP
+### 2.2.4 MLP
 
 Each transformer block has **separate MLPs for spatial and prompt tokens**. These MLPs are defined in the block parameters:
 
 ```py
-@dataclass
 class TtTransformerBlockParameters:
     # MLP for spatial/image tokens
    spatial_ff: TtFeedForwardParameters
@@ -211,12 +210,13 @@ spatial_time = sd_linear(ttnn.silu(time_embed), parameters.time_embed_out)
    return sd_linear(spatial, parameters.proj_out)
 ```
 
+## 3. Parallelization
 ### 3.1 CFG Parallelism
 
 CFG parallelism lets us run both the *conditional* and the *unconditional* model passes simultaneously by splitting the workload across two device groups. CFG parallelism applies to DiT, not VAE. If there is a negative prompt, it might apply to CLIP/T5.
 
-- **Conditional pass**: uses the user prompt
-- **Unconditional pass**: runs with an empty or null prompt to model natural image priors
+- **Conditional pass**: uses the user prompt.
+- **Unconditional pass**: runs with an empty or null prompt to model natural image priors.
 
 These are run in parallel and their outputs are later combined using the guidance scale to steer the final image. For example, when `DiTParallelConfig.cfg_parallel.factor = 2`, the device mesh is divided into 2 groups:
 - **Group 0** → runs the conditional pass
@@ -231,7 +231,7 @@ latents = unconditional + guidance_scale * (conditional - unconditional)
 
 ### 3.2 Non-attention Parallelism (TP, SP)
 
-Non-attention operations are parallelized using tensor parallelism (TP) and sequence parallelism (SP). Together, computation is sharded across the device mesh.
+Non-attention operations are parallelized using **tensor parallelism (TP) and sequence parallelism (SP)**. Together, computation is sharded across the device mesh.
 
 > **__NOTE__**: "Non-attention parallelism" here refers to both SP and TP as applied to feed-forward layers. In contrast, attention uses different parallel axes.
 
@@ -246,14 +246,12 @@ These are sharded using two types of TP (megatron-LM style parallelism):
 This setup lets each device compute a **partial result** of the MLP, which is then combined with reduce-scatter across devices.
 
 ```python
-@dataclass
 class TtFeedForwardParameters:
    # input projection: 2432 → 9728 (4x expansion)
    in_proj: TtLinearParameters
    # output projection: 9728 → 2432 (4x reduction)
    out_proj: TtLinearParameters
 
-   @classmethod
    def from_torch(cls, state: dict[str, torch.Tensor], *, dtype: ttnn.DataType | None = None, device: ttnn.MeshDevice, parallel_config: DiTParallelConfig) -> TtFeedForwardParameters:
        return cls(
            in_proj=TtLinearParameters.from_torch(
@@ -278,23 +276,22 @@ def sd_feed_forward(x: ttnn.Tensor, parameters: TtFeedForwardParameters, paralle
    if parallel_config.tensor_parallel.factor > 1:
        result = ttnn.reduce_scatter(
            result,
-           dim=-1,                                        # sum along feature dimension
-           math_op=ttnn.ReduceType.Sum,                   # sum all partial results
-           num_links=1,                                   # single comm link per device
+           dim=-1,  # sum along feature dimension
+           math_op=ttnn.ReduceType.Sum,  # sum all partial results
+           num_links=1,  # single comm link per device
            memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-           topology=ttnn.Topology.Ring,                  # ring pattern
+           topology=ttnn.Topology.Ring,  # ring pattern
        )
-
    return result
 ```
 
-While TP slices each token's embedding (i.e., shards across hidden dim), SP slices the tokens themselves (i.e., shards across sequence dim) so each device processes a different portion of the sequence.
+While **TP slices each token's embedding** (i.e., shards across hidden dim), **SP slices the tokens themselves** (i.e., shards across sequence dim) so each device processes a different portion of the sequence.
 
-### 3.3 Attention Parallelism (Ring + Head AKA RP+UP AKA USP)
+### 3.3 Attention Parallelism (Ring + Head)
 
 Due to TP, head and hidden dimensions are padded to be divisible by the number of parallel shards. In SD 3.5 large, 38 heads are padded to 40. Similarly, 9728 hidden dim in MLP may be split across devices (e.g., 2432 // 2 = 1216). This ensures equal workload across shards and simplifies kernel implementations.
 
-The SD3.5 large model has 38 attention heads, which cannot be evenly divided across the device mesh sizes. To solve this, **head count and hidden dimensions are padded.**
+The SD3.5 large model has 38 attention heads, which cannot be evenly divided across the device mesh sizes. To solve this, **head count and hidden dimensions are padded** to a more suitable value.
 
 In this case:
 - `num_heads = 40`
@@ -432,7 +429,7 @@ Instead, DRAM tensors are interleaved automatically across tiles/devices using t
 
 ## 5. Testing and Demo
 
-For instructions on running the demo, refer [here](link-to-demo-instructions).
+For instructions on running the demo, refer to [here](https://github.com/tenstorrent/tt-metal/blob/main/models/experimental/stable_diffusion_35_large/README.md).
 
 ### 5.1 Performance Testing
 
