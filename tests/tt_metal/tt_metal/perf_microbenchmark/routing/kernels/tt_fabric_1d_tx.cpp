@@ -297,6 +297,7 @@ void kernel_main() {
                 setup_header_noc_unicast_write(
                     bwd_packet_header, packet_payload_size_bytes, target_address, noc_x_start, noc_y_start);
             }
+            target_address += packet_payload_size_bytes;
         }
 #endif
 
@@ -313,11 +314,6 @@ void kernel_main() {
                 time_seed,
                 bwd_fabric_connection);
         }
-#ifndef BENCHMARK_MODE
-        if (!use_dram_dst) {
-            target_address += packet_payload_size_bytes;
-        }
-#endif
     }
 
     /* Use atomic increment to flush writes for simplicity*/
