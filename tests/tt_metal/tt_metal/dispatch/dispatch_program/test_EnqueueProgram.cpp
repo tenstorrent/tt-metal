@@ -1339,10 +1339,11 @@ auto CommandQueueFabricConfigsToTest = ::testing::Values(
     tt::tt_metal::FabricConfig::FABRIC_2D,
     tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
 
-INSTANTIATE_TEST_SUITE_P(CommandQueue, CommandQueueMultiDeviceOnFabricFixture, CommandQueueFabricConfigsToTest);
+INSTANTIATE_TEST_SUITE_P(
+    CommandQueueMultiDevice, CommandQueueMultiDeviceOnFabricFixture, CommandQueueFabricConfigsToTest);
 
 INSTANTIATE_TEST_SUITE_P(
-    MultiCommandQueue, MultiCommandQueueMultiDeviceOnFabricFixture, CommandQueueFabricConfigsToTest);
+    MultiCommandQueueMultiDevice, MultiCommandQueueMultiDeviceOnFabricFixture, CommandQueueFabricConfigsToTest);
 
 TEST_P(CommandQueueMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
     for (IDevice* device : devices_) {
