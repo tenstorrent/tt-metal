@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,56 +19,37 @@
 
 namespace ttnn::operations::ccl {
 
-// !TODO these should go in a common library, drop `detail` namespace
-namespace detail {
-
-// pretty sure this one is used in a couple of ops
-std::string stringify_vector(const std::vector<uint32_t>& vec);
-
-std::string stringify_array(const std::array<bool, 4>& arr);
-
-tt::tt_metal::Shape2D get_physical_size(const ttnn::Tensor& tensor);
-
-std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbors(
-    const MeshDeviceView& mesh_view,
-    const MeshCoordinate& mesh_coordinate,
-    tt::tt_fabric::Topology topology,
-    std::optional<uint32_t> axis);
-
-uint32_t select_link(
-    const MeshDeviceView& mesh_view,
-    const MeshCoordinate& src,
-    const MeshCoordinate& dst,
-    uint32_t num_links,
-    tt::tt_fabric::Topology topology);
-
-}  // namespace detail
-
-struct AllToAllDispatchDeviceOperation {
+struct AllToAllCombineDeviceOperation {
     struct operation_attributes_t {
-        const tt::tt_metal::SubDeviceId subdevice_id;
         const MemoryConfig output_mem_config;
         const std::optional<uint32_t> axis;
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
-        const std::optional<GlobalSemaphore> cross_device_semaphore;
+        const tt::tt_metal::GlobalSemaphore cross_device_semaphore;
+        const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "output_mem_config", "axis", "num_links", "topology", "cross_device_semaphore", "subdevice_id");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                output_mem_config, axis, num_links, topology, cross_device_semaphore, subdevice_id);
+        };
     };
     struct tensor_args_t {
-        const Tensor input_tensor;
-        const Tensor expert_indices_tensor;
-        const Tensor expert_mapping_tensor;
-        const std::optional<std::array<Tensor, 2>> optional_output_tensors;
+        const ttnn::Tensor input_tensor;
+        const ttnn::Tensor mapping_tensor;
+        const ttnn::Tensor metadata_tensor;
+        const std::optional<ttnn::Tensor> optional_output_tensor;
     };
 
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
+    using spec_return_value_t = ttnn::TensorSpec;
 
-    using tensor_return_value_t = std::array<Tensor, 2>;
+    using tensor_return_value_t = ttnn::Tensor;
 
-    struct AllToAllDispatchSparse {
+    struct AllToAllCombineFromSparse {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
             tt::tt_metal::KernelHandle ternary_reader_kernel_id;
-            tt::tt_metal::KernelHandle binary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
             CoreCoord core;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
@@ -82,9 +63,9 @@ struct AllToAllDispatchDeviceOperation {
         static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
             const operation_attributes_t& operation_attributes,
             const ttnn::MeshCoordinate& mesh_coordinate,
+            const std::vector<ttnn::MeshCoordinate>& all_mesh_coordinates,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords);
+            tensor_return_value_t& tensor_return_value);
 
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_program,
@@ -93,7 +74,7 @@ struct AllToAllDispatchDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<AllToAllDispatchSparse>;
+    using program_factory_t = std::variant<AllToAllCombineFromSparse>;
 
     // Mandatory methods
 
@@ -114,20 +95,20 @@ struct AllToAllDispatchDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& expert_indices_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
-        std::optional<uint32_t> axis,
-        const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
+        const ttnn::Tensor& expert_metadata_tensor,
         uint32_t num_links,
         tt::tt_fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,
-        tt::tt_metal::SubDeviceId subdevice_id,
-        const std::optional<GlobalSemaphore>& global_semaphore);
+        const GlobalSemaphore& global_semaphore,
+        const std::optional<uint32_t>& axis,
+        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+        const std::optional<ttnn::Tensor>& optional_output_tensor);
 };
 }  // namespace ttnn::operations::ccl
 
 namespace ttnn::prim {
 // Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-constexpr auto all_to_all_dispatch = ttnn::
-    register_operation<"ttnn::prim::all_to_all_dispatch", ttnn::operations::ccl::AllToAllDispatchDeviceOperation>();
+constexpr auto all_to_all_combine =
+    ttnn::register_operation<"ttnn::prim::all_to_all_combine", ttnn::operations::ccl::AllToAllCombineDeviceOperation>();
 }  // namespace ttnn::prim
