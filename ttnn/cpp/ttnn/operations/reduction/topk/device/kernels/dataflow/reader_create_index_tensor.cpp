@@ -11,7 +11,7 @@
  * first 32 elements are {0,..31}, then next 32 are {32,..64}
  * wt is which tile it is along the row [0, Wt) so j + 32*wt is the value in the tile at each element
  */
-FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt, const uint32_t uint16_output) {
+FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt, const bool uint16_output) {
     // TODO: investigate moving to compile time (binary size is at risk)
     cb_reserve_back(cb_id, 1);
     uint32_t write_addr = get_write_ptr(cb_id);
@@ -60,7 +60,7 @@ void kernel_main() {
 
     constexpr uint32_t Ht = get_compile_time_arg_val(3);
     constexpr uint32_t Wt = get_compile_time_arg_val(4);
-    constexpr uint32_t uint16_output = get_compile_time_arg_val(5);
+    constexpr bool uint16_output = get_compile_time_arg_val(5) == 1;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;

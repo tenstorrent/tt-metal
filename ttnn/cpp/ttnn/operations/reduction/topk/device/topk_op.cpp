@@ -96,7 +96,7 @@ void TopK::validate_with_output_tensors(
 
     bool can_run = false;
 
-    bool uint16_output = (input_shape[this->dim] < 65536);
+    bool uint16_output = (input_shape[this->dim] <= std::numeric_limits<uint16_t>::max());
     if (input_shape[dim] >= topk_utils::multi_core_min_width) {  // multicore implementation
         can_run = topk_utils::verify_multi_core_cost(
             input_tensors,
