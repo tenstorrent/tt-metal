@@ -355,6 +355,9 @@ def to_torch(
     """
     import torch
 
+    # `torch.float64` has no ttnn mapping, so the `typecast` operation
+    # might not be applicable in 100% of cases -- if that happens, some
+    # data conversion still has to be performed on host.
     on_device_typecast = False
 
     if dtype is not None:
