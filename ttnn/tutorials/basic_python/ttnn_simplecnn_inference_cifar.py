@@ -53,10 +53,13 @@ def main():
             B1 = weights["conv1.bias"]
             # W1_tt = ttnn.from_torch(W1, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
             # W1_tt = ttnn.to_layout(W1_tt, ttnn.TILE_LAYOUT)
-            W1 = W1.permute(0, 2, 3, 1)  # Convert to [out_channels, kernel_height, kernel_width, in_channels]
+            # W1 = W1.permute(0, 1, 2, 3)  # Convert to [out_channels, kernel_height, kernel_width, in_channels]
             B1 = B1.view(1, 1, 1, -1)  # Reshape bias to [1, 1, 1, out_channels]
             # B1_tt = ttnn.from_torch(B1.view(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
             # B1_tt = ttnn.to_layout(B1_tt, ttnn.TILE_LAYOUT)
+
+            # logger.info(f"W1 : shape: {W1.shape}")
+            # logger.info(f"B1 : shape: {B1.shape}")
 
             logger.info(f"Sample {i+1}: Input shape: {ttnn.to_torch(ttnn_image).shape}")
 
@@ -67,9 +70,10 @@ def main():
             # BCHW -> BHWC
             image_permuted = ttnn.permute(ttnn_image, (0, 2, 3, 1))
             image_B, image_H, image_W, image_C = image_permuted.shape
-            image_reshaped = ttnn.reshape(image_permuted, (1, 1, image_H * image_W, image_C))
+            image_reshaped = image_permuted  # ttnn.reshape(image_permuted, (1, 1, image_H * image_W, image_C))
 
-            conv_config = ttnn.Conv2dConfig(dtype=ttnn.bfloat16, weights_dtype=ttnn.bfloat16)
+            # if weights are on device, (1) pass correct shape, (2) preprocessed automatically to correct shape by setting always_preprocess_weights=true
+            conv_config = ttnn.Conv2dConfig(dtype=ttnn.bfloat16, weights_dtype=ttnn.bfloat16, activation="relu")
             print("CONV1 input_tensor shape:", image_reshaped.shape)
             print("weight_tensor shape:", W1_ttnn.shape)
             print("bias_tensor shape:", B1_ttnn.shape)
@@ -80,8 +84,8 @@ def main():
             print("stride:", (1, 1))
             print("padding:", (1, 1))
             print("batch_size:", 1)
-            print("input_height:", 1)
-            print("input_width:", image_B * image_H * image_W)
+            print("input_height:", 32)
+            print("input_width:", 32)
             print("conv_config:", conv_config)
             print("groups:", 0)
 
@@ -96,22 +100,18 @@ def main():
                 stride=(1, 1),
                 padding=(1, 1),
                 batch_size=1,
-                input_height=1,
-                input_width=image_B * image_H * image_W,
+                input_height=32,
+                input_width=32,
                 conv_config=conv_config,
                 groups=0,
             )
 
             print("conv1_out shape:", conv1_out.shape)
 
-            print("Input parameters to first relu:")
-            print(f"  input shape: {conv1_out.shape}")
-
-            conv1_relu = ttnn.relu(conv1_out)
-            print("conv1_relu shape:", conv1_relu.shape)
+            # conv1_relu = ttnn.relu(conv1_out)
 
             print("Input parameters to first max_pool2d:")
-            print(f"  input shape: {conv1_relu.shape}")
+            print(f"  input shape: {conv1_out.shape}")
             print(f"  batch_size: {1}")
             print(f"  input_h: {32}")
             print(f"  input_w: {32}")
@@ -122,8 +122,8 @@ def main():
             print(f"  dilation: {[1, 1]}")
             print(f"  ceil_mode: {False}")
 
-            conv1_pool = ttnn.max_pool2d(
-                conv1_relu,
+            conv1_pool_ttnn = ttnn.max_pool2d(
+                conv1_out,
                 batch_size=1,
                 input_h=32,
                 input_w=32,
@@ -134,15 +134,30 @@ def main():
                 dilation=[1, 1],
                 ceil_mode=False,
             )
-            print("conv1_pool shape:", conv1_pool.shape)
-            logger.info(f"Sample {i+1}: Output shape after Conv1: {ttnn.to_torch(conv1_pool).shape}")
+
+            # Convert to row-major and then to torch
+            # conv1_pool_rm = ttnn.to_layout(conv1_pool_ttnn, ttnn.ROW_MAJOR_LAYOUT)
+            # conv1_pool_torch = ttnn.to_torch(conv1_pool_rm)  # Shape: (1, 1, 256, 32)
+
+            # print("Post-pool torch tensor shape:", conv1_pool_torch.shape)  # Should be [1, 1, 256, 32]
+
+            # Reshape to (1, 16, 16, 32)
+            # conv1_pool_torch_reshaped = conv1_pool_torch.reshape(1, 16, 16, 32)
+            # print("Reshaped tensor shape:", conv1_pool_torch_reshaped.shape)  # [1, 16, 16, 32]
+
+            # Slice channels from 32 to 16 → final shape: (1, 1, 256, 16)
+            # conv1_pool_tt = conv1_pool_torch[:, :, :, :16]
+            # print("Final sliced tensor shape:", conv1_pool_tt.shape)  # [1, 1, 256, 16]
+
+            # Convert back to TTNN tensor for next conv
+            # conv1_pool_tt = ttnn.from_torch(conv1_pool_torch_sliced, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
             # Conv2
             W2 = weights["conv2.weight"]
             B2 = weights["conv2.bias"]
             # W2_tt = ttnn.from_torch(W2, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
             # W2_tt = ttnn.to_layout(W2_tt, ttnn.TILE_LAYOUT)
-            W2 = W2.permute(0, 1, 2, 3)  # Convert to [out_channels, kernel_height, kernel_width, in_channels]
+            # W2 = W2.permute(0, 1, 2, 3)  # Convert to [out_channels, kernel_height, kernel_width, in_channels]
             B2 = B2.view(1, 1, 1, -1)  # Reshape bias to [1, 1, 1, out_channels]
             # B2_tt = ttnn.from_torch(B2.view(1, -1, 1, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
             # B2_tt = ttnn.to_layout(B2_tt, ttnn.TILE_LAYOUT)
@@ -150,52 +165,48 @@ def main():
             W2_ttnn = ttnn.from_torch(W2, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
             B2_ttnn = ttnn.from_torch(B2, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
 
-            conv1_B, conv1_H, conv1_W, conv1_C = conv1_pool.shape
-            print(f"conv1_pool shape: {conv1_pool.shape}")
-            conv1_reshaped = ttnn.reshape(conv1_pool, (1, 1, conv1_H * conv1_W, conv1_C))
-            print(f"conv1_reshaped shape: {conv1_reshaped.shape}")
+            # conv1_pool_tt_B, conv1_pool_tt_H, conv1_pool_tt_W, conv1_pool_tt_C = conv1_pool_tt.shape
+            # conv1_pool_tt_reshaped = ttnn.reshape(conv1_pool_tt, (1, 1, conv1_pool_tt_H * conv1_pool_tt_W, conv1_pool_tt_C))
 
-            print("CONV2 input_tensor shape:", conv1_reshaped.shape)
+            print("CONV2 input_tensor shape:", conv1_pool_ttnn.shape)
             print("weight_tensor shape:", W2_ttnn.shape)
             print("bias_tensor shape:", B2_ttnn.shape)
-            print("in_channels:", conv1_C)
+            print("in_channels:", 16)
             print("out_channels:", 32)
             print("device:", device)
             print("kernel_size:", (3, 3))
             print("stride:", (1, 1))
             print("padding:", (1, 1))
             print("batch_size:", 1)
-            print("input_height:", 1)
-            print("input_width:", conv1_H * conv1_W)
+            print("input_height:", 16)
+            print("input_width:", 16)
             print("conv_config:", conv_config)
             print("groups:", 0)
 
             conv2_out = ttnn.conv2d(
-                input_tensor=conv1_reshaped,
+                input_tensor=conv1_pool_ttnn,
                 weight_tensor=W2_ttnn,
                 bias_tensor=B2_ttnn,
-                in_channels=conv1_C,
+                in_channels=16,
                 out_channels=32,
                 device=device,
                 kernel_size=(3, 3),
                 stride=(1, 1),
                 padding=(1, 1),
                 batch_size=1,
-                input_height=1,
-                input_width=conv1_H * conv1_W,
+                input_height=16,
+                input_width=16,
                 conv_config=conv_config,
                 groups=0,
             )
 
             print("conv2_out shape:", conv2_out.shape)
+            # conv2_relu = ttnn.relu(conv2_out)
 
-            conv2_relu = ttnn.relu(conv2_out)
-            print("conv2_relu shape:", conv2_relu.shape)
-
-            conv2_B, conv2_H, conv2_W, conv2_C = conv2_relu.shape
+            conv2_B, conv2_H, conv2_W, conv2_C = conv2_out.shape
 
             print("max_pool2d input parameters:")
-            print(f"  input shape: {conv2_relu.shape}")
+            print(f"  input shape: {conv2_out.shape}")
             print(f"  batch_size: {1}")
             print(f"  input_h: {16}")
             print(f"  input_w: {16}")
@@ -207,7 +218,7 @@ def main():
             print(f"  ceil_mode: {False}")
 
             conv2_pool = ttnn.max_pool2d(
-                conv2_relu,
+                conv2_out,
                 batch_size=1,
                 input_h=16,
                 input_w=16,
