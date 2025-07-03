@@ -93,7 +93,7 @@ void kernel_main() {
         .page_size = value_tensor_tile_size_bytes,
         .data_format = value_tensor_data_format};
 
-    sem_ptr_t sem_self_exchange_ptr = reinterpret_cast<sem_ptr_t>(sem_exchange_addr);
+    // sem_ptr_t sem_self_exchange_ptr = reinterpret_cast<sem_ptr_t>(sem_exchange_addr);
 
     DPRINT << "WRITER: index data format = " << (uint32_t)get_dataformat(index_tensor_cb_index) << ENDL();
 

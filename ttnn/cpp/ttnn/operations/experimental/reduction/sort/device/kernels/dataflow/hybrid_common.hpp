@@ -14,11 +14,10 @@ using sem_ptr_t = volatile tt_l1_ptr uint32_t*;
 constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
 
 /**
-
-* Exchange Wt tiles between two cores
-*
-* Read Wt tiles from value_tensor_cb_index, sent them to peer
-* Then, receive Wt tiles from peer and write them into cb_other_index
+ * Exchange Wt tiles between two cores
+ *
+ * Read Wt tiles from value_tensor_cb_index, sent them to peer
+ * Then, receive Wt tiles from peer and write them into cb_other_index
  */
 FORCE_INLINE
 void sort_noc_exchange_Wt_tiles(
