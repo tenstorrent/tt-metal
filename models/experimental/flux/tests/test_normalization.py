@@ -10,9 +10,9 @@ import pytest
 import torch
 import ttnn
 
-from ..reference.normalization import RmsNorm as RmsNormReference
-from ..tt.normalization import LayerNorm, LayerNormParameters, RmsNorm, RmsNormParameters
-from ..tt.utils import assert_quality
+from models.experimental.flux.reference.normalization import RmsNorm as RmsNormReference
+from models.experimental.flux.tt.normalization import LayerNorm, LayerNormParameters, RmsNorm, RmsNormParameters
+from models.experimental.flux.tt.utils import assert_quality
 
 
 @pytest.mark.parametrize(

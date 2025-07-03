@@ -10,8 +10,8 @@ import pytest
 import torch
 import ttnn
 
-from ..tt.linear import Linear, LinearParameters
-from ..tt.utils import assert_quality
+from models.experimental.flux.tt.linear import Linear, LinearParameters
+from models.experimental.flux.tt.utils import assert_quality
 
 
 @pytest.mark.parametrize(

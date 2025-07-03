@@ -11,11 +11,11 @@ import pytest
 import torch
 import ttnn
 
-from ..tt.attention import Attention, AttentionParameters
-from ..tt.utils import allocate_tensor_on_device_like, assert_quality
+from models.experimental.flux.tt.attention import Attention, AttentionParameters
+from models.experimental.flux.tt.utils import allocate_tensor_on_device_like, assert_quality
 
-from ..reference import FluxTransformer as FluxTransformerReference
-from ..reference.attention import Attention as AttentionReference
+from models.experimental.flux.reference import FluxTransformer as FluxTransformerReference
+from models.experimental.flux.reference.attention import Attention as AttentionReference
 
 
 @pytest.mark.parametrize(
