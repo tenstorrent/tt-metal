@@ -85,6 +85,8 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
  * synchronized in the kernels. To ensure this synchronization, tile packing is implemented as a separate
  * API call.
  *
+ * Return value: None
+ *
  * | Param Type | Name      | Description                                       | Type     | Valid Range                                          | Required |
  * |------------|-----------|---------------------------------------------------|----------|------------------------------------------------------|----------|
  * | Function   | ifrom_dst | The index of the first tile in the DEST register  | uint32_t | Must be less than the size of the DEST register (16) | True     |
@@ -100,10 +102,13 @@ ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
 /**
  * Reconfigures the packer output data format by specifying the CB ID of the new operand. This function
  * call will always perform the reconfiguration, regardless of the data format of the old operand.
+ * If the new CB ID is the same as the current one, reconfiguration will still occur.
  *
  * NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense
  * that they are called before the call to the packer function that uses the new configuration. It is
  * recommended to call this function right after other op-specific initialization functions.
+ *
+ * Return value: None
  *
  * | Param Type | Name       | Description                        | Type     | Valid Range | Required |
  * |------------|------------|------------------------------------|----------|-------------|----------|
@@ -126,6 +131,8 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
  * that they are called before the call to the packer function that uses the new configuration. It is
  * recommended to call this function right after other op-specific initialization functions.
  *
+ * Return value: None
+ *
  * | Param Type | Name       | Description                        | Type     | Valid Range | Required |
  * |------------|------------|------------------------------------|----------|-------------|----------|
  * | Function   | old_cb_id  | Previous data format operand value | uint32_t | Any         | True     |
@@ -139,13 +146,18 @@ ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new
 // clang-format off
 /**
  * Helper function to reconfigure the packer L1 accumulation flag. This function would ideally be called
- * after other initilaization functions that intilialize the packer for a specific operation.
+ * after other initialization functions that initialize the packer for a specific operation.
  * This function configures the packer to accumulate the values it takes from DEST with the ones that
  * are already in L1 at a given CB ID and tile index.
+ *
+ * The `l1_acc_en` parameter must be set to either 0 (disable accumulation) or 1 (enable accumulation).
+ * Other values are not valid.
  *
  * NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense
  * that they are called before the call to the packer function that uses the new configuration. It is
  * recommended to call this function right after other op-specific initialization functions.
+ *
+ * Return value: None
  *
  * | Param Type | Name      | Description                        | Type     | Valid Range | Required |
  * |------------|-----------|------------------------------------|----------|-------------|----------|
