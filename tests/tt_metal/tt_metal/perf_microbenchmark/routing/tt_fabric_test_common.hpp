@@ -311,7 +311,7 @@ public:
     // ======================================================================================
     // IRouteManager methods
     // ======================================================================================
-    uint32_t get_num_mesh_dims() const override { return NUM_MESH_DIMS; }
+    uint32_t get_num_mesh_dims() const override { return mesh_shape_.dims(); }
 
     // TODO: instead of parsing ChipSendType, this should only care about unicast/mcast
     // or capturing every device in the path or not

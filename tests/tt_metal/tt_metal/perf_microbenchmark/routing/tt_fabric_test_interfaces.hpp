@@ -46,8 +46,6 @@ public:
 
 class IRouteManager {
 public:
-    static constexpr uint32_t NUM_MESH_DIMS = 2;
-
     virtual ~IRouteManager() = default;
     virtual uint32_t get_num_mesh_dims() const = 0;
     virtual std::vector<FabricNodeId> get_dst_node_ids_from_hops(
