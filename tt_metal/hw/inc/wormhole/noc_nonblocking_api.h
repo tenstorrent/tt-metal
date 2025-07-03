@@ -688,3 +688,69 @@ inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
 }
+
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool one_packet = false, bool use_vc = false>
+inline __attribute__((always_inline)) void ncrisc_noc_read_set_state(
+    uint32_t noc, uint32_t cmd_buf, uint64_t src_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
+    if constexpr (use_vc) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+
+    // If one packet, set data size
+    if constexpr (one_packet) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    }
+}
+
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool inc_num_issued = true, bool one_packet = false>
+inline __attribute__((always_inline)) void ncrisc_noc_read_with_state(
+    uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
+    if constexpr (inc_num_issued && noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    }
+
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
+    if constexpr (!one_packet) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+    if constexpr (inc_num_issued && noc_mode == DM_DEDICATED_NOC) {
+        noc_reads_num_issued[noc] += 1;
+    }
+}
+
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool inc_num_issued = true>
+inline __attribute__((always_inline)) void ncrisc_noc_read_any_len_with_state(
+    uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes) {
+    if (len_bytes > NOC_MAX_BURST_SIZE) {
+        // Set data size for while loop
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
+
+        while (len_bytes > NOC_MAX_BURST_SIZE) {
+            ncrisc_noc_read_with_state<noc_mode, inc_num_issued, true /* one_packet */>(
+                noc, cmd_buf, src_local_addr, dst_local_addr);
+
+            len_bytes -= NOC_MAX_BURST_SIZE;
+            src_local_addr += NOC_MAX_BURST_SIZE;
+            dst_local_addr += NOC_MAX_BURST_SIZE;
+        }
+    }
+
+    // left-over packet
+    ncrisc_noc_read_with_state<noc_mode, inc_num_issued>(noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
+}
