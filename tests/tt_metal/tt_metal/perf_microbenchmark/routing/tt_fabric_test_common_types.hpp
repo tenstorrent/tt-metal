@@ -80,6 +80,7 @@ struct TestConfig {
     std::optional<std::vector<HighLevelPatternConfig>> patterns;
     std::vector<SenderConfig> senders;
     std::optional<std::string> bw_calc_func;
+    bool benchmark_mode = false;  // Enable benchmark mode for performance testing
     uint32_t seed;
 };
 

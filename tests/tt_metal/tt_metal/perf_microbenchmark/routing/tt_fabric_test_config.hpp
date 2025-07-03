@@ -377,6 +377,10 @@ inline TestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yam
         test_config.bw_calc_func = parse_scalar<std::string>(test_yaml["bw_calc_func"]);
     }
 
+    if (test_yaml["benchmark_mode"]) {
+        test_config.benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
+    }
+
     return test_config;
 }
 
@@ -1405,6 +1409,11 @@ private:
         if (config.seed != 0) {
             out << YAML::Key << "seed";
             out << YAML::Value << config.seed;
+        }
+
+        if (config.benchmark_mode) {
+            out << YAML::Key << "benchmark_mode";
+            out << YAML::Value << config.benchmark_mode;
         }
 
         out << YAML::Key << "fabric_setup";

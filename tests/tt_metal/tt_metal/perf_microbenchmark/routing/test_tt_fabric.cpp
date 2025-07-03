@@ -65,6 +65,7 @@ public:
     void launch_programs();
     void wait_for_prorgams();
     void close_devices();
+    void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
 
 private:
     void add_traffic_config(const TestTrafficConfig& traffic_config);
@@ -72,6 +73,7 @@ private:
     std::shared_ptr<TestFixture> fixture_;
     std::unordered_map<MeshCoordinate, TestDevice> test_devices_;
     std::unique_ptr<tt::tt_fabric::fabric_tests::GlobalAllocator> allocator_;
+    bool benchmark_mode_ = false;  // Benchmark mode for current test
 };
 
 void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
@@ -152,6 +154,7 @@ void TestContext::compile_programs() {
     fixture_->setup_workload();
     // TODO: should we be taking const ref?
     for (auto& [coord, test_device] : test_devices_) {
+        test_device.set_benchmark_mode(benchmark_mode_);
         test_device.create_kernels();
         auto& program_handle = test_device.get_program_handle();
         if (program_handle.num_kernels()) {
@@ -281,6 +284,9 @@ int main(int argc, char** argv) {
         log_info(tt::LogTest, "Running Test Group: {}", test_config.name);
 
         test_context.open_devices(test_config.fabric_setup.topology, test_config.fabric_setup.routing_type.value());
+
+        // Set benchmark mode for this test group
+        test_context.set_benchmark_mode(test_config.benchmark_mode);
 
         auto built_tests = builder.build_tests({test_config});
 
