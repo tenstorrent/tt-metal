@@ -14,6 +14,9 @@
 
 namespace ttnn::operations::reduction {
 
+using namespace tt::tt_metal;
+using namespace tt::stl;
+
 struct CumSumDeviceOperation {
     struct operation_attributes_t {
         const int64_t dim;  // axis to perform cumsum on (must be `-tensor.dim <= dim < tensor.dim`)
@@ -59,6 +62,8 @@ struct CumSumDeviceOperation {
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+
+    static operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);

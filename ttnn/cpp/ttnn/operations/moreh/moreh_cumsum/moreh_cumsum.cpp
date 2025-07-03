@@ -9,8 +9,7 @@ Tensor MorehCumsum::invoke(
     const Tensor& input,
     const int64_t dim,
     const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<MemoryConfig>& memory_config) {
     return ttnn::cumsum(
         input, dim, input.dtype(), output, false, memory_config.has_value() ? *memory_config : input.memory_config());
 }
@@ -19,8 +18,7 @@ Tensor MorehCumsumBackward::invoke(
     const Tensor& output_grad,
     const int64_t dim,
     const std::optional<Tensor>& input_grad,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<MemoryConfig>& memory_config) {
     return ttnn::cumsum(
         output_grad,
         dim,

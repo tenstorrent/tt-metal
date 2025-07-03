@@ -60,6 +60,23 @@ void CumSumDeviceOperation::validate_on_program_cache_hit(
     validate_on_program_cache_miss(args, tensor_args);
 }
 
+operation::Hash CumSumDeviceOperation::compute_program_hash(
+    const operation_attributes_t& op_args, const tensor_args_t& tensor_args) {
+    return operation::hash_operation<CumSumDeviceOperation>(
+        select_program_factory(op_args, tensor_args).index(),
+        op_args.dim,
+        op_args.dtype,
+        op_args.flip,
+        tensor_args.input_tensor.logical_shape(),
+        tensor_args.input_tensor.dtype(),
+        tensor_args.input_tensor.memory_config(),
+        tensor_args.input_tensor.layout(),
+        tensor_args.preallocated_output.has_value() ? tensor_args.preallocated_output.value().logical_shape() : Shape{},
+        tensor_args.preallocated_output.has_value() ? tensor_args.preallocated_output.value().dtype() : DataType{},
+        tensor_args.preallocated_output.has_value() ? tensor_args.preallocated_output.value().memory_config()
+                                                    : MemoryConfig{});
+}
+
 CumSumDeviceOperation::spec_return_value_t CumSumDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return TensorSpec(
