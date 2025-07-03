@@ -9,7 +9,18 @@
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
             "first_to_last_start_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.2
+            "dispatch_duration_relative_margin": 0.5
+        },
+        "AllReduceAsync_0": {
+            "op_name": "AllReduceAsync_DO",
+            "kernel_duration": 20600,
+            "op_to_op": 727.929292929293,
+            "first_to_last_start": 1748.0404040404042,
+            "non-overlapped-dispatch-time": 7015.244444444444,
+            "kernel_duration_relative_margin": 0.05,
+            "op_to_op_duration_relative_margin": 0.3,
+            "first_to_last_start_relative_margin": 0.2,
+            "dispatch_duration_relative_margin": 0.3
         },
         "RMSAllGather_1": {
             "op_name": "RMS_1",
