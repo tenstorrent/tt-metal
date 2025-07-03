@@ -1162,6 +1162,18 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
                     break;
                 }
 
+                if (rtoptions_.get_fd_fabric()) {
+                    // Last link reserved for dispatch
+                    // Only need fabric routers in the same tunnel
+                    // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+                    const auto is_mmio_device = [&](int id) { return cluster_desc_->is_chip_mmio_capable(id); };
+                    const auto is_last_link = [&]() { return num_reserved_cores == num_cores_to_reserve - 1; };
+                    if (is_last_link() && is_mmio_device(chip_id) && is_mmio_device(connnected_chip_id)) {
+                        num_reserved_cores++;
+                        break;
+                    }
+                }
+
                 const auto eth_core = cores[i];
                 const auto connected_core =
                     std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core)));

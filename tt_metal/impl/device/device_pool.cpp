@@ -285,31 +285,31 @@ void DevicePool::initialize(
     // Try to enable FD on Fabric if dispatching to remote devices. Fabric can only be enabled if all devices are open.
     // If not, then fallback to tunneling.
     // First check if all devices are enabled and if there any any remote devices. Then set the appropriate mode.
-    std::unordered_set<chip_id_t> device_ids_set{device_ids.begin(), device_ids.end()};
-    bool all_devices_open = true;
     bool any_remote_devices = false;
+    // Fabric requires all devices to be open even though dispatch
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
-        for (int dev_id = 0; dev_id < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
-             ++dev_id) {
-            if (!device_ids_set.contains(dev_id)) {
-                all_devices_open = false;
-                break;
-            }
+        // Check if fabric needs to be enabled (any remote devices).
+        // Note, all devices must be open to use fabric. This check will happen in add_devices_to_pool.
+        for (auto dev_id : device_ids) {
             any_remote_devices =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id) != dev_id;
+            if (any_remote_devices) {
+                break;
+            }
         }
 
-        const auto fallback_to_tunneling = [&]() {
+        const auto disable_dispatch_fabric = [&]() {
             tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
             // Need to reinitialize because FD Fabric setting has changed
             tt::tt_metal::MetalContext::instance().initialize(
                 dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
         };
 
-        if (all_devices_open && any_remote_devices) {
+        if (any_remote_devices) {
             FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
             if (hal::get_arch() == tt::ARCH::BLACKHOLE) {
-                fallback_to_tunneling();
+                disable_dispatch_fabric();
             } else {
                 if (fabric_config == FabricConfig::DISABLED) {
                     tt::tt_metal::detail::SetFabricConfig(
@@ -322,13 +322,8 @@ void DevicePool::initialize(
                     tt::tt_metal::detail::SetFabricConfig(
                         fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
                 }
-                log_info(tt::LogMetal, "Dispatch on {} Fabric", fabric_config);
+                log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs);
             }
-        } else {
-            fallback_to_tunneling();
-            log_debug(
-                tt::LogMetal,
-                "Cannot launch Dispatch on Fabric without all physical devices activated. Using tunneling.");
         }
     }
 
@@ -341,6 +336,7 @@ void DevicePool::initialize(
 void DevicePool::initialize_fabric_and_dispatch_fw() const {
     this->initialize_active_devices();
     this->wait_for_fabric_router_sync();
+    log_info(tt::LogMetal, "Devices initialized");
 }
 
 void DevicePool::initialize_host(IDevice* dev) const {
@@ -594,7 +590,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
             if (not _inst->is_device_active(i)) {
                 // Fabric currently requires all devices to be active
-                log_fatal(tt::LogMetal, "Fabric is being used but {} is not active", i);
+                TT_THROW("Fabric is being used but Device {} is not active", i);
             }
         }
     }
