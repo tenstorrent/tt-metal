@@ -112,8 +112,8 @@ jobs:
           # Generate commits table
           echo "| Commit | Message | Author | PR |" > ../../../commits_table.txt
           echo "|--------|---------|---------|-----|" >> ../../../commits_table.txt
-          
-          git log --pretty=format:"%h%n%s%n%an%n%H" ${OLD_SHA}..${NEW_SHA} | while read -r short_hash && read -r message && read -r author && read -r full_hash; do
+
+          while IFS= read -r short_hash && IFS= read -r message && IFS= read -r author && IFS= read -r full_hash; do
             # Try to get the PR number from the commit message
             pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
             if [ -n "$pr_number" ]; then
@@ -121,7 +121,7 @@ jobs:
             else
               echo "| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | - |" >> ../../../commits_table.txt
             fi
-          done
+          done < <(git log --pretty=format:"%h%n%s%n%an%n%H" ${OLD_SHA}..${NEW_SHA})
 
           # Generate PR body
           cat > ../../../llk_commit_log.txt << EOF
