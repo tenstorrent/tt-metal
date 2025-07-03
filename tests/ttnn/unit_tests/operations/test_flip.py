@@ -7,6 +7,8 @@ import torch
 import pytest
 import itertools
 
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
 
 def random_torch_tensor(dtype, shape):
     if dtype == ttnn.int32:
@@ -17,12 +19,14 @@ def random_torch_tensor(dtype, shape):
         return torch.rand(shape, dtype=torch.bfloat16)
 
 
+@pytest.mark.parametrize("n", [1, 2])
+@pytest.mark.parametrize("c", [1, 2])
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
-def test_flip(device, h, w, dtype):
+def test_flip(device, n, c, h, w, dtype):
     torch.manual_seed(2005)
-    shape = (1, 1, h, w)
+    shape = (n, c, h, w)
     torch_input_tensor = random_torch_tensor(dtype, shape)
     torch_output_tensor = torch.flip(torch_input_tensor, (0, 1))
 

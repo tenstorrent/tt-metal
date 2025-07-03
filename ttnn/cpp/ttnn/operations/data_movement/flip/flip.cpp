@@ -7,10 +7,10 @@
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace detail {
@@ -55,10 +55,23 @@ ttnn::Tensor ExecuteFlip::invoke(
     const ttnn::Tensor& input_tensor,
     const SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
+    const auto input_rank = input_tensor.logical_shape().rank();
+    TT_FATAL(is_device_tensor(input_tensor), "Tensor must already be on device");
 
     auto output_tensor = input_tensor;
 
     return output_tensor;
+}
+
+ttnn::Tensor invoke(
+    const ttnn::Tensor& input_tensor,
+    const SmallVector<int64_t>& dims,
+    const std::optional<MemoryConfig>& memory_config) {
+    return invoke(DefaultQueueId, input_tensor, dims, memory_config);
+}
+
+ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const SmallVector<int64_t>& dims) {
+    return invoke(input_tenstor, dims, std::nullopt);
 }
 
 } // namespace ttnn::operations::data_movement
