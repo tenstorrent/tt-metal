@@ -359,7 +359,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     log_trace(tt::LogOp, "max_buffer_per_chunk: {}", max_buffer_per_chunk);
     log_trace(tt::LogOp, "max_pages_per_chunk: {}", max_pages_per_chunk);
     bool rm = input_tensor.layout() == Layout::ROW_MAJOR;
-    bool width = input_tensor.padded_shape().rank() - 1 == dim;
     tt::DataFormat df = datatype_to_dataformat_converter(input_tensor.dtype());
 
     std::map<string, string> worker_defines;
@@ -385,7 +384,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     uint32_t global_num_workers =
         num_links * all_gather_config.get_num_eth_buffers_per_edm() * num_full_send_directions;
     uint32_t global_num_workers_per_direction = global_num_workers / num_full_send_directions;
-    uint32_t total_worker_core_pairs_used = global_num_workers;
 
     uint32_t num_input_pages = input_tensor.buffer()->size() / input_page_size;
     uint32_t min_pages_per_link = num_input_pages / num_links;
@@ -942,8 +940,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
             }
 
             for (uint32_t b = 0; b < all_gather_config.get_num_workers_per_link(); ++b) {
-                uint32_t global_worker_index = all_gather_config.get_num_workers_per_link() * i + b;
-
                 bool is_clockwise_direction = is_buffer_in_clockwise_direction(b);
 
                 // Not fully sure about these two
@@ -960,8 +956,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
                 if (sender_enabled) {
                     //// Send Reader
                     auto build_worker_send_reader_rt_args = [&]() {
-                        bool is_clockwise = is_buffer_in_clockwise_direction(b);
-
                         std::vector<uint32_t> args = {
                             static_cast<uint32_t>(input_buffer->address()),
                             static_cast<uint32_t>(output_buffer->address()),
