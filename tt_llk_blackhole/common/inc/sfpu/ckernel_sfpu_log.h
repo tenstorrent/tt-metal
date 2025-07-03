@@ -70,6 +70,37 @@ sfpi_inline void _calculate_log_body_(const uint log_base_scale_factor)
     sfpi::dst_reg[0] = result;
 }
 
+sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base)
+{
+    // Normalize base to calculation range
+    sfpi::vFloat x = setexp(base, 127); // set exp to exp bias (put base in range of 1-2)
+
+    // 3rd order polynomial approx - determined using rminimax over [1,2]
+    sfpi::vFloat series_result = x * (x * (x * 0x2.44734p-4f - 0xd.e712ap-4f) + 0x2.4f5388p+0f) - 0x1.952992p+0f;
+
+    // Convert exponent to float
+    sfpi::vInt exp = exexp(base);
+    v_if (exp < 0)
+    {
+        exp = sfpi::setsgn(~exp + 1, 1);
+    }
+    v_endif;
+    sfpi::vFloat expf = int32_to_float(exp, 0);
+
+    // De-normalize to original range
+    sfpi::vFloat vConstLn2  = 0.692871f;
+    sfpi::vFloat log_result = expf * vConstLn2 + series_result; // exp correction: ln(1+x) + exp*ln(2)
+
+    // Base case when input is 0. ln(0) = -inf
+    v_if (base == 0.0f)
+    {
+        log_result = -std::numeric_limits<float>::infinity();
+    }
+    v_endif;
+
+    return log_result;
+}
+
 template <bool APPROXIMATION_MODE, bool HAS_BASE_SCALING, int ITERATIONS>
 inline void _calculate_log_(const int iterations, uint log_base_scale_factor)
 {
