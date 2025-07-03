@@ -1,7 +1,6 @@
 name: Uplift LLK Submodule
 
 on:
-  workflow_dispatch:
   workflow_call:
     inputs:
       workflow_timeout:
@@ -41,6 +40,7 @@ jobs:
       new-sha: ${{ steps.update-submodule.outputs.new-sha }}
       has-changes: ${{ steps.update-submodule.outputs.has-changes }}
       changed-files: ${{ steps.analyze-changes.outputs.changed-files }}
+      commits-table: ${{ steps.analyze-changes.outputs.commits-table }}
     steps:
       - name: Checkout parent repo
         uses: actions/checkout@v4
@@ -95,7 +95,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
           # Check for architecture-specific changes
-          if echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/"; then
+          if echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole/"; then
             echo "should-run-wormhole=true" >> $GITHUB_OUTPUT
             echo "✅ Detected Wormhole changes"
           else
@@ -109,21 +109,50 @@ jobs:
             echo "should-run-blackhole=false" >> $GITHUB_OUTPUT
           fi
 
-          # Generate commits table
-          echo "| Commit | Message | Author | PR |" > ../../../commits_table.txt
-          echo "|--------|---------|---------|-----|" >> ../../../commits_table.txt
-          echo "New SHA: ${NEW_SHA}"
-          echo "Old SHA: ${OLD_SHA}"
-
-          while IFS= read -r short_hash && IFS= read -r message && IFS= read -r author && IFS= read -r full_hash; do
-            # Try to get the PR number from the commit message
-            pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
-            if [ -n "$pr_number" ]; then
-              echo "| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | [#$pr_number](https://github.com/tenstorrent/tt_llk/pull/$pr_number) |" >> ../../../commits_table.txt
-            else
-              echo "| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | - |" >> ../../../commits_table.txt
-            fi
-          done < <(git log --pretty=format:"%h%n%s%n%an%n%H" ${OLD_SHA}..${NEW_SHA})
+          # Generate commits table and save to GITHUB_OUTPUT
+          echo "=== Debugging git log ranges ==="
+          echo "OLD_SHA: $OLD_SHA"
+          echo "NEW_SHA: $NEW_SHA"
+          
+          COMMIT_COUNT=$(git log --oneline ${OLD_SHA}..${NEW_SHA} | wc -l)
+          echo "Found $COMMIT_COUNT commits using ${OLD_SHA}..${NEW_SHA}"
+          
+          # Generate commits table content
+          COMMITS_TABLE_CONTENT="| Commit | Message | Author | PR |"$'\n'
+          COMMITS_TABLE_CONTENT+="|--------|---------|---------|-----|"$'\n'
+          
+          if [ "$COMMIT_COUNT" -gt 0 ]; then
+            echo "Processing $COMMIT_COUNT commits..."
+            
+            # Generate commits table content
+            while IFS='|' read -r short_hash message author full_hash; do
+              # Skip empty lines
+              if [ -z "$short_hash" ]; then
+                continue
+              fi
+              
+              # Try to get the PR number from the commit message
+              pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
+              if [ -n "$pr_number" ]; then
+                COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | [#$pr_number](https://github.com/tenstorrent/tt_llk/pull/$pr_number) |"$'\n'
+              else
+                COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | - |"$'\n'
+              fi
+            done < <(git log --pretty=format:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA})
+          else
+            echo "No commits found - this shouldn't happen if we detected changes"
+            COMMITS_TABLE_CONTENT+="| (No commits found) | - | - | - |"$'\n'
+          fi
+          
+          # Save commits table to GITHUB_OUTPUT
+          echo "commits-table<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMITS_TABLE_CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          # Debug: Show what we generated
+          echo "=== Generated commits table ==="
+          echo "$COMMITS_TABLE_CONTENT"
+          echo "=== End of generated commits table ==="
 
           # Generate PR body
           cat > ../../../llk_commit_log.txt << EOF
@@ -134,7 +163,7 @@ jobs:
           | \`$OLD_SHA\` | \`$NEW_SHA\` |
 
           ### Commits Uplifted:
-          $(cat ../../../commits_table.txt)
+          $COMMITS_TABLE_CONTENT
 
           ### Files Changed:
           $(echo "$CHANGED_FILES" | sed 's/^/- /')
@@ -151,6 +180,8 @@ jobs:
           branch: ${{ env.BRANCH_NAME }}
           delete-branch: true
           body-path: llk_commit_log.txt
+          add-paths: |
+            ${{ env.SUBMODULE_PATH }}
           draft: ${{ !inputs.skip_draft }}
           labels: |
             llk-update
@@ -170,7 +201,7 @@ jobs:
           cd ${{ env.SUBMODULE_PATH }}
           CHANGED_FILES=$(git diff --name-only ${OLD_SHA}..${NEW_SHA})
 
-          # Generate updated PR body with PR link
+          # Generate updated PR body with PR link (use commits table from step output)
           cat > ../../../updated_llk_commit_log.txt << EOF
           ## LLK Submodule Update
 
@@ -181,7 +212,7 @@ jobs:
           | \`$OLD_SHA\` | \`$NEW_SHA\` |
 
           ### Commits Uplifted:
-          $(cat ../../../commits_table.txt)
+          ${{ steps.analyze-changes.outputs.commits-table }}
 
           ### Files Changed:
           $(echo "$CHANGED_FILES" | sed 's/^/- /')
