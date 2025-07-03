@@ -32,7 +32,7 @@ void SliceWriteDeviceOperation::validate_with_output_tensors(
         output_padded_shape.rank(),
         this->slice_start.rank(),
         this->slice_end.rank());
-    for (uint32_t i = 0; i < output_shape.rank(); i++) {
+    for (uint32_t i = 0; i < output_padded_shape.rank(); i++) {
         TT_FATAL(
             this->slice_start[i] < output_padded_shape[i],
             "Start is outside the bounds of the output tensor for index {}. Got {}. Size {}",
