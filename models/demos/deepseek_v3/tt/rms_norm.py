@@ -2,9 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
+import torch
+from transformers.configuration_utils import PretrainedConfig
+
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import RMSNormConfig
+from models.demos.deepseek_v3.utils.config_dataclass import (
+    FromWeightConfig,
+    ModelDecodeConfig,
+    ModelPrefillConfig,
+    RMSNormConfig,
+    WeightConfig,
+)
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     NORM_CATEGORIES,
@@ -17,8 +28,15 @@ class RMSNorm(AbstractModule):
     """Distributed RMSNorm module with 1D tensor parallelism from TTT code.
     Uses DRAM-sharded weights split 1D across 8 wormholes of 8x4 mesh device"""
 
-    @staticmethod
-    def convert_weights(hf_config, state_dict, output_path, mesh_device, norm_category):
+    @classmethod
+    def convert_weights(
+        cls,
+        hf_config: PretrainedConfig,
+        state_dict: dict[str, torch.Tensor],
+        output_path: Path,
+        mesh_device: ttnn.Device,
+        norm_category: str,
+    ) -> WeightConfig:
         """DRAM-sharded weights split 1D across all wormholes
 
         Args:
@@ -32,8 +50,6 @@ class RMSNorm(AbstractModule):
         """
         assert norm_category in NORM_CATEGORIES, f"Invalid norm category: {norm_category}"
         decoder_norm = norm_category == "attention_norm" or norm_category == "mlp_norm"
-
-        weight_config = {}
 
         # Get the embedding weight from the state dict (in the full model: model.embed_tokens.weight)
         torch_weight = state_dict["weight"]
@@ -54,16 +70,15 @@ class RMSNorm(AbstractModule):
 
         # Save to disk with standard naming - "rmsnorm" must match the op name used in the model config
         # so that RunConfig can populate it with the actual weight tensors at runtime
-        weight_config[norm_category] = {
+        return {
             "weight": save_and_get_path(output_path / (norm_category + ".weight"), ttnn_weight),
         }
 
         return weight_config
 
-    @staticmethod
-    def decode_model_config(hf_config, mesh_device, norm_category):
-        """Generate decode operator configuration for this embedding layer.
-        Same as prefill mode for this module.
+    @classmethod
+    def decode_model_config(cls, hf_config, mesh_device, norm_category) -> ModelDecodeConfig:
+        """Generate decode operator configuration for this rmsnorm layer.
 
         Args:
             hf_config: HuggingFace model configuration object
@@ -72,11 +87,7 @@ class RMSNorm(AbstractModule):
         Returns:
             Dict containing operator configurations for decode mode
         """
-        config = {"mode": "decode"}
-
         assert norm_category in NORM_CATEGORIES, f"Invalid norm category: {norm_category}"
-
-        config["norm_category"] = norm_category
 
         output_memcfg = ttnn.DRAM_MEMORY_CONFIG
         stats_memcfg = None
@@ -92,7 +103,8 @@ class RMSNorm(AbstractModule):
             )
 
         # RMSNorm configuration for decode mode
-        config[norm_category] = RMSNormConfig(
+        return RMSNormConfig(
+            weight=FromWeightConfig(),
             epsilon=hf_config.rms_norm_eps,
             compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             is_distributed=is_distributed,
@@ -100,22 +112,19 @@ class RMSNorm(AbstractModule):
             stats_memcfg=stats_memcfg,
             output_dtype=ttnn.bfloat16,
             topology=ttnn.Topology.Linear,
+            norm_category=norm_category,
         )
+
+    @classmethod
+    def prefill_model_config(cls, hf_config, mesh_device, norm_category) -> ModelPrefillConfig:
+        """Prefill model config for an RMSNorm with 1D tensor parallelism."""
+        config = RMSNorm.decode_model_config(hf_config, mesh_device, norm_category)
+        config.stats_memcfg = ttnn.DRAM_MEMORY_CONFIG
+        config.norm_category = norm_category
         return config
 
     @staticmethod
-    def prefill_model_config(hf_config, mesh_device, norm_category):
-        """Prefill model config for an RMSNorm with 1D tensor parallelism."""
-        config = RMSNorm.decode_model_config(hf_config, mesh_device, norm_category)
-        config["mode"] = "prefill"
-        config[norm_category].stats_memcfg = ttnn.DRAM_MEMORY_CONFIG
-        return config
-
-    def __init__(self, hf_config, mesh_device):
-        """Initialize the rms norm with the given HuggingFace config and mesh device."""
-        super().__init__(hf_config, mesh_device)
-
-    def forward(self, x, cfg, mesh_device):
+    def _rmsnorm_forward(x, cfg, mesh_device):
         """Forward pass of the embedding.
 
         Args:
@@ -139,33 +148,31 @@ class RMSNorm(AbstractModule):
                 inplace=False,
             )
 
-        norm = cfg["norm_category"]
-
-        if cfg[norm].is_distributed:
-            return self._distributed_rmsnorm(
+        if cfg.is_distributed:
+            return RMSNorm._distributed_rmsnorm(
                 x,
                 mesh_device=mesh_device,
-                epsilon=cfg[norm].epsilon,
-                weight=cfg[norm].weight,
-                compute_kernel_config=cfg[norm].compute_kernel_config,
+                epsilon=cfg.epsilon,
+                weight=cfg.weight,
+                compute_kernel_config=cfg.compute_kernel_config,
                 program_config=program_config,
-                output_memcfg=cfg[norm].output_memcfg,
-                stats_memcfg=cfg[norm].stats_memcfg,
-                output_dtype=cfg[norm].output_dtype,
-                topology=cfg[norm].topology,
+                output_memcfg=cfg.output_memcfg,
+                stats_memcfg=cfg.stats_memcfg,
+                output_dtype=cfg.output_dtype,
+                topology=cfg.topology,
             )
         else:
             return ttnn.rms_norm(
                 x,
-                epsilon=cfg[norm].epsilon,
-                weight=cfg[norm].weight,
-                compute_kernel_config=cfg[norm].compute_kernel_config,
+                epsilon=cfg.epsilon,
+                weight=cfg.weight,
+                compute_kernel_config=cfg.compute_kernel_config,
                 program_config=program_config,
-                memory_config=cfg[norm].stats_memcfg,
+                memory_config=cfg.stats_memcfg,
             )
 
+    @staticmethod
     def _distributed_rmsnorm(
-        self,
         inp,
         mesh_device,
         epsilon,
@@ -202,3 +209,11 @@ class RMSNorm(AbstractModule):
         tt_stats.deallocate(True)
 
         return tt_out
+
+    @classmethod
+    def forward_decode(cls, x, cfg, mesh_device):
+        return RMSNorm._rmsnorm_forward(x, cfg, mesh_device)
+
+    @classmethod
+    def forward_prefill(cls, x, cfg, mesh_device):
+        return RMSNorm._rmsnorm_forward(x, cfg, mesh_device)

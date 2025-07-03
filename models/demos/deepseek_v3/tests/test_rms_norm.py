@@ -17,7 +17,6 @@ import ttnn
 from models.demos.deepseek_v3.reference.rmsnorm import DeepseekV3RMSNorm
 from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.config_helpers import NORM_CATEGORIES, round_to_nearest_tile_size
-from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
 
 
@@ -42,8 +41,9 @@ def temp_dir():
 
 @pytest.fixture
 def hf_config():
-    """Load DeepSeek config for testing"""
-    config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
+    """Load DeepSeek config for testing."""
+    path = os.getenv("HF_MODEL", "/proj_sw/user_dev/deepseek-ai")
+    config = AutoConfig.from_pretrained(path, trust_remote_code=True)
     return config
 
 
@@ -109,16 +109,13 @@ def test_rmsnorm_forward_pass(
     )
 
     # Generate appropriate config
-    if mode == "prefill":
-        model_config = RMSNorm.prefill_model_config(hf_config, mesh_device, norm_category=norm_category)
-    else:
-        model_config = RMSNorm.decode_model_config(hf_config, mesh_device, norm_category=norm_category)
+    model_decode_config = RMSNorm.decode_model_config(hf_config, mesh_device, norm_category=norm_category)
+    model_prefill_config = RMSNorm.prefill_model_config(hf_config, mesh_device, norm_category=norm_category)
 
     # Create RunConfig using both weight_config and model_config
-    run_config = create_run_config(model_config, weight_config, mesh_device)
-
-    # Instantiate the model
-    tt_rmsnorm = RMSNorm(hf_config, mesh_device)
+    run_prefill_config, run_decode_config = RMSNorm.run_config(
+        model_prefill_config, model_decode_config, weight_config, mesh_device
+    )
 
     # Determine hidden_size based on norm_category
     hidden_size = get_hidden_size_for_norm_category(hf_config, norm_category)
@@ -154,7 +151,11 @@ def test_rmsnorm_forward_pass(
         tt_input = ttnn.to_memory_config(tt_input, memory_config=sharded_memory_config)
 
     # TTNN forward pass
-    tt_output = tt_rmsnorm.forward(tt_input, run_config, mesh_device)
+    if mode == "decode":
+        tt_output = RMSNorm.forward_decode(tt_input, run_decode_config, mesh_device)
+    else:
+        tt_output = RMSNorm.forward_prefill(tt_input, run_prefill_config, mesh_device)
+
     if is_decoder_norm:
         tt_output_torch = ttnn.to_torch(
             tt_output,

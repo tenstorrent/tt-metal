@@ -108,6 +108,7 @@ class AllGatherConfig(OpConfigBase):
     memory_config: ttnn.MemoryConfig
     mesh_device: ConfigDevice
 
+
 @dataclass
 class RMSNormConfig(OpConfigBase):
     """RMSNorm config"""
@@ -120,7 +121,7 @@ class RMSNormConfig(OpConfigBase):
     output_dtype: ttnn.DataType = ttnn.bfloat16
     is_distributed: bool = False
     topology: ttnn.Topology = ttnn.Topology.Linear
-
+    norm_category: str = None
 
 
 ConfigWithOp = dict[str, Any] | OpConfigBase
