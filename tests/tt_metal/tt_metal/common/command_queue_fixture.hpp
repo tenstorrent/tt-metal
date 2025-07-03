@@ -242,7 +242,7 @@ class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixt
 
 class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
 
-class CommandQueueOnFabricMultiDeviceFixture : public CommandQueueMultiDeviceFixture,
+class CommandQueueMultiDeviceOnFabricFixture : public CommandQueueMultiDeviceFixture,
                                                public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
 protected:
     void SetUp() override {

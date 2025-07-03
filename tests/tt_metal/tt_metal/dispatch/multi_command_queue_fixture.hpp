@@ -166,8 +166,8 @@ class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiD
 
 class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
 
-class MultiCommandQueueOnFabricMultiDeviceFixture : public MultiCommandQueueMultiDeviceFixture,
-                                                    public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
+class MultiCommandQueueOnFabricFixture : public MultiCommandQueueMultiDeviceFixture,
+                                         public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
 protected:
     void SetUp() override {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
