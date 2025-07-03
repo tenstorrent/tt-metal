@@ -91,7 +91,6 @@ def test_crossattndown(
     ttnn_output_tensor, output_shape, _ = tt_crosattn.forward(
         ttnn_input_tensor, [B, C, H, W], temb=ttnn_temb_tensor, encoder_hidden_states=ttnn_encoder_tensor
     )
-    model_config.clear_weight_preprocess()
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
     output_tensor = output_tensor.reshape(B, output_shape[1], output_shape[2], output_shape[0])

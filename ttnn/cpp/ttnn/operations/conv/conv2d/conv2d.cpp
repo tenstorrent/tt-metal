@@ -303,13 +303,6 @@ Result conv2d_DRAM(
                 bias_tensor.has_value(),
                 compute_config);
         }
-        if (!first_run) {
-            // After the first run, never preprocess weights.
-            TT_ASSERT(
-                conv_config.shard_layout.has_value(),
-                " Conv2D DRAM Slicing must have fixed a shard layout after the first run.");
-            conv_config.always_preprocess_weights = false;
-        }
         Tensor sliced_input_tensor;
         if (conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
             sliced_input_tensor = ttnn::slice(
@@ -526,6 +519,7 @@ Result conv2d_L1(
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
 
+    // Configure weight and bias preparation parameters
     Conv2dWeightsBiasPrepConfig params(
         input_channels_alignment,
         conv_config.weights_dtype,
@@ -543,16 +537,48 @@ Result conv2d_L1(
         orig_stride,
         padding_n4);
 
-    if (!tt::tt_metal::is_device_tensor(weight_tensor) || conv_config.always_preprocess_weights) {
-        // prepare weights in desired layout and move to device
-
-        // TODO: Implement heuristic to decide if weights should be preprocessed on device.
-        if (!conv_config.preprocess_weights_on_device) {
-            std::tie(weight_tensor_on_device, bias_tensor_on_device) =
-                prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, params, device);
+    // Prepare weights and move to device if necessary
+    if (!is_device_tensor(weight_tensor)) {
+        log_debug(tt::LogOp, "conv2d: Preprocessing weights on host and moving to device.");
+        std::tie(weight_tensor_on_device, bias_tensor_on_device) =
+            prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, params, device);
+    } else {
+        // Check if device weights are properly prepared
+        if (is_valid_device_conv_weights(
+                weight_tensor_on_device, in_channels, out_channels, conv_config.weights_dtype)) {
+            log_debug(tt::LogOp, "conv2d: Using preprocessed weights from device.");
         } else {
+            log_warning(
+                tt::LogOp,
+                "conv2d: Device weights not properly prepared, pulling back to host and trying to reprocess.");
+            // Pull weights back to host, prepare them, and push back to device
+            ttnn::Tensor host_weight_tensor = ttnn::operations::core::from_device(weight_tensor_on_device);
             std::tie(weight_tensor_on_device, bias_tensor_on_device) =
-                prepare_conv_weights_biases_on_device(weight_tensor, bias_tensor, params, device);
+                prepare_conv_weights_biases_and_move_to_device(host_weight_tensor, bias_tensor, params, device);
+        }
+    }
+
+    // Prepare bias tensor if it exists and is not yet on device
+    if (bias_tensor_on_device.has_value()) {
+        if (!is_device_tensor(bias_tensor_on_device.value())) {
+            bias_tensor_on_device = prepare_conv_bias_internal(
+                bias_tensor_on_device, out_channels, params, weight_tensor_on_device.dtype(), device);
+        } else {
+            // Check if device bias is properly prepared
+            if (is_valid_device_conv_bias(bias_tensor_on_device.value(), out_channels, conv_config.weights_dtype)) {
+                log_debug(tt::LogOp, "conv2d: Using preprocessed bias from device.");
+            } else {
+                log_warning(
+                    tt::LogOp, "conv2d: Device bias not properly prepared, pulling back to host and reprocessing.");
+                // Pull bias back to host, prepare it, and push back to device
+                ttnn::Tensor host_bias_tensor = ttnn::operations::core::from_device(bias_tensor_on_device.value());
+                bias_tensor_on_device = prepare_conv_bias_internal(
+                    std::optional<const ttnn::Tensor>(host_bias_tensor),
+                    out_channels,
+                    params,
+                    weight_tensor_on_device.dtype(),
+                    device);
+            }
         }
     }
 

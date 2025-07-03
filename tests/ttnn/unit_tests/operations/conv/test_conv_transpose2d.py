@@ -111,7 +111,6 @@ def run_conv_transpose2d(
 
     if config_override and "act_block_w_div" in config_override:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
-
     if preprocess_weights_bias:
         tt_weight_tensor = ttnn.to_device(tt_weight_tensor, device)
         tt_weight_tensor = ttnn.prepare_conv_transpose2d_weights(
