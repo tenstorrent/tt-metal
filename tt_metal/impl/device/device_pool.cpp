@@ -588,10 +588,8 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
-            if (not _inst->is_device_active(i)) {
-                // Fabric currently requires all devices to be active
-                TT_THROW("Fabric is being used but Device {} is not active", i);
-            }
+            // Fabric currently requires all devices to be active
+            TT_FATAL(_inst->is_device_active(i), "Fabric is being used but Device {} is not active", i);
         }
     }
 
