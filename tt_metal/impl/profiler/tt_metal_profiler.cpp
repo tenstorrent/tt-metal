@@ -289,8 +289,11 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
 
     double host_timestamp = hostStartTime;
     double device_timestamp = delay + (host_timestamp - smallestHostime[device_id]) * frequencyFit * tracyToSecRatio;
+    // disable linting here; slicing is __intended__
+    // NOLINTBEGIN
     tt_metal_device_profiler_map.at(device_id).device_core_sync_info.emplace(
         CoreCoord(phys_core), SyncInfo(host_timestamp, device_timestamp, frequencyFit));
+    // NOLINTEND
 }
 
 void setShift(int device_id, int64_t shift, double scale, const SyncInfo& root_sync_info) {
