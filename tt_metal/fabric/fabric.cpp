@@ -195,6 +195,20 @@ void append_fabric_connection_rt_args(
         worker_args);
 }
 
+std::vector<uint32_t> get_forwarding_link_indices(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // find the forwarding direction b/w src and dest chip
+    const auto& forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    if (!forwarding_direction.has_value()) {
+        return {};
+    }
+
+    return get_forwarding_link_indices_in_direction(
+        src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+}
+
 namespace experimental {
 
 size_t get_number_of_available_routing_planes(

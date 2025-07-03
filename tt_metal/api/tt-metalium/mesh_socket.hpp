@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/routing_table_generator.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -77,6 +79,8 @@ public:
     // Access the socket endpoint type (SENDER or RECEIVER).
     SocketEndpoint get_socket_endpoint_type() const { return socket_endpoint_type_; }
 
+    tt::tt_fabric::FabricNodeId get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const;
+
 private:
     MeshSocket(
         std::shared_ptr<MeshBuffer> data_buffer,
@@ -93,6 +97,9 @@ private:
     std::shared_ptr<MeshBuffer> config_buffer_;
     SocketConfig config_;
     SocketEndpoint socket_endpoint_type_;
+    std::
+        array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, magic_enum::enum_count<SocketEndpoint>()>
+            fabric_node_id_map_;
 };
 
 }  // namespace tt::tt_metal::distributed
