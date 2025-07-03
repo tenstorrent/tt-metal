@@ -90,7 +90,7 @@ class Yolov6l_Conv2D:
             input_height = self.conv.input_height
             input_width = self.conv.input_width
 
-        [output, [output_height, output_width]] = ttnn.conv2d(
+        [output, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
@@ -107,7 +107,7 @@ class Yolov6l_Conv2D:
             groups=self.groups,
             compute_config=self.compute_config,
             return_output_dim=True,
-            return_weights_and_bias=False,
+            return_weights_and_bias=True,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=self.activation_dtype,
         )
@@ -208,7 +208,7 @@ class Yolov6x_Conv_T_2D:
         input_width = x.shape[2]
         batch_size = x.shape[0]
 
-        [tt_output_tensor, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv_transpose2d(
+        [tt_output_tensor, [out_height, out_width], [self.weight, self.bias]] = ttnn.conv_transpose2d(
             input_tensor=x,
             weight_tensor=self.weight,
             in_channels=self.input_channels,

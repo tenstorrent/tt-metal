@@ -35,7 +35,7 @@ def get_expected_times(name):
 @pytest.mark.parametrize(
     "resolution",
     [
-        (640, 480),
+        (640, 640),
     ],
 )
 @pytest.mark.models_performance_bare_metal
