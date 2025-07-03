@@ -22,4 +22,13 @@ To obtain the perf reports through profiler, please build with the following com
 pytest --disable-warnings models/experimental/swin_s/tests/pcc/test_ttnn_swin_transformer.py
 ```
 
+## Model performant running with Trace+2CQ
+Use the following command to run the e2e perf:
+
+-  For overall rutime inference (end-2-end), use the following command to run:
+```sh
+pytest --disable-warnings models/experimental/swin_s/tests/perf/test_e2e_performant.py
+```
+- end-2-end perf is 5 FPS
+
 ### Owner: [HariniMohan0102](https://github.com/HariniMohan0102)
