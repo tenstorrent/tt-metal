@@ -51,20 +51,12 @@ enum EDMStatus : uint32_t {
 enum NocSendType : uint8_t {
     NOC_UNICAST_WRITE = 0,
     NOC_UNICAST_INLINE_WRITE = 1,
-#ifdef ARCH_WORMHOLE
     NOC_UNICAST_ATOMIC_INC = 2,
     NOC_FUSED_UNICAST_ATOMIC_INC = 3,
     NOC_UNICAST_SCATTER_WRITE = 4,
     NOC_MULTICAST_WRITE = 5,       // mcast has bug
     NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
     NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
-#else
-    NOC_MULTICAST_WRITE = 2,
-    NOC_UNICAST_ATOMIC_INC = 3,
-    NOC_FUSED_UNICAST_ATOMIC_INC = 4,
-    NOC_MULTICAST_ATOMIC_INC = 5,
-    NOC_SEND_TYPE_LAST = NOC_MULTICAST_ATOMIC_INC
-#endif
 };
 // How to send the payload across the cluster
 // 1 bit
