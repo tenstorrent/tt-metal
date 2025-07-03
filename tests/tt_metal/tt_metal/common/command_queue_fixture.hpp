@@ -82,6 +82,9 @@ protected:
 
 class UnitMeshCommandQueueFixture : public DispatchFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
