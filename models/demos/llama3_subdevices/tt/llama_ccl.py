@@ -5,7 +5,6 @@
 import ttnn
 import torch
 import os
-import math
 
 # SET TO 1 TO USE LINE FOR RS
 LINE_RS = os.environ.get("LINE_RS", "0") == "1"
@@ -102,11 +101,7 @@ class TT_CCL:
                     if self.use_ring_rs_prefill
                     else self.get_prefill_reduce_scatter_buffers()
                 )
-                self.all_gather_buffers = (
-                    self.get_ring_prefill_all_gather_buffers()
-                    if self.use_ring_ag_prefill
-                    else self.get_prefill_all_gather_buffers()
-                )
+                self.all_gather_buffers = self.get_prefill_all_gather_buffers()
             else:
                 for seqlen in self.support_seqlens:
                     self.persistent_buffers[seqlen] = {}
@@ -453,38 +448,6 @@ class TT_CCL:
             persistent_buffers_all[seqlen] = persistent_buffers
         return persistent_buffers_all
 
-    def padded_shape(self, output_shape, tile, num_devices, num_links, ag_input_dtype):
-        num_banks = 12
-
-        # calculate num tiles sent in one iteration on one link
-        output_tiles_shape = (math.ceil(output_shape[2] / tile[0]), math.ceil(output_shape[3] / tile[1]))
-        output_tile_num = output_tiles_shape[0] * output_tiles_shape[1]
-        tile_num_per_link = math.ceil(output_tile_num / (num_devices * num_links))
-
-        max_num_tiles_per_package = 2
-        if ag_input_dtype == ttnn.bfloat8_b:
-            max_num_tiles_per_package = 4
-
-        # for bfloat8_b, tile_num_per_link=6, we would need to send 2 packages, but they can be of size 3 instead of 4
-        num_packages_per_link = math.ceil(tile_num_per_link / max_num_tiles_per_package)
-        actual_num_tiles_per_package = math.ceil(tile_num_per_link / num_packages_per_link)
-
-        # calculate total num packages that will be in intermediate tensor
-        total_num_packages = num_packages_per_link * num_devices * num_links
-
-        # calculate num tiles needed for total packages to fit
-        padded_output_tile_num = math.floor(total_num_packages / num_banks) * num_banks * actual_num_tiles_per_package
-        if total_num_packages % num_banks > 0:
-            padded_output_tile_num += (actual_num_tiles_per_package - 1) * num_banks + total_num_packages % num_banks
-
-        padded_shape = [
-            output_shape[0],
-            output_shape[1],
-            tile[0],
-            padded_output_tile_num * tile[1],
-        ]
-        return padded_shape
-
     def get_ring_prefill_reduce_scatter_buffers(self):
         """
         Currently, this is hardcoded with llama specific shapes with hardcoded padding.
@@ -497,17 +460,13 @@ class TT_CCL:
                 return persistent_buffers
 
             buffers_dict = {
-                "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4), 4],
-                "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8), 8],
-                "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4), 4],
-                "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4), 4],
-                "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8), 8],
+                "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
             }
-            padded_buffers = {
-                key: (self.padded_shape(value[0], [32, 32], value[2], 4, ttnn.bfloat8_b), value[1])
-                for key, value in buffers_dict.items()
-            }
-            for key, shape in padded_buffers.items():
+            for key, shape in buffers_dict.items():
                 tt_intermediate_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
                     device=self.mesh_device,
@@ -515,7 +474,7 @@ class TT_CCL:
                     dtype=ttnn.bfloat8_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    cache_file_name=self.weight_cache_path / (f"pb_rs_ring_{key}_{seqlen}"),
+                    cache_file_name=self.weight_cache_path / (f"pb_rs_01_{key}_0_{seqlen}"),
                 )
                 # output buffer is reused from line imlementation
                 tt_output_buffer = ttnn.as_tensor(
@@ -562,57 +521,6 @@ class TT_CCL:
                     cache_file_name=self.weight_cache_path / ("pb_ag_" + key + str(seqlen)),
                 )
                 ag_persistent_buffers[key] = tt_buffer
-            ag_persistent_buffers_all[seqlen] = ag_persistent_buffers
-        return ag_persistent_buffers_all
-
-    def get_ring_prefill_all_gather_buffers(self):
-        ag_persistent_buffers_all = {}
-        for seqlen in self.support_seqlens:
-            ag_persistent_buffers = {}
-
-            buffers_dict = {
-                "QKV": [(1, 1, seqlen, 1280), 4],
-                "WO": [(1, 1, seqlen, 2048), 8],
-                "FF1": [(1, 1, seqlen, 3584), 4],
-                "FF3": [(1, 1, seqlen, 3584), 4],
-                "FF2": [(1, 1, seqlen, 2048), 8],
-                "LAYERNORM": [(1, 1, seqlen, 128), 4],
-            }
-            padded_buffers = {
-                key: (
-                    self.padded_shape(
-                        value[0], (32, 32), value[1], 4, ttnn.ttnn.bfloat16 if key == "LAYERNORM" else ttnn.bfloat8_b
-                    ),
-                    value[0],
-                )
-                for key, value in buffers_dict.items()
-            }
-            for key, shape in padded_buffers.items():
-                tt_intermediate_buffer = ttnn.as_tensor(
-                    torch.zeros(shape[0]),
-                    device=self.mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16 if key == "LAYERNORM" else ttnn.bfloat8_b,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    cache_file_name=self.weight_cache_path / ("pb_ring_ag_" + key + str(seqlen)),
-                )
-
-                tt_output_buffer = ttnn.as_tensor(
-                    torch.zeros(shape[1]),
-                    device=self.mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16 if key == "LAYERNORM" else ttnn.bfloat8_b,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    cache_file_name=self.weight_cache_path / ("pb_ag_" + key + str(seqlen)),
-                )
-
-                ag_persistent_buffers[key] = {
-                    "intermediate": tt_intermediate_buffer,
-                    "output": tt_output_buffer,
-                }
-
             ag_persistent_buffers_all[seqlen] = ag_persistent_buffers
         return ag_persistent_buffers_all
 
@@ -943,7 +851,7 @@ class TT_CCL:
             if self.use_ring_ag_prefill and buffer_key is not None:
                 if buffer_key in USE_LINE_AG:
                     seqlen = input_tensor_mesh.shape[1] * input_tensor_mesh.shape[-2]
-                    persistent_buffer = self.all_gather_buffers[seqlen][buffer_key]["output"]
+                    persistent_buffer = self.all_gather_buffers[seqlen][buffer_key]
                 else:
                     return self.ring_all_gather(
                         input_tensor_mesh,
@@ -1002,7 +910,7 @@ class TT_CCL:
         ttnn_tensor_out = ttnn.experimental.all_gather_async(
             input_tensor=input_tensor_mesh,
             # persistent_intermediate_buffer=persistent_buffers["intermediate"],
-            persistent_output_buffer=persistent_buffers["output"],
+            persistent_output_buffer=persistent_buffers,
             dim=dim,
             multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             num_links=num_links,
