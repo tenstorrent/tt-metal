@@ -124,6 +124,12 @@ jobs:
           
           if [ "$COMMIT_COUNT" -gt 0 ]; then
             echo "Processing $COMMIT_COUNT commits..."
+
+            # Debug: Show the raw git log output first
+            echo "=== Raw git log output ==="
+            git log --pretty=format:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA}
+            echo ""
+            echo "=== End of raw git log output ==="
             
             # Generate commits table content
             while IFS='|' read -r short_hash message author full_hash; do
