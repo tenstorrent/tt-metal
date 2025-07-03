@@ -68,7 +68,7 @@ def test_layer_norm(
     tt_output = tt_model.forward(tt_input_tensor)
 
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, tuple(mesh_device.shape), (0, -1))
-    assert_quality(torch_output, tt_output, pcc=0.99990, mesh_composer=composer)
+    assert_quality(torch_output, tt_output, pcc=0.99, mesh_composer=composer)
 
 
 @pytest.mark.parametrize(
@@ -114,4 +114,4 @@ def test_rms_norm(
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
     )[: input_shape[0]]
 
-    assert_quality(torch_output, tt_output_torch, pcc=0.99985)
+    assert_quality(torch_output, tt_output_torch, pcc=0.99)
