@@ -76,7 +76,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> Tilize::
     }
     const auto& input_shape = input_tensor.logical_shape();
     auto element_size_bytes = input_tensor.element_size();
-    uint32_t input_size_bytes = input_shape.volume() * element_size_bytes;
+    uint32_t input_size_bytes = input_tensor.physical_volume() * element_size_bytes;
 
     bool is_sharded = input_tensor.is_sharded();
     const auto& row_size = input_tensor.logical_shape()[-1] * element_size_bytes;
@@ -87,22 +87,22 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> Tilize::
 
     auto arch = input_tensor.device()->arch();
     const int num_cores = (arch == tt::ARCH::WORMHOLE_B0) ? 64 : 108;
-    uint32_t total_read_cycles = get_cycles_for_read_transaction_size(
-        input_transaction_size, is_dram, false, std::ceil((float)num_read_transactions / (float)num_cores));
+    uint32_t total_read_cycles =
+        get_cycles_for_read_transaction_size(input_transaction_size, is_dram, false, num_read_transactions, num_cores);
 
     const auto& output_tensor = output_tensors.at(0);
     if (output_tensor.storage_type() != StorageType::DEVICE) {
         log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
     const auto& output_shape = output_tensor.logical_shape();
-    uint32_t output_size_bytes = output_shape.volume() * element_size_bytes;
+    uint32_t output_size_bytes = output_tensor.physical_volume() * element_size_bytes;
     // output is tiled
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
     uint32_t output_transaction_size = single_tile_size;
     uint32_t num_write_transactions = std::ceil((float)output_size_bytes / (float)output_transaction_size);
     uint32_t total_write_cycles = get_cycles_for_write_transaction_size(
-        output_transaction_size, is_dram, false, std::ceil((float)num_write_transactions / (float)num_cores));
+        output_transaction_size, is_dram, false, num_write_transactions, num_cores);
 
     // do we just add cycles for read and write?
     int ideal_dev_clock_cycles = total_read_cycles + total_write_cycles;
