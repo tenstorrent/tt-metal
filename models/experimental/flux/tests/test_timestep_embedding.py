@@ -10,12 +10,15 @@ import pytest
 import torch
 import ttnn
 
-from ..tt.timestep_embedding import CombinedTimestepTextProjEmbeddings, CombinedTimestepTextProjEmbeddingsParameters
-from ..tt.utils import assert_quality, from_torch_fast
+from models.experimental.flux.tt.timestep_embedding import (
+    CombinedTimestepTextProjEmbeddings,
+    CombinedTimestepTextProjEmbeddingsParameters,
+)
+from models.experimental.flux.tt.utils import assert_quality, from_torch_fast
 
 
-from ..reference import FluxTransformer as FluxTransformerReference
-from ..reference.timestep_embedding import (
+from models.experimental.flux.reference import FluxTransformer as FluxTransformerReference
+from models.experimental.flux.reference.timestep_embedding import (
     CombinedTimestepTextProjEmbeddings as CombinedTimestepTextProjEmbeddingsReference,
 )
 

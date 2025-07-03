@@ -13,10 +13,10 @@ import ttnn
 from loguru import logger
 from transformers.models.t5.modeling_t5 import T5EncoderModel
 
-from ..reference.t5_encoder import T5Config
-from ..reference.t5_encoder import T5Encoder as T5EncoderReference
-from ..tt.t5_encoder import T5Encoder, T5EncoderParameters
-from ..tt.utils import assert_quality
+from models.experimental.flux.reference.t5_encoder import T5Config
+from models.experimental.flux.reference.t5_encoder import T5Encoder as T5EncoderReference
+from models.experimental.flux.tt.t5_encoder import T5Encoder, T5EncoderParameters
+from models.experimental.flux.tt.utils import assert_quality
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)

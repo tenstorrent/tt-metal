@@ -10,9 +10,9 @@ import pytest
 import torch
 import ttnn
 
-from ..reference.feed_forward import FeedForward as FeedForwardReference
-from ..tt.feed_forward import FeedForward, FeedForwardParameters
-from ..tt.utils import assert_quality
+from models.experimental.flux.reference.feed_forward import FeedForward as FeedForwardReference
+from models.experimental.flux.tt.feed_forward import FeedForward, FeedForwardParameters
+from models.experimental.flux.tt.utils import assert_quality
 
 
 @pytest.mark.parametrize(

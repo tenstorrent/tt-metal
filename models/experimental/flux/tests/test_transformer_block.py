@@ -11,10 +11,10 @@ import torch
 import ttnn
 from loguru import logger
 
-from ..tt import utils
-from ..tt.transformer_block import TransformerBlock, TransformerBlockParameters
-from ..tt.utils import assert_quality
-from ..reference.transformer import FluxTransformer as FluxTransformerReference
+from models.experimental.flux.tt import utils
+from models.experimental.flux.tt.transformer_block import TransformerBlock, TransformerBlockParameters
+from models.experimental.flux.tt.utils import assert_quality
+from models.experimental.flux.reference.transformer import FluxTransformer as FluxTransformerReference
 
 
 @pytest.mark.parametrize(
