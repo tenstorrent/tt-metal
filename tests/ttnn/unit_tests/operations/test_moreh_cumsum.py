@@ -260,17 +260,7 @@ def test_moreh_cumsum_backward_callback(input_shape, dim, device):
         rtol = atol = 0.1
 
         for i in range(2):
-            tt_input_grad_cpu = ttnn.to_torch(
-                ttnn.operations.moreh.cumsum_backward(tt_output_grad, dim)
-                # .cpu()
-                # .to(cpu_layout)
-                # .unpad_from_tile(input_shape)
-                # .to_torch()
-            )
-
-            logger.debug(
-                f"tt_output_grad.shape: {tt_output_grad.shape},torch_input.grad.shape: {torch_input.grad.shape}, torch_input.shape: {torch_input.shape}, tt_input_grad_cpu.shape: {tt_input_grad_cpu.shape}"
-            )
+            tt_input_grad_cpu = ttnn.to_torch(ttnn.operations.moreh.cumsum_backward(tt_output_grad, dim))
 
             passing, output_pcc = comp_allclose_and_pcc(
                 torch_input.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol

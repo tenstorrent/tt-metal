@@ -18,7 +18,7 @@ struct CumSumOperation {
         int64_t dim,
         std::optional<ttnn::DataType> dtype = std::nullopt,
         std::optional<Tensor> preallocated_output = std::nullopt,
-        const bool& flip = false,
+        bool flip = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 struct CumSumBackwardOperation {

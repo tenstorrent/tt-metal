@@ -59,7 +59,7 @@ Tensor CumSumOperation::invoke(
     int64_t dim,
     std::optional<ttnn::DataType> dtype,
     std::optional<Tensor> optional_output_tensor,
-    const bool& flip,
+    bool flip,
     const std::optional<MemoryConfig>& memory_config) {
     const auto& input_shape = input_tensor.logical_shape();
     int tensor_rank = input_shape.rank();
