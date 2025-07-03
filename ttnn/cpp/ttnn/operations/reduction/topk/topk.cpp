@@ -136,15 +136,14 @@ std::vector<Tensor> ExecuteTopK::invoke(
     const auto pad_amount = std::max(
         static_cast<int>(topk::constants::min_dim_per_core) - static_cast<int>(transformed_tensor.logical_shape()[-1]),
         0);
+    const auto pad_val = largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max();
     if (pad_amount > 0) {
-        const auto pad_val = largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max();
         ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
         padded_tensor = ttnn::pad(transformed_tensor, padding, pad_val);
     }
 
     // fill implicit padding, if any
-    padded_tensor = ttnn::fill_implicit_tile_padding(
-        padded_tensor, largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max());
+    padded_tensor = ttnn::fill_implicit_tile_padding(padded_tensor, pad_val);
 
     auto output_tensor_vec = tt::tt_metal::operation::run(
         TopK{adjusted_k, -1, largest, sorted, input_memory_config, used_sub_core_grids},
