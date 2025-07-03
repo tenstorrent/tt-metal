@@ -45,7 +45,6 @@ jobs:
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
       run:

@@ -81,7 +81,7 @@ jobs:
             fi
             matrix='["BH-LLMBox"]'
           else
-            matrix='["P100", "P150"]'
+            matrix='["P100", "tt-beta-ubuntu-2204-p150b-viommu-large-stable"]'
           fi
           echo "matrix=$matrix" >> $GITHUB_OUTPUT
 
@@ -111,7 +111,7 @@ jobs:
     secrets: inherit
     with:
       arch: "blackhole"
-      runner-label: ${{ inputs.runner-label || 'tt-beta-ubuntu-2204-p150b-viommu-large-stable' }}
+      runner-label: ${{ 'tt-beta-ubuntu-2204-p150b-viommu-large-stable' }}
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
@@ -122,7 +122,7 @@ jobs:
     uses: ./.github/workflows/umd-unit-tests.yaml
     with:
       arch: blackhole
-      runner-label: ${{ inputs.runner-label || 'tt-beta-ubuntu-2204-p150b-viommu-large-stable' }}
+      runner-label: ${{ 'tt-beta-ubuntu-2204-p150b-viommu-large-stable' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   sd-unit-tests:
@@ -131,7 +131,7 @@ jobs:
     secrets: inherit
     with:
       arch: blackhole
-      runner-label: ${{ inputs.runner-label || 'tt-beta-ubuntu-2204-p150b-viommu-large-stable' }}
+      runner-label: ${{ 'tt-beta-ubuntu-2204-p150b-viommu-large-stable' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -143,7 +143,7 @@ jobs:
     with:
       timeout: 40
       arch: blackhole
-      runner-label: ${{ inputs.runner-label || 'tt-beta-ubuntu-2204-p150b-viommu-large-stable' }}
+      runner-label: ${{ 'tt-beta-ubuntu-2204-p150b-viommu-large-stable' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
@@ -180,7 +180,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
     with:
-      runner-label: ${{ inputs.runner-label || 'tt-beta-ubuntu-2204-p150b-viommu-large-stable' }}
+      runner-label: ${{ 'tt-beta-ubuntu-2204-p150b-viommu-large-stable' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -192,7 +192,7 @@ jobs:
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       arch: blackhole
-      runner-label: ${{ inputs.runner-label || 'tt-beta-ubuntu-2204-p150b-viommu-large-stable' }}
+      runner-label: ${{ 'tt-beta-ubuntu-2204-p150b-viommu-large-stable' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -244,7 +244,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/blackhole-llmbox-demo-tests-impl.yaml
     with:
-      runner-label: ${{ inputs.runner-label || 'tt-beta-ubuntu-2204-p150b-viommu-large-stable' }}
+      runner-label: ${{ 'tt-beta-ubuntu-2204-p150b-viommu-large-stable' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
