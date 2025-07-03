@@ -4,6 +4,7 @@
 
 import torch
 import pytest
+import random
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
@@ -38,7 +39,7 @@ def get_pcc_threshold(dtype):
 
 def gen_tokens(batch, hidden_size, seq_len, mesh_shape, devices, scheme="random", dtype=torch.bfloat16):
     tokens = []
-    factor = 0
+    factor = 1
     for _ in range(batch):
         for _ in range(seq_len):
             if scheme == "random":
@@ -53,14 +54,24 @@ def gen_tokens(batch, hidden_size, seq_len, mesh_shape, devices, scheme="random"
 
 
 def gen_expert_mapping(experts, devices, scheme="random"):
+    assert experts % devices == 0
+
     expert_mapping = torch.zeros(1, 1, experts, devices, dtype=torch.int16)
+    device_id = 0
+    experts_per_devices = experts // devices
+    device_expert_count = {d: 0 for d in range(devices)}
     for i in range(experts):
         if scheme == "sequential":
-            device_id = i // devices
+            if i > 0 and i % experts_per_devices == 0:
+                device_id += 1
             expert_mapping[0, 0, i, device_id] = 1
         elif scheme == "random":
-            device_id = torch.randint(0, devices, (1,))
+            device_id = random.choice(
+                [d for d, _ in filter(lambda kv: kv[1] < experts_per_devices, device_expert_count.items())]
+            )
             expert_mapping[0, 0, i, device_id] = 1
+            device_expert_count[device_id] += 1
+
         else:
             raise ValueError(f"Invalid scheme: {scheme}")
 
@@ -80,7 +91,7 @@ def get_metadata_tensor(expert_indices, expert_mapping, mesh_shape):
 
 
 def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, scheme="random"):
-    expert_indices = torch.zeros(batch, 1, seq_len, selected_experts_k, dtype=torch.int16)
+    expert_indices = torch.ones(batch, 1, seq_len, selected_experts_k, dtype=torch.int16) * -1
     current_expert = 0
     for b in range(batch):
         for s in range(seq_len):
@@ -89,7 +100,11 @@ def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, 
                     expert_indices[b, 0, s, k] = current_expert % experts
                     current_expert += 1 + (k % 2)
                 elif scheme == "random":
-                    expert_indices[b, 0, s, k] = torch.randint(0, experts, (1,))
+                    # need to ensure a set of unique indices
+                    current_indices = expert_indices[b, 0, s, :].tolist()
+                    expert_indices[b, 0, s, k] = random.choice(
+                        list(filter(lambda e: e not in current_indices, range(experts)))
+                    )
                 else:
                     raise ValueError(f"Invalid scheme: {scheme}")
     return expert_indices
