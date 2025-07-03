@@ -59,7 +59,7 @@ WorkerMemMap generate_worker_mem_map(tt_metal::IDevice* device, Topology topolog
     constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
-    constexpr uint32_t NOTIFICATION_MAILBOX_ADDR_SIZE_BYTES = 32;
+    uint32_t NOTIFICATION_MAILBOX_ADDR_SIZE_BYTES = tt::tt_metal::hal::get_l1_alignment();
 
     uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     uint32_t packet_header_address = base_addr;
@@ -205,6 +205,8 @@ void RunTestLineMcast(
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     // common compile time args for sender and receiver
+    // Note: Fabric Mcast with NOC writes to DRAM provides redudant coverage,
+    // so use_dram_dst is set to 0; see run_unicast_dw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -403,6 +405,7 @@ void RunTestUnicastRaw(
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
     // common compile time args for sender and receiver
+    // Note: see run_unicast_dw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -576,7 +579,7 @@ void run_unicast_test_bw_chips(
     log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
     log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
 
-    // Set up destination address/coordinates
+    // Set up destination address/coordinates. One bank should be enough for testing
     uint32_t dest_bank_id = 0;
     uint32_t dest_dram_addr =
         use_dram_dst ? receiver_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::DRAM) : 0;
@@ -614,8 +617,9 @@ void run_unicast_test_bw_chips(
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // If using DRAM destination, zero out the mailbox
+    // Simple notification mailbox with flushing atomic increment is used instead of 2-way handshake for simple testing
     if (use_dram_dst) {
-        std::vector<uint32_t> zeros(8, 0);  // zero out mailbox
+        std::vector<uint32_t> zeros(tt::tt_metal::hal::get_l1_alignment() / sizeof(uint32_t), 0);  // zero out mailbox
         tt_metal::detail::WriteToDeviceL1(
             receiver_device,
             receiver_logical_core,
@@ -843,6 +847,8 @@ void RunTestMCastConnAPI(
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
     // common compile time args for sender and receiver
+    // Note: Fabric Mcast with NOC writes to DRAM provides redudant coverage,
+    // so use_dram_dst is set to 0; see run_unicast_dw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -1102,6 +1108,8 @@ void RunTestChipMCast1D(
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     // common compile time args for sender and receiver
+    // Note: Fabric Mcast with NOC writes to DRAM provides redudant coverage,
+    // so use_dram_dst is set to 0; see run_unicast_dw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
