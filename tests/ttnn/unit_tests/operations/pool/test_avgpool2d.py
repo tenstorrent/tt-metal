@@ -92,6 +92,9 @@ def test_avg_pool2d_post_commit(
     count_include_pad,
     shard_scheme,
 ):
+    # we only want to test the largest kernel size with a specific input shape
+    # to test otherwise untouched paths in the large kernel, other shapes run OOM
+    # or will just slow the test down doing redundant work
     if kernel_size == (36, 36) and input_shape != [1, 320, 48, 48]:
         pytest.skip("Skipping only run shape [1, 320, 48, 48] with kernel size (36, 36)")
     run_avg_pool2d(
