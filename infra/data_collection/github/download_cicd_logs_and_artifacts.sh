@@ -39,29 +39,29 @@ get_jobs_with_pagination_fallback() {
     set -e  # Re-enable exit on error
 
     if [ $paginate_exit_code -eq 0 ]; then
-        echo "Successfully fetched jobs using --paginate"
+        echo "Successfully fetched jobs using --paginate" >&2
         echo "$paginated_output"
     else
-        echo "--paginate failed (exit code: $paginate_exit_code), falling back to manual pagination"
-        echo "Error output: $paginated_output"
+        echo "--paginate failed (exit code: $paginate_exit_code), falling back to manual pagination" >&2
+        echo "Error output: $paginated_output" >&2
 
         # Manual pagination to avoid 502 errors with --paginate
         # Get first page to determine total count
         first_page=$(gh api "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs?per_page=50&page=1")
         total_count=$(echo "$first_page" | jq -r '.total_count')
-        echo "Total jobs: $total_count"
+        echo "Total jobs: $total_count" >&2
 
         # Calculate total pages needed
         per_page=50
         total_pages=$(( (total_count + per_page - 1) / per_page ))
-        echo "Total pages: $total_pages"
+        echo "Total pages: $total_pages" >&2
 
         # Initialize with first page
         all_jobs=$(echo "$first_page" | jq -r '.jobs')
 
         # Fetch remaining pages if any
         for page in $(seq 2 $total_pages); do
-            echo "Fetching page $page of $total_pages"
+            echo "Fetching page $page of $total_pages" >&2
             page_data=$(gh api "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs?per_page=50&page=$page")
             page_jobs=$(echo "$page_data" | jq -r '.jobs')
             all_jobs=$(jq -s '.[0] + .[1]' <(echo "$all_jobs") <(echo "$page_jobs"))
