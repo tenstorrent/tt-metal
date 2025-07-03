@@ -138,19 +138,49 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     if (fabric_config == tt_metal::FabricConfig::CUSTOM || fabric_config == tt_metal::FabricConfig::DISABLED) {
         return;
     }
-
-    this->router_port_directions_to_num_routing_planes_map_.clear();
-
     auto topology = FabricContext::get_topology_from_config(fabric_config);
     size_t min_routing_planes = std::numeric_limits<size_t>::max();
 
+    this->router_port_directions_to_num_routing_planes_map_.clear();
+
+    auto skip_direction = [&](const FabricNodeId& node_id, const RoutingDirection direction) -> bool {
+        const auto& neighbors = this->get_chip_neighbors(node_id, direction);
+        // log_info(LogMetal, "Neighbor size = {}", neighbors.size());
+        if (neighbors.empty()) {
+            // log_info(tt::LogMetal, "Node {} Direction {} not found in map", node_id,
+            // magic_enum::enum_name(direction));
+            return false;
+        }
+
+        // Get physical chip ID to check if this is an MMIO chip
+        auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(node_id);
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        bool is_mmio_chip = cluster.get_cluster_desc()->is_chip_mmio_capable(physical_chip_id);
+
+        // For MMIO chips, allow multiple neighbor meshes (multiple tunnels)
+        // For non-MMIO chips, skip if there are multiple neighbor meshes (inter-mesh connections)
+        if (!is_mmio_chip && (neighbors.size() > 1 || neighbors.begin()->first != node_id.mesh_id)) {
+            log_info(
+                tt::LogMetal,
+                "On node: {}, skipping direction: {} (non-MMIO chip with inter-mesh connections)",
+                node_id,
+                magic_enum::enum_name(direction));
+            return true;
+        }
+
+        return false;
+    };
+
     auto apply_min =
-        [this](
+        [&](FabricNodeId fabric_node_id,
             const std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<tt::tt_fabric::chan_id_t>>&
                 port_direction_eth_chans,
             tt::tt_fabric::RoutingDirection direction,
             const std::unordered_map<tt::tt_fabric::RoutingDirection, size_t>& golden_link_counts,
             size_t& val) {
+            if (skip_direction(fabric_node_id, direction)) {
+                return;
+            }
             if (auto it = port_direction_eth_chans.find(direction); it != port_direction_eth_chans.end()) {
                 val = std::min(val, it->second.size());
             }
@@ -182,6 +212,12 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                      this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
                     this->router_port_directions_to_num_routing_planes_map_[fabric_node_id][direction] =
                         eth_chans.size();
+                    log_info(
+                        tt::LogMetal,
+                        "Device {} in direction {} eth chans size = {}",
+                        get_physical_chip_id_from_fabric_node_id(fabric_node_id),
+                        magic_enum::enum_name(direction),
+                        eth_chans.size());
                 }
             }
         }
@@ -197,10 +233,20 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     build_golden_link_counts(
         this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity(), golden_link_counts);
 
-    auto apply_count = [this](FabricNodeId fabric_node_id, RoutingDirection direction, size_t count) {
+    auto apply_count = [&](FabricNodeId fabric_node_id, RoutingDirection direction, size_t count) {
+        if (skip_direction(fabric_node_id, direction)) {
+            return;
+        }
         if (this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id) &&
             this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).contains(direction) &&
             this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).at(direction).size() > 0) {
+            log_info(
+                LogMetal,
+                "ControlPlane: Setting routing plane count for fabric node {} (phys {}) in direction {} to {}",
+                fabric_node_id,
+                this->get_physical_chip_id_from_fabric_node_id(fabric_node_id),
+                magic_enum::enum_name(direction),
+                count);
             this->router_port_directions_to_num_routing_planes_map_[fabric_node_id][direction] = count;
         }
     };
@@ -229,10 +275,30 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                 const auto& port_directions = this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
 
                 const auto& golden_counts = golden_link_counts.at(MeshId{mesh_id}).at(chip_id);
-                apply_min(port_directions, RoutingDirection::E, golden_counts, row_min_planes.at(chip_coord_y));
-                apply_min(port_directions, RoutingDirection::W, golden_counts, row_min_planes.at(chip_coord_y));
-                apply_min(port_directions, RoutingDirection::N, golden_counts, col_min_planes.at(chip_coord_x));
-                apply_min(port_directions, RoutingDirection::S, golden_counts, col_min_planes.at(chip_coord_x));
+                apply_min(
+                    fabric_node_id,
+                    port_directions,
+                    RoutingDirection::E,
+                    golden_counts,
+                    row_min_planes.at(chip_coord_y));
+                apply_min(
+                    fabric_node_id,
+                    port_directions,
+                    RoutingDirection::W,
+                    golden_counts,
+                    row_min_planes.at(chip_coord_y));
+                apply_min(
+                    fabric_node_id,
+                    port_directions,
+                    RoutingDirection::N,
+                    golden_counts,
+                    col_min_planes.at(chip_coord_x));
+                apply_min(
+                    fabric_node_id,
+                    port_directions,
+                    RoutingDirection::S,
+                    golden_counts,
+                    col_min_planes.at(chip_coord_x));
             }
 
             // TODO: specialize by topology for better perf
@@ -1450,9 +1516,11 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_routing_planes_in_dir
             this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).at(routing_direction);
         TT_FATAL(
             eth_chans.size() >= num_routing_planes,
-            "Not enough active fabric eth channels for node {} in direction {}. Requested {} routing planes but only have {} eth channels",
-            fabric_node_id,
+            "Not enough active fabric eth channels in direction {} for (chip_id: {}, mesh_id: {}), num_routing_planes: "
+            "{}, eth_chans.size(): {}",
             routing_direction,
+            fabric_node_id.chip_id,
+            fabric_node_id.mesh_id,
             num_routing_planes,
             eth_chans.size());
         eth_chans.resize(num_routing_planes);

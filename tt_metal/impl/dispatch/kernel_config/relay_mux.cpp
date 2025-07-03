@@ -203,6 +203,12 @@ int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id) {
             k_MaxTunnelSize);
         for (int hop = 0; hop < tunnel.size(); ++hop) {
             if (tunnel[hop] == downstream_dev_id) {
+                log_info(
+                    tt::LogMetal,
+                    "Number of hops from MMIO device {} to downstream device {} is {}",
+                    mmio_dev_id,
+                    downstream_dev_id,
+                    hop);
                 return hop;
             }
         }

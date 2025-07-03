@@ -1442,7 +1442,7 @@ void build_tt_fabric_program(
         chip_neighbors.emplace(direction, neighbor_fabric_node_id);
 
         active_fabric_eth_channels.insert({direction, active_eth_chans});
-        log_debug(
+        log_info(
             tt::LogMetal,
             "Building fabric router -> device (phys): {}, (logical): {}, direction: {}, active_eth_chans: {}",
             device->id(),
@@ -1510,6 +1510,13 @@ void build_tt_fabric_program(
             for (uint32_t link = 0; link < num_links; link++) {
                 auto eth_chan_dir1 = eth_chans_dir1[link];
                 auto eth_chan_dir2 = eth_chans_dir2[link];
+                log_info(
+                    tt::LogMetal,
+                    "Device {} Link {} Dir {} {}",
+                    device->id(),
+                    link,
+                    (uint32_t)eth_chan_dir1,
+                    (uint32_t)eth_chan_dir2);
 
                 auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
@@ -1608,6 +1615,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
                     .compile_args = ct_args,
                     .defines = defines,
                     .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+            log_info(tt::LogMetal, "Create Fabric Router on Device {} at {}", device->id(), eth_logical_core.str());
 
             tt::tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, eth_logical_core, rt_args);
         }
