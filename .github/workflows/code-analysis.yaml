@@ -170,6 +170,8 @@ jobs:
           branch: ${{ env.BRANCH_NAME }}
           delete-branch: true
           body-path: llk_commit_log.txt
+          add-paths: |
+            ${{ env.SUBMODULE_PATH }}
           draft: ${{ !inputs.skip_draft }}
           labels: |
             llk-update
