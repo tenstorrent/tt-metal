@@ -72,7 +72,7 @@ public:
 
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const override;
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const override;
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment() override;
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord &logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const override;
@@ -207,7 +207,7 @@ private:
     void mark_allocations_safe();
 
     CoreCoord physical_worker_core_from_logical_core(const CoreCoord &logical_core) const;
-    CoreCoord dram_core_from_dram_channel(uint32_t dram_channel) const;
+    CoreCoord dram_core_from_dram_channel(uint32_t dram_channel, NOC noc = NOC::NOC_0) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
     chip_id_t id_;

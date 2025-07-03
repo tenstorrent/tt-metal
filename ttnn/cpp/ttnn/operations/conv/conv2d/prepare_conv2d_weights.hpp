@@ -17,6 +17,16 @@ namespace ttnn {
 namespace operations::conv {
 namespace conv2d {
 
+// Device validation functions for conv2d tensors (after preparation/on device)
+bool is_valid_device_conv_weights(
+    const ttnn::Tensor& weight_tensor,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    const std::optional<DataType>& expected_dtype);
+
+bool is_valid_device_conv_bias(
+    const ttnn::Tensor& bias_tensor, uint32_t out_channels, const std::optional<DataType>& expected_dtype);
+
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout(
@@ -50,15 +60,6 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
 // Converts convolution weights to depthwise layout with broadcasted weights
 Tensor convert_conv_weight_tensor_to_depthwise_layout(
     const Tensor& conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
-
-ttnn::Tensor conv_bias_layout_convert(
-    const ttnn::Tensor& bias_tensor,
-    DataType bias_dtype,
-    uint32_t weight_block_h_ntiles,
-    uint32_t weight_block_w_ntiles,
-    const sliding_window::ParallelConfig& parallel_config,
-    uint32_t out_channels,
-    bool is_non_tile_mul_width);
 
 template <typename T>
 ttnn::Tensor prepare_conv_weights(
@@ -141,8 +142,8 @@ struct Conv2dWeightsBiasPrepConfig {
     const std::optional<DataType> weights_bias_dtype;
     uint32_t weight_block_h_ntiles;
     const uint32_t weight_block_w_ntiles;
-    const sliding_window::ParallelConfig& input_parallel_config;
-    const sliding_window::ParallelConfig& output_parallel_config;
+    const sliding_window::ParallelConfig input_parallel_config;
+    const sliding_window::ParallelConfig output_parallel_config;
     const uint32_t groups;
     const uint32_t act_block_h_ntiles;
     const uint32_t input_width;
@@ -157,19 +158,19 @@ struct Conv2dWeightsBiasPrepConfig {
 };
 
 template <typename T>
-std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_on_device(
-    const ttnn::Tensor& weight_tensor,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    Conv2dWeightsBiasPrepConfig& params,
-    T* device);
-
-template <typename T>
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(
     const ttnn::Tensor& weight_tensor,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     Conv2dWeightsBiasPrepConfig& params,
     T* device);
 
+template <typename T>
+std::optional<ttnn::Tensor> prepare_conv_bias_internal(
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    uint32_t out_channels,
+    const Conv2dWeightsBiasPrepConfig& params,
+    DataType weight_dtype,
+    T* device);
 }  // namespace conv2d
 }  // namespace operations::conv
 }  // namespace ttnn
