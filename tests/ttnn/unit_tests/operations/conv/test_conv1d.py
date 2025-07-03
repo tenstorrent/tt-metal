@@ -357,10 +357,6 @@ def test_squeezebert_conv1d(
     ((1, 32, 32, 1024, 3, 1, 1, 1),),
 )
 @pytest.mark.parametrize("prepare_weights", [True, False])
-@pytest.mark.parametrize(
-    "preprocess_weights_on_device",
-    [True, False],
-)
 def test_with_prepare_weights(
     device,
     batch_size,
@@ -372,11 +368,7 @@ def test_with_prepare_weights(
     padding,
     groups,
     prepare_weights,
-    preprocess_weights_on_device,
 ):
-    if prepare_weights and preprocess_weights_on_device:
-        pytest.skip("preprocess_weights_on_device isn't needed when prepare_weights is True")
-
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_length]
     conv_weight_shape = [output_channels, input_channels // groups, kernel_size]
@@ -421,7 +413,6 @@ def test_with_prepare_weights(
         weights_dtype=ttnn.bfloat16,
         shard_layout=None,
         deallocate_activation=False,
-        preprocess_weights_on_device=preprocess_weights_on_device,
     )
 
     tt_output_tensor_on_device, out_length = ttnn.conv1d(

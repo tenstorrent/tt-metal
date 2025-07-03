@@ -101,7 +101,6 @@ def run_conv(
     output_mesh_composer=None,
     enable_split_reader=False,
     activation="",
-    preprocess_weights_on_device=True,
     in_place=False,
     run_twice=False,
     fast_compare=False,
@@ -224,8 +223,6 @@ def run_conv(
         output_layout=output_layout,
         activation=activation,
         transpose_shards=transpose_shards,
-        preprocess_weights_on_device=preprocess_weights_on_device,
-        always_preprocess_weights=False,
         in_place=in_place,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
@@ -770,7 +767,6 @@ def test_conv_dram(
         input_dtype=input_dtype,
         input_layout=input_layout,
         packer_l1_acc=packer_l1_acc,
-        preprocess_weights_on_device=False,
         run_twice=False,
         fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(
@@ -3103,7 +3099,6 @@ def test_conv2d_model_fruit(
         input_layout= input_layout,
         activation="relu",
         enable_act_double_buffer=enable_act_double_buffer,
-        preprocess_weights_on_device=False,
         input_dtype = input_dtype,
     )
 
@@ -3281,6 +3276,7 @@ def test_conv2d_sdxl(
         (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1, 0),
 
         # channels 4
+        # Skip specific test case for Blackhole devices
         (1, 4, 4, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1, 0),
     ),
 )
@@ -3309,6 +3305,10 @@ def test_conv2d_vae_sdxl(
     num_slices,
     act_block_h_override
 ):
+
+    # Skip specific test case for Blackhole devices
+    if is_blackhole() and (batch, input_channels, output_channels, input_height, input_width, weights_dtype) == (1, 4, 4, 128, 128, ttnn.bfloat8_b):
+        pytest.skip("Skipping this test case for Blackhole devices due to PCC issue, tracked in ISSUE-24463")
 
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
@@ -3536,9 +3536,16 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
     height = 512
     width = 512
     torch.manual_seed(20250416)
+
+    # In case of output dtype is bfloat8_b, we need to pad the input channels to be divisible by 8.
+    required_padding = (8 - num_channels % 8) % 8
+    padded_num_channels = num_channels + required_padding
+
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
+    torch_input_tensor = torch.nn.functional.pad(torch_input_tensor, (0, 0, 0, 0, 0, required_padding), mode="constant", value=0)
 
     torch_weights = torch.randn((hidden_size, num_channels, patch_size, patch_size), dtype=torch.bfloat16).float()
+    torch_weights = torch.nn.functional.pad(torch_weights, (0, 0, 0, 0, 0, required_padding), mode="constant", value=0)
     torch_bias = torch.randn((1, 1, 1, hidden_size), dtype=torch.bfloat16).float()
 
     torch_output_tensor = (
@@ -3586,7 +3593,7 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
         input_tensor=ttnn_input_tensor,
         weight_tensor=ttnn_weights,
         bias_tensor=ttnn_bias,
-        in_channels=num_channels,
+        in_channels=padded_num_channels,
         out_channels=hidden_size,
         batch_size=batch_size,
         input_height=height,
@@ -3610,7 +3617,6 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
 @pytest.mark.parametrize("kernel_height,kernel_width", [(16, 16), (32, 32)])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("has_bias", [True, False])
-@pytest.mark.parametrize("preprocess_weights_on_device", [True, False])
 def test_conv2d_with_fold(
     device,
     torch_tensor_map,
@@ -3623,7 +3629,6 @@ def test_conv2d_with_fold(
     kernel_width,
     input_layout,
     has_bias,
-    preprocess_weights_on_device,
 ):
     run_conv(
         device=device,
@@ -3646,7 +3651,6 @@ def test_conv2d_with_fold(
         input_layout=input_layout,
         has_bias=has_bias,
         enable_kernel_stride_folding=True,
-        preprocess_weights_on_device=preprocess_weights_on_device,
     )
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
