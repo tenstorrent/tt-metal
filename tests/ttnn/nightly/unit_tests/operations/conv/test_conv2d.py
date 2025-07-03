@@ -3894,3 +3894,51 @@ def test_conv2d_act_dealloc(
         slice_config=slice_config,
     )
     assert not tt_input_tensor.is_allocated(), "Input tensor is allocated"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, shard_layout",
+    (
+        (32, 32, 8, 8, WS),
+        (16, 16, 8, 4, BS),
+    ),
+)
+@pytest.mark.parametrize(
+    "filter, padding",
+    [
+        [3, (1, 1)],
+    ],
+)
+def test_conv_single_core_hang(
+    device,
+    torch_tensor_map,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    shard_layout,
+    filter,
+    padding,
+):
+
+    run_conv(
+        device = device,
+        torch_tensor_map = torch_tensor_map,
+        math_fidelity = ttnn.MathFidelity.HiFi4,
+        output_dtype = ttnn.bfloat16,
+        weights_dtype = ttnn.bfloat16,
+        batch_size = 1,
+        output_channels = output_channels,
+        input_channels = input_channels,
+        input_height = input_height,
+        input_width = input_width,
+        filter_height=filter,
+        filter_width=filter,
+        stride_h = 1,
+        stride_w = 1,
+        padding = padding,
+        shard_layout=shard_layout,
+        input_dtype=ttnn.bfloat16,
+        config_override = None,
+    )
