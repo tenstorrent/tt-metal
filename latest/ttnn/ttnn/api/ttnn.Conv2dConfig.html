@@ -185,19 +185,6 @@ relu, silu, mish, sigmoid, sigmoid_approx, tanh, log, softplus, gelu, sqrt</p>
 </dl>
 
 <dl class="py property">
-<dt class="sig sig-object py" id="ttnn.Conv2dConfig.always_preprocess_weights">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">always_preprocess_weights</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.always_preprocess_weights" title="Permalink to this definition"></a>
-</dt>
-<dd>
-<p>Used only when preprocess_weights_on_device is set to true.</p>
-<p>The Conv2d op determines if the weights should be preprocessed or not, by examining the storage type.
-If the weights are on device, then the op assumes that the weights are already preprocessed.</p>
-<p>However, if this flag is set to true, the op will always preprocess the weights, even if they are on device.
-This is useful when the weights are on device, but in the PyTorch format [out_channels, in_channels, kernel_height, kernel_width].</p>
-</dd>
-</dl>
-
-<dl class="py property">
 <dt class="sig sig-object py" id="ttnn.Conv2dConfig.core_grid">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">core_grid</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.core_grid" title="Permalink to this definition"></a>
 </dt>
@@ -320,16 +307,6 @@ So if the next op is a conv op, it is recommended to set this to <code class="xr
 <dd>
 <p>Boolean flag that allows the core grid for the conv op to be specified.
 If true, then core_grid must also be specified.</p>
-</dd>
-</dl>
-
-<dl class="py property">
-<dt class="sig sig-object py" id="ttnn.Conv2dConfig.preprocess_weights_on_device">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">preprocess_weights_on_device</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.preprocess_weights_on_device" title="Permalink to this definition"></a>
-</dt>
-<dd>
-<p>Determines if the weights should be preprocessed on host or device.
-For large weights, it is recommended to set this to true, as it would be faster.</p>
 </dd>
 </dl>
 
