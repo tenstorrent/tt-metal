@@ -74,7 +74,7 @@ jobs:
           else
             echo "has-changes=true" >> $GITHUB_OUTPUT
             echo "✅ Changes detected: $OLD_SHA -> $NEW_SHA"
-            
+
             # Stage the submodule changes in the parent repo
             cd ../../..
             git add ${{ env.SUBMODULE_PATH }}
@@ -111,76 +111,38 @@ jobs:
           fi
 
           # Generate commits table and save to GITHUB_OUTPUT
-          echo "=== Debugging git log ranges ==="
-          echo "OLD_SHA: $OLD_SHA"
-          echo "NEW_SHA: $NEW_SHA"
-          
           COMMIT_COUNT=$(git log --oneline ${OLD_SHA}..${NEW_SHA} | wc -l)
           echo "Found $COMMIT_COUNT commits using ${OLD_SHA}..${NEW_SHA}"
-          
+
           # Generate commits table content
           COMMITS_TABLE_CONTENT="| Commit | Message | Author | PR |"$'\n'
           COMMITS_TABLE_CONTENT+="|--------|---------|---------|-----|"$'\n'
-          
-          if [ "$COMMIT_COUNT" -gt 0 ]; then
-            echo "Processing $COMMIT_COUNT commits..."
 
-            # Debug: Show the raw git log output first
-            echo "=== Raw git log output ==="
-            git log --pretty=format:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA}
-            echo ""
-            echo "=== End of raw git log output ==="
-            
-            # Save git log output to a file to avoid process substitution issues
-            git log --pretty=tformat:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA} > /tmp/git_log_output.txt
-            
-            # Debug: Check if file was created and show its contents
-            echo "=== File debug info ==="
-            echo "File exists: $(test -f /tmp/git_log_output.txt && echo 'YES' || echo 'NO')"
-            echo "File size: $(wc -c < /tmp/git_log_output.txt) bytes"
-            echo "File content:"
-            cat /tmp/git_log_output.txt
-            echo "=== End file debug ==="
-            
+          if [ "$COMMIT_COUNT" -gt 0 ]; then
             # Generate commits table content
-            echo "Starting while loop..."
-            line_count=0
             while IFS='|' read -r short_hash message author full_hash; do
-              line_count=$((line_count + 1))
-              echo "DEBUG: Line $line_count - Raw line: '$(echo "$short_hash|$message|$author|$full_hash")'"
-              echo "DEBUG: Processing line: short_hash='$short_hash', message='$message', author='$author', full_hash='$full_hash'"
-              
               # Skip empty lines
               if [ -z "$short_hash" ]; then
-                echo "DEBUG: Skipping empty line"
                 continue
               fi
-              
+
               # Try to get the PR number from the commit message
               pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
               if [ -n "$pr_number" ]; then
-                echo "DEBUG: Found PR number: $pr_number"
                 COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | [#$pr_number](https://github.com/tenstorrent/tt_llk/pull/$pr_number) |"$'\n'
               else
-                echo "DEBUG: No PR number found"
                 COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | - |"$'\n'
               fi
-            done < /tmp/git_log_output.txt
-            echo "Finished while loop. Processed $line_count lines."
+            done < <(git log --pretty=tformat:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA})
           else
             echo "No commits found - this shouldn't happen if we detected changes"
             COMMITS_TABLE_CONTENT+="| (No commits found) | - | - | - |"$'\n'
           fi
-          
+
           # Save commits table to GITHUB_OUTPUT
           echo "commits-table<<EOF" >> $GITHUB_OUTPUT
           echo "$COMMITS_TABLE_CONTENT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-          
-          # Debug: Show what we generated
-          echo "=== Generated commits table ==="
-          echo "$COMMITS_TABLE_CONTENT"
-          echo "=== End of generated commits table ==="
 
           # Generate PR body
           cat > ../../../llk_commit_log.txt << EOF
@@ -424,7 +386,7 @@ jobs:
           # Comment on PR that it's ready for review
           echo "📝 PR #$PR_NUMBER is ready for review and merge"
           gh pr comment "$PR_NUMBER" \
-            --body "🎉 **LLK submodule update completed successfully!** 
+            --body "🎉 **LLK submodule update completed successfully!**
             All workflows have passed. This PR is ready for review and merge." \
             --repo "${{ github.repository }}" || echo "⚠️ Unable to comment on PR - insufficient permissions"
 
