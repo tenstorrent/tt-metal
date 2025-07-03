@@ -374,17 +374,21 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, tile_size(in_df), 1);
     }
 
-    // CBs for NC/BR synchornization
+    // CBs for NC/BR/Compute synchornization
     int32_t sync_cb_id1 = next_cb_index++;
-    auto sync_cb1 = tt::tt_metal::create_cb(sync_cb_id1, program, all_cores, 2, 2, tt::DataFormat::UInt16);
-    int32_t sync_cb_id2 = next_cb_index++;
-    auto sync_cb2 = tt::tt_metal::create_cb(sync_cb_id2, program, all_cores, 2, 2, tt::DataFormat::UInt16);
+    tt::tt_metal::create_cb(sync_cb_id1, program, all_cores, 2, 2, tt::DataFormat::UInt16);
     int32_t sync_cb_id3 = next_cb_index++;
-    auto sync_cb3 = tt::tt_metal::create_cb(sync_cb_id3, program, all_cores, 2, 1, tt::DataFormat::UInt16);
-    int32_t sync_cb_id4 = next_cb_index++;
-    auto sync_cb4 = tt::tt_metal::create_cb(sync_cb_id4, program, all_cores, 2, 1, tt::DataFormat::UInt16);
+    tt::tt_metal::create_cb(sync_cb_id3, program, all_cores, 2, 1, tt::DataFormat::UInt16);
     int32_t sync_cb_id5 = next_cb_index++;
-    auto sync_cb5 = tt::tt_metal::create_cb(sync_cb_id5, program, all_cores, 2, 1, tt::DataFormat::UInt16);
+    tt::tt_metal::create_cb(sync_cb_id5, program, all_cores, 2, 1, tt::DataFormat::UInt16);
+    int32_t sync_cb_id2 = 0;
+    int32_t sync_cb_id4 = 0;
+    if (split_reader) {
+        sync_cb_id2 = next_cb_index++;
+        sync_cb_id4 = next_cb_index++;
+        tt::tt_metal::create_cb(sync_cb_id2, program, all_cores, 2, 2, tt::DataFormat::UInt16);
+        tt::tt_metal::create_cb(sync_cb_id4, program, all_cores, 2, 1, tt::DataFormat::UInt16);
+    }
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
