@@ -92,10 +92,10 @@ struct NdShardSpec {
     Shape shard_shape;
     CoreRangeSet grid;
     ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
-    bool use_2d_grid_distribution = false;
+    ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D;
 
     NdShardSpec with_shard_shape(Shape new_shard_shape) const {
-        return NdShardSpec{std::move(new_shard_shape), grid, orientation, use_2d_grid_distribution};
+        return NdShardSpec{std::move(new_shard_shape), grid, orientation, shard_distribution_strategy};
     }
 
     bool operator==(const NdShardSpec& other) const = default;

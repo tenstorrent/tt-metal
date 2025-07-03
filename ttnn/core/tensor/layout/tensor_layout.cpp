@@ -223,7 +223,7 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const ttnn::Shape&
             page_shape,
             nd_shard_spec->grid,
             nd_shard_spec->orientation,
-            nd_shard_spec->use_2d_grid_distribution);
+            nd_shard_spec->shard_distribution_strategy);
     }
     return BufferShardingArgs(
         std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());

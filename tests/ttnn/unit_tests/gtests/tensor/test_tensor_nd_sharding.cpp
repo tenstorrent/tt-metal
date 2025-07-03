@@ -26,7 +26,7 @@ struct NdToLegacyShardingParams {
     Shape shard_shape_nd;
     Layout layout = Layout::TILE;
     CoreCoord grid_size;
-    bool use_2d_grid_distribution = false;
+    ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D;
 
     TensorMemoryLayout memory_layout = TensorMemoryLayout::BLOCK_SHARDED;
     std::optional<Shape2D> shard_shape_2d;
@@ -179,7 +179,7 @@ TEST_P(NdToLegacyShardingTests, NdToLegacySharding) {
 
     CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{params.grid_size.x - 1, params.grid_size.y - 1}));
     NdShardSpec nd_shard_spec{
-        params.shard_shape_nd, cores, ShardOrientation::ROW_MAJOR, params.use_2d_grid_distribution};
+        params.shard_shape_nd, cores, ShardOrientation::ROW_MAJOR, params.shard_distribution_strategy};
     MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
     TensorLayout tensor_layout(DataType::UINT16, PageConfig(params.layout), memory_config);
     TensorSpec tensor_spec(params.shape, tensor_layout);
@@ -676,7 +676,7 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_nd = Shape({1, 32, 32}),
             .layout = Layout::TILE,
             .grid_size = CoreCoord{3, 4},
-            .use_2d_grid_distribution = true,
+            .shard_distribution_strategy = ShardDistributionStrategy::GRID_2D,
             .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
             .shard_shape_2d = Shape2D{32, 32},
         },

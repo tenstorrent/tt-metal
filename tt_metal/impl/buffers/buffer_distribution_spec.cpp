@@ -142,11 +142,11 @@ BufferDistributionSpec BufferDistributionSpec::from_shard_spec(
     tt::tt_metal::Shape2D page_shape,
     CoreRangeSet core_range_set,
     ShardOrientation shard_orientation,
-    bool use_2d_grid_distribution) {
+    ShardDistributionStrategy shard_distribution_strategy) {
     auto tensor_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(tensor_shape, page_shape);
     auto shard_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(shard_shape, page_shape);
     return BufferDistributionSpec(
-        tensor_shape_in_pages, shard_shape_in_pages, core_range_set, shard_orientation, use_2d_grid_distribution);
+        tensor_shape_in_pages, shard_shape_in_pages, core_range_set, shard_orientation, shard_distribution_strategy);
 }
 
 BufferDistributionSpec::BufferDistributionSpec(
@@ -154,7 +154,7 @@ BufferDistributionSpec::BufferDistributionSpec(
     tt::tt_metal::Shape shard_shape_in_pages,
     CoreRangeSet core_range_set,
     ShardOrientation shard_orientation,
-    bool use_2d_grid_distribution) :
+    ShardDistributionStrategy shard_distribution_strategy) :
     shard_orientation_(shard_orientation) {
     TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.rank() >= 1, "Shard rank must be at least 1!");
@@ -162,15 +162,15 @@ BufferDistributionSpec::BufferDistributionSpec(
     std::tie(tensor_shape_in_pages_, shard_shape_in_pages_) =
         CMAKE_UNIQUE_NAMESPACE::squeeze_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
 
-    cores_ = compute_core_list(core_range_set, use_2d_grid_distribution);
+    cores_ = compute_core_list(core_range_set, shard_distribution_strategy);
     if (tensor_shape_in_pages_.volume() != 0) {
         TT_FATAL(cores_.size() != 0, "Can't distribute non zero volume tensor over an empty set of cores");
     }
 }
 
 std::vector<CoreCoord> BufferDistributionSpec::compute_core_list(
-    const CoreRangeSet& core_range_set, bool use_2d_grid_distribution) {
-    if (!use_2d_grid_distribution) {
+    const CoreRangeSet& core_range_set, ShardDistributionStrategy shard_distribution_strategy) {
+    if (shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D) {
         return corerange_to_cores(
             core_range_set, core_range_set.num_cores(), shard_orientation_ == ShardOrientation::ROW_MAJOR);
     }

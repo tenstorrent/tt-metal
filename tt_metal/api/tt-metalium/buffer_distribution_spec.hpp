@@ -25,14 +25,14 @@ public:
         tt::tt_metal::Shape2D page_shape,
         CoreRangeSet core_range_set,
         ShardOrientation shard_orientation,
-        bool use_2d_grid_distribution = false);
+        ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D);
 
     BufferDistributionSpec(
         tt::tt_metal::Shape tensor_shape_in_pages,
         tt::tt_metal::Shape shard_shape_in_pages,
         CoreRangeSet core_range_set,
         ShardOrientation shard_orientation,
-        bool use_2d_grid_distribution = false);
+        ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D);
 
     tt::tt_metal::Shape get_tensor_shape_in_pages() const { return tensor_shape_in_pages_; }
     tt::tt_metal::Shape get_shard_shape_in_pages() const { return shard_shape_in_pages_; }
@@ -59,7 +59,8 @@ public:
     }
 
 private:
-    std::vector<CoreCoord> compute_core_list(const CoreRangeSet& core_range_set, bool use_2d_grid_distribution);
+    std::vector<CoreCoord> compute_core_list(
+        const CoreRangeSet& core_range_set, ShardDistributionStrategy shard_distribution_strategy);
 
     tt::tt_metal::Shape tensor_shape_in_pages_;
     tt::tt_metal::Shape shard_shape_in_pages_;

@@ -168,7 +168,7 @@ MemoryConfig TensorSpec::populate_nd_shard_spec_from_legacy() const {
 
     // For block sharding, we need to use 2D grid distribution to ensure the same distribution of shards
     if (mem_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        nd_shard_spec.use_2d_grid_distribution = true;
+        nd_shard_spec.shard_distribution_strategy = ShardDistributionStrategy::GRID_2D;
     }
 
     return MemoryConfig::create_with_prepopulated_shard_specs(
@@ -233,7 +233,7 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
     }
 
     TensorMemoryLayout shard_kind = TensorMemoryLayout::BLOCK_SHARDED;
-    if (!nd_shard_spec.use_2d_grid_distribution) {
+    if (nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D) {
         if (shard_spec.shape[0] == padded_shape().volume() / padded_shape()[-1]) {
             shard_kind = TensorMemoryLayout::WIDTH_SHARDED;
         } else if (shard_spec.shape[1] == padded_shape()[-1]) {
@@ -255,10 +255,11 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return std::nullopt;
     }
 
-    // If 2D grid distribution is not used, we need number of shards along width to match the grid width to guarantee
-    // the same distribution of shards
+    // If 1D distribution is used, we need the number of shards along width to match the grid width to guarantee the
+    // same distribution of shards
     CoreCoord shard_grid = shard_spec.grid.ranges()[0].grid_size();
-    if (!nd_shard_spec.use_2d_grid_distribution && num_shards_along_width != shard_grid.x) {
+    if (nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D &&
+        num_shards_along_width != shard_grid.x) {
         return std::nullopt;
     }
 
