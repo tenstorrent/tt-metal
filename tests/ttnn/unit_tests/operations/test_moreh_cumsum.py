@@ -149,7 +149,10 @@ def test_moreh_cumsum_backward(input_shape, dim, device):
 @pytest.mark.parametrize(
     "input_shape",
     (
+<<<<<<< HEAD
         ([]),
+=======
+>>>>>>> 0a9ff3e693 (23710: remove moreh_cumsum dev op)
         ([TILE_WIDTH - 1]),
         ([TILE_HEIGHT, TILE_WIDTH + 1]),
         ([10, TILE_HEIGHT, TILE_WIDTH + 1]),
@@ -160,7 +163,10 @@ def test_moreh_cumsum_backward(input_shape, dim, device):
         ([4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1]),
     ),
     ids=[
+<<<<<<< HEAD
         "[]",
+=======
+>>>>>>> 0a9ff3e693 (23710: remove moreh_cumsum dev op)
         "TILE_WIDTH - 1",
         "TILE_HEIGHT, TILE_WIDTH + 1",
         "10, TILE_HEIGHT, TILE_WIDTH + 1",
@@ -193,6 +199,7 @@ def test_moreh_cumsum_callback(input_shape, dim, device):
         rtol = atol = 0.1
 
         for i in range(2):
+<<<<<<< HEAD
             tt_output_cpu = ttnn.to_torch(ttnn.operations.moreh.cumsum(tt_input, dim))
 
             logger.debug(f"torch_output.shape == {torch_output.shape}, tt_output_cpu == {tt_output_cpu.shape}")
@@ -204,6 +211,23 @@ def test_moreh_cumsum_callback(input_shape, dim, device):
 
             assert passing
         assert device.num_program_cache_entries() >= 1
+=======
+            tt_output_cpu = (
+                ttnn.operations.moreh.cumsum(tt_input, dim)
+                .cpu()
+                .to(cpu_layout)
+                .unpad_from_tile(output_shape)
+                .to_torch()
+            )
+
+            passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
+
+            logger.debug(f"Out passing={passing}")
+            logger.debug(f"Output pcc={output_pcc}")
+
+            assert passing
+        assert device.num_program_cache_entries() == 1
+>>>>>>> 0a9ff3e693 (23710: remove moreh_cumsum dev op)
 
 
 @pytest.mark.parametrize(
@@ -220,7 +244,10 @@ def test_moreh_cumsum_callback(input_shape, dim, device):
         ([4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1]),
     ),
     ids=[
+<<<<<<< HEAD
         "[]",
+=======
+>>>>>>> 0a9ff3e693 (23710: remove moreh_cumsum dev op)
         "TILE_WIDTH - 1",
         "TILE_HEIGHT, TILE_WIDTH + 1",
         "10, TILE_HEIGHT, TILE_WIDTH + 1",
