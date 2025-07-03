@@ -217,8 +217,8 @@ int main(int argc, char** argv) {
     auto fixture = std::make_shared<TestFixture>();
     fixture->init();
 
-    // fixture is passed to both the parsers since it implements the device interface
-    CmdlineParser cmdline_parser(input_args, *fixture);
+    // Parse command line and YAML configurations
+    CmdlineParser cmdline_parser(input_args);
 
     if (cmdline_parser.has_help_option()) {
         cmdline_parser.print_help();
@@ -229,7 +229,7 @@ int main(int argc, char** argv) {
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
 
     if (auto yaml_path = cmdline_parser.get_yaml_config_path()) {
-        YamlConfigParser yaml_parser(*fixture);
+        YamlConfigParser yaml_parser;
         auto parsed_yaml = yaml_parser.parse_file(yaml_path.value());
         raw_test_configs = std::move(parsed_yaml.test_configs);
         if (parsed_yaml.allocation_policies.has_value()) {

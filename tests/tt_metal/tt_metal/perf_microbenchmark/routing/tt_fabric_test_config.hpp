@@ -225,13 +225,11 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
 
 class YamlConfigParser {
 public:
-    YamlConfigParser(IDeviceInfoProvider& device_info_provider) : device_info_provider_(device_info_provider) {}
+    YamlConfigParser() {}
 
     ParsedYamlConfig parse_file(const std::string& yaml_config_path);
 
 private:
-    IDeviceInfoProvider& device_info_provider_;
-
     DeviceIdentifier parse_device_identifier(const YAML::Node& node);
     ParsedDestinationConfig parse_destination_config(const YAML::Node& dest_yaml);
     ParsedTrafficPatternConfig parse_traffic_pattern_config(const YAML::Node& pattern_yaml);
@@ -261,8 +259,7 @@ private:
 
 class CmdlineParser {
 public:
-    CmdlineParser(const std::vector<std::string>& input_args, IDeviceInfoProvider& device_info_provider) :
-        input_args_(input_args), device_info_provider_(device_info_provider) {}
+    CmdlineParser(const std::vector<std::string>& input_args) : input_args_(input_args) {}
 
     std::optional<std::string> get_yaml_config_path();
     void apply_overrides(std::vector<ParsedTestConfig>& test_configs);
@@ -275,7 +272,6 @@ public:
 
 private:
     const std::vector<std::string>& input_args_;
-    IDeviceInfoProvider& device_info_provider_;
 };
 
 const std::string no_default_test_yaml_config = "";
