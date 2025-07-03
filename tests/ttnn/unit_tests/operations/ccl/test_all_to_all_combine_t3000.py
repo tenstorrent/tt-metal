@@ -8,7 +8,9 @@ import torch
 import pytest
 from loguru import logger
 
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 import ttnn
+from tracy import signpost
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -174,6 +176,194 @@ def gen_tensors(
         metadata_tensor,
         output_tensor,
         data_map,
+    )
+
+
+def trace_all_to_all_combine(
+    mesh_device,
+    mesh_shape,
+    axis,
+    batch,
+    seq,
+    experts,
+    select_experts_k,
+    hidden_size,
+    num_iters,
+    warmup_iters,
+    num_links,
+    scheme="random",
+    dtype=ttnn.bfloat16,
+    topology=ttnn.Topology.Linear,
+    input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    profiler=BenchmarkProfiler(),
+):
+    devices = mesh_shape[0] * mesh_shape[1]
+    # input, output, interm core range set
+    compute_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
+    subdevice_shard_cores_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(compute_grid[0] - 1, compute_grid[1] - 1),
+            ),
+        }
+    )
+
+    _, input_contrib, expert_mapping, metadata_tensor, output_contrib_tensor, data_map = gen_tensors(
+        batch, experts, select_experts_k, hidden_size, seq, mesh_shape, axis, devices, scheme=scheme
+    )
+
+    ccl_semaphore_handle = ttnn.create_global_semaphore(mesh_device, subdevice_shard_cores_grid, 0)
+
+    tt_input_contribs = ttnn.from_torch(
+        input_contrib,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=dtype,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    tt_expert_mapping = ttnn.from_torch(
+        expert_mapping,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+    )
+
+    tt_metadata = ttnn.from_torch(
+        metadata_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    def run_op(n):
+        for _ in range(n):
+            tt_out_tensor = ttnn.all_to_all_combine(
+                tt_input_contribs,
+                tt_expert_mapping,
+                tt_metadata,
+                num_links=num_links,
+                topology=topology,
+                memory_config=output_memory_config,
+                global_semaphore=ccl_semaphore_handle,
+                axis=axis,
+            )
+
+    # compile run:
+    logger.info("Compiling model")
+    tt_out_tensor_list = run_op(1)
+
+    logger.info("Capturing Warmup")
+
+    if warmup_iters > 0:
+        logger.info(f"Capturing Warmup {warmup_iters} iterations")
+        trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        run_op(warmup_iters)
+        ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+    logger.info("Capturing Trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    run_op(num_iters)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info("Starting Trace perf test...")
+    profiler.start("all-to-all-combine-trace-warmup")
+    if warmup_iters > 0:
+        ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id_warmup)
+        ttnn.synchronize_device(mesh_device)
+    profiler.end("all-to-all-combine-trace-warmup")
+
+    signpost("start")
+    profiler.start("all-to-all-combine-trace")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    ttnn.synchronize_device(mesh_device)
+    profiler.end("all-to-all-combine-trace")
+    signpost("stop")
+
+    time_taken = profiler.get_duration("all-to-all-combine-trace") - profiler.get_duration(
+        "all-to-all-combine-trace-warmup"
+    )
+    logger.info(f"Time taken e2e: {time_taken} s")
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("axis", [0])
+@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [7000])
+@pytest.mark.parametrize("seq", [2])
+@pytest.mark.parametrize("scheme", ["random"])
+@pytest.mark.parametrize("num_iters", [10])
+@pytest.mark.parametrize("warmup_iters", [5])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_all_to_all_combine_trace(
+    mesh_device,
+    mesh_shape,
+    axis,
+    batches_per_device,
+    experts_per_device,
+    select_experts_k,
+    hidden_size,
+    seq,
+    num_iters,
+    warmup_iters,
+    scheme,
+    input_memory_config,
+    output_memory_config,
+    num_links,
+    topology,
+    dtype,
+):
+    devices = mesh_shape[0] * mesh_shape[1]
+    batch = batches_per_device * devices
+    experts = experts_per_device * devices
+
+    trace_all_to_all_combine(
+        mesh_device,
+        mesh_shape,
+        axis,
+        batch,
+        seq,
+        experts,
+        select_experts_k,
+        hidden_size,
+        num_iters,
+        warmup_iters,
+        num_links,
+        scheme,
+        dtype,
+        topology,
+        input_memory_config,
+        output_memory_config,
     )
 
 
