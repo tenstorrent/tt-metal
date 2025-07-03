@@ -96,7 +96,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
           # Check for architecture-specific changes
-          if echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole/"; then
+          if echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/"; then
             echo "should-run-wormhole=true" >> $GITHUB_OUTPUT
             echo "✅ Detected Wormhole changes"
           else
