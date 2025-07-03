@@ -9,7 +9,7 @@ import torch
 import ttnn
 import random
 from math import pi
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 from models.utility_functions import torch_random
 
 

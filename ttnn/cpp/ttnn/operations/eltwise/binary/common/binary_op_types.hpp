@@ -39,6 +39,8 @@ enum class BinaryOpType {
     MINIMUM,
     GCD,
     LCM,
+    ADDALPHA,
+    SUBALPHA,
 };
 
 }  // namespace ttnn::operations::binary
