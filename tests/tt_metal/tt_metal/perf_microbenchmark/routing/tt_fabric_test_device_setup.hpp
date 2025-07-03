@@ -103,6 +103,7 @@ public:
     void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
     void add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config);
     void create_kernels();
+    void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
     void validate_results() const;
@@ -129,6 +130,8 @@ private:
     std::unordered_map<CoreCoord, TestReceiver> receivers_;
 
     std::unordered_map<RoutingDirection, std::set<uint32_t>> used_fabric_connections_{};
+
+    bool benchmark_mode_ = false;
 
     // controller?
 };
@@ -405,7 +408,7 @@ inline void TestDevice::create_sender_kernels() {
             use_dynamic_routing,
             sender.fabric_connections_.size(), /* num fabric connections */
             sender.configs_.size(),
-            0 /* benchmark mode */};
+            benchmark_mode_ ? 1u : 0u /* benchmark mode */};
 
         // Get memory layout from sender memory map
         TT_FATAL(sender_memory_map_ != nullptr, "Sender memory map is required for creating sender kernels");
@@ -472,7 +475,7 @@ inline void TestDevice::create_receiver_kernels() {
     for (const auto& [core, receiver] : this->receivers_) {
         // get ct args
         // TODO: fix these
-        std::vector<uint32_t> ct_args = {receiver.configs_.size(), 0 /* benchmark mode */};
+        std::vector<uint32_t> ct_args = {receiver.configs_.size(), benchmark_mode_ ? 1u : 0u /* benchmark mode */};
 
         // Get memory layout from receiver memory map
         TT_FATAL(receiver_memory_map_ != nullptr, "Receiver memory map is required for creating receiver kernels");

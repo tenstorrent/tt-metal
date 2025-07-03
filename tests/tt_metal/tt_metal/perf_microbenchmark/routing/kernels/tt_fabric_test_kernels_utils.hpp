@@ -536,6 +536,37 @@ struct SenderKernelTrafficConfig {
         num_packets_processed += num_packets_to_send;
     }
 
+    // Round-robin version: always sends exactly one packet
+    template <bool BENCHMARK_MODE>
+    void send_one_packet() {
+        uint64_t start_timestamp = get_timestamp();
+
+        fabric_connection_handle->wait_for_empty_write_slot();
+
+        if constexpr (!BENCHMARK_MODE) {
+            if (payload_size_bytes > 0 && payload_buffer_) {
+                payload_buffer_->fill_data(metadata.seed);
+
+                fabric_connection_handle->send_payload_without_header_non_blocking_from_address(
+                    payload_buffer_->get_physical_address(), payload_size_bytes);
+            }
+        }
+
+        fabric_connection_handle->send_payload_flush_non_blocking_from_address(
+            (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+
+        if constexpr (!BENCHMARK_MODE) {
+            if (payload_size_bytes > 0 && payload_buffer_) {
+                payload_buffer_->advance();
+                update_header_for_next_packet();
+            }
+            metadata.seed = prng_next(metadata.seed);
+        }
+
+        elapsed_cycles += get_timestamp() - start_timestamp;
+        num_packets_processed += 1;  // Always increment by 1
+    }
+
     void advance_dst_address() {
         if (payload_buffer_) {
             payload_buffer_->advance();
