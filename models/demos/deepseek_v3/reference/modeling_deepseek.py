@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2023 DeepSeek-AI and The HuggingFace Inc. team.
+# SPDX-License-Identifier: Apache-2.0
+
 # coding=utf-8
 # Copyright 2023 DeepSeek-AI and The HuggingFace Inc. team. All rights reserved.
 #

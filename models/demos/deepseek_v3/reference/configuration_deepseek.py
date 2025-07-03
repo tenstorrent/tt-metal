@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2023 DeepSeek-AI and The HuggingFace Inc. team.
+# SPDX-License-Identifier: Apache-2.0
+
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
 

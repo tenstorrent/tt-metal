@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 import itertools
 from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
