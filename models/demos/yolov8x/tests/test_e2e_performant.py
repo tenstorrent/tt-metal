@@ -38,15 +38,12 @@ def test_run_yolov8x_trace_2cqs_inference(
     input_shape = (batch_size, 3, 640, 640)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
     n, c, h, w = torch_input_tensor.shape
-    torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
-    torch_input_tensor = torch_input_tensor.reshape(1, 1, h * w * n, c)
-    tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    tt_inputs_host = ttnn.pad(tt_inputs_host, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
     inference_iter_count = 10
     inference_time_iter = []
     for iter in range(0, inference_iter_count):
         t0 = time.time()
-        output = yolov8x_trace_2cq.execute_yolov8x_trace_2cqs_inference(tt_inputs_host)
+        output = yolov8x_trace_2cq.run(torch_input_tensor)
+        output = ttnn.to_torch(output, dtype=torch.float32)
         t1 = time.time()
         inference_time_iter.append(t1 - t0)
     yolov8x_trace_2cq.release_yolov8x_trace_2cqs_inference()
