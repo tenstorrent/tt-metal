@@ -57,10 +57,8 @@ void kernel_main() {
     const uint16_t core_id = get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
     const uint16_t global_tile_start = core_id * number_of_tiles_per_core;
     const uint16_t global_tile_end = global_tile_start + number_of_tiles_per_core;
-
-    // const uint16_t number_of_pairs_processed_by_each_core = number_of_tiles_per_core / 2;
-    const uint16_t processing_tile_start = core_id * number_of_tiles_per_core;
-    const uint16_t processing_tile_end = processing_tile_start + number_of_tiles_per_core;
+    constexpr uint32_t start_core_id = 0;
+    constexpr uint32_t leader_core_id = start_core_id;
 
     // Input tensor config
     constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
@@ -94,6 +92,7 @@ void kernel_main() {
     noc_async_read(noc_addr, physical_core_lookup_table_l1_write_addr, physical_core_lookup_table_tile_size_bytes);
     noc_async_read_barrier();
 
+    // Semaphore setup
     sem_ptr_t sem_self_exchange_ptr = reinterpret_cast<sem_ptr_t>(sem_exchange_addr);
 
     DPRINT << "READER: Starting" << ENDL();  // TODO: Remove
@@ -110,51 +109,19 @@ void kernel_main() {
         }  // w loop
 
         DPRINT << "READER: LOGIC" << ENDL();
-        uint32_t stages = ilog2(Wt);
+        const uint32_t stages = ilog2(Wt);
         DPRINT << "READER: stages = " << stages << ENDL();
         for (uint32_t stage = 2; stage <= stages; stage++) {
             for (uint32_t sub = stage; sub > 0; sub--) {
-                uint32_t sub_dist = 1 << (sub - 1);
-                uint16_t pair_id = 0;
+                const uint32_t sub_dist = 1 << (sub - 1);
 
-                // for (uint32_t i = 0; i < Wt; i++) {
-                //     uint32_t j = i ^ sub_dist;
-                //     if (j > i) {
-                //         if (pair_id >= processing_pair_start && pair_id < processing_pair_end) {
-                //             if (i >= global_tile_start && i < global_tile_end && j >= global_tile_start &&
-                //                 j < global_tile_end) {
-                //                 // NOTHING
-                //             } else {
-                //                 // TODO: Swapping tiles
-                //                 // Get second core id
-                //                 const uint32_t other_core_id = j / number_of_tiles_per_core;
-                //                 const std::pair<uint32_t, uint32_t> remote_core_physical =
-                //                     get_core_physical_coordinates(other_core_id,
-                //                     physical_core_lookup_table_cb_index);
-                //             }
-                //         }
-                //         pair_id++;
-                //     }
-                // }
+                const uint32_t i = global_tile_start;
+                const uint32_t j = i ^ sub_dist;
 
-                // TOOD: We don't need to check for each tile if it's outside or inside core. We can simply check the
-                // first one
-                //       For a given sub, all tiles are either in-core or outside
-                //       If inside => do nothing
-                //      Otherwise => exchange
+                DPRINT << "READER: i = " << i << ", j = " << j << ", processing pair start = " << global_tile_start
+                       << ", pair end = " << global_tile_end << ENDL();
 
-                uint32_t i = processing_tile_start;
-                uint32_t j = i ^ sub_dist;
-                DPRINT << "READER: i = " << i << ", j = " << j << ", processing pair start = " << processing_tile_start
-                       << ", pair end = " << processing_tile_end << ENDL();
-                // if (pair_id >= processing_tile_start && pair_id < processing_tile_end) {
-                if (i >= global_tile_start && i < global_tile_end && j >= global_tile_start && j < global_tile_end) {
-                    // Nothing
-                } else {
-                    constexpr uint32_t start_core_id = 0;
-                    constexpr uint32_t leader_core_id = start_core_id;
-
-                    // TODO: PUT BARRIER HERE
+                if (!(i >= global_tile_start && i < global_tile_end && j >= global_tile_start && j < global_tile_end)) {
                     sort_barrier(
                         physical_core_lookup_table_cb_index,
                         sem_barrier_addr,
@@ -183,9 +150,7 @@ void kernel_main() {
                         sem_self_exchange_ptr);
 
                     DPRINT << "READER: Tiles have been exchanged" << ENDL();
-                }
-                // }
-
+                }  // if !(i >= global_tile_start && i < ...
             }  // sub
         }  // stages
 

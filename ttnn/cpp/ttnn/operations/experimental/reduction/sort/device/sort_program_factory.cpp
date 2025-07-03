@@ -306,9 +306,6 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(0).dtype());
     const tt::DataFormat index_tensor_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(1).dtype());
-
-    // const tt::DataFormat index_tensor_cb_data_format = tt::DataFormat::Float16_b;
-
     const tt::DataFormat packer_unpacker_sync_cb_data_format = tt::DataFormat::Float16_b;
 
     const uint32_t input_tensor_tile_size = tile_size(input_tensor_cb_data_format);
@@ -341,10 +338,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
     uint32_t number_of_tiles_per_core =
         get_number_of_tiles_per_core(tensor_args.input_tensor.dtype(), output_tensors.at(1).dtype());
-
-    // DEBUG:
     number_of_tiles_per_core = std::min(number_of_tiles_per_core, Wt);
-    ;
 
     // Calculate the number of cores utilized based on the input tensor shape
     const uint32_t all_core_utilization_count = (Wt + number_of_tiles_per_core - 1) / number_of_tiles_per_core;
@@ -603,11 +597,6 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         compute_kernel_path,
         core_range,
         tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
-    // SetRuntimeArgs(
-    //     program,
-    //     compute_kernel_id,
-    //     core_range,
-    //     {});
 
     return {std::move(program), {reader_kernel_id, compute_kernel_id, writer_kernel_id, core_range}};
 }
