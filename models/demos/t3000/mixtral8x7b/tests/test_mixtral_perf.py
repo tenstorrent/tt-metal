@@ -46,7 +46,6 @@ def test_mixtral_model_perf(
     generation_start_pos,
     expected_compile_time,
     expected_inference_time,
-    use_program_cache,
     reset_seeds,
     is_ci_env,
 ):
@@ -157,7 +156,6 @@ def test_mixtral_model_with_prefill_perf(
     prefill_seqlen,
     expected_compile_time,
     expected_inference_time,
-    use_program_cache,
     reset_seeds,
     is_ci_env,
 ):

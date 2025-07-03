@@ -471,7 +471,7 @@ def test_logsoftmax_backward_optional_output_tensor(shape_dim, dtype, device):
         ttnn.bfloat16,
     ],
 )
-def test_logsoftmax_callback(shape_dim_strategy, dtype, device, use_program_cache):
+def test_logsoftmax_callback(shape_dim_strategy, dtype, device):
     shape, dim, strategy = shape_dim_strategy
     torch.manual_seed(0)
     rtol = atol = 0.1
@@ -503,7 +503,7 @@ def test_logsoftmax_callback(shape_dim_strategy, dtype, device, use_program_cach
         ttnn.bfloat16,
     ],
 )
-def test_logsoftmax_backward_callback(shape_dim_strategy, dtype, device, use_program_cache):
+def test_logsoftmax_backward_callback(shape_dim_strategy, dtype, device):
     shape, dim, strategy = shape_dim_strategy
     torch.manual_seed(0)
 

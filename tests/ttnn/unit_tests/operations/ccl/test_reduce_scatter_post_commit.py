@@ -87,7 +87,6 @@ def run_reduce_scatter_test(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
     topology=ttnn.Topology.Ring,
@@ -232,7 +231,6 @@ def test_ring_reduce_scatter_post_commit(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -246,7 +244,6 @@ def test_ring_reduce_scatter_post_commit(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
     )
@@ -294,7 +291,6 @@ def test_line_reduce_scatter_post_commit(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -308,7 +304,6 @@ def test_line_reduce_scatter_post_commit(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         topology=ttnn.Topology.Linear,
@@ -354,7 +349,6 @@ def test_line_reduce_scatter_post_commit_4chip(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -368,7 +362,6 @@ def test_line_reduce_scatter_post_commit_4chip(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         topology=ttnn.Topology.Linear,
@@ -388,7 +381,6 @@ def run_reduce_scatter_sharded_test(
     input_dtype,
     tensor_layout,
     tensor_mem_layout,
-    use_program_cache,
     function_level_defaults,
     in_shard_override=None,
     in_shard_grid_override=None,
@@ -444,16 +436,23 @@ def run_reduce_scatter_sharded_test(
 
     numel = canonical_input_shape[0] * canonical_input_shape[1] * canonical_input_shape[2] * canonical_input_shape[3]
     input_tensors = [
-        # torch.rand(canonical_input_shape).bfloat16() if not debug else torch.arange(numel).reshape(canonical_input_shape).bfloat16()
         torch.rand(canonical_input_shape).bfloat16() if not debug else torch.ones(canonical_input_shape).bfloat16()
         for _ in range(num_devices)
     ]
     if debug:
         input_tensors[-1] = torch.arange(numel).reshape(canonical_input_shape).bfloat16()
-    for i, canonical_input_tensor in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(canonical_input_tensor, input_dtype).to(tensor_layout))
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(t3k_mesh_device, input_mem_config)
+    input_tensor_mesh = ttnn.from_torch(
+        torch.cat(input_tensors, dim=0),
+        device=t3k_mesh_device,
+        layout=tensor_layout,
+        dtype=input_dtype,
+        memory_config=input_mem_config,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            t3k_mesh_device,
+            ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(0)], ttnn.MeshShape(1, num_devices)),
+        ),
+    )
 
     # Run the op
     if trace_mode:
@@ -573,7 +572,6 @@ def test_width_sharded_reduce_scatter_post_commit(
     input_dtype,
     tensor_layout,
     tensor_mem_layout,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -590,7 +588,6 @@ def test_width_sharded_reduce_scatter_post_commit(
         input_dtype,
         tensor_layout,
         tensor_mem_layout,
-        use_program_cache=use_program_cache,
         function_level_defaults=function_level_defaults,
         num_iters=num_iters,
     )
@@ -656,7 +653,6 @@ def test_width_sharded_reduce_scatter_post_commit_4chip(
     input_dtype,
     tensor_layout,
     tensor_mem_layout,
-    use_program_cache,
     function_level_defaults,
     in_shard_override,
     in_shard_grid_override,
@@ -675,7 +671,6 @@ def test_width_sharded_reduce_scatter_post_commit_4chip(
         input_dtype,
         tensor_layout,
         tensor_mem_layout,
-        use_program_cache=use_program_cache,
         function_level_defaults=function_level_defaults,
         in_shard_override=in_shard_override,
         in_shard_grid_override=in_shard_grid_override,
@@ -733,7 +728,6 @@ def test_height_sharded_reduce_scatter_post_commit(
     input_dtype,
     tensor_layout,
     tensor_mem_layout,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -750,7 +744,6 @@ def test_height_sharded_reduce_scatter_post_commit(
         input_dtype,
         tensor_layout,
         tensor_mem_layout,
-        use_program_cache=use_program_cache,
         function_level_defaults=function_level_defaults,
         num_iters=num_iters,
     )
@@ -804,7 +797,6 @@ def test_block_sharded_reduce_scatter_post_commit(
     input_dtype,
     tensor_layout,
     tensor_mem_layout,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -821,7 +813,6 @@ def test_block_sharded_reduce_scatter_post_commit(
         input_dtype,
         tensor_layout,
         tensor_mem_layout,
-        use_program_cache=use_program_cache,
         function_level_defaults=function_level_defaults,
         num_iters=num_iters,
     )

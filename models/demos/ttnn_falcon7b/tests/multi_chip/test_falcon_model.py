@@ -58,7 +58,6 @@ def get_model_prefix(layer_index: int = 0):
 )
 def test_falcon_model(
     mesh_device,
-    use_program_cache,
     model_version,
     llm_mode,
     device_batch_size,

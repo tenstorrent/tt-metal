@@ -37,7 +37,6 @@ def run_all_gather_impl(
     all_gather_topology,
     use_non_fused,
     use_legacy_allgather,
-    use_program_cache,
     mem_config_weights=None,
     num_iters=1,
     enable_trace=True,
@@ -111,12 +110,14 @@ def run_all_gather_impl(
         ag_output_tensor = torch.rand(ag_output_shape).bfloat16()
         ag_output_tensor_goldens_list.append(ag_output_tensor)
 
-        input_tensors = torch.chunk(ag_output_tensor, num_devices, dim)
-
-        tt_input_tensors = []
-        for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(ttnn.Tensor(t, ag_input_dtype).to(layout))
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(t3k_mesh_device, mem_config_input)
+        input_tensor_mesh = ttnn.from_torch(
+            ag_output_tensor,
+            device=t3k_mesh_device,
+            layout=layout,
+            dtype=ag_input_dtype,
+            memory_config=mem_config_input,
+            mesh_mapper=ttnn.ShardTensorToMesh(t3k_mesh_device, dim=dim),
+        )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -303,7 +304,7 @@ def run_all_gather_impl(
         tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
         tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
         tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
-        eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor)
+        eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor, 1)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED ag: {output}"
 
@@ -376,10 +377,12 @@ def test_all_gather_matmul_async(
     enable_trace,
     use_non_fused,
     use_legacy_allgather,
-    use_program_cache,
     all_gather_topology,
     num_iters,
 ):
+    if use_non_fused == False and all_gather_topology == ttnn.Topology.Linear:
+        pytest.skip("linear is not supported when using fused for all-gather")
+
     run_all_gather_impl(
         t3k_mesh_device,
         num_devices,
@@ -395,7 +398,6 @@ def test_all_gather_matmul_async(
         mem_config_input,
         mem_config_ag,
         mem_config_mm,
-        use_program_cache=use_program_cache,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         use_non_fused=use_non_fused,

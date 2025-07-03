@@ -31,7 +31,6 @@ def test_upsample(
     output_width,
     conv_channel_split_factor,
     block_id,
-    use_program_cache,
 ):
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
     torch_upsample = vae.decoder.up_blocks[block_id].upsamplers[0]

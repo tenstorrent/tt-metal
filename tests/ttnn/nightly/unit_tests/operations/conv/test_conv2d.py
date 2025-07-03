@@ -101,7 +101,6 @@ def run_conv(
     output_mesh_composer=None,
     enable_split_reader=False,
     activation="",
-    preprocess_weights_on_device=True,
     in_place=False,
     run_twice=False,
     fast_compare=False,
@@ -224,8 +223,6 @@ def run_conv(
         output_layout=output_layout,
         activation=activation,
         transpose_shards=transpose_shards,
-        preprocess_weights_on_device=preprocess_weights_on_device,
-        always_preprocess_weights=False,
         in_place=in_place,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
@@ -529,7 +526,6 @@ def run_conv_with_split(
 def test_conv_features_multi_device(
     mesh_device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -621,7 +617,6 @@ def test_conv_features_multi_device(
 def test_conv_activation(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -772,7 +767,6 @@ def test_conv_dram(
         input_dtype=input_dtype,
         input_layout=input_layout,
         packer_l1_acc=packer_l1_acc,
-        preprocess_weights_on_device=False,
         run_twice=False,
         fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(
@@ -826,7 +820,6 @@ def test_conv_dram(
 def test_conv_ws(
     device,
     torch_tensor_map,
-    use_program_cache,
     batch_size,
     output_channels,
     input_channels,
@@ -997,7 +990,6 @@ def test_conv_ws(
 def test_conv_for_segformer_512x512(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -1109,7 +1101,6 @@ def test_conv_for_segformer_512x512(
 def test_resnet50_conv_wh(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -1171,7 +1162,6 @@ def test_resnet50_conv_wh(
 def test_conv_mem_config_wh(
     device,
     torch_tensor_map,
-    use_program_cache,
     batch_size,
     output_channels,
     input_channels,
@@ -1274,7 +1264,6 @@ def test_conv_mem_config_wh(
 def test_resnet50_conv_wh_fp32(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     fp32_accum,
     output_dtype,
@@ -1403,7 +1392,6 @@ def test_resnet50_conv_wh_fp32(
 def test_sd_conv(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -1542,7 +1530,6 @@ def test_sd_conv(
 def test_sd_conv_wh(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -1646,7 +1633,6 @@ def test_sd_conv_wh(
 def test_sd14_vae_conv(
     device,
     torch_tensor_map,
-    use_program_cache,
     input_channels,
     output_channels,
     input_height,
@@ -1749,7 +1735,6 @@ def test_sd14_vae_conv(
 def test_unet_conv_wh(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -1843,7 +1828,6 @@ def test_unet_conv_wh(
 def test_unet_conv_groups_2_wh(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -1939,7 +1923,6 @@ def test_unet_conv_groups_2_wh(
 def test_unet_conv_groups_4_6_wh(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2037,7 +2020,6 @@ def test_unet_conv_groups_4_6_wh(
 def test_unet_conv_groups_8_wh(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2107,7 +2089,6 @@ def test_unet_conv_groups_8_wh(
 def test_halo_reshard_conv(
     device,
     torch_tensor_map,
-    use_program_cache,
     shard_layout,
     batch_size,
     output_channels,
@@ -2166,7 +2147,6 @@ def test_halo_reshard_conv(
 def test_conv_core_nondivis(
     device,
     torch_tensor_map,
-    use_program_cache,
     shard_layout,
     batch_size,
     output_channels,
@@ -2258,7 +2238,6 @@ def test_conv_core_nondivis(
 def test_conv_dilation(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2353,7 +2332,6 @@ def test_conv_dilation(
 def test_conv_groups(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2467,7 +2445,6 @@ def test_conv_groups(
 def test_yolov4_conv_groups_larger_than_one(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2540,7 +2517,6 @@ def test_yolov4_conv_groups_larger_than_one(
 def test_swin_s_conv(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2614,7 +2590,6 @@ def test_swin_s_conv(
 def test_model_k_256x256(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2693,7 +2668,6 @@ def test_model_k_256x256(
 def test_conv_for_vanilla_unet(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -2875,7 +2849,6 @@ def test_dram_input_mm_conv(device, torch_tensor_map, tiled_input, input_on_devi
 def test_split_reader_regression(
     device,
     torch_tensor_map,
-    use_program_cache,
     batch_size,
     output_channels,
     input_channels,
@@ -3126,7 +3099,6 @@ def test_conv2d_model_fruit(
         input_layout= input_layout,
         activation="relu",
         enable_act_double_buffer=enable_act_double_buffer,
-        preprocess_weights_on_device=False,
         input_dtype = input_dtype,
     )
 
@@ -3304,6 +3276,7 @@ def test_conv2d_sdxl(
         (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1, 0),
 
         # channels 4
+        # Skip specific test case for Blackhole devices
         (1, 4, 4, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1, 0),
     ),
 )
@@ -3332,6 +3305,10 @@ def test_conv2d_vae_sdxl(
     num_slices,
     act_block_h_override
 ):
+
+    # Skip specific test case for Blackhole devices
+    if is_blackhole() and (batch, input_channels, output_channels, input_height, input_width, weights_dtype) == (1, 4, 4, 128, 128, ttnn.bfloat8_b):
+        pytest.skip("Skipping this test case for Blackhole devices due to PCC issue, tracked in ISSUE-24463")
 
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
@@ -3436,7 +3413,7 @@ def test_conv2d_ws_program_cache(
     fp32_accum,
     packer_l1_acc,
     enable_split_reader,
-    use_program_cache,
+
 ):
 
     config_override = {}
@@ -3559,9 +3536,16 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
     height = 512
     width = 512
     torch.manual_seed(20250416)
+
+    # In case of output dtype is bfloat8_b, we need to pad the input channels to be divisible by 8.
+    required_padding = (8 - num_channels % 8) % 8
+    padded_num_channels = num_channels + required_padding
+
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
+    torch_input_tensor = torch.nn.functional.pad(torch_input_tensor, (0, 0, 0, 0, 0, required_padding), mode="constant", value=0)
 
     torch_weights = torch.randn((hidden_size, num_channels, patch_size, patch_size), dtype=torch.bfloat16).float()
+    torch_weights = torch.nn.functional.pad(torch_weights, (0, 0, 0, 0, 0, required_padding), mode="constant", value=0)
     torch_bias = torch.randn((1, 1, 1, hidden_size), dtype=torch.bfloat16).float()
 
     torch_output_tensor = (
@@ -3609,7 +3593,7 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
         input_tensor=ttnn_input_tensor,
         weight_tensor=ttnn_weights,
         bias_tensor=ttnn_bias,
-        in_channels=num_channels,
+        in_channels=padded_num_channels,
         out_channels=hidden_size,
         batch_size=batch_size,
         input_height=height,
@@ -3633,7 +3617,6 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
 @pytest.mark.parametrize("kernel_height,kernel_width", [(16, 16), (32, 32)])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("has_bias", [True, False])
-@pytest.mark.parametrize("preprocess_weights_on_device", [True, False])
 def test_conv2d_with_fold(
     device,
     torch_tensor_map,
@@ -3646,7 +3629,6 @@ def test_conv2d_with_fold(
     kernel_width,
     input_layout,
     has_bias,
-    preprocess_weights_on_device,
 ):
     run_conv(
         device=device,
@@ -3669,7 +3651,6 @@ def test_conv2d_with_fold(
         input_layout=input_layout,
         has_bias=has_bias,
         enable_kernel_stride_folding=True,
-        preprocess_weights_on_device=preprocess_weights_on_device,
     )
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -3699,7 +3680,7 @@ def test_conv2d_with_fold(
 def test_conv_yolov10x(
     device,
     torch_tensor_map,
-    use_program_cache,
+
     math_fidelity,
     activations_dtype,
     weights_dtype,

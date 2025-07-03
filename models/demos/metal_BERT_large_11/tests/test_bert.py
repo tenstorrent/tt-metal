@@ -182,7 +182,6 @@ def run_bert_question_and_answering_inference(
 )
 def test_bert(
     device,
-    use_program_cache,
     model_version,
     batch,
     seq_len,
