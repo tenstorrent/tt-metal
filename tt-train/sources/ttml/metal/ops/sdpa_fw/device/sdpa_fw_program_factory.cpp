@@ -31,8 +31,15 @@ constexpr uint32_t kOutputBufferIdx = 0;
 constexpr auto kQueryCbIndex = tt::CBIndex::c_0;
 constexpr auto kKeyCbIndex = tt::CBIndex::c_1;
 constexpr auto kValueCbIndex = tt::CBIndex::c_2;
-constexpr auto kMaskCbIndex = tt::CBIndex::c_3;
-constexpr auto kOutputCbIndex = tt::CBIndex::c_4;
+constexpr auto KAttnMaskCbIndex = tt::CBIndex::c_3;
+constexpr auto kScalerCbIndex = tt::CBIndex::c_4;
+constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_5;
+constexpr auto kTranspoxeKeyCbIndex = tt::CBIndex::c_6;  // used for transposing key tiles
+constexpr auto kTempAccumCbIndex = tt::CBIndex::c_7;     // used for accumulating results
+constexpr auto kOutputCbIndex = tt::CBIndex::c_8;
+
+constexpr uint32_t kNumScalerTiles = 1U;
+constexpr uint32_t kTempAccumTiles = 2U;
 
 }  // namespace
 
@@ -234,8 +241,20 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     auto cb_value = create_circular_buffer(
         program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
 
-    auto cb_mask = create_circular_buffer(
-        program, all_cores, kMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+    auto cb_attn_mask = create_circular_buffer(
+        program, all_cores, KAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+
+    auto cb_scaler = create_circular_buffer(
+        program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+
+    auto cb_reduction_scaler = create_circular_buffer(
+        program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+
+    auto cb_transposed_key = create_circular_buffer(
+        program, all_cores, kTranspoxeKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+
+    auto cb_temp_accum = create_circular_buffer(
+        program, all_cores, kTempAccumCbIndex, data_format, bfloat16_single_tile_size_bytes, kTempAccumTiles);
 
     auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
