@@ -42,6 +42,7 @@ def test_transformer(
     block_count: int | None,
     pcc: float,
     mse: float,
+    model_location_generator,
 ) -> None:
     mesh_height, _ = mesh_device.shape
     batch_size = 1
@@ -49,7 +50,12 @@ def test_transformer(
     torch.manual_seed(0)
 
     logger.info("loading model...")
-    torch_model = FluxTransformerReference.from_pretrained("black-forest-labs/FLUX.1-schnell", subfolder="transformer")
+
+    checkpoint = "black-forest-labs/FLUX.1-schnell"
+
+    model_name_checkpoint = model_location_generator(checkpoint, model_subdir="Flux1_Schnell")
+
+    torch_model = FluxTransformerReference.from_pretrained(model_name_checkpoint, subfolder="transformer")
     torch_model.eval()
     torch_model.keep_blocks_only(block_count, block_count)
 

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import os
 
-from typing import TYPE_CHECKING
 
 import pytest
 import torch
@@ -15,9 +14,8 @@ import ttnn
 from ..tt.attention import Attention, AttentionParameters
 from ..tt.utils import allocate_tensor_on_device_like, assert_quality
 
-if TYPE_CHECKING:
-    from ..reference import FluxTransformer as FluxTransformerReference
-    from ..reference.attention import Attention as AttentionReference
+from ..reference import FluxTransformer as FluxTransformerReference
+from ..reference.attention import Attention as AttentionReference
 
 
 @pytest.mark.parametrize(
@@ -45,14 +43,20 @@ def test_attention(
     block_index: int,
     spatial_sequence_length: int,
     prompt_sequence_length: int,
-    parent_torch_model: FluxTransformerReference,
+    model_location_generator,
 ) -> None:
     separate_prompt = prompt_sequence_length != 0
     batch_size, _ = mesh_device.shape
 
     torch.manual_seed(0)
 
-    torch_model: AttentionReference = parent_torch_model.transformer_blocks[block_index].attn.to(torch.float32)
+    # Load the model from checkpoint
+    model_path = model_location_generator("black-forest-labs/FLUX.1-schnell", model_subdir="Flux1_Schnell")
+    flux_model = FluxTransformerReference.from_pretrained(
+        model_path, subfolder="transformer", torch_dtype=torch.float32
+    )
+
+    torch_model: AttentionReference = flux_model.transformer_blocks[block_index].attn.to(torch.float32)
 
     parameters = AttentionParameters.from_torch(
         torch_model.state_dict(),

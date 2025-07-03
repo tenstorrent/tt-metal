@@ -29,15 +29,18 @@ from ..tt.utils import assert_quality
     ],
     indirect=True,
 )
-def test_t5_encoder(*, mesh_device: ttnn.Device) -> None:
+def test_t5_encoder(*, mesh_device: ttnn.Device, model_location_generator) -> None:
     # if use_program_cache:
     #    ttnn.enable_program_cache(device)
 
+    checkpoint = "black-forest-labs/FLUX.1-schnell"
+
+    model_name_checkpoint = model_location_generator(checkpoint, model_subdir="Flux1_Schnell")
+
     hf_model = T5EncoderModel.from_pretrained(
-        "black-forest-labs/FLUX.1-schnell",
+        model_name_checkpoint,
         subfolder="text_encoder_2",
     )
-
     with torch.device("meta"):
         torch_model = T5EncoderReference(
             T5Config(

@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
 import os
 
 import pytest
@@ -15,9 +14,7 @@ from loguru import logger
 from ..tt import utils
 from ..tt.transformer_block import TransformerBlock, TransformerBlockParameters
 from ..tt.utils import assert_quality
-
-if TYPE_CHECKING:
-    from ..reference.transformer_block import TransformerBlock as TransformerBlockReference
+from ..reference.transformer import FluxTransformer as FluxTransformerReference
 
 
 @pytest.mark.parametrize(
@@ -44,13 +41,21 @@ def test_transformer_block(
     block_index: int,
     spatial_sequence_length: int,
     prompt_sequence_length: int,
-    parent_torch_model: FluxTransformer,
+    model_location_generator,
 ) -> None:
     batch_size, _ = mesh_device.shape
 
     torch.manual_seed(0)
 
-    torch_model: TransformerBlockReference = parent_torch_model.transformer_blocks[block_index].to(torch.float32)
+    checkpoint = "black-forest-labs/FLUX.1-schnell"
+
+    model_name_checkpoint = model_location_generator(checkpoint, model_subdir="Flux1_Schnell")
+
+    torch_model = (
+        FluxTransformerReference.from_pretrained(model_name_checkpoint, subfolder="transformer")
+        .transformer_blocks[block_index]
+        .to(torch.float32)
+    )
 
     logger.debug("creating TT-NN model...")
     parameters = TransformerBlockParameters.from_torch(
