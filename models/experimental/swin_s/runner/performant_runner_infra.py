@@ -82,11 +82,10 @@ class SwinSPerformanceRunnerInfra:
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
 
         n, c, h, w = torch_input_tensor.shape
-
-        padded_c = 16 if c < 16 else c  # If the channels < 16, pad the channels to 16 to run the Conv layer
-
+        if c == 3:
+            c = 16
         input_mem_config = ttnn.create_sharded_memory_config(
-            [n, padded_c, h, w],
+            [n, c, h, w],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
