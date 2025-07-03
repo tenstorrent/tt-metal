@@ -56,14 +56,14 @@ def test_demo(device, reset_seeds, model_type, source):
 
         logger.info("Inferencing [Torch] Model")
         for batch in dataset:
-            path, im0s, s, _ = batch
+            path, im0s, s = batch
             im = preprocess(im0s)
             preds = torch_model(im)[0]
             postprocess(preds, im, im0s, batch, names, path, s, dataset, save_dir=save_dir)
 
     else:
         for batch in dataset:
-            path, im0s, s, _ = batch
+            path, im0s, s = batch
             im = preprocess(im0s)
             performant_runner = YOLOv7PerformantRunner(
                 device,

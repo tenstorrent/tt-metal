@@ -53,11 +53,13 @@ def letterbox(
 
 class LoadImages:
     def __init__(self, path, img_size=640, stride=32):
-        p = str(Path(path).absolute())
-        if os.path.isfile(p):
-            files = [p]
-        else:
-            raise Exception(f"ERROR: {p} does not exist")
+        files = []
+        for p in sorted(path) if isinstance(path, (list, tuple)) else [path]:
+            a = str(Path(p).absolute())
+            if os.path.isfile(a):
+                files.append(a)
+            else:
+                raise FileNotFoundError(f"{p} does not exist")
         img_formats = ["jpg", "jpeg", "png", "bmp", "tiff"]
         images = [x for x in files if x.split(".")[-1].lower() in img_formats]
         ni = len(images)
@@ -82,7 +84,7 @@ class LoadImages:
         img = letterbox(img0, self.img_size, stride=self.stride)[0]
         img = img[:, :, ::-1].transpose(2, 0, 1)
         img = np.ascontiguousarray(img)
-        return path, img, img0, None
+        return path, img, img0
 
     def __len__(self):
         return self.nf
@@ -262,13 +264,21 @@ def postprocess(
         classes=args["classes"],
         agnostic=args["agnostic_nms"],
     )
+    results = []
+    from models.experimental.yolo_eval.utils import Results
+
     for _, det in enumerate(pred):
+        if det.numel() == 0:
+            # If not prediction for a image
+            results.append(Results(im0s, path=path, names=names, boxes=torch.full((1, 6), -1)))
+            continue
         p, s, im0, frame = path, "", im0s, getattr(dataset, "frame", 0)
         p = Path(p)
         colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
         save_path = str(save_dir / p.name)
         if len(det):
             det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
+            results.append(Results(im0s, path=path, names=names, boxes=det))
             for c in det[:, -1].unique():
                 n = (det[:, -1] == c).sum()
                 s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "
@@ -287,3 +297,5 @@ def postprocess(
         if dataset.mode == "image":
             cv2.imwrite(save_path, im0)
         logger.info(f"Predictions saved to {save_path}")
+
+    return results
