@@ -17,6 +17,7 @@ The current version is verified to work with the following models:
 | [Qwen 2.5 72B](https://huggingface.co/Qwen/Qwen2.5-72B)                                          | LoudBox / QuietBox          | ```Qwen/Qwen2.5-72B```                          |
 | [Qwen 3 32B](https://huggingface.co/Qwen/Qwen3-32B)                                              | LoudBox / QuietBox          | ```Qwen/Qwen3-32B```                            |
 | [Phi-3-mini-128k-instruct](https://huggingface.co/microsoft/Phi-3-mini-128k-instruct)            | n150 / n300                 | ```microsoft/Phi-3-mini-128k-instruct```        |
+
 ## Dependencies
 
 1. Install [TT-Metalium and TTNN](../../INSTALLING.md).
