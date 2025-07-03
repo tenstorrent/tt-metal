@@ -112,6 +112,8 @@ jobs:
           # Generate commits table
           echo "| Commit | Message | Author | PR |" > ../../../commits_table.txt
           echo "|--------|---------|---------|-----|" >> ../../../commits_table.txt
+          echo "New SHA: ${NEW_SHA}"
+          echo "Old SHA: ${OLD_SHA}"
 
           while IFS= read -r short_hash && IFS= read -r message && IFS= read -r author && IFS= read -r full_hash; do
             # Try to get the PR number from the commit message
