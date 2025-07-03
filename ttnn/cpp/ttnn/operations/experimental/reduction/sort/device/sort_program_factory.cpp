@@ -336,8 +336,12 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     const auto device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
-    uint32_t number_of_tiles_per_core =
-        get_number_of_tiles_per_core(tensor_args.input_tensor.dtype(), output_tensors.at(1).dtype());
+    uint32_t number_of_tiles_per_core = get_number_of_tiles_per_core(
+        total_number_of_cores,
+        Wt,
+        tensor_args.input_tensor.dtype(),
+        output_tensors.at(1).dtype(),
+        HybridSortSlicingStrategy::USE_AS_MANY_CORES);
     number_of_tiles_per_core = std::min(number_of_tiles_per_core, Wt);
 
     // Calculate the number of cores utilized based on the input tensor shape
@@ -629,7 +633,17 @@ void SortProgramFactoryHybrid::override_runtime_arguments(
 }
 
 uint32_t SortProgramFactoryHybrid::get_number_of_tiles_per_core(
-    const DataType& input_dtype, const DataType& index_dtype) {
+    uint32_t total_number_of_cores,
+    uint32_t Wt,
+    const DataType& input_dtype,
+    const DataType& index_dtype,
+    HybridSortSlicingStrategy slicing_strategy) {
+    if (slicing_strategy == HybridSortSlicingStrategy::USE_AS_MANY_CORES) {
+        constexpr uint32_t MIN_TILES_PER_CORE = 2;
+        return std::max(Wt / total_number_of_cores, MIN_TILES_PER_CORE);
+    }
+    // slicing_strategy == HybridSortSlicingStrategy::FILL_CORES_FIRST
+
     if (input_dtype == DataType::FLOAT32 || input_dtype == DataType::UINT32 || input_dtype == DataType::INT32 ||
         index_dtype == DataType::INT32 || index_dtype == DataType::UINT32) {
         return 64;

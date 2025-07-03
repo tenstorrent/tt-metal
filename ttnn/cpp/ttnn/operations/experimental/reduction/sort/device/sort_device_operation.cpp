@@ -25,9 +25,9 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
     const auto output_specs = compute_output_specs(attributes, tensor_args);
     const auto index_dtype = output_specs[1].data_type();
 
-    const uint32_t total_number_of_tiles_for_hybrid_approach =
-        total_number_of_cores *
-        sort::program::SortProgramFactoryHybrid::get_number_of_tiles_per_core(input_dtype, index_dtype);
+    // const uint32_t total_number_of_tiles_for_hybrid_approach =
+    //     total_number_of_cores *
+    //     sort::program::SortProgramFactoryHybrid::get_number_of_tiles_per_core(input_dtype, index_dtype);
 
     // if (Wt <= WT_THRESHOLD) {
     //     // Single-core implementation

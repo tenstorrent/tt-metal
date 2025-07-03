@@ -42,7 +42,22 @@ struct SortProgramFactoryHybrid {
     static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
     static void override_runtime_arguments(
         cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
-    static uint32_t get_number_of_tiles_per_core(const DataType& input_dtype, const DataType& index_dtype);
+
+    // There are several parallel strategies to split the work on a 1D tensor
+    // - USE_AS_MANY_CORES: Use all cores (e.g. 64 on Wormhole) to process the same line.
+    //                      This optimizes latency.
+    // - FILL_CORES_FIRST:
+    enum class HybridSortSlicingStrategy {
+        USE_AS_MANY_CORES,
+        FILL_CORES_FIRST,
+    };
+
+    static uint32_t get_number_of_tiles_per_core(
+        uint32_t total_number_of_cores,
+        uint32_t Wt,
+        const DataType& input_dtype,
+        const DataType& index_dtype,
+        HybridSortSlicingStrategy slicing_strategy);
 };
 
 // Single row - multi core
