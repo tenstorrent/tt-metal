@@ -18,7 +18,7 @@ def test_yolov6l_bottlerep(device, reset_seeds):
 
     model = model.backbone.ERBlock_2[1].m.conv1
 
-    torch_input = torch.randn(1, 64, 160, 120)
+    torch_input = torch.randn(1, 64, 160, 160)
 
     parameters = create_yolov6l_model_parameters(model, torch_input, device)
 

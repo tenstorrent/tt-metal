@@ -18,9 +18,9 @@ def test_yolov6l_bifusion(device, reset_seeds):
 
     model = model.neck.Bifusion0
 
-    torch_input_0 = torch.randn(1, 256, 20, 15)
-    torch_input_1 = torch.randn(1, 512, 40, 30)
-    torch_input_2 = torch.randn(1, 256, 80, 60)
+    torch_input_0 = torch.randn(1, 256, 20, 20)
+    torch_input_1 = torch.randn(1, 512, 40, 40)
+    torch_input_2 = torch.randn(1, 256, 80, 80)
 
     parameters = create_yolov6l_model_parameters(model, [torch_input_0, torch_input_1, torch_input_2], device)
 

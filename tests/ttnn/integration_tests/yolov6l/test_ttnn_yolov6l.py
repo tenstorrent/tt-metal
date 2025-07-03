@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 def test_yolov6l(device, reset_seeds):
     model = load_torch_model_yolov6l()
 
-    torch_input = torch.randn(1, 3, 640, 480)
+    torch_input = torch.randn(1, 3, 640, 640)
 
     parameters = create_yolov6l_model_parameters(model, torch_input, device)
 

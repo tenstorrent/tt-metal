@@ -268,7 +268,9 @@ class TtDetect:
         bbox = ttnn.concat([c_xy, wh], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         bbox = ttnn.multiply(bbox, self.strides)
-
+        print("bbox", bbox.shape)
+        print("self.ones_tensor", self.ones_tensor.shape)
+        print("cls_score_list", cls_score_list.shape)
         output = ttnn.concat([bbox, self.ones_tensor, cls_score_list], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return output

@@ -18,7 +18,7 @@ def test_yolov6l_bepc3(device, reset_seeds):
 
     model = model.backbone.ERBlock_3[1]
 
-    torch_input = torch.randn(1, 256, 80, 60)
+    torch_input = torch.randn(1, 256, 80, 80)
 
     parameters = create_yolov6l_model_parameters(model, torch_input, device)
 

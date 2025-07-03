@@ -30,6 +30,7 @@ class TtSppf:
         )
 
     def __call__(self, x):
+        print("x", x.shape)
         conv1 = self.cv1(x)
         conv1 = ttnn.to_memory_config(conv1, ttnn.L1_MEMORY_CONFIG)
         conv1 = ttnn.sharded_to_interleaved(conv1, ttnn.L1_MEMORY_CONFIG)
@@ -37,7 +38,7 @@ class TtSppf:
             conv1,
             batch_size=1,
             input_h=20,
-            input_w=15,
+            input_w=20,
             channels=512,
             kernel_size=[5, 5],
             stride=[1, 1],
@@ -48,7 +49,7 @@ class TtSppf:
             m1,
             batch_size=1,
             input_h=20,
-            input_w=15,
+            input_w=20,
             channels=512,
             kernel_size=[5, 5],
             stride=[1, 1],
@@ -59,7 +60,7 @@ class TtSppf:
             m2,
             batch_size=1,
             input_h=20,
-            input_w=15,
+            input_w=20,
             channels=512,
             kernel_size=[5, 5],
             stride=[1, 1],
@@ -71,8 +72,12 @@ class TtSppf:
         m1 = ttnn.sharded_to_interleaved(m1, ttnn.L1_MEMORY_CONFIG)
         m2 = ttnn.sharded_to_interleaved(m2, ttnn.L1_MEMORY_CONFIG)
         m3 = ttnn.sharded_to_interleaved(m3, ttnn.L1_MEMORY_CONFIG)
+        print("conv1", conv1.shape)
+        print("m1", m1.shape)
+        print("m2", m2.shape)
+        print("m3", m3.shape)
         concat_output = ttnn.concat([conv1, m1, m2, m3], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         conv2 = self.cv2(concat_output)
-        conv2 = ttnn.reshape(conv2, (1, 20, 15, 1024), memory_config=ttnn.L1_MEMORY_CONFIG)
+        conv2 = ttnn.reshape(conv2, (1, 20, 20, 1024), memory_config=ttnn.L1_MEMORY_CONFIG)
         return conv2
