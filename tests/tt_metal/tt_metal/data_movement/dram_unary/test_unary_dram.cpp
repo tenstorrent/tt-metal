@@ -110,15 +110,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, total_size_bytes / bfloat16::SIZEOF, chrono::system_clock::now().time_since_epoch().count());
 
-    /*
-    vector<uint32_t> packed_input = generate_increment_vector<uint32_t>(
-        199,  // Initial value (converted to bfloat16)
-        total_size_bytes / sizeof(uint32_t), // Number of elements
-        1.0,
-        0.0,
-        64
-    );*/
-
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     vector<uint32_t> packed_golden = packed_input;
 
     // Write Input to DRAM
