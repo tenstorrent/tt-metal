@@ -211,6 +211,8 @@ void MAIN {
 
                             ckernel::topk_local_sort(0, (int)dir, 5);
 
+                            // ckernel::topk_merge(0, m_iter, K);
+
                             tile_regs_commit();
                             tile_regs_wait();
 
@@ -293,12 +295,16 @@ void MAIN {
 
                         cb_pop_front(value_tensor_peer_cb_index, one_tile);
 
-                        ckernel::topk_local_sort(0, (int)dir, 5);
+                        uint32_t m_iter = stage - 1;
+                        // ckernel::topk_local_sort(0, (int)dir, 5);
+                        ckernel::topk_merge(0, m_iter, 32);
+
+                        uint32_t select_lower = dir ^ (i < j);
 
                         // TODO: Fix output tile selection w.r.t ascending
                         uint32_t value_output_tile = input_dest_start;
                         uint32_t index_output_tile = index_dest_start;
-                        if (i > j) {
+                        if (!select_lower) {
                             value_output_tile = input_dest_end;
                             index_output_tile = index_dest_end;
                         }
