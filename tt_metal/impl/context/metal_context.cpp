@@ -102,6 +102,12 @@ void MetalContext::initialize(
         std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs);
     dispatch_mem_map_[magic_enum::enum_integer(CoreType::ETH)] =
         std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs);
+    // Initialize debug servers. Attaching individual devices done below
+    if (rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+        TT_FATAL(!rtoptions_.get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
+        rtoptions_.set_disable_dma_ops(true);  // DMA is not thread-safe
+        dprint_server_ = std::make_unique<DPrintServer>(rtoptions_);
+    }
 
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
@@ -146,13 +152,15 @@ void MetalContext::initialize(
     }
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
-    tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(true);
+    cluster_->set_internal_routing_info_for_ethernet_cores(true);
 
     // Initialize debug tools, reset cores, init FW
+    if (dprint_server_) {
+        dprint_server_->attach_devices();
+    };
     for (chip_id_t device_id : all_devices) {
         // Init debug tools
         ClearNocData(device_id);
-        DprintServerAttach(device_id);
         watcher_init(device_id);
 
         // TODO: as optimization, investigate removing all this call for already initialized devivces
@@ -179,11 +187,16 @@ void MetalContext::teardown() {
     initialized_ = false;
 
     // Set internal routing to false to exit active ethernet FW & go back to base FW
-    tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
+    cluster_->set_internal_routing_info_for_ethernet_cores(false);
+
+    if (dprint_server_) {
+        dprint_server_->detach_devices();
+        dprint_server_.reset();
+        rtoptions_.set_disable_dma_ops(false);
+    }
 
     auto all_devices = cluster_->all_chip_ids();
     for (chip_id_t device_id : all_devices) {
-        DprintServerDetach(device_id);
         watcher_detach(device_id);
         assert_cores(device_id);
 
@@ -197,6 +210,7 @@ void MetalContext::teardown() {
     }
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
+    tt::tt_metal::reset_topology_state();
 }
 
 MetalContext& MetalContext::instance() {
@@ -363,7 +377,9 @@ void MetalContext::set_default_control_plane_mesh_graph() {
 }
 
 void MetalContext::teardown_fabric_config() {
-    this->cluster_->configure_ethernet_cores_for_fabric_routers(tt_metal::FabricConfig::DISABLED);
+    this->fabric_config_ = tt_metal::FabricConfig::DISABLED;
+    this->cluster_->configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
+    this->num_fabric_active_routing_planes_ = 0;
     this->get_control_plane().clear_fabric_context();
 }
 
@@ -649,12 +665,9 @@ void MetalContext::generate_device_bank_to_noc_tables(chip_id_t device_id) {
     const auto allocator = L1BankingAllocator(config);
     const auto& soc_d = cluster_->get_soc_desc(device_id);
     const size_t num_dram_banks = allocator.get_num_banks(BufferType::DRAM);
-    std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
     dram_bank_offset_map_[device_id].clear();
     dram_bank_offset_map_[device_id].resize(num_dram_banks);
     for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        dram_noc_coord_per_bank[bank_id] =
-            soc_d.get_preferred_worker_core_for_dram_view(allocator.get_dram_channel_from_bank_id(bank_id));
         dram_bank_offset_map_[device_id][bank_id] = allocator.get_bank_offset(BufferType::DRAM, bank_id);
     }
     const size_t num_l1_banks = allocator.get_num_banks(BufferType::L1);
@@ -668,18 +681,20 @@ void MetalContext::generate_device_bank_to_noc_tables(chip_id_t device_id) {
     }
 
     dram_bank_to_noc_xy_[device_id].clear();
-    dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * dram_noc_coord_per_bank.size());
+    dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * num_dram_banks);
     bool dram_is_virtualized =
         hal_->get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal_->get_virtualized_core_types().end();
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
-        for (unsigned int bank_id = 0; bank_id < dram_noc_coord_per_bank.size(); bank_id++) {
+        for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
             uint16_t noc_x, noc_y;
+            CoreCoord dram_noc_coord =
+                soc_d.get_preferred_worker_core_for_dram_view(allocator.get_dram_channel_from_bank_id(bank_id), noc);
             if (dram_is_virtualized) {
-                noc_x = dram_noc_coord_per_bank[bank_id].x;
-                noc_y = dram_noc_coord_per_bank[bank_id].y;
+                noc_x = dram_noc_coord.x;
+                noc_y = dram_noc_coord.y;
             } else {
-                noc_x = hal_->noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
-                noc_y = hal_->noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
+                noc_x = hal_->noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord.x);
+                noc_y = hal_->noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord.y);
             }
             uint16_t xy = ((noc_y << hal_->get_noc_addr_node_id_bits()) | noc_x) << hal_->get_noc_coord_reg_offset();
             dram_bank_to_noc_xy_[device_id].push_back(xy);
@@ -900,14 +915,16 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     std::unordered_set<tt::umd::CoreCoord> dram_cores;
     auto num_dram_channels = cluster_->get_soc_desc(device_id).get_num_dram_views();
     for (uint32_t dram_channel = 0; dram_channel < num_dram_channels; dram_channel++) {
-        auto worker_dram_ep = soc_d.get_preferred_worker_core_for_dram_view(dram_channel);
-        auto eth_dram_ep = soc_d.get_preferred_eth_core_for_dram_view(dram_channel);
-        auto physical_worker_dram_ep =
-            soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
-        auto physical_eth_dram_ep =
-            soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
-        dram_cores.insert(physical_worker_dram_ep);
-        dram_cores.insert(physical_eth_dram_ep);
+        for (uint32_t noc = 0; noc < hal_->get_num_nocs(); noc++) {
+            auto worker_dram_ep = soc_d.get_preferred_worker_core_for_dram_view(dram_channel, noc);
+            auto eth_dram_ep = soc_d.get_preferred_eth_core_for_dram_view(dram_channel, noc);
+            auto physical_worker_dram_ep =
+                soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+            auto physical_eth_dram_ep =
+                soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+            dram_cores.insert(physical_worker_dram_ep);
+            dram_cores.insert(physical_eth_dram_ep);
+        }
     }
 
     const std::vector<tt::umd::CoreCoord>& eth_cores =

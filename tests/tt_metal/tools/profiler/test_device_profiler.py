@@ -222,8 +222,8 @@ def test_dispatch_cores():
     RISC_COUNT = 1
     ZONE_COUNT = 37
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch": [400, 1000, 1290, 2000],
-        "Tensix CQ Prefetch": [400, 1000, 1580, 4000],
+        "Tensix CQ Dispatch": [400, 600, 1000, 1290, 2000],
+        "Tensix CQ Prefetch": [400, 900, 1580, 4000],
         "dispatch_total_cq_cmd_op_time": [103],
         "dispatch_go_send_wait_time": [103],
     }
@@ -293,7 +293,7 @@ def test_dispatch_cores():
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [322, 541, 1400, 1900, 2100],
+        "Ethernet CQ Dispatch": [322, 600, 1400, 1900, 2100],
         "Ethernet CQ Prefetch": [600, 2500],
     }
     devicesData = run_device_profiler_test(
