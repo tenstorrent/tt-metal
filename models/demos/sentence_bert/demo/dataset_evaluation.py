@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import io
+import time
 
 import pandas as pd
 import pytest
@@ -51,6 +52,7 @@ def test_sentence_bert_eval(device, model_name, sequence_length, batch_size, num
     reference_module = BertModel(config).to(torch.bfloat16)
     reference_module.load_state_dict(transformers_model.state_dict())
     ttnn_module = None
+    inference_times = []
     for i in tqdm(range(num_samples), desc="Evaluating"):
         example = dataset[i]
         sen1, sen2, score = example["sentence1_tr"], example["sentence2_tr"], example["score"]
@@ -73,22 +75,32 @@ def test_sentence_bert_eval(device, model_name, sequence_length, batch_size, num
         if ttnn_module is None:
             ttnn_module = SentenceBERTPerformantRunner(
                 device=device,
+                device_batch_size=batch_size,
                 input_ids=input_ids,
                 extended_mask=extended_mask,
                 token_type_ids=token_type_ids,
                 position_ids=position_ids,
             )
             ttnn_module._capture_sentencebert_trace_2cqs()
-        ttnn_out = ttnn_module.run(input_ids, token_type_ids, position_ids, extended_mask)
-        ttnn_out = ttnn.to_torch(ttnn_out).squeeze(dim=1)
-        reference_sentence_embeddings = mean_pooling(reference_out[0], attention_mask)
+        t0 = time.time()
+        # ttnn_out = ttnn_module.run(input_ids, token_type_ids, position_ids, extended_mask)
+        ttnn_out = ttnn_module._execute_sentencebert_trace_2cqs_inference()
+        ttnn_out = ttnn.to_torch(ttnn_out, mesh_composer=ttnn_module.runner_infra.output_mesh_composer).squeeze(dim=1)
         ttnn_sentence_embeddings = mean_pooling(ttnn_out, attention_mask)
+        t1 = time.time()
+        reference_sentence_embeddings = mean_pooling(reference_out[0], attention_mask)
+        inference_times.append(t1 - t0)
         sim1 = F.cosine_similarity(reference_sentence_embeddings[:1], reference_sentence_embeddings[-1:]).item()
         sim2 = F.cosine_similarity(ttnn_sentence_embeddings[:1], ttnn_sentence_embeddings[-1:]).item()
         ref_pred_score, ttnn_pred_score = (sim1 + 1) * 2.5, (sim2 + 1) * 2.5  # scale from [-1, 1] to [0, 5]
         true_scores.append(score)
         ref_pred_scores.append(ref_pred_score)
         ttnn_pred_scores.append(ttnn_pred_score)
+
+    inference_time_avg = round(sum(inference_times) / len(inference_times), 6)
+    logger.info(
+        f"ttnn_sentencebert_batch_size: {batch_size}, One inference iteration time (sec): {inference_time_avg}, Sentence per sec: {round(batch_size/inference_time_avg)}"
+    )
 
     pearson1, spearman1 = pearsonr(true_scores, ref_pred_scores)[0], spearmanr(true_scores, ref_pred_scores)[0]
     pearson2, spearman2 = pearsonr(true_scores, ttnn_pred_scores)[0], spearmanr(true_scores, ttnn_pred_scores)[0]
