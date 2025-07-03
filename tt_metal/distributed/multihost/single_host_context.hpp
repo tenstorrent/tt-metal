@@ -71,6 +71,9 @@ public:
     [[nodiscard]] ContextPtr create_sub_context(tt::stl::Span<int> ranks) const override;
     void revoke_and_shrink() override;
 
+    /* ------------- message snooping ------------- */
+    std::size_t snoop_incoming_msg_size(Rank source, Tag tag) const override;
+
 private:
     int rank_{0};
     int size_{1};

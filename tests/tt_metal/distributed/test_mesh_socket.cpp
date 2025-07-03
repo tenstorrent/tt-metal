@@ -16,6 +16,8 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/socket.h"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/distributed/mesh_socket_utils.hpp"
+#include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/system_mesh.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -98,7 +100,7 @@ void test_single_connection_single_device_socket(
         .socket_connection_config = {socket_connection},
         .socket_mem_config = socket_mem_config,
     };
-    auto [send_socket, recv_socket] = MeshSocket::create_sockets(md0, md0, socket_config);
+    auto [send_socket, recv_socket] = MeshSocket::create_socket_pair(md0, md0, socket_config);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -297,7 +299,7 @@ void test_single_device_socket_with_workers(
         .socket_mem_config = socket_mem_config,
     };
 
-    auto [send_socket, recv_socket] = MeshSocket::create_sockets(md0, md0, socket_config);
+    auto [send_socket, recv_socket] = MeshSocket::create_socket_pair(md0, md0, socket_config);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_data_core), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -576,7 +578,7 @@ void test_single_connection_multi_device_socket(
         .socket_connection_config = {socket_connection},
         .socket_mem_config = socket_mem_config,
     };
-    auto [send_socket, recv_socket] = MeshSocket::create_sockets(md0, md1, socket_config);
+    auto [send_socket, recv_socket] = MeshSocket::create_socket_pair(md0, md1, socket_config);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -776,7 +778,7 @@ void test_single_connection_multi_device_socket_with_workers(
         .socket_connection_config = {socket_connection},
         .socket_mem_config = socket_mem_config,
     };
-    auto [send_socket, recv_socket] = MeshSocket::create_sockets(md0, md1, socket_config);
+    auto [send_socket, recv_socket] = MeshSocket::create_socket_pair(md0, md1, socket_config);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -1374,9 +1376,9 @@ void test_multi_sender_single_recv(
         .socket_mem_config = socket_mem_config,
     };
 
-    auto [send_socket_0, recv_socket_0] = MeshSocket::create_sockets(sender_0, reducer, socket_config_0);
-    auto [send_socket_1, recv_socket_1] = MeshSocket::create_sockets(sender_1, reducer, socket_config_1);
-    auto [send_socket_2, recv_socket_2] = MeshSocket::create_sockets(reducer, receiver, socket_config_2);
+    auto [send_socket_0, recv_socket_0] = MeshSocket::create_socket_pair(sender_0, reducer, socket_config_0);
+    auto [send_socket_1, recv_socket_1] = MeshSocket::create_socket_pair(sender_1, reducer, socket_config_1);
+    auto [send_socket_2, recv_socket_2] = MeshSocket::create_socket_pair(reducer, receiver, socket_config_2);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -1563,7 +1565,7 @@ void test_multi_connection_multi_device_data_copy(
         .fifo_size = socket_fifo_size,
     };
 
-    auto [send_socket, recv_socket] = MeshSocket::create_sockets(
+    auto [send_socket, recv_socket] = MeshSocket::create_socket_pair(
         sender_mesh,
         recv_mesh,
         SocketConfig{
@@ -1809,7 +1811,7 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
         .socket_connection_config = {socket_connection},
         .socket_mem_config = socket_mem_config,
     };
-    auto [send_socket, recv_socket] = MeshSocket::create_sockets(md0, md0, socket_config);
+    auto [send_socket, recv_socket] = MeshSocket::create_socket_pair(md0, md0, socket_config);
 
     std::vector<sender_socket_md> sender_config_readback;
     std::vector<receiver_socket_md> recv_config_readback;
@@ -1874,7 +1876,7 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
         .socket_mem_config = socket_mem_config,
     };
 
-    auto [send_socket, recv_socket] = MeshSocket::create_sockets(md0, md0, socket_config);
+    auto [send_socket, recv_socket] = MeshSocket::create_socket_pair(md0, md0, socket_config);
 
     std::vector<sender_socket_md> sender_configs;
     std::vector<receiver_socket_md> recv_configs;
@@ -1982,8 +1984,8 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
             },
     };
 
-    auto [send_socket_l1, recv_socket_l1] = MeshSocket::create_sockets(md0, md1, socket_config_l1);
-    auto [send_socket_dram, recv_socket_dram] = MeshSocket::create_sockets(md0, md1, socket_config_dram);
+    auto [send_socket_l1, recv_socket_l1] = MeshSocket::create_socket_pair(md0, md1, socket_config_l1);
+    auto [send_socket_dram, recv_socket_dram] = MeshSocket::create_socket_pair(md0, md1, socket_config_dram);
 
     const auto& sender_core_to_core_id =
         send_socket_l1.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
@@ -2060,7 +2062,7 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
         .socket_connection_config = {global_socket_connection},
         .socket_mem_config = global_socket_mem_cfg,
     };
-    auto [send_socket_global, recv_socket_global] = MeshSocket::create_sockets(md0, md1, global_socket_config);
+    auto [send_socket_global, recv_socket_global] = MeshSocket::create_socket_pair(md0, md1, global_socket_config);
 
     SubDevice sub_device_0(std::array{CoreRangeSet(CoreRange({0, 0}, {0, 0}))});
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({1, 1}, {1, 1}))});
@@ -2098,14 +2100,14 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
             .receiver_sub_device = md0->get_sub_device_ids()[1],
         };
 
-        auto [send_socket_0, recv_socket_0] = MeshSocket::create_sockets(
+        auto [send_socket_0, recv_socket_0] = MeshSocket::create_socket_pair(
             md0,
             md1,
             SocketConfig{
                 .socket_connection_config = {socket_0_connection},
                 .socket_mem_config = socket_mem_config_0,
             });
-        auto [send_socket_1, recv_socket_1] = MeshSocket::create_sockets(
+        auto [send_socket_1, recv_socket_1] = MeshSocket::create_socket_pair(
             md1,
             md0,
             SocketConfig{
@@ -2114,7 +2116,7 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
             });
         // Assert exppected: Socket cores don't match sub device
         EXPECT_THROW(
-            MeshSocket::create_sockets(
+            MeshSocket::create_socket_pair(
                 md0,
                 md1,
                 SocketConfig{
@@ -2173,10 +2175,27 @@ TEST_F(MeshSocketTest, AssertOnDuplicateCores) {
     SocketConfig socket_config_2 = {
         .socket_connection_config = {socket_connection}, .socket_mem_config = socket_mem_config};
 
-    EXPECT_THROW(MeshSocket::create_sockets(md0, md1, socket_config_0), std::exception);
-    EXPECT_THROW(MeshSocket::create_sockets(md0, md1, socket_config_1), std::exception);
+    EXPECT_THROW(MeshSocket::create_socket_pair(md0, md1, socket_config_0), std::exception);
+    EXPECT_THROW(MeshSocket::create_socket_pair(md0, md1, socket_config_1), std::exception);
     // Having the sender and receiver on the same core is valid. Ensure that this doesn't fail.
-    EXPECT_NO_THROW(MeshSocket::create_sockets(md0, md0, socket_config_2));
+    EXPECT_NO_THROW(MeshSocket::create_socket_pair(md0, md0, socket_config_2));
+}
+
+void verify_socket_configs_match(const SocketConfig& config_a, const SocketConfig& config_b) {
+    EXPECT_EQ(config_a.socket_connection_config.size(), config_b.socket_connection_config.size());
+
+    // Make sure connections match
+    for (size_t i = 0; i < config_a.socket_connection_config.size(); ++i) {
+        const auto& local_conn = config_a.socket_connection_config[i];
+        const auto& peer_conn = config_b.socket_connection_config[i];
+        EXPECT_EQ(local_conn.sender_core, peer_conn.sender_core);
+        EXPECT_EQ(local_conn.receiver_core, peer_conn.receiver_core);
+    }
+    // make sure socket memory config matches
+    EXPECT_EQ(config_a.socket_mem_config.socket_storage_type, config_b.socket_mem_config.socket_storage_type);
+    EXPECT_EQ(config_a.socket_mem_config.fifo_size, config_b.socket_mem_config.fifo_size);
+    EXPECT_EQ(config_a.socket_mem_config.sender_sub_device, config_b.socket_mem_config.sender_sub_device);
+    EXPECT_EQ(config_a.socket_mem_config.receiver_sub_device, config_b.socket_mem_config.receiver_sub_device);
 }
 
 // ========= Single Device Data Movement Tests =========
@@ -2318,6 +2337,105 @@ TEST_F(MeshSocketTest2DFabric, MultiSenderSingleRecvSplitReducer) { run_multi_se
 
 TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceDataCopy) {
     run_multi_connection_multi_device_data_copy(this);
+}
+
+// ================== (De)Serialization Tests ==================
+
+// Verify that serialization and deserialization of socket peer descriptors works correctly (this is needed for
+// Multi-Host Sockets)
+TEST(SocketSerializationTest, PeerDesc) {
+    std::size_t socket_fifo_size = 1024;
+    const auto worker_grid = CoreCoord(8, 8);
+
+    std::vector<CoreCoord> sender_logical_coords;
+    std::vector<CoreCoord> recv_logical_coords;
+    std::vector<uint32_t> sender_chip_ids;
+    std::vector<uint32_t> recv_chip_ids;
+    std::vector<MeshCoordinate> sender_device_coords;
+    std::vector<MeshCoordinate> recv_device_coords;
+    uint32_t core_idx = 0;
+    for (std::size_t x = 0; x < worker_grid.x; x++) {
+        for (std::size_t y = 0; y < worker_grid.y; y++) {
+            sender_logical_coords.push_back(CoreCoord(x, y));
+            recv_logical_coords.push_back(CoreCoord(x, y));
+            sender_chip_ids.push_back(core_idx % 4);
+            recv_chip_ids.push_back(4 + core_idx % 4);
+            sender_device_coords.push_back(MeshCoordinate(0, core_idx % 4));
+            recv_device_coords.push_back(MeshCoordinate(1, core_idx % 4));
+            core_idx++;
+        }
+    }
+
+    // Shuffle core coordinates to randomize the connections
+    std::random_device rd;
+    std::mt19937 generator(rd());
+    std::shuffle(sender_logical_coords.begin(), sender_logical_coords.end(), generator);
+    std::shuffle(recv_logical_coords.begin(), recv_logical_coords.end(), generator);
+    std::shuffle(sender_chip_ids.begin(), sender_chip_ids.end(), generator);
+    std::shuffle(recv_chip_ids.begin(), recv_chip_ids.end(), generator);
+    std::shuffle(sender_device_coords.begin(), sender_device_coords.end(), generator);
+    std::shuffle(recv_device_coords.begin(), recv_device_coords.end(), generator);
+    std::vector<SocketConnection> socket_connections;
+
+    for (std::size_t coord_idx = 0; coord_idx < sender_logical_coords.size(); coord_idx++) {
+        SocketConnection socket_connection = {
+            .sender_core = {sender_device_coords[coord_idx], sender_logical_coords[coord_idx]},
+            .receiver_core = {recv_device_coords[coord_idx], recv_logical_coords[coord_idx]}};
+        socket_connections.push_back(socket_connection);
+    }
+
+    SocketConfig socket_config_l1 = {
+        .socket_connection_config = socket_connections,
+        .socket_mem_config =
+            {
+                .socket_storage_type = BufferType::L1,
+                .fifo_size = socket_fifo_size,
+
+            },
+        .sender_rank = multihost::Rank{0},
+        .receiver_rank = multihost::Rank{1},
+    };
+
+    // Populate sender size peer descriptor based on config, addresses and device coordinates
+    SocketPeerDescriptor send_socket_peer_desc_l1 = SocketPeerDescriptor{
+        .config = socket_config_l1,
+        .config_buffer_address = 1 << 20,  // Assuming a dummy address for the config buffer at 1 MB
+        .data_buffer_address = 0,          /* Sender Endpoint has no data buffer allocated. */
+    };
+
+    for (const auto& id : sender_chip_ids) {
+        send_socket_peer_desc_l1.mesh_ids.push_back(0);
+        send_socket_peer_desc_l1.chip_ids.push_back(id);
+    }
+
+    // Populate receiver size peer descriptor based on config, addresses and device coordinates
+    SocketPeerDescriptor recv_socket_peer_desc_l1 = SocketPeerDescriptor{
+        .config = socket_config_l1,
+        .config_buffer_address = 1 << 21,  // Assuming a dummy address for the config buffer at 2 MB
+        .data_buffer_address = 1 << 22,    // Assuming a dummy address for the data buffer at 4 MB
+    };
+    for (const auto& id : recv_chip_ids) {
+        recv_socket_peer_desc_l1.mesh_ids.push_back(1);
+        recv_socket_peer_desc_l1.chip_ids.push_back(id);
+    }
+    // Serialize and deserialize the socket peer descriptors
+    auto serialized_send_socket_desc = serialize_to_bytes(send_socket_peer_desc_l1);
+    SocketPeerDescriptor deserialized_send_socket_desc = deserialize_from_bytes(serialized_send_socket_desc);
+    auto serialized_recv_socket_desc = serialize_to_bytes(recv_socket_peer_desc_l1);
+    SocketPeerDescriptor deserialized_recv_socket_desc = deserialize_from_bytes(serialized_recv_socket_desc);
+    // Validate configs are preserved after serialization
+    verify_socket_configs_match(deserialized_send_socket_desc.config, send_socket_peer_desc_l1.config);
+    verify_socket_configs_match(deserialized_recv_socket_desc.config, recv_socket_peer_desc_l1.config);
+    verify_socket_configs_match(deserialized_send_socket_desc.config, deserialized_recv_socket_desc.config);
+    // Validate that all other attributes of the peer descriptors are preserved
+    EXPECT_EQ(deserialized_send_socket_desc.config_buffer_address, send_socket_peer_desc_l1.config_buffer_address);
+    EXPECT_EQ(deserialized_recv_socket_desc.config_buffer_address, recv_socket_peer_desc_l1.config_buffer_address);
+    EXPECT_EQ(deserialized_send_socket_desc.data_buffer_address, send_socket_peer_desc_l1.data_buffer_address);
+    EXPECT_EQ(deserialized_recv_socket_desc.data_buffer_address, recv_socket_peer_desc_l1.data_buffer_address);
+    EXPECT_EQ(deserialized_send_socket_desc.mesh_ids, send_socket_peer_desc_l1.mesh_ids);
+    EXPECT_EQ(deserialized_recv_socket_desc.mesh_ids, recv_socket_peer_desc_l1.mesh_ids);
+    EXPECT_EQ(deserialized_send_socket_desc.chip_ids, send_socket_peer_desc_l1.chip_ids);
+    EXPECT_EQ(deserialized_recv_socket_desc.chip_ids, recv_socket_peer_desc_l1.chip_ids);
 }
 
 }  // namespace tt::tt_metal::distributed
