@@ -132,7 +132,7 @@ jobs:
             echo "=== End of raw git log output ==="
             
             # Save git log output to a file to avoid process substitution issues
-            git log --pretty=format:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA} > /tmp/git_log_output.txt
+            git log --pretty=tformat:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA} > /tmp/git_log_output.txt
             
             # Debug: Check if file was created and show its contents
             echo "=== File debug info ==="
