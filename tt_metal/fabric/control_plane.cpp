@@ -526,7 +526,8 @@ void ControlPlane::validate_mesh_connections() const {
 }
 
 std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
-    const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container) const {
+    const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container,
+    std::optional<chip_id_t> starting_physical_chip_id) const {
     std::uint32_t num_ports_per_side =
         routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
 
@@ -538,8 +539,19 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
         user_chip_ids.insert(chip_id);
     }
 
-    // Get the first chip ID from the mesh container iterator
-    chip_id_t chip_0 = *user_chip_ids.begin();
+    // Determine the starting chip ID
+    chip_id_t chip_0;
+    if (starting_physical_chip_id.has_value()) {
+        // Use the provided starting physical chip ID if it's valid
+        chip_0 = starting_physical_chip_id.value();
+        TT_FATAL(
+            user_chip_ids.find(chip_0) != user_chip_ids.end(),
+            "Provided starting physical chip ID {} not found in mesh container",
+            chip_0);
+    } else {
+        // Default behavior: use the first chip ID from the mesh container iterator
+        chip_0 = *user_chip_ids.begin();
+    }
 
     // Populate mesh of chips based on adjacency from first chip
     std::unordered_map<chip_id_t, std::vector<chip_id_t>> adjacent_chips_map;
@@ -864,7 +876,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
         auto mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{4});
         // Main board
         const auto& mesh_container = this->routing_table_generator_->mesh_graph->get_chip_ids(MeshId{4});
-        const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container);
+        const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id);
         for (std::uint32_t i = 0; i < physical_chip_ids.size(); i++) {
             logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{4}, i), physical_chip_ids[i]});
         }

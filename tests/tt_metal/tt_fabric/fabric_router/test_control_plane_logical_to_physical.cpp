@@ -71,8 +71,9 @@ public:
     }
 
     std::vector<chip_id_t> get_mesh_physical_chip_ids(
-        const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container) const override {
-        return ControlPlane::get_mesh_physical_chip_ids(mesh_container);
+        const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container,
+        std::optional<chip_id_t> starting_physical_chip_id = std::nullopt) const override {
+        return ControlPlane::get_mesh_physical_chip_ids(mesh_container, starting_physical_chip_id);
     }
 
     // Convenience method to get mesh physical chip IDs using the internal mesh container
@@ -444,6 +445,41 @@ TEST_F(ControlPlaneFixture, TestGetMeshPhysicalChipIdsLooped2DMesh) {
     auto physical_chip_ids = mock_cp.get_mesh_physical_chip_ids();
 
     verify_physical_chip_ids(physical_chip_ids, 4);
+}
+
+TEST_F(ControlPlaneFixture, TestGetMeshPhysicalChipIdsWithStartingChipId) {
+    // Test 3x3 mesh with custom starting chip ID
+    // Shape: 0-1-2
+    //        | | |
+    //        3-4-5
+    //        | | |
+    //        6-7-8
+    std::unordered_map<chip_id_t, std::vector<chip_id_t>> adjacency_data = {
+        {0, {1, 3}},
+        {1, {0, 2, 4}},
+        {2, {1, 5}},
+        {3, {0, 4, 6}},
+        {4, {1, 3, 5, 7}},
+        {5, {2, 4, 8}},
+        {6, {3, 7}},
+        {7, {4, 6, 8}},
+        {8, {5, 7}}};
+    TestingMockControlPlane mock_cp(
+        adjacency_data, tt::tt_metal::distributed::MeshShape(3, 3), {0, 1, 2, 3, 4, 5, 6, 7, 8});
+
+    // Test with default starting chip ID (should use chip 0)
+    auto physical_chip_ids_default = mock_cp.get_mesh_physical_chip_ids();
+    EXPECT_EQ(physical_chip_ids_default[0], 0) << "Default starting chip should be 0";
+
+    // Test with custom starting chip ID (chip 4)
+    auto physical_chip_ids_custom = mock_cp.get_mesh_physical_chip_ids(mock_cp.get_mesh_container(), 4);
+    EXPECT_EQ(physical_chip_ids_custom[0], 4) << "Custom starting chip should be 4";
+
+    // Test with invalid starting chip ID (should throw)
+    EXPECT_THROW(
+        { auto physical_chip_ids_invalid = mock_cp.get_mesh_physical_chip_ids(mock_cp.get_mesh_container(), 99); },
+        std::exception)
+        << "Should throw when starting chip ID is not in mesh container";
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

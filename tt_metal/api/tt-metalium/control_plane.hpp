@@ -224,7 +224,8 @@ private:
     // Should look into making a mock cluster object that can be used to test the control plane:
     // https://github.com/tenstorrent/tt-metal/issues/24497
     virtual std::vector<chip_id_t> get_mesh_physical_chip_ids(
-        const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container) const;
+        const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container,
+        std::optional<chip_id_t> starting_physical_chip_id = std::nullopt) const;
 
     std::map<FabricNodeId, chip_id_t> get_logical_chip_to_physical_chip_mapping(
         const std::string& mesh_graph_desc_file);
