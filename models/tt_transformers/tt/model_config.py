@@ -95,7 +95,11 @@ class ModelOptimizations:
                 }
             )
         else:
-            if base_model_name.startswith("Llama-3") or base_model_name.startswith("Mistral-7B") or model_name.startswith("Phi-3-mini"):
+            if (
+                base_model_name.startswith("Llama-3")
+                or base_model_name.startswith("Mistral-7B")
+                or base_model_name.startswith("Phi-3-mini")
+            ):
                 logger.info(
                     f"Llama 3, Mistral 7B and Phi3-mini models test insensitive to attention precision, using BFP8 attention and kv-cache with FP16 MLP accumulation even in accuracy mode"
                 )
@@ -1453,7 +1457,8 @@ class ModelArgs:
         if rope_scaling_params:
             self.rope_scaling_factor = rope_scaling_params.get("factor", None)
             self.orig_context_len = rope_scaling_params.get(
-                "original_max_position_embeddings", text_config.get("original_max_position_embeddings", self.max_context_len)
+                "original_max_position_embeddings",
+                text_config.get("original_max_position_embeddings", self.max_context_len),
             )
             self.rope_ext_scaling_tensor = None
             if rope_scaling_params.get("rope_type", rope_scaling_params.get("type", None)) == "longrope":
@@ -1462,7 +1467,7 @@ class ModelArgs:
                     ext_factor = rope_scaling_params.get("long_factor", None)
                 else:
                     ext_factor = rope_scaling_params.get("short_factor", None)
-                if ext_factor:
+                if ext_factor and not self.rope_scaling_factor:
                     self.rope_ext_scaling_tensor = torch.tensor(ext_factor, dtype=torch.float32)
                     scale = self.max_context_len / self.orig_context_len
                     if scale <= 1.0:
