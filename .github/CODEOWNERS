@@ -196,7 +196,6 @@ models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/t3000/llama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
-models/demos/tg/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/whisper @skhorasganiTT @uaydonat
 models/demos/grayskull @uaydonat
@@ -208,7 +207,6 @@ models/demos/ufld_v2 @tenstorrent/cse-developer-ttnn
 models/demos/vgg_unet @tenstorrent/cse-developer-ttnn
 models/experimental/openpdn_mnist @tenstorrent/cse-developer-ttnn
 models/experimental/functional_vanilla_unet @tenstorrent/cse-developer-ttnn
-models/experimental/sentence_bert @tenstorrent/cse-developer-ttnn
 models/experimental/grok @yieldthought @uaydonat
 models/demos/wormhole/vit @mbahnasTT @dvartaniansTT @uaydonat
 models/demos/vit  @mbahnasTT @dvartaniansTT @uaydonat
@@ -219,7 +217,6 @@ models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat
 models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat
 models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/metalium-developers-convolutions
 models/demos/mobilenetv2 @tenstorrent/cse-developer-ttnn
-models/experimental/yolov8s_world @tenstorrent/cse-developer-ttnn
 models/experimental/yolov10 @tenstorrent/cse-developer-ttnn
 models/demos/yolov9c @tenstorrent/cse-developer-ttnn
 models/demos/yolov8x @tenstorrent/cse-developer-ttnn
