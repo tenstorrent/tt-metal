@@ -1107,8 +1107,8 @@ namespace basic_tests {
 
 namespace compiler_workaround_hardware_bug_tests {
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestArbiterDoesNotHang) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TensixTestArbiterDoesNotHang) {
+    for (const auto& device : devices_) {
         distributed::MeshWorkload workload;
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -1132,7 +1132,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestArbiterDoesNotHang) {
 }  // namespace compiler_workaround_hardware_bug_tests
 namespace single_core_tests {
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleCbConfigCorrectlySentSingleCore) {
+TEST_F(UnitMeshCQFixture, TensixTestSingleCbConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1145,7 +1145,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleCbConfigCorrectlySentSingleC
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbSeqConfigCorrectlySentSingleCore) {
+TEST_F(UnitMeshCQFixture, TensixTestMultiCbSeqConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1162,7 +1162,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbSeqConfigCorrectlySentSingl
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbRandomConfigCorrectlySentSingleCore) {
+TEST_F(UnitMeshCQFixture, TensixTestMultiCbRandomConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1179,7 +1179,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbRandomConfigCorrectlySentSi
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
+TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1196,7 +1196,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCBSharedAddressSpaceSentSingl
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     CoreCoord core_coord(0, 0);
 
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         distributed::MeshWorkload workload;
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -1241,7 +1241,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCBSharedAddressSpaceSentSingl
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
+TEST_F(UnitMeshCQFixture, TensixTestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1255,7 +1255,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleCbConfigCorrectlyUpdateSizeS
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleSemaphoreConfigCorrectlySentSingleCore) {
+TEST_F(UnitMeshCQFixture, TensixTestSingleSemaphoreConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1267,8 +1267,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleSemaphoreConfigCorrectlySent
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
+    for (const auto& device : devices_) {
         distributed::MeshWorkload workload;
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -1292,11 +1292,11 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAutoInsertedBlankBriscKernelInDevi
 }
 
 // Sanity test for setting and verifying common and unique runtime args to a single core, the simplest case.
-TEST_F(UnitMeshCommandQueueFixture, TensixIncrementRuntimeArgsSanitySingleCoreCompute) {
+TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanitySingleCoreCompute) {
     CoreRange cr0({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr0});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 8, 8, tt::RISCV::COMPUTE));
     }
@@ -1305,7 +1305,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixIncrementRuntimeArgsSanitySingleCoreCo
 // Test setting common runtime args across multiple kernel in the same program
 // This test will ensure a multicast (or unicast for eth) gets created for each time the
 // user calls SetCommonRuntimeArgs.
-TEST_F(UnitMeshCommandQueueFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
+TEST_F(UnitMeshCQFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
     const CoreRange core_range_0(CoreCoord(1, 1), CoreCoord(2, 2));
     const CoreRange core_range_1(CoreCoord(3, 3), CoreCoord(4, 4));
 
@@ -1317,13 +1317,13 @@ TEST_F(UnitMeshCommandQueueFixture, TensixSetCommonRuntimeArgsMultipleCreateKern
         {.cr_set = core_range_set_1},
     };
 
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         EXPECT_TRUE(
             local_test_functions::test_increment_runtime_args_sanity(device, configs, 8, 8, tt::RISCV::COMPUTE));
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, ActiveEthEnqueueDummyProgram) {
+TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
             local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, eth_core);
@@ -1333,8 +1333,8 @@ TEST_F(UnitMeshCommandQueueFixture, ActiveEthEnqueueDummyProgram) {
 
 // Sanity test for setting and verifying common and unique runtime args to single cores via ERISC. Some arch may return
 // 0 active eth cores, that's okay.
-TEST_F(UnitMeshCommandQueueFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementErisc) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementErisc) {
+    for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
@@ -1349,8 +1349,8 @@ TEST_F(UnitMeshCommandQueueFixture, ActiveEthIncrementRuntimeArgsSanitySingleCor
 // Sanity test for setting and verifying common and unique runtime args to single cores via ERISC(IDLE). Some arch may
 // return 0 active eth cores, that's okay.
 // FIXME - Re-enable when FD-on-idle-eth is supported
-TEST_F(UnitMeshCommandQueueFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
+    for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
@@ -1365,8 +1365,8 @@ TEST_F(UnitMeshCommandQueueFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanity
 // Sanity test for setting and verifying common and unique runtime args to single cores via inactive ERISC cores. Some
 // arch may return 0 active eth cores, that's okay.
 // FIXME - Re-enable when FD-on-idle-eth is supported
-TEST_F(UnitMeshCommandQueueFixture, DISABLED_IdleEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, DISABLED_IdleEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
+    for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_devices()[0]->get_inactive_ethernet_cores()) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
@@ -1379,7 +1379,7 @@ TEST_F(UnitMeshCommandQueueFixture, DISABLED_IdleEthIncrementRuntimeArgsSanitySi
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestRuntimeArgsCorrectlySentSingleCore) {
+TEST_F(UnitMeshCQFixture, TensixTestRuntimeArgsCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1390,24 +1390,23 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestRuntimeArgsCorrectlySentSingleCore
     }
 }
 
-auto CommandQueueFabricConfigsToTest = ::testing::Values(
+auto CQFabricConfigsToTest = ::testing::Values(
     tt::tt_metal::FabricConfig::FABRIC_1D,
     tt::tt_metal::FabricConfig::FABRIC_1D_RING,
     tt::tt_metal::FabricConfig::FABRIC_2D,
     tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
 
-INSTANTIATE_TEST_SUITE_P(CommandQueue, CommandQueueOnFabricMultiDeviceFixture, CommandQueueFabricConfigsToTest);
+INSTANTIATE_TEST_SUITE_P(CommandQueue, CQOnFabricMultiDeviceFixture, CQFabricConfigsToTest);
 
-INSTANTIATE_TEST_SUITE_P(
-    MultiCommandQueue, MultiCommandQueueOnFabricMultiDeviceFixture, CommandQueueFabricConfigsToTest);
+INSTANTIATE_TEST_SUITE_P(MultiCommandQueue, MultiCQOnFabricMultiDeviceFixture, CQFabricConfigsToTest);
 
-TEST_P(CommandQueueOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunctions) {
+TEST_P(CQOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunctions) {
     for (auto& device : devices_) {
         local_test_functions::test_basic_dispatch_functions(device, 0);
     }
 }
 
-TEST_P(MultiCommandQueueOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunctions) {
+TEST_P(MultiCQOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunctions) {
     for (auto& device : devices_) {
         for (int cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
             local_test_functions::test_basic_dispatch_functions(device, cq_id);
@@ -1418,7 +1417,7 @@ TEST_P(MultiCommandQueueOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunct
 }  // end namespace single_core_tests
 
 namespace multicore_tests {
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
+TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -1438,7 +1437,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentMultiCore
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
+TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -1459,7 +1458,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentUpdateSiz
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
+TEST_F(UnitMeshCQFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -1480,7 +1479,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbConfigsCorrectlySentUpdateS
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges) {
+TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -1503,7 +1502,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentMultipleC
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
+TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -1527,7 +1526,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentUpdateSiz
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
+TEST_F(UnitMeshCQFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -1551,7 +1550,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbConfigsCorrectlySentUpdateS
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllSemConfigsCorrectlySentMultiCore) {
+TEST_F(UnitMeshCQFixture, TensixTestAllSemConfigsCorrectlySentMultiCore) {
     for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
@@ -1564,7 +1563,7 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllSemConfigsCorrectlySentMultiCor
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCoreRanges) {
+TEST_F(UnitMeshCQFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCoreRanges) {
     for (const auto& device : devices_) {
         CoreRange first_cr({0, 0}, {1, 1});
 
@@ -1606,8 +1605,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllSemaphoreConfigsCorrectlySentMu
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore) {
+    for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -1619,8 +1618,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCo
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore_255_PerKernel) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore_255_PerKernel) {
+    for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -1632,8 +1631,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCo
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestSendRuntimeArgsMultiCoreRange) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TensixTestSendRuntimeArgsMultiCoreRange) {
+    for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
@@ -1646,9 +1645,9 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestSendRuntimeArgsMultiCoreRange) {
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestSendRuntimeArgsMultiNonOverlappingCoreRange) {
+TEST_F(UnitMeshCQFixture, TensixTestSendRuntimeArgsMultiNonOverlappingCoreRange) {
     // Core ranges get merged in kernel groups, this one does not
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
@@ -1661,8 +1660,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestSendRuntimeArgsMultiNonOverlapping
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, TensixTestUpdateRuntimeArgsMultiCoreRange) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TensixTestUpdateRuntimeArgsMultiCoreRange) {
+    for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
@@ -1676,83 +1675,83 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestUpdateRuntimeArgsMultiCoreRange) {
 }
 
 // Sanity test for setting and verifying common and unique runtime args to multiple cores.
-TEST_F(UnitMeshCommandQueueFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute) {
+TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 16, 16, tt::RISCV::COMPUTE));
     }
 }
 
 // Max number of 255 unique RT args.
-TEST_F(UnitMeshCommandQueueFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_255_UniqueArgs) {
+TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_255_UniqueArgs) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 255, 0, tt::RISCV::COMPUTE));
     }
 }
 
 // Max number of 255 common RT args.
-TEST_F(UnitMeshCommandQueueFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_255_CommonArgs) {
+TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_255_CommonArgs) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 0, 255, tt::RISCV::COMPUTE));
     }
 }
 
 // Sanity test for setting and verifying common and unique runtime args to multiple cores via BRISC.
-TEST_F(UnitMeshCommandQueueFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementBrisc) {
+TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementBrisc) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 16, 16, tt::RISCV::BRISC));
     }
 }
 
 // Sanity test for setting and verifying common and unique runtime args to multiple cores via NCRISC.
-TEST_F(UnitMeshCommandQueueFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementNcrisc) {
+TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementNcrisc) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 16, 16, tt::RISCV::NCRISC));
     }
 }
 
 // Ensure the data movement core can access their own logical coordinate. Same binary enqueued to multiple cores.
-TEST_F(UnitMeshCommandQueueFixture, TestLogicalCoordinatesDataMovement) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesDataMovement) {
+    for (const auto& device : devices_) {
         local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC);
         local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC);
     }
 }
 
 // Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
-TEST_F(UnitMeshCommandQueueFixture, TestLogicalCoordinatesCompute) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesCompute) {
+    for (const auto& device : devices_) {
         local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
     }
 }
 
 // Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
-TEST_F(UnitMeshCommandQueueFixture, TestLogicalCoordinatesEth) {
-    for (auto device : devices_) {
+TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesEth) {
+    for (const auto& device : devices_) {
         if (!does_device_have_active_eth_cores(device->get_devices()[0])) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
@@ -1762,7 +1761,7 @@ TEST_F(UnitMeshCommandQueueFixture, TestLogicalCoordinatesEth) {
 }
 
 // Ensure the data movement core can access their own logical coordinate. Same binary enqueued to multiple cores.
-TEST_F(UnitMeshMultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesDataMovement) {
+TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesDataMovement) {
     for (const auto& device : devices_) {
         local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC);
         local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC, 1);
@@ -1772,7 +1771,7 @@ TEST_F(UnitMeshMultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinat
 }
 
 // Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
-TEST_F(UnitMeshMultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesCompute) {
+TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesCompute) {
     for (const auto& device : devices_) {
         local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
         local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE, 1);
@@ -1780,7 +1779,7 @@ TEST_F(UnitMeshMultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinat
 }
 
 // Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
-TEST_F(UnitMeshMultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesEth) {
+TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesEth) {
     for (const auto& device : devices_) {
         if (!does_device_have_active_eth_cores(device->get_devices()[0])) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
@@ -1796,7 +1795,7 @@ TEST_F(UnitMeshMultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinat
 
 namespace stress_tests {
 
-TEST_F(UnitMeshMultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
+TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
     uint32_t NUM_PROGRAMS = 100;
     uint32_t MAX_LOOP = 100;
     uint32_t page_size = 1024;
@@ -2064,9 +2063,9 @@ TEST_F(UnitMeshMultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomized
     }
 }
 
-TEST_F(UnitMeshCommandQueueFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
+TEST_F(UnitMeshCQFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
     uint32_t NUM_ITER = 100000;
-    for (auto device : devices_) {
+    for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -2079,7 +2078,7 @@ TEST_F(UnitMeshCommandQueueFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
     }
 }
 
-TEST_F(UnitMeshCommandQueueProgramFixture, TensixTestRandomizedProgram) {
+TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
     uint32_t NUM_PROGRAMS = 100;
     uint32_t MAX_LOOP = 100;
     uint32_t page_size = 1024;

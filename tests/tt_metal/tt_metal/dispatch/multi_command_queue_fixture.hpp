@@ -81,7 +81,7 @@ protected:
     uint8_t num_cqs_;
 };
 
-class UnitMeshMultiCommandQueueSingleDeviceFixture : public DispatchFixture {
+class UnitMeshMultiCQSingleDeviceFixture : public DispatchFixture {
 protected:
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
@@ -89,8 +89,15 @@ protected:
         }
 
         this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
+        if (this->num_cqs_ != 2) {
+            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
+            GTEST_SKIP();
+        }
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+
+        const chip_id_t device_id = 0;
+        const DispatchCoreType dispatch_core_type = this->get_dispatch_core_type();
 
         this->create_devices();
     }
@@ -112,17 +119,17 @@ protected:
         return true;
     }
 
-    // DispatchCoreType get_dispatch_core_type() {
-    //     DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
-    //     if (this->arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
-    //         if (!tt::tt_metal::IsGalaxyCluster()) {
-    //             log_warning(
-    //                 tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in SetUp()");
-    //             dispatch_core_type = DispatchCoreType::ETH;
-    //         }
-    //     }
-    //     return dispatch_core_type;
-    // }
+    DispatchCoreType get_dispatch_core_type() {
+        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
+        if (this->arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
+            if (!tt::tt_metal::IsGalaxyCluster()) {
+                log_warning(
+                    tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in SetUp()");
+                dispatch_core_type = DispatchCoreType::ETH;
+            }
+        }
+        return dispatch_core_type;
+    }
 
     void create_devices(std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
         const auto& dispatch_core_config =
@@ -150,7 +157,7 @@ protected:
     uint8_t num_cqs_;
 };
 
-class UnitMeshMultiCommandQueueSingleDeviceProgramFixture : public UnitMeshMultiCommandQueueSingleDeviceFixture {};
+class UnitMeshMultiCQSingleDeviceProgramFixture : public UnitMeshMultiCQSingleDeviceFixture {};
 
 class MultiCommandQueueSingleDeviceEventFixture : public MultiCommandQueueSingleDeviceFixture {};
 
@@ -233,7 +240,7 @@ protected:
     std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
 };
 
-class UnitMeshMultiCommandQueueMultiDeviceFixture : public DispatchFixture {
+class UnitMeshMultiCQMultiDeviceFixture : public DispatchFixture {
 protected:
     void SetUp() override {
         this->slow_dispatch_ = false;
@@ -285,8 +292,8 @@ class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiD
 
 class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
 
-class MultiCommandQueueOnFabricMultiDeviceFixture : public UnitMeshMultiCommandQueueMultiDeviceFixture,
-                                                    public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
+class MultiCQOnFabricMultiDeviceFixture : public UnitMeshMultiCQMultiDeviceFixture,
+                                          public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
 protected:
     void SetUp() override {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
@@ -295,7 +302,7 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param
         tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-        UnitMeshMultiCommandQueueMultiDeviceFixture::SetUp();
+        UnitMeshMultiCQMultiDeviceFixture::SetUp();
 
         if (::testing::Test::IsSkipped()) {
             tt::tt_metal::detail::SetFabricConfig(
@@ -304,7 +311,7 @@ protected:
     }
 
     void TearDown() override {
-        UnitMeshMultiCommandQueueMultiDeviceFixture::TearDown();
+        UnitMeshMultiCQMultiDeviceFixture::TearDown();
         tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
     }

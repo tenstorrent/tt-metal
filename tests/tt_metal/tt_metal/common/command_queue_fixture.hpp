@@ -76,7 +76,7 @@ protected:
     void CreateDevice(const size_t trace_region_size) { this->create_device(trace_region_size); }
 };
 
-class UnitMeshCommandQueueFixture : public DispatchFixture {
+class UnitMeshCQFixture : public DispatchFixture {
 protected:
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
@@ -127,7 +127,7 @@ protected:
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
 };
 
-class UnitMeshCommandQueueProgramFixture : public UnitMeshCommandQueueFixture {};
+class UnitMeshCQProgramFixture : public UnitMeshCQFixture {};
 
 class CommandQueueSingleCardFixture : virtual public DispatchFixture {
 protected:
@@ -186,7 +186,7 @@ protected:
     std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
 };
 
-class UnitMeshCommandQueueSingleCardFixture : virtual public DispatchFixture {
+class UnitMeshCQSingleCardFixture : virtual public DispatchFixture {
 protected:
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
@@ -237,7 +237,7 @@ protected:
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
 };
 
-class UnitMeshCommandQueueSingleCardProgramFixture : virtual public UnitMeshCommandQueueSingleCardFixture {};
+class UnitMeshCQSingleCardProgramFixture : virtual public UnitMeshCQSingleCardFixture {};
 
 class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture {};
 
@@ -254,7 +254,7 @@ protected:
 
 class CommandQueueSingleCardProgramFixture : virtual public CommandQueueSingleCardFixture {};
 
-class UnitMeshCommandQueueMultiDeviceFixture : public DispatchFixture {
+class UnitMeshCQMultiDeviceFixture : public DispatchFixture {
 protected:
     void SetUp() override {
         this->slow_dispatch_ = false;
@@ -274,7 +274,6 @@ protected:
 
         std::vector<chip_id_t> chip_ids;
         for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
-            std::cout << "Adding chip ID: " << id << std::endl;
             chip_ids.push_back(id);
         }
 
@@ -340,8 +339,8 @@ class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixt
 
 class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
 
-class CommandQueueOnFabricMultiDeviceFixture : public UnitMeshCommandQueueMultiDeviceFixture,
-                                               public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
+class CQOnFabricMultiDeviceFixture : public UnitMeshCQMultiDeviceFixture,
+                                     public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
 protected:
     void SetUp() override {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
@@ -350,7 +349,7 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param
         tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-        UnitMeshCommandQueueMultiDeviceFixture::SetUp();
+        UnitMeshCQMultiDeviceFixture::SetUp();
 
         if (::testing::Test::IsSkipped()) {
             tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
@@ -358,7 +357,7 @@ protected:
     }
 
     void TearDown() override {
-        UnitMeshCommandQueueMultiDeviceFixture::TearDown();
+        UnitMeshCQMultiDeviceFixture::TearDown();
         tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
     }

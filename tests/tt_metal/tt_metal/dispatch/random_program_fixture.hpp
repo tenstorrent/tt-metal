@@ -359,7 +359,7 @@ private:
     }
 };
 
-class UnitMeshRandomProgramFixture : virtual public UnitMeshCommandQueueSingleCardProgramFixture {
+class UnitMeshRandomProgramFixture : virtual public UnitMeshCQSingleCardProgramFixture {
 protected:
     static const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
     static const uint32_t MAX_KERNEL_SIZE_BYTES = 4096;
@@ -412,7 +412,7 @@ protected:
     std::shared_ptr<distributed::MeshDevice> device_;
 
     void SetUp() override {
-        UnitMeshCommandQueueSingleCardProgramFixture::SetUp();
+        UnitMeshCQSingleCardProgramFixture::SetUp();
         if (!::testing::Test::IsSkipped()) {
             // Parent may have skipped
             this->device_ = this->devices_[0];
