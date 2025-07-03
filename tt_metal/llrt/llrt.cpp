@@ -205,13 +205,6 @@ void write_binary_to_address(ll_api::memory const& mem, chip_id_t chip_id, const
     });
 }
 
-CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
-    return tt::tt_metal::MetalContext::instance()
-        .get_cluster()
-        .get_soc_desc(chip_id)
-        .get_preferred_worker_core_for_dram_view(dram_channel_id);
-}
-
 namespace internal_ {
 
 bool is_active_eth_core(chip_id_t chip_id, const CoreCoord& core) {
