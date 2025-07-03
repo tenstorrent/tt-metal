@@ -43,6 +43,8 @@ void bind_reduction_topk_operation(py::module& module) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
                 queue_id (int, optional): command queue id. Defaults to `0`.
+                sub_core_grids (ttnn.CoreRangeSet, optional): Core range set to run the operation on. Defaults to `None`.
+                indices_tensor (ttnn.Tensor, optional): Preallocated indices tensor. Defaults to `None`.
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
@@ -64,6 +66,7 @@ void bind_reduction_topk_operation(py::module& module) {
                std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>> optional_output_tensors,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
+               const std::optional<ttnn::Tensor>& indices_tensor,
                QueueId queue_id) {
                 return self(
                     queue_id,
@@ -74,6 +77,7 @@ void bind_reduction_topk_operation(py::module& module) {
                     sorted,
                     memory_config,
                     sub_core_grids,
+                    indices_tensor,
                     optional_output_tensors);
             },
             py::arg("input_tensor").noconvert(),
@@ -85,6 +89,7 @@ void bind_reduction_topk_operation(py::module& module) {
             py::arg("out") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("sub_core_grids") = std::nullopt,
+            py::arg("indices_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
 
