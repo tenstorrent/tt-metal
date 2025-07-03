@@ -50,6 +50,8 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
     auto output_buffer = CreateBuffer(interleaved_buffer_config);
     uint32_t output_byte_address = output_buffer->address();
 
+    assert(input_byte_address != output_byte_address);
+
     // Input
     // vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
     //     -100.0f, 100.0f, total_size_bytes / bfloat16::SIZEOF,
@@ -107,7 +109,7 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
 
     std::vector<uint32_t> writer_run_time_args = {output_byte_address};
     tt::tt_metal::SetRuntimeArgs(program, writer_kernel, test_config.cores, writer_run_time_args);
-
+    log_info(tt::LogTest, "Input buffer addr: {}, Output buffer addr: {}", input_byte_address, output_byte_address);
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
@@ -223,6 +225,41 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileDirectedIdeal) {
     // Run
     for (unsigned int id = 0; id < num_devices_; id++) {
         EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
+/* ========== Test case for varying number of tiles using interleaved L1; Test id = 63 ========== */
+TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileNumbers) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
+    // Parameters
+    uint32_t max_num_tiles = 512;            // Bound for testing different transaction sizes
+    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+
+    // Cores
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    for (uint32_t num_tiles = 1; num_tiles <= max_num_tiles; num_tiles *= 2) {
+        if (num_tiles * tile_size_bytes > max_transmittable_bytes) {
+            continue;
+        }
+
+        // Test config
+        unit_tests::dm::dram::InterleavedConfig test_config = {
+            .test_id = 63,
+            .num_tiles = num_tiles,
+            .tile_size_bytes = tile_size_bytes,
+            .l1_data_format = DataFormat::Float16_b,
+            .cores = core_range_set,
+            .is_dram = false};
+
+        // Run
+        for (unsigned int id = 0; id < num_devices_; id++) {
+            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+        }
     }
 }
 
