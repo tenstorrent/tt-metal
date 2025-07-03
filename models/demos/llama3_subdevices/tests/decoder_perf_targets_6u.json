@@ -281,7 +281,7 @@
         },
         "TopK_0": {
             "op_name": "TopK_0",
-            "kernel_duration": 553289.8125,
+            "kernel_duration": 293601,
             "op_to_op": 668.0,
             "non-overlapped-dispatch-time": 4645.0,
             "kernel_duration_relative_margin": 0.2,

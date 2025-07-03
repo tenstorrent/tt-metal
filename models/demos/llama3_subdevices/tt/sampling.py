@@ -73,6 +73,18 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, self.args.padded_vocab_size, dtype=torch.int32)
+        for i in range(indices_tensor_torch.shape[3]):
+            indices_tensor_torch[:, :, :, i] = i
+        self.tt_indices_tensor = ttnn.from_torch(
+            indices_tensor_torch,
+            dtype=ttnn.uint16,
+            layout=ttnn.Layout.TILE,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(3, None), mesh_shape=self.args.cluster_shape),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -99,7 +111,11 @@ class TTSampling(LightweightModule):
 
         # Local top k
         topk_values, topk_indices = ttnn.topk(
-            x_bf16, k=self.max_top_k, dim=-1, sub_core_grids=self.args.sub_core_grid_topk
+            x_bf16,
+            k=self.max_top_k,
+            dim=-1,
+            sub_core_grids=self.args.sub_core_grid_topk,
+            indices_tensor=self.tt_indices_tensor,
         )
 
         # Gather values
