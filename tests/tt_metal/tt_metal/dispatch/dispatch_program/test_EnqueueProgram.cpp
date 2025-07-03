@@ -1341,7 +1341,8 @@ auto CommandQueueFabricConfigsToTest = ::testing::Values(
 
 INSTANTIATE_TEST_SUITE_P(CommandQueue, CommandQueueMultiDeviceOnFabricFixture, CommandQueueFabricConfigsToTest);
 
-INSTANTIATE_TEST_SUITE_P(MultiCommandQueue, MultiCommandQueueOnFabricFixture, CommandQueueFabricConfigsToTest);
+INSTANTIATE_TEST_SUITE_P(
+    MultiCommandQueue, MultiCommandQueueMultiDeviceOnFabricFixture, CommandQueueFabricConfigsToTest);
 
 TEST_P(CommandQueueMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
     for (IDevice* device : devices_) {
@@ -1349,7 +1350,7 @@ TEST_P(CommandQueueMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions)
     }
 }
 
-TEST_P(MultiCommandQueueOnFabricFixture, TensixTestBasicDispatchFunctions) {
+TEST_P(MultiCommandQueueMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
     for (IDevice* device : devices_) {
         for (int cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
             local_test_functions::test_basic_dispatch_functions(device, cq_id);
