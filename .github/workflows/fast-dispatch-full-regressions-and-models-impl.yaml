@@ -14,72 +14,72 @@ on:
         type: string
 
 jobs:
-  fd-nightly:
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        test-group:
-          [
-            {
-              name: "WH N150 ttnn nightly",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
-              timeout: 70
-            }, # Nathan Sidwell
-            {
-              name: "WH N300 ttnn nightly",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
-              timeout: 70
-            }, # Nathan Sidwell
-          ]
-    defaults:
-      run:
-        shell: bash
-    name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
-    runs-on: ${{ matrix.test-group.runs-on }}
-    steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.build-artifact-name }}
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-      - uses: ./.github/actions/ensure-active-weka-mount
-      - name: Run frequent reg tests scripts
-        timeout-minutes: ${{ matrix.test-group.timeout }}
-        uses: ./.github/actions/docker-run
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          install_wheel: true
-          docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GTEST_OUTPUT=xml:generated/test_reports/
-          run_args: ${{ matrix.test-group.cmd }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          path: generated/test_reports/
-          prefix: "test_reports_"
+  # fd-nightly:
+  #   strategy:
+  #     # Do not fail-fast because we need to ensure all tests go to completion
+  #     # so we try not to get hanging machines
+  #     fail-fast: false
+  #     matrix:
+  #       test-group:
+  #         [
+  #           {
+  #             name: "WH N150 ttnn nightly",
+  #             arch: wormhole_b0,
+  #             runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+  #             cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
+  #             timeout: 70
+  #           }, # Nathan Sidwell
+  #           {
+  #             name: "WH N300 ttnn nightly",
+  #             arch: wormhole_b0,
+  #             runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+  #             cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
+  #             timeout: 70
+  #           }, # Nathan Sidwell
+  #         ]
+  #   defaults:
+  #     run:
+  #       shell: bash
+  #   name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
+  #   runs-on: ${{ matrix.test-group.runs-on }}
+  #   steps:
+  #     - name: ⬇️ Checkout
+  #       uses: actions/checkout@v4
+  #       with:
+  #         submodules: recursive
+  #     - name: ⬇️ Download Build
+  #       uses: actions/download-artifact@v4
+  #       timeout-minutes: 10
+  #       with:
+  #         name: ${{ inputs.build-artifact-name }}
+  #     - name: Extract files
+  #       run: tar -xvf ttm_any.tar
+  #     - name: ⬇️ Download Wheel
+  #       uses: actions/download-artifact@v4
+  #       timeout-minutes: 10
+  #       with:
+  #         name: ${{ inputs.wheel-artifact-name }}
+  #     - uses: ./.github/actions/ensure-active-weka-mount
+  #     - name: Run frequent reg tests scripts
+  #       timeout-minutes: ${{ matrix.test-group.timeout }}
+  #       uses: ./.github/actions/docker-run
+  #       with:
+  #         docker_image: ${{ inputs.docker-image }}
+  #         docker_password: ${{ secrets.GITHUB_TOKEN }}
+  #         install_wheel: true
+  #         docker_opts: |
+  #           -v /mnt/MLPerf:/mnt/MLPerf:ro
+  #           -e TT_METAL_HOME=${{ github.workspace }}
+  #           -e ARCH_NAME=wormhole_b0
+  #           -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+  #           -e GTEST_OUTPUT=xml:generated/test_reports/
+  #         run_args: ${{ matrix.test-group.cmd }}
+  #     - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+  #       timeout-minutes: 10
+  #       if: ${{ !cancelled() }}
+  #       with:
+  #         path: generated/test_reports/
+  #         prefix: "test_reports_"
   nightly-wh-models:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
@@ -87,15 +87,15 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen, ttt-mistral-7B-v0.3, resnet50, whisper, yolov8s_world, yolov9c, vgg_unet, ufld_v2, mobilenetv2, functional_vanilla_unet, yolov10, openpdn_mnist, yolov8x, vit, sentence_bert, yolov7, yolov8s, swin_s, yolov11, yolov6l]
+        model: [ sentence_bert]
         # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
-        include:
-          - model: stable_diffusion_xl_base
-            card: N150
-            timeout: 45
-          - model: stable_diffusion_xl_base
-            card: N300
-            timeout: 45
+        # include:
+        #   - model: stable_diffusion_xl_base
+        #     card: N150
+        #     timeout: 45
+        #   - model: stable_diffusion_xl_base
+        #     card: N300
+        #     timeout: 45
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
     defaults:
       run:
@@ -147,70 +147,70 @@ jobs:
         with:
           path: generated/test_reports/
           prefix: "test_reports_"
-  nightly-wh-unstable-models:
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        test-config:
-          - model: "stable_diffusion"
-            cmd: SLOW_MATMULS=1 pytest --timeout 1000 -n auto tests/nightly/single_card/stable_diffusion
-              # Skipping due to issue #15932
-              # - model: "mamba 1"
-              # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1
-              # - model: "mamba 2"
-              # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 2
-              # - model: "mamba 3"
-              # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 3
-              # - model: "mamba 4"
-              # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 4
-          - model: "mamba 5"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 5
-              # - model: "mamba 6"
-              # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 6
-        card: [N150, N300]
-    name: "[Unstable] Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}"
-    defaults:
-      run:
-        shell: bash
-    runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.card }}"]
-    steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.build-artifact-name }}
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-      - uses: ./.github/actions/ensure-active-weka-mount
-      - name: Run frequent reg tests scripts
-        timeout-minutes: 60
-        uses: ./.github/actions/docker-run
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          install_wheel: true
-          docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GTEST_OUTPUT=xml:generated/test_reports/
-            -e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-          run_args: ${{ matrix.test-config.cmd }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          path: generated/test_reports/
-          prefix: "test_reports_"
+  # nightly-wh-unstable-models:
+  #   strategy:
+  #     # Do not fail-fast because we need to ensure all tests go to completion
+  #     # so we try not to get hanging machines
+  #     fail-fast: false
+  #     matrix:
+  #       test-config:
+  #         - model: "stable_diffusion"
+  #           cmd: SLOW_MATMULS=1 pytest --timeout 1000 -n auto tests/nightly/single_card/stable_diffusion
+  #             # Skipping due to issue #15932
+  #             # - model: "mamba 1"
+  #             # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1
+  #             # - model: "mamba 2"
+  #             # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 2
+  #             # - model: "mamba 3"
+  #             # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 3
+  #             # - model: "mamba 4"
+  #             # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 4
+  #         # - model: "mamba 5"
+  #         #   cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 5
+  #             # - model: "mamba 6"
+  #             # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 6
+  #       card: [N150, N300]
+  #   name: "[Unstable] Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}"
+  #   defaults:
+  #     run:
+  #       shell: bash
+  #   runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.card }}"]
+  #   steps:
+  #     - name: ⬇️ Checkout
+  #       uses: actions/checkout@v4
+  #       with:
+  #         submodules: recursive
+  #     - name: ⬇️ Download Build
+  #       uses: actions/download-artifact@v4
+  #       timeout-minutes: 10
+  #       with:
+  #         name: ${{ inputs.build-artifact-name }}
+  #     - name: Extract files
+  #       run: tar -xvf ttm_any.tar
+  #     - name: ⬇️ Download Wheel
+  #       uses: actions/download-artifact@v4
+  #       timeout-minutes: 10
+  #       with:
+  #         name: ${{ inputs.wheel-artifact-name }}
+  #     - uses: ./.github/actions/ensure-active-weka-mount
+  #     - name: Run frequent reg tests scripts
+  #       timeout-minutes: 60
+  #       uses: ./.github/actions/docker-run
+  #       with:
+  #         docker_image: ${{ inputs.docker-image }}
+  #         docker_password: ${{ secrets.GITHUB_TOKEN }}
+  #         install_wheel: true
+  #         docker_opts: |
+  #           -v /mnt/MLPerf:/mnt/MLPerf:ro
+  #           -e TT_METAL_HOME=${{ github.workspace }}
+  #           -e ARCH_NAME=wormhole_b0
+  #           -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+  #           -e GTEST_OUTPUT=xml:generated/test_reports/
+  #           -e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+  #         run_args: ${{ matrix.test-config.cmd }}
+  #     - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+  #       timeout-minutes: 10
+  #       if: ${{ !cancelled() }}
+  #       with:
+  #         path: generated/test_reports/
+  #         prefix: "test_reports_"

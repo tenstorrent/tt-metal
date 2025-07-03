@@ -11,6 +11,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.demos.sentence_bert.ttnn.common import custom_preprocessor, preprocess_inputs
 from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
 from models.demos.sentence_bert.ttnn.ttnn_sentence_bert_model import TtnnSentenceBertModel
+from loguru import logger
+import os
+
+os.environ["TT_GH_CI_INFRA"] = "1"
 
 
 @pytest.mark.parametrize(
@@ -18,9 +22,12 @@ from models.demos.sentence_bert.ttnn.ttnn_sentence_bert_model import TtnnSentenc
     [["emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", [8, 384], [8, 1, 1, 384]]],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_ttnn_sentence_bert_model(device, inputs):
-    transformers_model = transformers.AutoModel.from_pretrained(inputs[0]).eval()
-    config = transformers.BertConfig.from_pretrained(inputs[0])
+def test_ttnn_sentence_bert_model(device, inputs, model_location_generator):
+    model_location_or_version = model_location_generator(inputs[0], download_if_ci_v2=True)
+    # logger.info("download_if_ci_v2 value in script is", download_if_ci_v2)
+    print("CIV2 Detected:", "TT_GH_CI_INFRA" in os.environ)
+    transformers_model = transformers.AutoModel.from_pretrained(model_location_or_version).eval()
+    config = transformers.BertConfig.from_pretrained(model_location_or_version)
     input_ids = torch.randint(low=0, high=config.vocab_size - 1, size=inputs[1], dtype=torch.int64)
     attention_mask = torch.ones(inputs[1][0], inputs[1][1])
     extended_mask = custom_extended_mask(attention_mask, dtype=torch.bfloat16)

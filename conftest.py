@@ -244,10 +244,11 @@ def model_location_generator(is_ci_v2_env):
         model_folder = Path("tt_dnn-models") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
-
+        logger.info(f"both vars in 247 line are download_if_ci_v2:{download_if_ci_v2},is_ci_v2_env:{is_ci_v2_env}")
         download_from_ci_v2 = download_if_ci_v2 and is_ci_v2_env
-
+        logger.info(f"after and logic 248:{download_if_ci_v2}")
         if download_from_ci_v2:
+            logger.info(f"goes into download_from_ci_v2")
             assert (
                 not has_internal_weka
             ), "For some reason, we see a file existing at the expected MLPerf location: {internal_weka_path} on CIv2. Please use the opportunity to clean up your model and get rid of MLPerf if you're moving to CIv2"
@@ -260,9 +261,11 @@ def model_location_generator(is_ci_v2_env):
             logger.info(f"For model location, using CIv2 large file cache: {civ2_download_path}")
             return civ2_download_path
         elif has_internal_weka:
+            logger.info(f"goes into inrernal weka")
             logger.info(f"For model location, using internal MLPerf path: {internal_weka_path}")
             return internal_weka_path
         else:
+            logger.info(f"hf downlaoadddddd")
             logger.info(
                 f"For model location, local copy not found, so likely downloading straight from HF: {model_version}"
             )
