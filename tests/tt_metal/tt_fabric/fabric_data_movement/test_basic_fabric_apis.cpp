@@ -692,6 +692,92 @@ void RunAsyncWriteMulticastTest(
     }
 }
 
+void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_mesh = false) {
+    CoreCoord logical_core = {0, 0};
+
+    auto devices = DevicePool::instance().get_all_active_devices();
+    const size_t NUM_DEVICES = devices.size();
+    bool invalid_test_scenario = !is_multi_mesh && NUM_DEVICES < 2;
+    if (invalid_test_scenario) {
+        GTEST_SKIP() << "Test requires at least 2 devices, found " << NUM_DEVICES;
+    }
+
+    std::vector<tt::tt_metal::Program> programs(NUM_DEVICES);
+    std::vector<std::shared_ptr<tt_metal::Buffer>> result_buffers(NUM_DEVICES);
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
+        auto* src_device = devices[src_idx];
+        auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device->id());
+        uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
+
+        uint32_t result_size = NUM_DEVICES * sizeof(uint32_t);
+        std::vector<uint32_t> result_buffer_data(NUM_DEVICES, 0);
+        CoreRangeSet core_range = {logical_core};
+        result_buffers[src_idx] = PrepareBuffer(src_device, result_size, core_range, result_buffer_data);
+        programs[src_idx] = tt::tt_metal::CreateProgram();
+
+        uint32_t result_addr = result_buffers[src_idx]->address();
+        std::vector<uint32_t> runtime_args = {
+            *src_fabric_node_id.mesh_id,         // src_mesh_id
+            src_fabric_chip_id,                  // src_chip_id
+            result_addr,                         // result_addr
+            static_cast<uint32_t>(NUM_DEVICES),  // num_devices
+        };
+
+        // Add mesh_id and chip_id pairs for all destinations
+        for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
+            auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->id());
+            runtime_args.push_back(*dst_fabric_node_id.mesh_id);  // dst_mesh_id
+            runtime_args.push_back(dst_fabric_node_id.chip_id);   // dst_chip_id
+        }
+
+        auto kernel = tt_metal::CreateKernel(
+            programs[src_idx],
+            "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_get_next_hop_router_direction.cpp",
+            {logical_core},
+            tt_metal::DataMovementConfig{});
+
+        tt_metal::SetRuntimeArgs(programs[src_idx], kernel, logical_core, runtime_args);
+    }
+
+    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
+        fixture->RunProgramNonblocking(devices[src_idx], programs[src_idx]);
+    }
+    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
+        fixture->WaitForSingleProgramDone(devices[src_idx], programs[src_idx]);
+    }
+
+    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
+        auto* src_device = devices[src_idx];
+        auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device->id());
+        uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
+
+        std::vector<uint32_t> result_data;
+        tt::tt_metal::detail::ReadFromBuffer(result_buffers[src_idx], result_data);
+        for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
+            auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->id());
+            uint32_t actual_direction = result_data[dst_idx];
+            if (src_fabric_node_id == dst_fabric_node_id) {
+                // Self-routing should return INVALID_DIRECTION
+                EXPECT_EQ(actual_direction, (uint32_t)eth_chan_magic_values::INVALID_DIRECTION);
+            } else {
+                auto expected_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id)
+                                              .value_or(RoutingDirection::NONE);
+
+                if (expected_direction != RoutingDirection::NONE) {
+                    // Route exists - should return valid direction
+                    auto expected_eth_direction = control_plane.routing_direction_to_eth_direction(expected_direction);
+                    EXPECT_EQ(actual_direction, expected_eth_direction);
+                } else {
+                    // No route exists - should return INVALID_DIRECTION
+                    EXPECT_EQ(actual_direction, (uint32_t)eth_chan_magic_values::INVALID_DIRECTION);
+                }
+            }
+        }
+    }
+}
+
 TEST_F(Fabric2DFixture, DISABLED_TestAsyncWrite) { RunAsyncWriteTest(this, fabric_mode::PUSH, false); }
 
 TEST_F(Fabric2DFixture, TestUnicastRaw) {
@@ -770,6 +856,33 @@ TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestUnicastRaw) {
         RunTestUnicastRaw(this);
     }
 }
+
+TEST_F(Fabric2DDynamicFixture, TestGetNextHopRouterDirection1MeshAllToAll) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
+        GTEST_SKIP() << "Test not applicable for TG cluster type";
+    }
+    RunGetNextHopRouterDirectionTest(this, false);
+}
+
+// Multi-Mesh Test - Using parameterized test with connected mesh descriptor
+TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirectionMultiMesh) {
+    auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
+    CustomMeshGraphFabric2DDynamicFixture::SetUp(
+        mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
+    RunGetNextHopRouterDirectionTest(this, true);
+}
+
+TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirectionDisjointMultiMesh) {
+    auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
+    CustomMeshGraphFabric2DDynamicFixture::SetUp(
+        mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
+    RunGetNextHopRouterDirectionTest(this, true);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    T3kDisjointMeshGraphFabric2DDynamicTests,
+    T3kCustomMeshGraphFabric2DDynamicFixture,
+    ::testing::ValuesIn(t3k_disjoint_mesh_descriptor_chip_mappings));
 
 INSTANTIATE_TEST_SUITE_P(
     T3kCustomMeshGraphFabric2DDynamicTests,

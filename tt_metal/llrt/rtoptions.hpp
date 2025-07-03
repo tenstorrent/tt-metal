@@ -106,8 +106,8 @@ class RunTimeOptions {
     std::string kernel_dir;
     std::string system_kernel_dir;
 
-    bool is_visible_device_env_var_set = false;
-    uint32_t visible_device;
+    bool is_visible_devices_env_var_set = false;
+    std::vector<uint32_t> visible_devices;
 
     bool build_map_enabled = false;
 
@@ -197,8 +197,8 @@ public:
     // Location where kernels are installed via package manager.
     const std::string& get_system_kernel_dir() const;
 
-    inline bool is_visible_device_specified() const { return this->is_visible_device_env_var_set; }
-    inline uint32_t get_visible_device() const { return this->visible_device; }
+    inline bool is_visible_devices_specified() const { return this->is_visible_devices_env_var_set; }
+    inline const std::vector<uint32_t>& get_visible_devices() const { return this->visible_devices; }
 
     inline bool get_build_map_enabled() const { return build_map_enabled; }
 
@@ -320,7 +320,11 @@ public:
     // Returns the string representation for hash computation.
     inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) const {
         switch (feature) {
-            case RunTimeDebugFeatureDprint: return std::to_string(get_feature_enabled(feature));
+            case RunTimeDebugFeatureDprint: {
+                std::string hash_str = std::to_string(get_feature_enabled(feature));
+                hash_str += std::to_string(get_feature_all_chips(feature));
+                return hash_str;
+            }
             case RunTimeDebugFeatureReadDebugDelay:
             case RunTimeDebugFeatureWriteDebugDelay:
             case RunTimeDebugFeatureAtomicDebugDelay:

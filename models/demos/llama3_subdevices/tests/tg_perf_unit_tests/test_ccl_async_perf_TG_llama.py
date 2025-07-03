@@ -4,12 +4,10 @@
 
 import pytest
 from loguru import logger
-import os
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 
 THRESHOLD = 0.4
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 
 @pytest.mark.parametrize(
@@ -23,13 +21,14 @@ def test_ag_tg_llama_perf(
     ag_type,
     warmup_iters,
     perf_target_us,
+    galaxy_type,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = f"all_gather_{ag_type}"
 
     subdir = "llama_ccl_perf"
-    if is_RING_6U:
+    if galaxy_type == "6U":
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_gather_6u_llama -k {ag_type}"
     else:
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_gather_tg_llama -k {ag_type}"
@@ -59,7 +58,7 @@ def test_ag_tg_llama_perf(
     benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ag_type}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_ops",
+        run_type=f"tg_llama_ops" if galaxy_type != "6U" else "tg_llama_ops_6U",
         ml_model_name="llama70b-tg",
     )
 
@@ -79,13 +78,14 @@ def test_ar_tg_llama_perf(
     ar_type,
     warmup_iters,
     perf_target_us,
+    galaxy_type,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = f"all_reduce_{ar_type}"
 
     subdir = "llama_ccl_perf"
-    if is_RING_6U:
+    if galaxy_type == "6U":
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_reduce_6U_llama -k {ar_type}"
     else:
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_reduce_tg_llama -k {ar_type}"
@@ -115,7 +115,7 @@ def test_ar_tg_llama_perf(
     benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ar_type}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_ops",
+        run_type=f"tg_llama_ops" if galaxy_type != "6U" else "tg_llama_ops_6U",
         ml_model_name="llama70b-tg",
     )
 
@@ -135,13 +135,14 @@ def test_matmul_rs(
     ar_type,
     warmup_iters,
     perf_target_us,
+    galaxy_type,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = f"matmul_rs_test"
 
     subdir = "llama_ccl_perf"
-    if is_RING_6U:
+    if galaxy_type == "6U":
         command = f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_rs_matmul_1d_gather_in0.py::test_6U_matmul_1d_ring_llama_with_rs_perf"
     else:
         command = f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_rs_matmul_1d_gather_in0.py::test_tg_matmul_1d_ring_llama_with_rs_perf"
@@ -171,7 +172,7 @@ def test_matmul_rs(
     benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_ops",
+        run_type=f"tg_llama_ops" if galaxy_type != "6U" else "tg_llama_ops_6U",
         ml_model_name="llama70b-tg",
     )
 
@@ -189,13 +190,14 @@ def test_rms_perf(
     ar_type,
     warmup_iters,
     perf_target_us,
+    galaxy_type,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = f"rms_test"
 
     subdir = "llama_ccl_perf"
-    if is_RING_6U:
+    if galaxy_type == "6U":
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_6u_trace_rms_fuse"
     else:
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_tg_trace_rms_fuse"
@@ -225,7 +227,7 @@ def test_rms_perf(
     benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_ops",
+        run_type=f"tg_llama_ops" if galaxy_type != "6U" else "tg_llama_ops_6U",
         ml_model_name="llama70b-tg",
     )
 
@@ -242,13 +244,14 @@ def test_rms_perf(
 def test_fused_all_gather_concat_perf(
     warmup_iters,
     perf_target_us,
+    galaxy_type,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = f"all_gather_concat_heads"
 
     subdir = "llama_ccl_perf"
-    if is_RING_6U:
+    if galaxy_type == "6U":
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_concat_fuse_6u"
     else:
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_concat_fuse"
@@ -278,7 +281,7 @@ def test_fused_all_gather_concat_perf(
     benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_ops",
+        run_type=f"tg_llama_ops" if galaxy_type != "6U" else "tg_llama_ops_6U",
         ml_model_name="llama70b-tg",
     )
 
@@ -295,13 +298,14 @@ def test_fused_all_gather_concat_perf(
 def test_fused_all_reduce_create_heads_perf(
     warmup_iters,
     perf_target_us,
+    galaxy_type,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = f"all_reduce_create_heads"
 
     subdir = "llama_ccl_perf"
-    if is_RING_6U:
+    if galaxy_type == "6U":
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py::test_all_reduce_qkv_heads_fuse_perf_6U"
     else:
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py::test_all_reduce_qkv_heads_fuse_perf"
@@ -331,7 +335,7 @@ def test_fused_all_reduce_create_heads_perf(
     benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_ops",
+        run_type=f"tg_llama_ops" if galaxy_type != "6U" else "tg_llama_ops_6U",
         ml_model_name="llama70b-tg",
     )
 
@@ -348,13 +352,14 @@ def test_fused_all_reduce_create_heads_perf(
 def test_reduce_scatter_perf(
     warmup_iters,
     perf_target_us,
+    galaxy_type,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = f"reduce_scatter_perf"
 
     subdir = "llama_ccl_perf"
-    if is_RING_6U:
+    if galaxy_type == "6U":
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_async_6U.py::test_fabric_reduce_scatter_tg_trace_6u"
     else:
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_async_TG.py::test_fabric_reduce_scatter_tg_trace"
@@ -383,7 +388,7 @@ def test_reduce_scatter_perf(
     benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_ops",
+        run_type=f"tg_llama_ops" if galaxy_type != "6U" else "tg_llama_ops_6U",
         ml_model_name="llama70b-tg",
     )
 
@@ -400,13 +405,14 @@ def test_reduce_scatter_perf(
 def test_rs_create_heads_perf(
     warmup_iters,
     perf_target_us,
+    galaxy_type,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = f"rs_create_heads_perf"
 
     subdir = "llama_ccl_perf"
-    if is_RING_6U:
+    if galaxy_type == "6U":
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_create_heads_async_TG.py::test_rs_create_heads_6u_trace"
     else:
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_create_heads_async_TG.py::test_rs_create_heads_tg_trace"
@@ -435,7 +441,7 @@ def test_rs_create_heads_perf(
     benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_ops",
+        run_type=f"tg_llama_ops" if galaxy_type != "6U" else "tg_llama_ops_6U",
         ml_model_name="llama70b-tg",
     )
 

@@ -23,6 +23,21 @@ namespace tt::tt_fabric {
 
 class FabricContext;
 
+// This struct provides information for how a process binds to a particular
+// mesh and local mesh rank (HostRankId rename - #24178) in the mesh graph
+// descriptor.
+struct LocalMeshBinding {
+    MeshId mesh_id;
+    HostRankId host_rank;
+};
+
+// In multi-host context, APIs parameterized with MeshScope, can return
+// results for local mesh or global mesh.
+enum class MeshScope {
+    LOCAL,
+    GLOBAL,
+};
+
 class ControlPlane {
 public:
     explicit ControlPlane(const std::string& mesh_graph_desc_yaml_file);
@@ -47,7 +62,14 @@ public:
     chip_id_t get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
 
     std::vector<MeshId> get_user_physical_mesh_ids() const;
-    MeshShape get_physical_mesh_shape(MeshId mesh_id) const;
+
+    // Query for the MeshId and HostRankId of the local mesh; returns std::nullopt if binding is not set
+    MeshId get_local_mesh_id_binding() const;
+    HostRankId get_local_host_rank_id_binding() const;
+
+    // Queries that are MeshScope-aware (i.e. return results for local mesh or global mesh)
+    MeshShape get_physical_mesh_shape(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
+    MeshCoordinateRange get_coord_range(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
 
     // Return valid ethernet channels on the specificed routing plane
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
@@ -182,7 +204,9 @@ private:
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
     void initialize_dynamic_routing_plane_counts(
-        const IntraMeshConnectivity& intra_mesh_connectivity, tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
+        const IntraMeshConnectivity& intra_mesh_connectivity,
+        tt_metal::FabricConfig fabric_config,
+        tt_metal::FabricReliabilityMode reliability_mode);
     void trim_ethernet_channels_not_mapped_to_live_routing_planes();
 
     void validate_mesh_connections(MeshId mesh_id) const;
@@ -197,7 +221,8 @@ private:
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
 
-    void write_routing_tables_to_chip(MeshId mesh_id, chip_id_t chip_id) const;
+    void write_routing_tables_to_eth_cores(MeshId mesh_id, chip_id_t chip_id) const;
+    void write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
 
     // Populate the local intermesh link to remote intermesh link table
     void generate_local_intermesh_link_table();
@@ -208,7 +233,12 @@ private:
     // Check if intermesh links are available by reading SPI ROM config from first chip
     bool is_intermesh_enabled() const;
 
+    // Initialize the local mesh binding from the environment variables
+    // Returns std::nullopt if not in multi-host context
+    LocalMeshBinding initialize_local_mesh_binding();
+
     std::unique_ptr<FabricContext> fabric_context_;
+    LocalMeshBinding local_mesh_binding_;
 };
 
 class GlobalControlPlane {

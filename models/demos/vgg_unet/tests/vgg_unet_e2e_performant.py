@@ -21,11 +21,9 @@ class VggUnetTrace2CQ:
         self,
         device,
         model_location_generator,
+        use_pretrained_weight=False,
     ):
-        self.test_infra = create_test_infra(
-            device,
-            model_location_generator,
-        )
+        self.test_infra = create_test_infra(device, model_location_generator, use_pretrained_weight)
         self.device = device
         self.tt_inputs_host, sharded_mem_config_DRAM, self.input_mem_config = self.test_infra.setup_dram_sharded_input(
             device

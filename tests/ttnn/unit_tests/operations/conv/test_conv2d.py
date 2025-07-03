@@ -101,7 +101,6 @@ def test_conv_features(
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
-        preprocess_weights_on_device=True,
         run_twice=True,
         input_layout=ttnn.TILE_LAYOUT if input_dtype == ttnn.bfloat8_b else None,
         input_dtype=input_dtype,
@@ -158,8 +157,6 @@ def test_conv_dram(
     input_layout,
     packer_l1_acc,
 ):
-    # https://github.com/tenstorrent/tt-metal/issues/24072
-    device.disable_and_clear_program_cache()
     if device.core_grid.y == 7:
         pytest.skip("Tests have been configured for N150.")
     config = {
@@ -185,7 +182,6 @@ def test_conv_dram(
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
-        preprocess_weights_on_device=False,
         input_layout=input_layout,
         run_twice=True,
         fast_compare=True,
