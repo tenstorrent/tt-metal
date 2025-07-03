@@ -131,21 +131,29 @@ jobs:
             echo ""
             echo "=== End of raw git log output ==="
             
+            # Save git log output to a file to avoid process substitution issues
+            git log --pretty=format:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA} > /tmp/git_log_output.txt
+            
             # Generate commits table content
             while IFS='|' read -r short_hash message author full_hash; do
+              echo "DEBUG: Processing line: short_hash='$short_hash', message='$message', author='$author', full_hash='$full_hash'"
+              
               # Skip empty lines
               if [ -z "$short_hash" ]; then
+                echo "DEBUG: Skipping empty line"
                 continue
               fi
               
               # Try to get the PR number from the commit message
               pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
               if [ -n "$pr_number" ]; then
+                echo "DEBUG: Found PR number: $pr_number"
                 COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | [#$pr_number](https://github.com/tenstorrent/tt_llk/pull/$pr_number) |"$'\n'
               else
+                echo "DEBUG: No PR number found"
                 COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | - |"$'\n'
               fi
-            done < <(git log --pretty=format:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA})
+            done < /tmp/git_log_output.txt
           else
             echo "No commits found - this shouldn't happen if we detected changes"
             COMMITS_TABLE_CONTENT+="| (No commits found) | - | - | - |"$'\n'
