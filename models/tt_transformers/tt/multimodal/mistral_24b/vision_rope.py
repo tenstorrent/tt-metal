@@ -8,8 +8,8 @@ We have modified the compute_gather_cos_sin function of RMSNorm to be compatible
 """
 
 import torch
-import ttnn
 
+import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import precompute_mistral_vision_freqs
 from ttnn import ReplicateTensorToMesh

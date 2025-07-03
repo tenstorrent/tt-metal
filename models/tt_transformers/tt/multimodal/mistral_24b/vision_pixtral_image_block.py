@@ -4,10 +4,11 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
-
-from models.experimental.mistral_24b.tt.vision_attention import TtMistralImageAttention as TtLlamaImageAttention
-from models.experimental.mistral_24b.tt.vision_mlp import MistralTTVisionMLP as MLP
+from models.tt_transformers.tt.multimodal.mistral_24b.rmsnorm import RMSNorm
+from models.tt_transformers.tt.multimodal.mistral_24b.vision_attention import (
+    TtMistralImageAttention as TtLlamaImageAttention,
+)
+from models.tt_transformers.tt.multimodal.mistral_24b.vision_mlp import MistralTTVisionMLP as MLP
 
 """
 This file implements the pixtral image block specific for the Mistral-Small-3.1-24B-Instruct-2503 model.

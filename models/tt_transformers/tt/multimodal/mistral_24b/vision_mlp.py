@@ -8,8 +8,8 @@ This file implements the Vision FeedForward submodule specific for the Mistral-S
 """
 
 import torch
-import ttnn
 
+import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 

@@ -6,9 +6,10 @@ This file implements the Vision MultiModalProjector submodule specific for the M
 """
 
 import torch
-from models.common.lightweightmodule import LightweightModule
-from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
+
 import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.multimodal.mistral_24b.rmsnorm import RMSNorm
 from ttnn import ConcatMeshToTensor
 
 

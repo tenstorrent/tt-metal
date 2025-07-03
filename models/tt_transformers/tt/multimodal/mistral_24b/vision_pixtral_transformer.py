@@ -10,7 +10,7 @@ This pipeline iterates over the pixtral image blocks to generate the image embed
 from tqdm import tqdm
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.mistral_24b.tt.vision_pixtral_image_block import TtPixtralImageTransformerBlock
+from models.tt_transformers.tt.multimodal.mistral_24b.vision_pixtral_image_block import TtPixtralImageTransformerBlock
 
 
 class TtPixtralTransformer(LightweightModule):

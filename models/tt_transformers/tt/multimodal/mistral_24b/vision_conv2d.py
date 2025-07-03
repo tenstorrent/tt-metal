@@ -8,8 +8,8 @@ We have modified the llama_patch_conv2d to be compatible with the Mistral-Small-
 """
 
 import torch
-import ttnn
 
+import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 

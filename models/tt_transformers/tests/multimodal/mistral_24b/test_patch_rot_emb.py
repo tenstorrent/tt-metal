@@ -1,36 +1,26 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
+import pytest
+import torch
 from loguru import logger
 
-import torch
-import pytest
-import os
 import ttnn
-
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.mistral_24b.tt.vision_rope import VisionRotarySetup as RotarySetup
-
-from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
-
-
-def reference_vision_rot_emb(model_args):
-    """Mistral-specific reference method for vision rotary embedding."""
-    model = model_args.reference_vision_transformer(wrap=False)
-    layer = model.vision_tower.patch_positional_embedding
-    layer._load_state_dict = layer.load_state_dict
-    layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, model_args.head_dim))
-    return layer
+from models.tt_transformers.tt.multimodal.mistral_24b.vision_rope import VisionRotarySetup as RotarySetup
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 @torch.no_grad()
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("device"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
@@ -56,7 +46,7 @@ def test_rot_emb(seq_len, batch_size, reset_seeds, device):
     tt_model_args.n_layers = 1
     partial_state_dict = {}
 
-    reference_model = reference_vision_rot_emb(tt_model_args)
+    reference_model = tt_model_args.reference_vision_rot_emb()
     reference_model.load_state_dict(partial_state_dict)
 
     image_size = tt_model_args.vision_image_size

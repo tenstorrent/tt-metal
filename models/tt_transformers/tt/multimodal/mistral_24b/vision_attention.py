@@ -4,11 +4,11 @@
 """
 This is the modified version of the vision_attention for the Mistral-Small-3.1-24B-Instruct-2503 model.
 We introduced the `apply_rotary_pos_emb_vision_tt` function to llama_image_attention to be compatible with the Mistral-Small-3.1-24B-Instruct-2503 model.
+
 """
-
 import torch
-import ttnn
 
+import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole, nearest_32
 

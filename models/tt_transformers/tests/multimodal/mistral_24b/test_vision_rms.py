@@ -2,36 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-
-import torch
-import pytest
 import os
 
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
-
-from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
-
-
-def reference_vision_rms(model_args):
-    """Mistral-specific reference method for vision RMS norm."""
-    model = model_args.reference_vision_transformer(wrap=False)
-    layer = model.vision_tower.transformer.layers[0].ffn_norm
-    layer._load_state_dict = layer.load_state_dict
-    layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, model_args.head_dim))
-    return layer
+from models.tt_transformers.tt.multimodal.mistral_24b.rmsnorm import RMSNorm
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 @torch.no_grad()
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("device"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
@@ -57,7 +47,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     tt_model_args.n_layers = 1
     state_dict = tt_model_args.load_state_dict()
 
-    reference_model = reference_vision_rms(tt_model_args)
+    reference_model = tt_model_args.reference_vision_rms()
 
     first_layer_prefix = "vision_tower.transformer.layers.0.ffn_norm."
 
