@@ -86,5 +86,9 @@ class Yolov8xTrace2CQ:
 
         return outputs
 
+    def run(self, torch_input_tensor):
+        self.tt_inputs_host, _ = self.test_infra.setup_l1_sharded_input(self.device, torch_input_tensor)
+        return self.execute_yolov8x_trace_2cqs_inference(self.tt_inputs_host)
+
     def release_yolov8x_trace_2cqs_inference(self):
         ttnn.release_trace(self.device, self.tid)
