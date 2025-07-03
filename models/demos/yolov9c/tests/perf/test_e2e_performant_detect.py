@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
+from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
 from models.utility_functions import run_for_wormhole_b0
 
 
@@ -19,34 +19,34 @@ from models.utility_functions import run_for_wormhole_b0
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
-    "batch_size, act_dtype, weight_dtype",
-    ((1, ttnn.bfloat16, ttnn.bfloat8_b),),
-)
-@pytest.mark.parametrize(
-    "resolution",
+    "batch_size, resolution",
     [
-        (640, 640),
+        (
+            1,
+            (640, 640),
+        ),
     ],
 )
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 def test_e2e_performant(
     device,
-    batch_size,
-    act_dtype,
-    weight_dtype,
     model_location_generator,
+    batch_size,
     resolution,
+    act_dtype=ttnn.bfloat8_b,
+    weight_dtype=ttnn.bfloat8_b,
 ):
-    performant_runner = YOLOv8sWorldPerformantRunner(
+    performant_runner = YOLOv9PerformantRunner(
         device,
         batch_size,
         act_dtype,
         weight_dtype,
+        model_task="detect",
         resolution=resolution,
         model_location_generator=None,
     )
-    performant_runner._capture_yolov8s_world_trace_2cqs()
+    performant_runner._capture_yolov9_trace_2cqs()
     input_shape = (1, *resolution, 3)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
     torch_input_tensor = F.pad(torch_input_tensor, (0, 29), mode="constant", value=0)
@@ -55,7 +55,7 @@ def test_e2e_performant(
     inference_times = []
     for _ in range(10):
         t0 = time.time()
-        _ = performant_runner._execute_yolov8s_world_trace_2cqs_inference(tt_inputs_host)
+        _ = performant_runner._execute_yolov9_trace_2cqs_inference(tt_inputs_host)
         t1 = time.time()
         inference_times.append(t1 - t0)
 
@@ -63,5 +63,5 @@ def test_e2e_performant(
 
     inference_time_avg = round(sum(inference_times) / len(inference_times), 6)
     logger.info(
-        f"ttnn_yolov8s_world_batch_size: {batch_size}, resolution: {resolution}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size/inference_time_avg)}"
+        f"ttnn_yolov9 Detect - batch_size: {batch_size}, resolution: {resolution}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size/inference_time_avg)}"
     )

@@ -108,13 +108,12 @@ def run_prefetcher_mm(
         padded_shapes.append((K_padded, N_padded))
         shard_shapes.append((K_per_shard, N_per_shard))
 
-    cluster_shape = None
     mesh_mapper = None
     mesh_composer = None
     if isinstance(device, ttnn._ttnn.multi_device.MeshDevice):
-        cluster_shape = device.shape
+        mesh_rows, mesh_cols = device.shape
         mesh_mapper = ReplicateTensorToMesh(device)
-        mesh_composer = ConcatMesh2dToTensor(device, dims=(0, 1), mesh_shape=cluster_shape)
+        mesh_composer = ConcatMesh2dToTensor(device, dims=(0, 1), mesh_shape=(mesh_rows, mesh_cols))
 
     pt_tensors = []
     for l in range(num_layers):
