@@ -584,7 +584,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
         }
     } else if (
         mesh_graph_desc_filename == "single_galaxy_mesh_graph_descriptor.yaml" ||
-        mesh_graph_desc_filename == "single_galaxy_torus_2d_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "single_galaxy_torus_xy_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "dual_galaxy_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "p100_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "p150_mesh_graph_descriptor.yaml" ||

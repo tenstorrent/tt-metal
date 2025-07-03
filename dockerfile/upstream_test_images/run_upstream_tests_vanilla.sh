@@ -88,8 +88,8 @@ test_suite_wh_6u_metal_unit_tests() {
 }
 
 test_suite_wh_6u_metal_2d_torus_health_check_tests() {
-    echo "[upstream-tests] Checking for 2D Torus topology on WH 6U"
-    ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_2D
+    echo "[upstream-tests] Checking for XY Torus topology on WH 6U"
+    ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_XY
 }
 
 test_suite_wh_6u_model_unit_tests() {
