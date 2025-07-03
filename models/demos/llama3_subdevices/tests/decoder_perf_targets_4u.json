@@ -24,7 +24,7 @@
         },
         "AllReduceAsync_0": {
             "op_name": "AllReduceAsync_DO",
-            "kernel_duration": 23027,
+            "kernel_duration": 20600,
             "op_to_op": 727.929292929293,
             "first_to_last_start": 1748.0404040404042,
             "non-overlapped-dispatch-time": 7015.244444444444,
