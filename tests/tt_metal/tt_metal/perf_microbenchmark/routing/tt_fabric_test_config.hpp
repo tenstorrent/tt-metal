@@ -98,6 +98,15 @@ static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mappe
     {"ExhaustFirst", CoreAllocationPolicy::ExhaustFirst},
 });
 
+static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_pattern_mapper({
+    {"all_to_all_unicast", HighLevelTrafficPattern::AllToAllUnicast},
+    {"full_device_random_pairing", HighLevelTrafficPattern::FullDeviceRandomPairing},
+    {"all_to_all_multicast", HighLevelTrafficPattern::AllToAllMulticast},
+    {"unidirectional_linear_multicast", HighLevelTrafficPattern::UnidirectionalLinearMulticast},
+    {"full_ring_multicast", HighLevelTrafficPattern::FullRingMulticast},
+    {"half_ring_multicast", HighLevelTrafficPattern::HalfRingMulticast},
+});
+
 }  // namespace detail
 
 struct ParsedYamlConfig {
@@ -966,7 +975,9 @@ private:
             } else if (pattern.type == "unidirectional_linear_multicast") {
                 expand_unidirectional_linear_multicast(test, defaults);
             } else if (pattern.type == "full_ring_multicast" || pattern.type == "half_ring_multicast") {
-                expand_full_or_half_ring_multicast(test, defaults, pattern.type);
+                HighLevelTrafficPattern pattern_type =
+                    detail::high_level_traffic_pattern_mapper.from_string(pattern.type, "HighLevelTrafficPattern");
+                expand_full_or_half_ring_multicast(test, defaults, pattern_type);
             } else {
                 TT_THROW("Unsupported pattern type: {}", pattern.type);
             }
@@ -1011,9 +1022,9 @@ private:
     }
 
     void expand_unidirectional_linear_multicast(TestConfig& test, const TrafficPatternConfig& base_pattern) {
-        log_info(LogTest, "Expanding all_to_all_multicast pattern for test: {}", test.name);
+        log_info(LogTest, "Expanding unidirectional_linear_multicast pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
-        TT_FATAL(!devices.empty(), "Cannot expand all_to_all_multicast because no devices were found.");
+        TT_FATAL(!devices.empty(), "Cannot expand unidirectional_linear_multicast because no devices were found.");
 
         for (const auto& src_node : devices) {
             // instantiate N/S E/W traffic on seperate senders to avoid bottlnecking on sender.
@@ -1031,18 +1042,27 @@ private:
     }
 
     void expand_full_or_half_ring_multicast(
-        TestConfig& test, const TrafficPatternConfig& base_pattern, const std::string& patter_type) {
+        TestConfig& test, const TrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
         log_info(LogTest, "Expanding full_or_half_ring_multicast pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
-        TT_FATAL(!devices.empty(), "Cannot expand all_to_all_multicast because no devices were found.");
+        TT_FATAL(!devices.empty(), "Cannot expand full_or_half_ring_multicast because no devices were found.");
 
         for (const auto& src_node : devices) {
-            // TODO: fix for 6U since this is not a valide config for it.
-            auto [dst_node_forward, dst_node_backward] =
-                this->route_manager_.get_wrap_around_mesh_ring_neighbors(src_node, devices);
+            // Get ring neighbors - returns nullopt for non-perimeter devices
+            auto ring_neighbors = this->route_manager_.get_wrap_around_mesh_ring_neighbors(src_node, devices);
+
+            // Check if the result is valid (has value)
+            if (!ring_neighbors.has_value()) {
+                // Skip this device as it's not on the perimeter and can't participate in ring multicast
+                log_info(LogTest, "Skipping device {} as it's not on the perimeter ring", src_node.chip_id);
+                continue;
+            }
+
+            // Extract the valid ring neighbors
+            auto [dst_node_forward, dst_node_backward] = ring_neighbors.value();
 
             auto hops = this->route_manager_.get_full_or_half_ring_mcast_hops(
-                src_node, dst_node_forward, dst_node_backward, patter_type);
+                src_node, dst_node_forward, dst_node_backward, pattern_type);
 
             TrafficPatternConfig specific_pattern;
             specific_pattern.destination = DestinationConfig{.hops = hops};

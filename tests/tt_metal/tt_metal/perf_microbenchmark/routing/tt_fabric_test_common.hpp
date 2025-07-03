@@ -200,7 +200,7 @@ public:
      * - Upper rows: East → South, Lower rows: East → North
      * - Left columns: South → East, Right columns: South → West
      */
-    std::vector<FabricNodeId> get_ring_topology_dst_node_ids_from_hops(
+    std::vector<FabricNodeId> get_wrap_around_mesh_ring_topology_dst_node_ids(
         const FabricNodeId& src_node_id, RoutingDirection initial_direction, uint32_t total_hops) const {
         std::vector<FabricNodeId> ring_destinations;
         ring_destinations.reserve(total_hops);
@@ -329,7 +329,7 @@ public:
                 }
             }
             TT_FATAL(total_hops != 0, "all directions has 0 hops");
-            return get_ring_topology_dst_node_ids_from_hops(src_node, initial_direction, total_hops);
+            return get_wrap_around_mesh_ring_topology_dst_node_ids(src_node, initial_direction, total_hops);
         }
 
         std::vector<FabricNodeId> dst_nodes;
@@ -516,24 +516,73 @@ public:
         return hops;
     }
 
-    std::pair<FabricNodeId, FabricNodeId> get_wrap_around_mesh_ring_neighbors(
+    std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
         const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const override {
-        bool is_first_chip = src_node.chip_id == 0;
-        bool is_last_chip = src_node.chip_id == devices.size() - 1;
+        // Get mesh dimensions
+        uint32_t mesh_height = mesh_shape_[NS_DIM];
+        uint32_t mesh_width = mesh_shape_[EW_DIM];
 
-        FabricNodeId dst_node_forward = src_node, dst_node_backward = src_node;
+        // Convert chip_id to row/col coordinates (row-major order)
+        uint32_t row = src_node.chip_id / mesh_width;
+        uint32_t col = src_node.chip_id % mesh_width;
 
-        // TODO: fix for 6U since this is not a valid config for it.
-        if (is_first_chip) {
-            dst_node_forward = FabricNodeId{src_node.mesh_id, src_node.chip_id + 1};
-            dst_node_backward = FabricNodeId{src_node.mesh_id, static_cast<chip_id_t>(devices.size() - 1)};
-        } else if (is_last_chip) {
-            dst_node_forward = FabricNodeId{src_node.mesh_id, 0};
-            dst_node_backward = FabricNodeId{src_node.mesh_id, src_node.chip_id - 1};
-        } else {
-            dst_node_forward = FabricNodeId{src_node.mesh_id, src_node.chip_id + 1};
-            dst_node_backward = FabricNodeId{src_node.mesh_id, src_node.chip_id - 1};
+        // Check if the device is on the outer ring (perimeter)
+        bool is_perimeter = (row == 0) || (row == mesh_height - 1) || (col == 0) || (col == mesh_width - 1);
+
+        // If not on perimeter, return nullopt to indicate no valid ring neighbors
+        if (!is_perimeter) {
+            return std::nullopt;
         }
+
+        // Calculate ring neighbors based on position on perimeter
+        // Ring goes clockwise: top row (L->R), right col (T->B), bottom row (R->L), left col (B->T)
+        chip_id_t forward_chip_id, backward_chip_id;
+
+        if (row == 0 && col == 0) {
+            // Top-left corner (0): forward=1, backward=4 (4x4 mesh)
+            forward_chip_id = 1;
+            backward_chip_id = mesh_width;
+        } else if (row == 0 && col == mesh_width - 1) {
+            // Top-right corner (3): forward=7, backward=2
+            forward_chip_id = src_node.chip_id + mesh_width;
+            backward_chip_id = src_node.chip_id - 1;
+        } else if (row == mesh_height - 1 && col == mesh_width - 1) {
+            // Bottom-right corner (15): forward=14, backward=11
+            forward_chip_id = src_node.chip_id - 1;
+            backward_chip_id = src_node.chip_id - mesh_width;
+        } else if (row == mesh_height - 1 && col == 0) {
+            // Bottom-left corner (12): forward=8, backward=13
+            forward_chip_id = src_node.chip_id - mesh_width;
+            backward_chip_id = src_node.chip_id + 1;
+        } else if (row == 0) {
+            // Top row (not corners): forward=right, backward=left
+            forward_chip_id = src_node.chip_id + 1;
+            backward_chip_id = src_node.chip_id - 1;
+        } else if (col == mesh_width - 1) {
+            // Right column (not corners): forward=down, backward=up
+            forward_chip_id = src_node.chip_id + mesh_width;
+            backward_chip_id = src_node.chip_id - mesh_width;
+        } else if (row == mesh_height - 1) {
+            // Bottom row (not corners): forward=left, backward=right
+            forward_chip_id = src_node.chip_id - 1;
+            backward_chip_id = src_node.chip_id + 1;
+        } else if (col == 0) {
+            // Left column (not corners): forward=up, backward=down
+            forward_chip_id = src_node.chip_id - mesh_width;
+            backward_chip_id = src_node.chip_id + mesh_width;
+        } else {
+            TT_THROW("Device {} should be on perimeter but logic error occurred", src_node.chip_id);
+        }
+
+        log_debug(
+            LogTest,
+            "src_node: {}, forward_chip_id: {}, backward_chip_id: {}",
+            src_node.chip_id,
+            forward_chip_id,
+            backward_chip_id);
+
+        FabricNodeId dst_node_forward = FabricNodeId{src_node.mesh_id, forward_chip_id};
+        FabricNodeId dst_node_backward = FabricNodeId{src_node.mesh_id, backward_chip_id};
 
         return std::make_pair(dst_node_forward, dst_node_backward);
     }
@@ -542,7 +591,7 @@ public:
         const FabricNodeId& src_node_id,
         const FabricNodeId& dst_node_forward_id,
         const FabricNodeId& dst_node_backward_id,
-        const std::string& patter_type) const override {
+        HighLevelTrafficPattern pattern_type) const override {
         std::unordered_map<RoutingDirection, uint32_t> hops;
         for (const auto& direction : FabricContext::routing_directions) {
             hops[direction] = 0;
@@ -554,19 +603,21 @@ public:
         auto num_forward_hops = 0;
         auto num_backward_hops = 0;
         // TODO: fix for 6U since this is not a valide config for it.
-        uint32_t full_hop_count = mesh_shape_[NS_DIM] * mesh_shape_[EW_DIM] - 1;
+        uint32_t full_hop_count = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1) - 1;
 
-        if (patter_type == "full_ring_multicast") {
+        if (pattern_type == HighLevelTrafficPattern::FullRingMulticast) {
             num_forward_hops = full_hop_count;
             num_backward_hops = full_hop_count;
-        } else if (patter_type == "half_ring_multicast") {
+        } else if (pattern_type == HighLevelTrafficPattern::HalfRingMulticast) {
             num_forward_hops = tt::div_up(full_hop_count, 2);
             num_backward_hops = full_hop_count - num_forward_hops;
             if (src_node_id.chip_id % 2 == 0) {
                 std::swap(num_forward_hops, num_backward_hops);
             }
         } else {
-            TT_THROW("high level pattern tyep {}  not supported in full/half ring test", patter_type);
+            TT_THROW(
+                "Unsupported pattern type for ring multicast: only FullRingMulticast and HalfRingMulticast are "
+                "supported");
         }
 
         hops[direction_forward] = num_forward_hops;
