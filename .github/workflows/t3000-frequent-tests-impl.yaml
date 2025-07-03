@@ -38,6 +38,7 @@ jobs:
           { name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 60, owner_id: U03PUAKE719}, #Miguel Tairum Cruz
           { name: "t3k resnet tests", arch: wormhole_b0, cmd: run_t3000_resnet_tests, timeout: 30, owner_id: U052J2QDDKQ}, #Pavle Josipovic
           { name: "t3k sd35_large tests", arch: wormhole_b0, cmd: run_t3000_sd35large_tests, timeout: 60, owner_id: U03FJB5TM5Y}, #Colman Glagovich
+          { name: "t3k flux1_schnell tests", arch: wormhole_b0, cmd: run_t3000_flux1_schnell, timeout: 60, owner_id: U08HEPGQ2UE}, # Stanley Shen
           { name: "t3k mistral tests", arch: wormhole_b0, cmd: run_t3000_mistral_tests, timeout: 60, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
         ]
     name: ${{ matrix.test-group.name }}
