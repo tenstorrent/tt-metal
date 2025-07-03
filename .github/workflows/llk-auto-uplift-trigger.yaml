@@ -1,7 +1,6 @@
 name: Uplift LLK Submodule
 
 on:
-  workflow_dispatch:
   workflow_call:
     inputs:
       workflow_timeout:
