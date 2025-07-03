@@ -767,13 +767,13 @@ def export_dm_stats_to_csv(dm_stats, output_dir="tests/tt_metal/tt_metal/data_mo
                 [
                     "Kernel",
                     "Run Host ID",
-                    "Log2 of Transaction Size (bytes)",
+                    "Transaction Size (bytes)",
                     "Number of Transactions",
                     "Latency (cycles)",
                     "Bandwidth (bytes/cycle)",
                 ]
             )
-            for kernel in ["riscv_1", "riscv_0"]:
+            for kernel in dm_stats.keys():
                 kernel_series = dm_stats[kernel]["analysis"]["series"]
                 for entry in kernel_series:
                     run_host_id = entry["duration_type"][0]["run_host_id"]
@@ -784,12 +784,11 @@ def export_dm_stats_to_csv(dm_stats, output_dir="tests/tt_metal/tt_metal/data_mo
                     num_transactions = attributes.get("Number of transactions", 0)
                     duration_cycles = entry["duration_cycles"]
                     bandwidth = (num_transactions * transaction_size) / duration_cycles if duration_cycles else 0
-                    log2_transaction_size = int(np.log2(transaction_size)) if transaction_size > 0 else 0
                     writer.writerow(
                         [
                             "Receiver" if kernel == "riscv_1" else "Sender",
                             run_host_id,
-                            log2_transaction_size,
+                            transaction_size,
                             num_transactions,
                             duration_cycles,
                             bandwidth,
