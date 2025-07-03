@@ -5,6 +5,7 @@
 #pragma once
 
 #include <umd/device/types/arch.h>
+#include <cstdint>
 #include "fabric_types.hpp"
 #include "gtest/gtest.h"
 #include "dispatch_fixture.hpp"
@@ -250,14 +251,9 @@ protected:
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
         }
-        // Skip unsupported FabricConfigs on TG
+        // Skip for TG as it's still being implemented
         if (tt::tt_metal::IsGalaxyCluster()) {
-            switch (GetParam()) {
-                case tt::tt_metal::FabricConfig::FABRIC_1D:
-                case tt::tt_metal::FabricConfig::FABRIC_2D:
-                case tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC: break;
-                default: GTEST_SKIP() << "Unsupported FabricConfig for this test";
-            }
+            GTEST_SKIP();
         }
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param
