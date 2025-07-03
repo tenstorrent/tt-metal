@@ -83,12 +83,9 @@ The following model is evaluated(mAPval 50-95) for 500 samples.:-
 -   YOLOv10x(640x640 resolution) - **0.7800** #Ran for 105 samples, since running 500 samples requires more memory
 -   YOLOv9c(640x640 resolution) - **0.6702**#Ran for 20 samples, since running 500 samples requires more memory
 -   YOLOv8s(640x640 resolution) - **0.7997**
-<<<<<<< HEAD
 -   YOLOv11n(640x640 resolution) - **0.7653**
-
-=======
 -   YOLOv7(640x640 resolution) - **0.3188** #Ran for 20 samples, since running 500 samples requires more memory
->>>>>>> 542db07ebe (#21629: Yolov7 eval)
+
 To run the test of ttnn vs ground truth, please follow the following commands:
 
 **YOLOv4:** <br>

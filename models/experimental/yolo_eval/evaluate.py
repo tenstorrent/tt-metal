@@ -271,6 +271,8 @@ def evaluation(
     for ttnn_im, im, im0s in preprocessed_images:
         if model_type == "torch_model":
             preds = model(im)
+            if model_name == "YOLOv7":
+                preds = preds[0]
             if model_name == "YOLOv4":
                 from models.demos.yolov4.post_processing import get_region_boxes
 
@@ -311,30 +313,17 @@ def evaluation(
         elif model_name == "YOLOv7":
             from models.demos.yolov7.demo.demo_utils import postprocess as postprocess_yolov7
 
-            if model_type == "torch_model":
-                results = postprocess_yolov7(
-                    preds[0],
-                    im,
-                    im0s,
-                    batch,
-                    classes,
-                    source_list[index],
-                    img_for_yolov7[index],
-                    data_set,
-                    save_dir=save_dir,
-                )[0]
-            else:
-                results = postprocess_yolov7(
-                    preds,
-                    im,
-                    im0s,
-                    batch,
-                    classes,
-                    source_list[index],
-                    img_for_yolov7[index],
-                    data_set,
-                    save_dir=save_dir,
-                )[0]
+            results = postprocess_yolov7(
+                preds,
+                im,
+                im0s,
+                batch,
+                classes,
+                source_list[index],
+                img_for_yolov7[index],
+                data_set,
+                save_dir=save_dir,
+            )[0]
         else:
             results = postprocess(preds, im, im0s, batch, classes)[0]
 
