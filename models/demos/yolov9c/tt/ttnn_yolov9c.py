@@ -732,6 +732,19 @@ class YoloV9:
             self.segment_detect = TtnnDetect(device, parameters.model_args.model[22], parameters.model[22])  # 22
 
     def __call__(self, x):
+        N, C, H, W = x.shape
+        ## Padding from image channels (3) to min channels (16)
+        min_channels = 16
+        if C < min_channels:
+            channel_padding_needed = min_channels - C
+            nchw = ttnn.pad(x, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        else:
+            nchw = x
+        nhwc = ttnn.permute(nchw, (0, 2, 3, 1))  # NCHW -> NHWC
+        ttnn.deallocate(nchw)
+        ttnn.deallocate(x)
+        nhwc = ttnn.reallocate(nhwc)
+        x = ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
         x = self.conv1(x)  # 0
         x = self.conv2(x)  # 1
         x = self.repncspelan4_1(x)  # 2
