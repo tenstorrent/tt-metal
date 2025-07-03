@@ -46,8 +46,9 @@ void pairwise_reduce_cb(
     uint32_t num_dst_regs) {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;
-    binary_op_init_common(cb_in, cb_scaler, cb_intermediate);
-    mul_tiles_bcast_scalar_init_short(cb_in, cb_scaler);
+    // binary_op_init_common(cb_in, cb_scaler, cb_intermediate);
+    init_bcast<ELWMUL, BroadcastType::SCALAR>(cb_in, cb_scaler, cb_intermediate);
+    // mul_tiles_bcast_scalar_init_short(cb_in, cb_scaler);
     reconfig_data_format(cb_in, cb_scaler);
     pack_reconfig_data_format(cb_intermediate);
     // always 0 if are popping cb_in, increases if we are not popping cb_in

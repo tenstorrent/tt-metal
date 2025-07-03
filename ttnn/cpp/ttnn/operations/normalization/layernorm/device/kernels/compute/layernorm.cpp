@@ -131,12 +131,11 @@ void MAIN {
          * x - E[x]
          * compute xmm=x-mean. Reuse cb_x since we didn't pop anything from it
          */
-        if constexpr (FLOAT32_DTYPE) {
-            reconfig_data_format(cb_x, cb_ex);
-        }
+        reconfig_data_format(cb_x, cb_ex);
 
 #ifndef FUSE_PRE_ADD
-        binary_op_init_common(cb_x, cb_ex, cb_xmm);
+        // binary_op_init_common(cb_x, cb_ex, cb_xmm);
+        init_bcast<ELWSUB, BroadcastType::COL>(cb_x, cb_ex, cb_xmm);
 #endif
         cb_wait_front(cb_ex, 1);  // should have 1 tile
         cb_reserve_back(cb_xmm, Wt);
@@ -176,9 +175,7 @@ void MAIN {
 
         pairwise_reduce_cb<true>(cb_xmm2, cb_scaler, cb_xmm2, cb_ex2, Wt, 4);
 
-        if constexpr (FLOAT32_DTYPE) {
-            reconfig_data_format(cb_ex2, cb_eps);
-        }
+        reconfig_data_format(cb_ex2, cb_eps);
         ACQ();
         add_tiles_init(cb_ex2, cb_eps);
         cb_wait_front(cb_ex2, 1);
