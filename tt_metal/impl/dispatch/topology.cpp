@@ -1609,6 +1609,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
                     .compile_args = ct_args,
                     .defines = defines,
                     .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+            log_info(tt::LogMetal, "Create EDM Create Device: {} Eth Core: {}", device->id(), eth_logical_core.str());
 
             tt::tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, eth_logical_core, rt_args);
         }

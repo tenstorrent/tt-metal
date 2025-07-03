@@ -1269,6 +1269,7 @@ void run_fabric_edm_main_loop(
         }
 
         if constexpr (enable_context_switch) {
+            run_routing_without_noc_sync();
             // shouldn't do noc counter sync since we are not incrementing them
             if constexpr (IDLE_CONTEXT_SWITCHING) {
                 if (did_something) {
@@ -1276,13 +1277,12 @@ void run_fabric_edm_main_loop(
                 } else {
                     if (did_nothing_count++ > SWITCH_INTERVAL) {
                         did_nothing_count = 0;
-                        run_routing_without_noc_sync();
                     }
                 }
             } else {
                 if (did_nothing_count++ > SWITCH_INTERVAL) {
                     did_nothing_count = 0;
-                    run_routing_without_noc_sync();
+                    // run_routing_without_noc_sync();
                 }
             }
         }

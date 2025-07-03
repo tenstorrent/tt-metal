@@ -105,7 +105,7 @@ void RelayMux::GenerateStaticConfigs() {
     log_debug(
         tt::LogMetal,
         "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {} Channel Size: {}, Num "
-        "Slots: {}, L1 Size: {}, Link Index: {}",
+        "Slots: {}, L1 Size: {}, Src: {}, Dst: {}, Links: {}, Link Index: {}",
         device_->id(),
         kernels_requiring_header_only_channel,
         kernels_requiring_full_size_channel,
@@ -116,6 +116,9 @@ void RelayMux::GenerateStaticConfigs() {
         mux_buffer_size,
         num_slots,
         l1_size,
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        available_links,
         available_links.back());
 
     tt_fabric::append_fabric_connection_rt_args(

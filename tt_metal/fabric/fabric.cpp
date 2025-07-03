@@ -169,6 +169,17 @@ void append_fabric_connection_rt_args(
     CoreCoord fabric_router_virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
             src_chip_id, fabric_router_channel);
+    auto logical_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+        src_chip_id, fabric_router_virtual_core);
+    log_warning(
+        tt::LogMetal,
+        "Program {} Appending Fabric Connection RT Args Src: {} Dst: {} LinkIdx: {}. Fabric Router Core: {} Chip {}",
+        worker_program.get_id(),
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        link_idx,
+        logical_eth_core.str(),
+        src_chip_id);
 
     const auto& edm_config = fabric_context.get_fabric_router_config();
     const auto sender_channel = is_2d_fabric ? router_direction : 0;

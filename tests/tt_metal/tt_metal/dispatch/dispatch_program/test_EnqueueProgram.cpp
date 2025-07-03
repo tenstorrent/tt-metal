@@ -36,6 +36,7 @@
 #include <tt-metalium/device.hpp>
 #include "dispatch_test_utils.hpp"
 #include "env_lib.hpp"
+#include "fabric.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -2451,6 +2452,81 @@ TEST_F(RandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPrograms) {
     }
 
     Finish(device_->command_queue());
+}
+
+TEST(Test1, Test) {
+    tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::FABRIC_1D);
+    constexpr CoreCoord core = {0, 0};
+    std::vector<int> devices_to_open;
+    devices_to_open.reserve(GetNumAvailableDevices());
+    for (int i = 0; i < GetNumAvailableDevices(); ++i) {
+        devices_to_open.push_back(i);
+    }
+    auto devices = detail::CreateDevices(devices_to_open);
+    Program program = CreateProgram();
+    KernelHandle void_dataflow_kernel_noc0_id = CreateKernel(
+        program,
+        "tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    KernelHandle void_dataflow_kernel_noc1_id = CreateKernel(
+        program,
+        "tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    std::vector<int> mmio_devices{0, 1, 2, 3};
+
+    for (const auto& mmio_chip_id : mmio_devices) {
+        int index = 0;
+        log_info(tt::LogTest, "MMIO Chip ID = {}", mmio_chip_id);
+        auto mmio_fabric_id = tt_fabric::get_fabric_node_id_from_physical_chip_id(mmio_chip_id);
+        auto& control_plane = MetalContext::instance().get_control_plane();
+        auto mmio_eth_chans = control_plane.get_active_fabric_eth_channels(mmio_fabric_id);
+        auto first_chan = *mmio_eth_chans.begin();
+
+        for (const auto& tunnels : MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_chip_id)) {
+            log_info(tt::LogTest, "  Tunnel {}", tunnels);
+            for (auto chip_in_tunnel : tunnels) {
+                auto dst_id = tt_fabric::get_fabric_node_id_from_physical_chip_id(chip_in_tunnel);
+
+                auto route = control_plane.get_fabric_route(mmio_fabric_id, dst_id, first_chan.first);
+                log_info(tt::LogTest, " Route to Chip ID {}: {}", chip_in_tunnel, route);
+                for (auto route_node : route) {
+                    log_info(tt::LogTest, "  Fabric Route = {} {}", route_node.first, (uint32_t)route_node.second);
+                }
+            }
+        }
+    }
+
+    for (const auto& mmio_chip_id : mmio_devices) {
+        int index = 0;
+        for (std::vector<int> tunnels :
+             MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_chip_id)) {
+            log_info(tt::LogTest, "Testing Tunnel {}. Devices = {}", index++, tunnels);
+            std::reverse(tunnels.begin(), tunnels.end());
+            for (auto chip_id_in_tunnel : tunnels) {
+                if (chip_id_in_tunnel < 4) {
+                    continue;  // Skip non-MMIO devices
+                }
+                log_info(tt::LogTest, "Testing Chip ID {}", chip_id_in_tunnel);
+                auto device = devices[chip_id_in_tunnel];
+                if (device->is_mmio_capable()) {
+                    continue;
+                }
+                log_info(tt::LogTest, "Begin Enqueue programs on Device {}", chip_id_in_tunnel);
+                CommandQueue& cq = device->command_queue();
+                for (int i = 0; i < 1; ++i) {
+                    EnqueueProgram(cq, program, true);
+                }
+                Finish(cq);
+                log_info(tt::LogTest, "Done Device {}", chip_id_in_tunnel);
+            }
+        }
+    }
+
+    detail::CloseDevices(devices);
 }
 
 }  // namespace stress_tests

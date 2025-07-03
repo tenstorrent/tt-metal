@@ -171,6 +171,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
 
     // wait for fabric router to be ready before setting up the connection
+    DPRINT << "Fabric Mux Waiting For Router" << ENDL();
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_connection.edm_noc_x,
         fabric_connection.edm_noc_y,
@@ -180,6 +181,8 @@ void kernel_main() {
     fabric_connection.open();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
+
+    DPRINT << "Fabric Mux Ready for Traffic" << ENDL();
 
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
