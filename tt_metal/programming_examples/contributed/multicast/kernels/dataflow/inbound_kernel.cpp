@@ -5,6 +5,15 @@
 #include "debug/dprint.h"  // required in all kernels using DPRINT
 #include "dataflow_api.h"
 
+// Helper function to copy a tile from one CB to another CB (eg. input CB to output CB) via L1.
+inline void copy_tile_between_cb(uint32_t src_addr, uint32_t dst_addr, uint32_t bytes) {
+    volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
+    volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
+    for (uint32_t i = 0; i < bytes / sizeof(uint32_t); i++) {
+        dst[i] = src[i];
+    }
+}
+
 // Ensure this is set: export TT_METAL_DPRINT_CORES='(0,0)-(3,0)'
 void kernel_main() {
 
@@ -16,8 +25,10 @@ void kernel_main() {
 
     ////////// BUFFER SETUP //////////
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0; // index=0
+    constexpr uint32_t cb_id_out0 = tt::CB::c_out0;  // index=16
     uint32_t ublock_size_bytes = get_tile_size(cb_id_in0);
-    uint32_t l1_addr = get_write_ptr(cb_id_in0);
+    uint32_t l1_addr_in = get_write_ptr(cb_id_in0);
+    uint32_t l1_addr_out = get_write_ptr(cb_id_out0);
 
     ////////// SEMAPHORE SETUP //////////
     volatile tt_l1_ptr uint32_t* receiver_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_addr);
@@ -48,5 +59,10 @@ void kernel_main() {
     cb_push_back(cb_id_in0, 1);
 
     DPRINT << "CORE (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y()
-    << "): Inbound kernel has processed and acknowledged its tile." << ENDL() << ENDL();
+           << "): Inbound kernel has received and acknowledged its tile." << ENDL() << ENDL();
+
+    ////////// COPY TILE TO OUTBOUND KERNEL'S CB //////////
+    cb_reserve_back(cb_id_out0, 1);
+    copy_tile_between_cb(get_read_ptr(cb_id_in0), get_write_ptr(cb_id_out0), ublock_size_bytes);
+    cb_push_back(cb_id_out0, 1);
 }
