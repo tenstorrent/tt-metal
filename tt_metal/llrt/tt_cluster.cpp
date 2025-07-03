@@ -1147,14 +1147,23 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
         return;
     }
 
+    std::set<std::pair<chip_id_t, chip_id_t>> pairs_done;
+
     // to reserve specified number of cores, ensure that the same are avaialble on connected chip id as well
     for (const auto& chip_id : this->driver_->get_target_device_ids()) {
         const auto& connected_chips_and_cores = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
-        for (const auto& [connnected_chip_id, cores] : connected_chips_and_cores) {
+        for (const auto& [connected_chip_id, cores] : connected_chips_and_cores) {
             const uint8_t num_cores_to_reserve = std::min(num_routing_planes, static_cast<uint8_t>(cores.size()));
+            if (pairs_done.count(std::make_pair(chip_id, connected_chip_id))) {
+                // the cores for this pair of chips are already allocated, skip
+                continue;
+            }
+
             uint8_t num_reserved_cores = 0;
             for (auto i = 0; i < cores.size(); i++) {
                 if (num_reserved_cores == num_cores_to_reserve) {
+                    pairs_done.insert(std::make_pair(chip_id, connected_chip_id));
+                    pairs_done.insert(std::make_pair(connected_chip_id, chip_id));
                     break;
                 }
 
@@ -1164,7 +1173,8 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
                     // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
                     const auto is_mmio_device = [&](int id) { return cluster_desc_->is_chip_mmio_capable(id); };
                     const auto is_last_link = [&]() { return num_reserved_cores == num_cores_to_reserve - 1; };
-                    if (is_last_link() && is_mmio_device(chip_id) && is_mmio_device(connnected_chip_id)) {
+                    if (is_last_link() && is_mmio_device(chip_id) && is_mmio_device(connected_chip_id)) {
+                        log_info(tt::LogMetal, "SKIPPING MMIO TO MMIO LINK");
                         num_reserved_cores++;
                         break;
                     }
@@ -1180,9 +1190,9 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
                 }
 
                 if (this->device_eth_routing_info_[chip_id][eth_core] == EthRouterMode::IDLE &&
-                    this->device_eth_routing_info_.at(connnected_chip_id).at(connected_core) == EthRouterMode::IDLE) {
+                    this->device_eth_routing_info_.at(connected_chip_id).at(connected_core) == EthRouterMode::IDLE) {
                     this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::FABRIC_ROUTER;
-                    this->device_eth_routing_info_[connnected_chip_id][connected_core] = EthRouterMode::FABRIC_ROUTER;
+                    this->device_eth_routing_info_[connected_chip_id][connected_core] = EthRouterMode::FABRIC_ROUTER;
 
                     log_info(
                         LogMetal,
@@ -1190,11 +1200,11 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
                         "Distance = {})",
                         chip_id,
                         cluster_desc_->get_closest_mmio_capable_chip(chip_id),
-                        connnected_chip_id,
-                        cluster_desc_->get_closest_mmio_capable_chip(connnected_chip_id),
+                        connected_chip_id,
+                        cluster_desc_->get_closest_mmio_capable_chip(connected_chip_id),
                         eth_core.str(),
                         this->cluster_desc_->get_ethernet_link_distance(
-                            cluster_desc_->get_closest_mmio_capable_chip(connnected_chip_id), connnected_chip_id));
+                            cluster_desc_->get_closest_mmio_capable_chip(connected_chip_id), connected_chip_id));
                     num_reserved_cores++;
                 }
             }
@@ -1204,7 +1214,7 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
                 "Unable to reserve {} routing planes b/w chip {} and {} for fabric, reserved only {}",
                 num_cores_to_reserve,
                 chip_id,
-                connnected_chip_id,
+                connected_chip_id,
                 num_reserved_cores);
         }
     }
