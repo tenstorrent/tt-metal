@@ -41,10 +41,7 @@ jobs:
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - arch-wormhole_b0
-      - config-t3000
-      - pipeline-functional
-      - ${{ inputs.extra-tag }}
+      - tt-beta-ubuntu-2204-n300-llmbox-viommu-stable
     container:
       image: ${{ inputs.docker-image }}
       env:

@@ -39,10 +39,7 @@ jobs:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on:
-      - arch-wormhole_b0
-      - config-t3000
-      - pipeline-perf
-      - ${{ inputs.extra-tag }}
+      - tt-beta-ubuntu-2204-n300-llmbox-viommu-stable
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4

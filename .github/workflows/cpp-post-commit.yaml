@@ -75,8 +75,8 @@ jobs:
     runs-on: >-
       ${{
         (startsWith(inputs.runner-label, 'tt-beta-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)))
-        || github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        || github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-viommu-large-stable', inputs.runner-label)
+        || fromJSON(format('["{0}"]', inputs.runner-label))
       }}
     steps:
       - name: ⬇️  Setup Job
