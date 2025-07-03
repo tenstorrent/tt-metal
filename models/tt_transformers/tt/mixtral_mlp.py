@@ -74,16 +74,10 @@ class TtMixtralMLP(LightweightModule):
                 pc_1 = self.model_config["PREFILL_MIXTRAL_MLP_W1_W3_PRG_CONFIG"](seq_len)
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
                 pc_3 = self.model_config["PREFILL_MIXTRAL_MLP_W1_W3_PRG_CONFIG"](seq_len)
-            elif seq_len == 128:
+            else:
                 pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"]
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"]
                 pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"]
-            else:  # For some sequence lengths,just use default program config
-                pc_1 = None
-                pc_2 = None
-                pc_3 = None
-
-            # breakpoint()
 
             w1_out = ttnn.linear(
                 x,
@@ -126,12 +120,12 @@ class TtMixtralMLP(LightweightModule):
                 w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, self.model_args.dim])
 
         else:  # Decode mode
+            breakpoint()
             w1_out = ttnn.matmul(
                 x,
                 self.w1,
-                program_config=self.model_config[
-                    "DECODE_MIXTRAL_MLP_W1_W3_PRG_CONFIG"
-                ],  # SILu activation fused in the op
+                program_config=self.model_config["DECODE_MIXTRAL_MLP_W1_PRG_CONFIG"],  # SILu activation fused in the op
+                # program_config=self.model_config["FF1_OUTPUT_PROGCFG"],
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,
@@ -139,7 +133,8 @@ class TtMixtralMLP(LightweightModule):
             w3_out = ttnn.matmul(
                 x,
                 self.w3,
-                program_config=self.model_config["DECODE_MIXTRAL_MLP_W1_W3_PRG_CONFIG"],
+                program_config=self.model_config["DECODE_MIXTRAL_MLP_W3_PRG_CONFIG"],
+                # program_config=self.model_config["FF2_OUTPUT_PROGCFG"],
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,
@@ -152,10 +147,13 @@ class TtMixtralMLP(LightweightModule):
                 w2_in,
                 self.w2,
                 program_config=self.model_config["DECODE_MIXTRAL_MLP_W2_PRG_CONFIG"],
+                # program_config=self.model_config["FF3_OUTPUT_PROGCFG"],
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,
             )
             w2_in.deallocate(True)
+            mc = ttnn.MemoryConfig(memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.L1)
+            w2_out = ttnn.to_memory_config(w2_out, mc)
 
         return w2_out
