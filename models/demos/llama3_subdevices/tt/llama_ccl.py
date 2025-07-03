@@ -6,12 +6,11 @@ import ttnn
 import torch
 import os
 
-# SET TO 1 TO USE LINE FOR RS
+# Only for prefill, check tt-metal/models/demos/llama3_subdevices/README.md
 LINE_RS = os.environ.get("LINE_RS", "0") == "1"
-# SET TO 1 TO USE LINE FOR ANY AG
 LINE_AG = os.environ.get("LINE_AG", "0") == "1"
 
-# AG KEYS THAT USE LINE WHEN RING_6U IS 1 AND LINE_AG IS 0
+# If set, use line for those AG ops in prefill, otherwise use ring if available
 USE_LINE_AG = {
     # "QKV",
     # "WO",
