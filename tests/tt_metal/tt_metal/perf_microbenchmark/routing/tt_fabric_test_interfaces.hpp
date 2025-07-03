@@ -103,6 +103,7 @@ public:
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const = 0;
     virtual FabricNodeId get_neighbor_node_id(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
+    virtual uint32_t get_max_routing_planes_for_device(const FabricNodeId& node_id) const = 0;
 };
 
 }  // namespace fabric_tests

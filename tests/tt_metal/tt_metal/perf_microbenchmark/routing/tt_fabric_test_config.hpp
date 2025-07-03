@@ -523,6 +523,12 @@ inline TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fa
         fabric_setup.routing_type = RoutingType::LowLatency;
     }
 
+    if (fabric_setup_yaml["num_links"]) {
+        fabric_setup.num_links = parse_scalar<uint32_t>(fabric_setup_yaml["num_links"]);
+    } else {
+        fabric_setup.num_links = 1;
+    }
+
     return fabric_setup;
 }
 
@@ -793,7 +799,7 @@ inline ParametrizationOptionsMap YamlConfigParser::parse_parametrization_params(
 
         if (key == "ftype" || key == "ntype") {
             options[key] = parse_scalar_sequence<std::string>(node);
-        } else if (key == "size" || key == "num_packets") {
+        } else if (key == "size" || key == "num_packets" || key == "num_links") {
             options[key] = parse_scalar_sequence<uint32_t>(node);
         } else {
             TT_THROW("Unsupported parametrization parameter: {}", key);
@@ -878,6 +884,7 @@ private:
         SenderConfig resolved_sender;
         resolved_sender.device = resolve_device_identifier(parsed_sender.device, device_info_provider_);
         resolved_sender.core = parsed_sender.core;
+        resolved_sender.link_id = parsed_sender.link_id;  // Transfer link ID
 
         resolved_sender.patterns.reserve(parsed_sender.patterns.size());
         for (const auto& parsed_pattern : parsed_sender.patterns) {
@@ -973,6 +980,12 @@ private:
                 }
             }
 
+            // After patterns are expanded, duplicate senders for different links if specified
+            if (!expand_link_duplicates(iteration_test)) {
+                // Test was skipped due to insufficient routing planes, continue to next iteration
+                continue;
+            }
+
             // After patterns are expanded, resolve any missing params based on policy
             resolve_missing_params(iteration_test);
 
@@ -1014,6 +1027,8 @@ private:
                         for (const auto& value : values) {
                             next_level_configs.emplace_back(current_config);
                             auto& next_config = next_level_configs.back();
+                            // Explicitly preserve benchmark_mode
+                            next_config.benchmark_mode = current_config.benchmark_mode;
                             // Use optimized string concatenation utility
                             detail::append_with_separator(next_config.name, "_", param_name, value);
 
@@ -1033,17 +1048,22 @@ private:
                         for (const auto& value : values) {
                             next_level_configs.emplace_back(current_config);
                             auto& next_config = next_level_configs.back();
-                            // Use optimized string concatenation utility
-                            detail::append_with_separator(next_config.name, "_", param_name, value);
+                            // Explicitly preserve benchmark_mode
+                            next_config.benchmark_mode = current_config.benchmark_mode;
 
-                            ParsedTrafficPatternConfig param_default;
-                            if (param_name == "size") {
-                                param_default.size = value;
-                            } else if (param_name == "num_packets") {
-                                param_default.num_packets = value;
+                            if (param_name == "num_links") {
+                                // num_links is part of fabric_setup, not traffic pattern defaults
+                                next_config.fabric_setup.num_links = value;
+                            } else {
+                                ParsedTrafficPatternConfig param_default;
+                                if (param_name == "size") {
+                                    param_default.size = value;
+                                } else if (param_name == "num_packets") {
+                                    param_default.num_packets = value;
+                                }
+                                next_config.defaults = merge_patterns(
+                                    current_config.defaults.value_or(ParsedTrafficPatternConfig{}), param_default);
                             }
-                            next_config.defaults = merge_patterns(
-                                current_config.defaults.value_or(ParsedTrafficPatternConfig{}), param_default);
                         }
                     }
                 }
@@ -1500,6 +1520,48 @@ private:
         }
     }
 
+    bool expand_link_duplicates(ParsedTestConfig& test) {
+        // If num_links is 1, no duplication needed
+        if (test.fabric_setup.num_links <= 1) {
+            return true;  // Success - no expansion needed
+        }
+
+        uint32_t num_links = test.fabric_setup.num_links;
+        log_info(LogTest, "Expanding link duplicates for test '{}' with {} links", test.name, num_links);
+
+        // Validate that num_links doesn't exceed available routing planes for any device
+        std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
+        for (const auto& device : devices) {
+            uint32_t max_routing_planes = route_manager_.get_max_routing_planes_for_device(device);
+            if (num_links > max_routing_planes) {
+                log_warning(
+                    LogTest,
+                    "Skipping test '{}': Requested num_links ({}) exceeds maximum available routing planes ({}) for "
+                    "device {}. "
+                    "Please reduce num_links or check your fabric configuration.",
+                    test.name,
+                    num_links,
+                    max_routing_planes,
+                    device.chip_id);
+                return false;  // Indicate test should be skipped
+            }
+        }
+
+        std::vector<ParsedSenderConfig> new_senders;
+        new_senders.reserve(test.senders.size() * num_links);
+
+        for (const auto& sender : test.senders) {
+            for (uint32_t link_id = 0; link_id < num_links; ++link_id) {
+                ParsedSenderConfig duplicated_sender = sender;
+                duplicated_sender.link_id = link_id;  // Assign link ID
+                new_senders.push_back(duplicated_sender);
+            }
+        }
+
+        test.senders = std::move(new_senders);
+        return true;  // Success
+    }
+
     void resolve_missing_params(ParsedTestConfig& test) {
         if (test.on_missing_param_policy.has_value() && test.on_missing_param_policy.value() == "randomize") {
             for (auto& sender : test.senders) {
@@ -1730,6 +1792,11 @@ private:
             out << YAML::Key << "core";
             out << YAML::Value;
             to_yaml(out, config.core.value());
+        }
+
+        if (config.link_id) {
+            out << YAML::Key << "link_id";
+            out << YAML::Value << config.link_id.value();
         }
 
         out << YAML::Key << "patterns";
