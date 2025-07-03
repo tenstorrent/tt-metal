@@ -22,7 +22,7 @@ def to_torch(
     *,
     mesh_device: ttnn.MeshDevice | None = None,  # this is only used to construct a mesh composer
     dtype: torch.dtype | None = None,
-    mesh_composer: ttnn.MeshToTensor | None = None,
+    mesh_composer: ttnn.CppMeshToTensor | None = None,
     shard_dim: int | None = None,
     fix_special_numbers: bool = False,
 ) -> torch.Tensor:
