@@ -3927,7 +3927,7 @@ def test_conv2d_act_dealloc(
         [3, (1, 1)],
     ],
 )
-def test_conv_single_core_hang(
+def test_conv_single_core(
     device,
     torch_tensor_map,
     output_channels,

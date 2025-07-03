@@ -208,7 +208,6 @@ void kernel_main() {
             for (uint32_t act_w_outer_i = 0; act_w_outer_i < num_input_cores; act_w_outer_i++) {
                 cb_reserve_back(cb_id_act, act_block_num_tiles);
                 if constexpr (skip_mcast) {
-                    cb_reserve_back(cb_id_act, act_block_num_tiles);
                     cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
 
                     uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
