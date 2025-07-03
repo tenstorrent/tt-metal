@@ -228,9 +228,6 @@ def test_cumsum_callback(size, dim, dtypes, device):
     "dtypes",
     [
         (torch.float32, None),
-        # (torch.bfloat16, ttnn.bfloat16),
-        # (torch.float32, ttnn.float32),
-        # (torch.float32, ttnn.bfloat16),
     ],
 )
 def test_cumsum_backward(size, dim, dtypes, device):
@@ -259,18 +256,10 @@ def test_cumsum_backward(size, dim, dtypes, device):
     torch_output.backward(torch_output_grad)
 
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    # tt_input_grad_cpu = (
-    #     ttnn.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad)
-    #     .cpu()
-    #     .to(cpu_layout)
-    #     .unpad_from_tile(size)
-    #     .to_torch()
-    # )
 
     tt_input_grad_cpu = ttnn.to_torch(ttnn.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad))
 
     assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
-    # assert tt_input_grad_cpu.dtype == torch_input_tensor.grad.dtype
 
     # test for equivalance
     rtol = atol = 0.1
