@@ -119,8 +119,10 @@ jobs:
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} > workflow.json
           echo "[Info] Workflow run attempt jobs"
           # Try the original --paginate approach first, fall back to manual pagination if it fails
+          set +e  # Disable exit on error
           paginated_output=$(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate 2>&1)
           paginate_exit_code=$?
+          set -e  # Re-enable exit on error
 
           if [ $paginate_exit_code -eq 0 ]; then
             echo "Successfully fetched jobs using --paginate"
