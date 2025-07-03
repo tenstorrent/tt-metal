@@ -5,6 +5,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/kernel.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -13,11 +17,19 @@ using namespace tt::tt_metal;
 #endif
 int main() {
     /* Silicon accelerator setup */
-    IDevice* device = CreateDevice(0);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(
+        0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
 
     /* Setup program to execute along with its buffers and kernels to use */
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
+
     constexpr CoreCoord core = {0, 0};
 
     constexpr uint32_t single_tile_size = 2 * 1024;
@@ -42,30 +54,30 @@ int main() {
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
     constexpr uint32_t src1_cb_index = CBIndex::c_1;
     CircularBufferConfig cb_src1_config =
         CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, single_tile_size);
-    CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program_, core, cb_src1_config);
 
     constexpr uint32_t output_cb_index = CBIndex::c_16;
     constexpr uint32_t num_output_tiles = 1;
     CircularBufferConfig cb_output_config =
         CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(output_cb_index, single_tile_size);
-    CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    CBHandle cb_output = tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
     /* Specify data movement kernels for reading/writing data to/from DRAM */
     KernelHandle binary_reader_kernel_id = CreateKernel(
-        program,
+        program_,
         OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/dataflow/reader_binary_1_tile.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     KernelHandle unary_writer_kernel_id = CreateKernel(
-        program,
+        program_,
         OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/dataflow/writer_1_tile.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
@@ -75,7 +87,7 @@ int main() {
 
     /* Use the add_tiles operation in the compute kernel */
     KernelHandle eltwise_binary_kernel_id = CreateKernel(
-        program,
+        program_,
         OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/compute/add_2_tiles.cpp",
         core,
         ComputeConfig{
@@ -91,28 +103,28 @@ int main() {
     src0_vec = create_constant_vector_of_bfloat16(single_tile_size, 14.0f);
     src1_vec = create_constant_vector_of_bfloat16(single_tile_size, 8.0f);
 
-    EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
+    EnqueueWriteBuffer(device->command_queue(), src0_dram_buffer, src0_vec, false);
+    EnqueueWriteBuffer(device->command_queue(), src1_dram_buffer, src1_vec, false);
 
     /* Configure program and runtime kernel arguments, then execute */
     SetRuntimeArgs(
-        program,
+        program_,
         binary_reader_kernel_id,
         core,
         {src0_dram_buffer->address(), src1_dram_buffer->address(), src0_bank_id, src1_bank_id});
-    SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_bank_id});
+    SetRuntimeArgs(program_, eltwise_binary_kernel_id, core, {});
+    SetRuntimeArgs(program_, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_bank_id});
 
-    EnqueueProgram(cq, program, false);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
 
     /* Read in result into a host vector */
     std::vector<uint32_t> result_vec;
-    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+    EnqueueReadBuffer(device->command_queue(), dst_dram_buffer, result_vec, true);
 
     printf("Result = %d\n", result_vec[0]);  // 22 = 1102070192
     printf(
         "Expected = %d\n",
         pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(bfloat16(22.0f), bfloat16(22.0f))));
-    CloseDevice(device);
+    mesh_device.reset();
 }
