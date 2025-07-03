@@ -16,13 +16,9 @@ on:
         required: false
         type: string
         default: "in-service"
-      topology:
-        required: false
-        type: string
-        default: "config-tg"
 
 jobs:
-  tg-model-perf-tests:
+  tg-op-perf-tests:
     strategy:
       fail-fast: false
       matrix:
@@ -33,7 +29,7 @@ jobs:
             cmd: 'tests/scripts/tg/run_tg_op_perf_tests.sh',
             timeout: 10,
             tracy: true,
-            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
           },
         ]
     name: ${{ matrix.test-group.name }}
