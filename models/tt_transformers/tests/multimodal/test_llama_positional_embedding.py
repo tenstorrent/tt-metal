@@ -73,7 +73,6 @@ class PositionalEmbedding(nn.Module):
 )
 def test_positional_embedding_inference(
     mesh_device,
-    use_program_cache,
     reset_seeds,
     # Input params
     bsz,

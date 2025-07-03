@@ -1,0 +1,28 @@
+ChipSpec: {
+  arch: wormhole_b0,
+  ethernet_ports: {
+    N: 2,
+    E: 2,
+    S: 2,
+    W: 2,
+  }
+}
+
+
+Board: [
+  { name: N300_2x2,
+    type: Mesh,
+    topology: [2, 2]}
+]
+
+Mesh: [
+{
+  id: 0,
+  board: N300_2x2,
+  host_topology: [1, 1],
+  device_topology: [2, 2],
+  host_ranks: [[0]]}
+]
+
+Graph: [
+]

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "fabric_types.hpp"
 #include "gtest/gtest.h"
 #include "dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
@@ -165,18 +166,27 @@ class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiD
 
 class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
 
-class MultiCommandQueueOnFabricMultiDeviceFixture : public MultiCommandQueueMultiDeviceFixture {
+class MultiCommandQueueOnFabricMultiDeviceFixture : public MultiCommandQueueMultiDeviceFixture,
+                                                    public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
 protected:
     void SetUp() override {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
         }
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
+        // This will force dispatch init to inherit the FabricConfig param
+        tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
         MultiCommandQueueMultiDeviceFixture::SetUp();
+
+        if (::testing::Test::IsSkipped()) {
+            tt::tt_metal::detail::SetFabricConfig(
+                FabricConfig::DISABLED, FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        }
     }
 
     void TearDown() override {
         MultiCommandQueueMultiDeviceFixture::TearDown();
+        tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
     }
 };

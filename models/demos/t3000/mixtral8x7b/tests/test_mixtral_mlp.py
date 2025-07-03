@@ -12,7 +12,7 @@ from models.utility_functions import comp_allclose, comp_pcc
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
-def test_mixtral_mlp_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds):
     # Specify different dtypes for each feedForward weights
     dtypes = {
         "w1": ttnn.bfloat4_b,

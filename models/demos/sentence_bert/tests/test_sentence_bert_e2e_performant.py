@@ -23,7 +23,7 @@ from models.utility_functions import run_for_wormhole_b0
 @pytest.mark.parametrize("batch_size, sequence_length", [(8, 384)])
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-def test_e2e_performant_sentencebert(device, batch_size, sequence_length, act_dtype, weight_dtype, use_program_cache):
+def test_e2e_performant_sentencebert(device, batch_size, sequence_length, act_dtype, weight_dtype):
     performant_runner = SentenceBERTPerformantRunner(
         device=device,
         device_batch_size=batch_size,

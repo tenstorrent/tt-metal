@@ -16,10 +16,11 @@ void kernel_main() {
     constexpr uint32_t test_id = get_compile_time_arg_val(5);
     constexpr uint32_t num_subordinates = get_compile_time_arg_val(6);
     constexpr bool is_linked = get_compile_time_arg_val(7);
-    constexpr uint32_t start_x = get_compile_time_arg_val(8);
-    constexpr uint32_t start_y = get_compile_time_arg_val(9);
-    constexpr uint32_t end_x = get_compile_time_arg_val(10);
-    constexpr uint32_t end_y = get_compile_time_arg_val(11);
+    constexpr bool loopback = get_compile_time_arg_val(8);
+    constexpr uint32_t start_x = get_compile_time_arg_val(9);
+    constexpr uint32_t start_y = get_compile_time_arg_val(10);
+    constexpr uint32_t end_x = get_compile_time_arg_val(11);
+    constexpr uint32_t end_y = get_compile_time_arg_val(12);
 
     // Derivative values
     constexpr uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
@@ -31,15 +32,23 @@ void kernel_main() {
         DeviceZoneScopedN("RISCV0");
 
         for (uint32_t i = 0; i < num_of_transactions - 1; i++) {
-            noc_async_write_multicast_loopback_src(
-                mst_base_addr, dst_noc_addr_multicast, bytes_per_transaction, num_subordinates, is_linked);
+            if constexpr (loopback) {
+                noc_async_write_multicast_loopback_src(
+                    mst_base_addr, dst_noc_addr_multicast, bytes_per_transaction, num_subordinates, is_linked);
+            } else {
+                noc_async_write_multicast(
+                    mst_base_addr, dst_noc_addr_multicast, bytes_per_transaction, num_subordinates, is_linked);
+            }
         }
-
         // Last packet is sent separately to unlink the transaction,
         // so the next one can use the VC and do its own path reservation
-        noc_async_write_multicast_loopback_src(
-            mst_base_addr, dst_noc_addr_multicast, bytes_per_transaction, num_subordinates, false);
-
+        if constexpr (loopback) {
+            noc_async_write_multicast_loopback_src(
+                mst_base_addr, dst_noc_addr_multicast, bytes_per_transaction, num_subordinates, false);
+        } else {
+            noc_async_write_multicast(
+                mst_base_addr, dst_noc_addr_multicast, bytes_per_transaction, num_subordinates, false);
+        }
         noc_async_write_barrier();
     }
 

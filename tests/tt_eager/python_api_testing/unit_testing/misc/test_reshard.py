@@ -310,7 +310,6 @@ def test_reshard_rn50(
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_reshard_with_program_cache(
     device,
-    use_program_cache,
     input_shape,
     input_layout,
     input_shard_grid,
@@ -625,7 +624,6 @@ def test_dram_reshard(
     ],
 )
 def test_dram_reshard_with_program_cache(
-    use_program_cache,
     device,
     input_shape,
     input_layout,

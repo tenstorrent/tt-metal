@@ -42,11 +42,6 @@ pytest models/demos/t3000/vit/demo/demo_vit_performant_imagenet_inference.py::te
 pytest models/demos/t3000/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference_with_random_inputs
 ```
 
-### Run Both Tests
-```bash
-# Run all tests in the file
-pytest models/demos/t3000/vit/demo/demo_vit_performant_imagenet_inference.py
-```
 
 ## Data Parallel Implementation
 

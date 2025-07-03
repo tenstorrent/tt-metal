@@ -53,6 +53,9 @@ private:
         bool stall_first,
         bool stall_before_program,
         uint32_t program_runtime_id);
+    // Captures a dispatch command to reset the expected number of workers. Used when the worker
+    // counter on the host overflows.
+    void capture_expected_worker_count_reset_cmd(uint32_t previous_expected_workers, SubDeviceId sub_device);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Go signals
     // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
     // When running trace, the dispatch commands responsible for forwarding go signals must be
