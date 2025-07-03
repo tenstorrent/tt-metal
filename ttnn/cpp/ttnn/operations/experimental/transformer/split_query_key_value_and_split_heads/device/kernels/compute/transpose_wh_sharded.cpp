@@ -4,13 +4,14 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 
 namespace NAMESPACE {
 void MAIN {
     uint32_t num_tiles = get_compile_time_arg_val(0);
 
-    transpose_wh_init(tt::CBIndex::c_24, tt::CBIndex::c_17);
+    compute_kernel_hw_startup(tt::CBIndex::c_24, tt::CBIndex::c_17);
+    transpose_init(tt::CBIndex::c_24);
 
     constexpr uint32_t cb_im0 = tt::CBIndex::c_24;
     constexpr uint32_t cb_out1 = tt::CBIndex::c_17;
@@ -24,7 +25,7 @@ void MAIN {
         cb_reserve_back(cb_out1, 1);
 
         acquire_dst();
-        transpose_wh_tile(cb_im0, 0, 0);
+        transpose_tile(cb_im0, 0, 0);
         pack_tile(0, cb_out1);
         release_dst();
 

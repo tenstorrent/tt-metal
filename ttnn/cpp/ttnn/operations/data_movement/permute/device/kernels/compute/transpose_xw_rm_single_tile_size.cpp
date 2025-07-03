@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
@@ -39,11 +39,11 @@ void MAIN {
 
         // transpose input
         cb_wait_front(cb_tilize, 1);
-        transpose_wh_init_short(cb_tilize);
+        transpose_init(cb_tilize);
         pack_untilize_dest_init<1>(cb_out);
 
         tile_regs_acquire();
-        transpose_wh_tile(cb_tilize, 0, 0);  // transpose call
+        transpose_tile(cb_tilize, 0, 0);  // transpose call
         tile_regs_commit();
 
         // pack and untilize

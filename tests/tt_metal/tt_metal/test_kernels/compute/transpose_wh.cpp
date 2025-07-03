@@ -4,19 +4,15 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 
 namespace NAMESPACE {
 void MAIN {
     uint32_t NHtWt = get_compile_time_arg_val(0);
-#ifndef SHORT_INIT
-    transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
-#else
-    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    transpose_wh_init_short(tt::CBIndex::c_0);
-#endif
 
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    transpose_init(tt::CBIndex::c_0);
     // transpose a row-major block:
     // - assumes the tiles come in in column major order from reader
     // - uses reader_unary_transpose_wh
@@ -26,7 +22,7 @@ void MAIN {
         cb_reserve_back(tt::CBIndex::c_16, 1);
 
         tile_regs_acquire();
-        transpose_wh_tile(tt::CBIndex::c_0, 0, 0);
+        transpose_tile(tt::CBIndex::c_0, 0, 0);
         tile_regs_commit();
 
         tile_regs_wait();

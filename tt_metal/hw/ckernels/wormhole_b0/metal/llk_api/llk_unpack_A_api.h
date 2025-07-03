@@ -59,11 +59,14 @@ template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false>
+    bool unpack_to_dest = false,
+    bool disable_src_zero_flag = false>
 inline void llk_unpack_A_init(
     const std::uint32_t transpose_of_faces = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
     const std::uint32_t operand = 0) {
+    // These two lines should be moved to the LLK
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
 
     const std::uint32_t operand_id = get_operand_id(operand);

@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
@@ -14,14 +14,14 @@ namespace NAMESPACE {
 
 FORCE_INLINE void transpose_and_pack(uint32_t input_cb_index, uint32_t dest_cb_index, uint32_t total_tiles) {
     reconfig_data_format_srca(input_cb_index);
-    transpose_wh_init_short(input_cb_index);
+    transpose_init(input_cb_index);
     pack_reconfig_data_format(input_cb_index);
 
     cb_wait_front(input_cb_index, 2 * total_tiles);
     for (uint32_t i = 0; i < total_tiles; ++i) {
         acquire_dst();
         cb_reserve_back(dest_cb_index, 1);
-        transpose_wh_tile(input_cb_index, i, 0);
+        transpose_tile(input_cb_index, i, 0);
         pack_tile(0, dest_cb_index);
         cb_push_back(dest_cb_index, 1);
         release_dst();
@@ -40,10 +40,10 @@ FORCE_INLINE void pack_results(uint32_t cb0, uint32_t cb1, uint32_t base_offset)
 
 FORCE_INLINE void read_cb_and_transpose(uint32_t cb, uint32_t base_offset, bool get_two = true) {
     reconfig_data_format_srca(cb);
-    transpose_wh_init_short(cb);
-    transpose_wh_tile(cb, 0, base_offset + 0);
+    transpose_init(cb);
+    transpose_tile(cb, 0, base_offset + 0);
     if (get_two) {
-        transpose_wh_tile(cb, 1, base_offset + 1);
+        transpose_tile(cb, 1, base_offset + 1);
     }
 }
 
@@ -73,8 +73,9 @@ void MAIN {
     constexpr uint32_t largest = get_compile_time_arg_val(11);
 
     ckernel::topk_tile_init();
-    transpose_wh_init(input_val_cb_index, output_val_cb_index);
-    transpose_wh_init(input_ind_cb_index, output_ind_cb_index);
+    compute_kernel_hw_startup(input_val_cb_index, output_val_cb_index);
+    transpose_init(input_val_cb_index);
+    transpose_init(input_ind_cb_index);
 
     int end_phase = 5;  // The end phase of the local sort, based on topk_local_sort documentation
     for (uint32_t ht = 0; ht < Ht; ++ht) {
