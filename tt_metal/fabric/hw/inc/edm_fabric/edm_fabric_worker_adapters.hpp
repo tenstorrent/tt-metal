@@ -67,7 +67,6 @@ struct WorkerToFabricEdmSenderImpl {
     template <ProgrammableCoreType my_core_type>
     static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
-        // Declare variables before if-else block to ensure they're accessible afterward
         uint32_t direction;
         WorkerXY edm_worker_xy(0, 0);
         uint32_t edm_buffer_base_addr;

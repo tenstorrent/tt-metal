@@ -164,7 +164,7 @@ void append_fabric_connection_rt_args(
     auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
     auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
     auto worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
-    if (core_type == CoreType::TENSIX) {
+    if (core_type == CoreType::WORKER) {
         append_worker_to_fabric_edm_sender_rt_args(
             fabric_router_channel,
             worker_flow_control_semaphore_id,
