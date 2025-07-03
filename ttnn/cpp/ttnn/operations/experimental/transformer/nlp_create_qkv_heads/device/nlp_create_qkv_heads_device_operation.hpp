@@ -115,10 +115,10 @@ struct NlpCreateHeadsDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor_q,
         const std::optional<Tensor>& input_tensor_kv,
-        const uint32_t num_q_heads,
-        const std::optional<uint32_t> num_kv_heads,
+        uint32_t num_q_heads,
+        std::optional<uint32_t> num_kv_heads,
         uint32_t head_dim,
-        const bool transpose_k_heads,
+        bool transpose_k_heads,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors);
 };

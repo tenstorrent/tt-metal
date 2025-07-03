@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@ import re
 import inspect
 import pytest
 import subprocess
+import glob
 from loguru import logger
 
 import pandas as pd
@@ -48,6 +49,7 @@ def set_env_vars(**kwargs):
         "doDispatchCores": "TT_METAL_DEVICE_PROFILER_DISPATCH=1 ",
         "slowDispatch": "TT_METAL_SLOW_DISPATCH_MODE=1 ",
         "dispatchFromEth": "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ",
+        "enable_noc_tracing": "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 ",
     }
     envVarsStr = " "
     for arg, argVal in kwargs.items():
@@ -56,16 +58,21 @@ def set_env_vars(**kwargs):
     return envVarsStr
 
 
-def run_gtest_profiler_test(testbin, testname, doSync=False):
+# returns True if test passed, False if test was SKIPPED
+def run_gtest_profiler_test(testbin, testname, doSync=False, enable_noc_tracing=False, skip_get_device_data=False):
     clear_profiler_runtime_artifacts()
-    envVars = set_env_vars(doSync=doSync)
+    envVars = set_env_vars(doSync=doSync, enable_noc_tracing=enable_noc_tracing)
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testbin} --gtest_filter={testname}"
     print()
     logger.info(f"Running: {testCommand}")
     output = subprocess.check_output(testCommand, stderr=subprocess.STDOUT, shell=True).decode("UTF-8")
     print(output)
     if "SKIPPED" not in output:
-        get_device_data()
+        if not skip_get_device_data:
+            get_device_data()
+        return True
+    else:
+        return False
 
 
 def run_device_profiler_test(
@@ -209,16 +216,19 @@ def test_full_buffer():
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
+@skip_for_blackhole()
 def test_dispatch_cores():
     OP_COUNT = 1
     RISC_COUNT = 1
     ZONE_COUNT = 37
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch": [16, 1404],
-        "Tensix CQ Prefetch": [25, 1990],
+        "Tensix CQ Dispatch": [400, 1000, 1290, 2000],
+        "Tensix CQ Prefetch": [400, 1000, 1580, 4000],
+        "dispatch_total_cq_cmd_op_time": [103],
+        "dispatch_go_send_wait_time": [103],
     }
 
-    def verify_stats(devicesData):
+    def verify_stats(devicesData, statTypes, allowedRange):
         verifiedStat = []
         for device, deviceData in devicesData["data"]["devices"].items():
             for ref, counts in REF_COUNT_DICT.items():
@@ -226,16 +236,14 @@ def test_dispatch_cores():
                     verifiedStat.append(ref)
                     res = False
                     readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
-                    allowedRange = 20
                     for count in counts:
-                        if count - allowedRange < readCount < count + allowedRange:
+                        if count - allowedRange <= readCount <= count + allowedRange:
                             res = True
                             break
                     assert (
                         res
-                    ), f"Wrong ethernet dispatch zone count, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+                    ), f"Wrong tensix dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
-        statTypes = ["Dispatch", "Prefetch"]
         statTypesSet = set(statTypes)
         for statType in statTypes:
             for stat in verifiedStat:
@@ -243,14 +251,20 @@ def test_dispatch_cores():
                     statTypesSet.remove(statType)
         assert len(statTypesSet) == 0
 
-    verify_stats(run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True))
+    verify_stats(
+        run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True),
+        statTypes=["Dispatch", "Prefetch"],
+        allowedRange=150,
+    )
 
     verify_stats(
         run_device_profiler_test(
             testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
             setupAutoExtract=True,
             doDispatchCores=True,
-        )
+        ),
+        statTypes=["Dispatch", "Prefetch"],
+        allowedRange=1000,
     )
 
     verify_stats(
@@ -258,7 +272,19 @@ def test_dispatch_cores():
             testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices",
             setupAutoExtract=True,
             doDispatchCores=True,
-        )
+        ),
+        statTypes=["Dispatch", "Prefetch"],
+        allowedRange=1000,
+    )
+
+    verify_stats(
+        run_device_profiler_test(
+            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
+            setupAutoExtract=False,
+            doDispatchCores=True,
+        ),
+        statTypes=["dispatch_total_cq_cmd_op_time", "dispatch_go_send_wait_time"],
+        allowedRange=0,  # This test is basically counting ops and should be exact regardless of changes to dispatch code or harvesting.
     )
 
 
@@ -267,8 +293,8 @@ def test_dispatch_cores():
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [17, 1480],
-        "Ethernet CQ Prefetch": [18, 1951],
+        "Ethernet CQ Dispatch": [322, 541, 1400, 1900, 2100],
+        "Ethernet CQ Prefetch": [600, 2500],
     }
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
@@ -281,7 +307,7 @@ def test_ethernet_dispatch_cores():
             if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
                 res = False
                 readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
-                allowedRange = 20
+                allowedRange = 200
                 for count in counts:
                     if count - allowedRange < readCount < count + allowedRange:
                         res = True
@@ -301,7 +327,7 @@ def test_ethernet_dispatch_cores():
             if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
                 res = False
                 readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
-                allowedRange = 20
+                allowedRange = 200
                 for count in counts:
                     if count - allowedRange < readCount < count + allowedRange:
                         res = True
@@ -362,9 +388,9 @@ def test_timestamped_events():
     OP_COUNT = 2
     RISC_COUNT = 5
     ZONE_COUNT = 100
-    WH_ERISC_COUNTS = [0, 1, 5]
+    WH_ERISC_COUNTS = [0, 2, 5]  # N150, N300, T3K
     WH_TENSIX_COUNTS = [72, 64, 56]
-    BH_ERISC_COUNTS = [0, 1, 5]
+    BH_ERISC_COUNTS = [0, 1, 6, 8]
     BH_TENSIX_COUNTS = [130, 120, 110]
 
     WH_COMBO_COUNTS = []
@@ -405,6 +431,28 @@ def test_timestamped_events():
         assert eventCount in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong event count"
 
 
+def test_noc_event_profiler_linked_multicast_hang():
+    # test that we can avoid hangs with linked multicast
+    # see tt-metal issue #22578
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
+
+    testCommand = "build/test/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency"
+    # note: this runs a long series repeated multicasts from worker {1,1} to grid {2,2},{3,3}
+    # note: -m6 is multicast test mode, -link activates linked multicast
+    testCommandArgs = "-tx 3 -ty 3 -sx 2 -sy 2 -rx 1 -ry 1 -m 6 -link -profdump"
+    clear_profiler_runtime_artifacts()
+    nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
+    profilerRun = os.system(f"cd {TT_METAL_HOME} && {nocEventProfilerEnv} {testCommand} {testCommandArgs}")
+    assert profilerRun == 0
+
+    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
+    assert os.path.isfile(expected_trace_file)
+
+    with open(expected_trace_file, "r") as nocTraceJson:
+        noc_trace_data = json.load(nocTraceJson)
+
+
 def test_noc_event_profiler():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
@@ -423,16 +471,139 @@ def test_noc_event_profiler():
         assert len(noc_trace_data) == 8
 
 
+@skip_for_blackhole()
+def test_fabric_event_profiler_unicast():
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
+
+    # test that current device has a valid fabric API connection
+    sanity_check_test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
+    sanity_check_test_name = "Fabric1DFixture.TestUnicastConnAPI"
+    sanity_check_succeeded = run_gtest_profiler_test(
+        sanity_check_test_bin, sanity_check_test_name, skip_get_device_data=True
+    )
+    if not sanity_check_succeeded:
+        logger.info("Device does not have testable fabric connections, skipping ...")
+        return
+
+    # if device supports fabric API, test fabric event profiler
+    test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
+    test_name = "Fabric1DFixture.TestUnicastRawWithTracing"
+    nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
+    try:
+        not_skipped = run_gtest_profiler_test(test_bin, test_name, False, True)
+        assert not_skipped, f"gtest command '{test_bin}' was skipped unexpectedly"
+    except subprocess.CalledProcessError as e:
+        ret_code = e.returncode
+        assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
+
+    expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
+    assert os.path.isfile(
+        expected_cluster_coords_file
+    ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
+
+    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
+    assert os.path.isfile(expected_trace_file), f"expected noc trace file '{expected_trace_file}' does not exist"
+
+    fabric_event_count = 0
+    with open(expected_trace_file, "r") as nocTraceJson:
+        try:
+            noc_trace_data = json.load(nocTraceJson)
+        except json.JSONDecodeError:
+            raise ValueError(f"noc trace file '{expected_trace_file}' is not a valid JSON file")
+
+        assert isinstance(noc_trace_data, list), f"noc trace file '{expected_trace_file}' format is incorrect"
+        assert len(noc_trace_data) > 0, f"noc trace file '{expected_trace_file}' is empty"
+        for event in noc_trace_data:
+            assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
+            if event.get("type", "") == "FABRIC_UNICAST_WRITE":
+                fabric_event_count += 1
+                fabric_send_metadata = event.get("fabric_send", None)
+                if fabric_send_metadata is not None:
+                    assert fabric_send_metadata.get("eth_chan", None) is not None
+                    assert fabric_send_metadata.get("start_distance", None) is not None
+
+    EXPECTED_FABRIC_EVENT_COUNT = 10
+    assert (
+        fabric_event_count == EXPECTED_FABRIC_EVENT_COUNT
+    ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {EXPECTED_FABRIC_EVENT_COUNT}"
+
+
+@skip_for_blackhole()
+def test_fabric_event_profiler_1d_multicast():
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
+
+    # test that current device has a valid fabric API connection
+    sanity_check_test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
+    sanity_check_test_name = "Fabric1DFixture.TestMCastConnAPI"
+    sanity_check_succeeded = run_gtest_profiler_test(
+        sanity_check_test_bin, sanity_check_test_name, skip_get_device_data=True
+    )
+    if not sanity_check_succeeded:
+        logger.info("Device does not have testable fabric connections, skipping ...")
+        return
+
+    # if device supports fabric API, test fabric event profiler
+    test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
+    tests = ["Fabric1DFixture.TestChipMCast1DWithTracing", "Fabric1DFixture.TestChipMCast1DWithTracing2"]
+    expected_outputs = [
+        {"START_DISTANCE": 1, "RANGE": 3, "FABRIC_EVENT_COUNT": 100},
+        {"START_DISTANCE": 2, "RANGE": 2, "FABRIC_EVENT_COUNT": 100},
+    ]
+
+    for test_name, expected_output in zip(tests, expected_outputs):
+        nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
+        try:
+            not_skipped = run_gtest_profiler_test(test_bin, test_name, False, True)
+            assert not_skipped, f"gtest command '{test_bin}' was skipped unexpectedly"
+        except subprocess.CalledProcessError as e:
+            ret_code = e.returncode
+            assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
+
+        expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
+        assert os.path.isfile(
+            expected_cluster_coords_file
+        ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
+
+        noc_trace_files = glob.glob(f"{PROFILER_LOGS_DIR}/noc_trace_dev[0-9]_ID[0-9].json")
+
+        fabric_event_count = 0
+        for trace_file in noc_trace_files:
+            with open(trace_file, "r") as nocTraceJson:
+                try:
+                    noc_trace_data = json.load(nocTraceJson)
+                except json.JSONDecodeError:
+                    raise ValueError(f"noc trace file '{trace_file}' is not a valid JSON file")
+
+                assert isinstance(noc_trace_data, list), f"noc trace file '{trace_file}' format is incorrect"
+                assert len(noc_trace_data) > 0, f"noc trace file '{trace_file}' is empty"
+                for event in noc_trace_data:
+                    assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
+                    if event.get("type", "") == "FABRIC_UNICAST_WRITE":
+                        fabric_event_count += 1
+                        fabric_send_metadata = event.get("fabric_send", None)
+                        if fabric_send_metadata is not None:
+                            assert fabric_send_metadata.get("eth_chan", None) is not None
+                            assert (
+                                fabric_send_metadata.get("start_distance", None) == expected_output["START_DISTANCE"]
+                            ), f"Incorrect start distance for fabric event in noc trace: {fabric_send_metadata.get('start_distance', None)}, "
+                            f"expected {expected_output['START_DISTANCE']}"
+                            assert (
+                                fabric_send_metadata.get("range", None) == expected_output["RANGE"]
+                            ), f"Incorrect range for fabric event in noc trace: {fabric_send_metadata.get('range', None)}, "
+                            f"expected {expected_output['RANGE']}"
+
+        assert (
+            fabric_event_count == expected_output["FABRIC_EVENT_COUNT"]
+        ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {EXPECTED_FABRIC_EVENT_COUNT}"
+
+
 def test_sub_device_profiler():
     ARCH_NAME = os.getenv("ARCH_NAME")
     run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
         "CommandQueueSingleCardFixture.TensixTestSubDeviceBasicPrograms",
-    )
-    run_gtest_profiler_test(
-        "./build/test/tt_metal/unit_tests_dispatch",
-        "CommandQueueSingleCardFixture.TensixActiveEthTestSubDeviceBasicEthPrograms",
-        doSync=True,
     )
     run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",

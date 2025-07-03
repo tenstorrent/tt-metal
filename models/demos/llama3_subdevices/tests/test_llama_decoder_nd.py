@@ -39,6 +39,7 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 165136000,
+            "fabric_config": True,
         }
     ],
     indirect=True,
@@ -47,13 +48,11 @@ def test_llama_decoder_same(
     max_seq_len,
     batch_size,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
     seqlen = 1
-    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=True)
     model_args.n_layers = 1
@@ -130,7 +129,7 @@ def test_llama_decoder_same(
     )
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats = rope_setup.get_rot_mats(current_pos)
+    rot_mats = rope_setup.get_rm_rot_mats(current_pos)
     tt_pf = prefetcher_setup.get_input_tensors()
 
     # Explicitly allocate global CB to avoid memory fragmentation

@@ -3,25 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from loguru import logger
 import torch
-import ttnn
-from ttnn import ConcatMeshToTensor
-
-from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
-from models.demos.t3000.llama2_70b.tests.test_llama_perf import (
-    load_prompts_file,
-    intialize_inputs,
-)
-from models.demos.t3000.llama2_70b.tt.model_config import (
-    get_model_config,
-)
-from models.demos.t3000.llama2_70b.tt.llama_common import get_llama_path, MAX_SEQ_LEN, BASE_URL, load_llama_state_dict
-from models.utility_functions import (
-    skip_for_grayskull,
-)
+from loguru import logger
 from tqdm import tqdm
+
+import ttnn
+from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
+from models.demos.t3000.llama2_70b.tests.test_llama_perf import intialize_inputs, load_prompts_file
+from models.demos.t3000.llama2_70b.tt.llama_common import BASE_URL, MAX_SEQ_LEN, get_llama_path, load_llama_state_dict
+from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
+from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
+from models.utility_functions import skip_for_grayskull
+from ttnn import ConcatMeshToTensor
 
 
 def prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token):
@@ -140,7 +133,6 @@ def test_Llama_stress_test(
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    t3k_mesh_device.enable_program_cache()
     run_test_LlamaModel_stress_test(
         devices,
         batch,

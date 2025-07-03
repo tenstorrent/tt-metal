@@ -7,7 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include "full_like_device_operation.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
 
@@ -55,7 +55,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     IDevice* device = input.device();
     MemoryConfig memory_config{operation_attributes.memory_config};
 
-    auto num_tiles = input.volume() / TILE_HW;
+    auto num_tiles = input.physical_volume() / TILE_HW;
 
     Program program{};
 

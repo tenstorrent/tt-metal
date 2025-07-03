@@ -5,17 +5,13 @@
 import math
 from typing import Tuple
 
-import transformers
 import torch
+import transformers
 from torch.nn import functional as F
 from transformers.models.bloom.configuration_bloom import BloomConfig
+from ttnn.model_preprocessing import ParameterDict, preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
-from ttnn.model_preprocessing import (
-    ParameterDict,
-    preprocess_linear_weight,
-    preprocess_linear_bias,
-)
 
 BLOOM_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 BLOOM_DTYPE = ttnn.bfloat8_b

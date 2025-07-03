@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -81,7 +81,7 @@ def precompute_freqs(dim: int, end: int, theta: float = 500000.0, use_scaled: bo
     """
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
-    if use_scaled:
+    if use_scaled and scale_factor is not None:
         freqs = apply_scaling(freqs, scale_factor)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)

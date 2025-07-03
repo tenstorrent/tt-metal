@@ -7,16 +7,17 @@ import os
 import torch
 import pytest
 import ttnn
-from models.experimental.functional_mobilenetv2.reference.mobilenetv2 import Mobilenetv2
-from models.experimental.functional_mobilenetv2.tt.model_preprocessing import (
+from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
+from models.demos.mobilenetv2.tests.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
+from models.demos.mobilenetv2.tt.model_preprocessing import (
     create_mobilenetv2_input_tensors,
     create_mobilenetv2_model_parameters,
 )
-from models.experimental.functional_mobilenetv2.tt import ttnn_mobilenetv2
+from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": MOBILENETV2_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
@@ -29,14 +30,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "batch_size",
     [
-        1,
+        MOBILENETV2_BATCH_SIZE,
     ],
 )
 def test_mobilenetv2(device, use_pretrained_weight, batch_size, reset_seeds):
     # Check if weights file exists, if not, download them
-    weights_path = "models/experimental/functional_mobilenetv2/mobilenet_v2-b0353104.pth"
+    weights_path = "models/demos/mobilenetv2/mobilenet_v2-b0353104.pth"
     if not os.path.exists(weights_path):
-        os.system("bash models/experimental/functional_mobilenetv2/weights_download.sh")
+        os.system("bash models/demos/mobilenetv2/weights_download.sh")
     if use_pretrained_weight:
         state_dict = torch.load(weights_path)
         ds_state_dict = {k: v for k, v in state_dict.items()}
@@ -61,9 +62,9 @@ def test_mobilenetv2(device, use_pretrained_weight, batch_size, reset_seeds):
 
     model_parameters = create_mobilenetv2_model_parameters(torch_model, device=device)
 
-    ttnn_model = ttnn_mobilenetv2.MobileNetV2(model_parameters, device, batchsize=batch_size)
+    ttnn_model = ttnn_mobilenetv2.TtMobileNetV2(model_parameters, device, batchsize=batch_size)
     output_tensor = ttnn_model(ttnn_input_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.93 if use_pretrained_weight else 0.999)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.944 if use_pretrained_weight else 0.999)

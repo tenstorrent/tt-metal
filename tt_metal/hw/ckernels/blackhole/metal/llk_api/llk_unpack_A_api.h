@@ -11,7 +11,7 @@
  *************************************************************************/
 
 template <
-    bool is_fp32_dest_acc_en = false,
+    bool is_fp32_dest_acc_en,
     StochRndType stoch_rnd_mode = StochRndType::None,
     bool disable_src_zero_flag = false>
 inline void llk_unpack_A_hw_configure(
@@ -29,7 +29,7 @@ inline void llk_unpack_A_hw_configure(
 }
 
 template <
-    bool is_fp32_dest_acc_en = false,
+    bool is_fp32_dest_acc_en,
     StochRndType stoch_rnd_mode = StochRndType::None,
     bool disable_src_zero_flag = false>
 inline void llk_unpack_A_hw_configure_disaggregated(

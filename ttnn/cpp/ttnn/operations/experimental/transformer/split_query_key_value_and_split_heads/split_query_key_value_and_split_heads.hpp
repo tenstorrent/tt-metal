@@ -43,15 +43,6 @@ struct SplitFusedQKVAndSplitHeadsOperation {
             num_heads,
             optional_output_tensors);
     }
-
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {
-            Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
-            Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
-            Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-    }
 };
 
 }  // namespace operations::experimental::transformer

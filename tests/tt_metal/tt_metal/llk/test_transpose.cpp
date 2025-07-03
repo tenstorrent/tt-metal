@@ -22,16 +22,16 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
@@ -56,6 +56,7 @@ enum TransposeType : uint8_t { WH = 0 };
 
 struct TransposeConfig {
     bool short_init;
+    bool transpose_dest;
     uint32_t single_tile_size;
     std::vector<uint32_t> shape;
     TransposeType transpose_type;
@@ -78,11 +79,8 @@ void validate_transpose_wh(
 
     // recover a linear view of input vector for consumption by gold_ function
     auto u16_src0_vec = u16_from_u32_vector(src_vec);
-    vector<uint16_t> src_linear = convert_layout<uint16_t>(
-        u16_src0_vec,
-        shape,
-        tests::utils::TensorLayoutType::TILED_NFACES,
-        tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
+    vector<uint16_t> src_linear =
+        convert_layout<uint16_t>(u16_src0_vec, shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
     vector<uint16_t> gold_reduced =
         ::unit_tests::compute::gold_transpose_wh(src_linear, shape);  // result is uint16_t untilized
 
@@ -90,10 +88,7 @@ void validate_transpose_wh(
     TT_FATAL(shape.size() == 4, "Error");
     vector<uint32_t> shapeR{shape[0], shape[1], shape[3], shape[2]};
     auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(
-        gold_reduced,
-        shapeR,
-        tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-        tests::utils::TensorLayoutType::TILED_NFACES));
+        gold_reduced, shapeR, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES));
 
     bool pass = packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
     if (not pass) {
@@ -174,7 +169,9 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
 
     auto transpose_compute_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp",
+        test_config.transpose_dest
+            ? "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp"
+            : "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
 
@@ -223,6 +220,7 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
 TEST_F(DeviceFixture, TensixComputeTransposeWH) {
     unit_tests::compute::transpose::TransposeConfig test_config = {
         .short_init = false,
+        .transpose_dest = false,
         .single_tile_size = 2 * 1024,
         .shape = {1, 3, 3 * 32 * 1, 4 * 32 * 1},
         .transpose_type = unit_tests::compute::transpose::TransposeType::WH};
@@ -232,6 +230,17 @@ TEST_F(DeviceFixture, TensixComputeTransposeWH) {
 TEST_F(DeviceFixture, TensixComputeTransposeWHShortInit) {
     unit_tests::compute::transpose::TransposeConfig test_config = {
         .short_init = true,
+        .transpose_dest = false,
+        .single_tile_size = 2 * 1024,
+        .shape = {1, 3, 3 * 32 * 1, 4 * 32 * 1},
+        .transpose_type = unit_tests::compute::transpose::TransposeType::WH};
+    unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
+}
+
+TEST_F(DeviceFixture, TensixComputeTransposeWHDest) {
+    unit_tests::compute::transpose::TransposeConfig test_config = {
+        .short_init = false,
+        .transpose_dest = true,
         .single_tile_size = 2 * 1024,
         .shape = {1, 3, 3 * 32 * 1, 4 * 32 * 1},
         .transpose_type = unit_tests::compute::transpose::TransposeType::WH};

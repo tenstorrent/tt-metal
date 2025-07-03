@@ -21,7 +21,7 @@ struct ExecuteConvertToCHW {
 
 namespace ttnn::experimental {
 
-constexpr auto convert_to_chw = ttnn::register_operation_with_auto_launch_op<
+constexpr auto convert_to_chw = ttnn::register_operation<
     "ttnn::experimental::convert_to_chw",
     ttnn::operations::experimental::cnn::ExecuteConvertToCHW>();
 

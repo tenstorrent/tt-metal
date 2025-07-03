@@ -10,7 +10,8 @@ import ttnn
 from loguru import logger
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -62,8 +63,9 @@ def run_softmax(device, tensor_shape, dim, op) -> tuple:
 
     ttnn_errored = False
     ttnn_error_msg = ""
+    start_time = start_measuring_time()
     try:
-        ttnn_result = ttnn_op(ttnn_tensor, scale=scale, dim=dim) if is_scale_op else ttnn_op(ttnn_tensor, dim=dim)
+        op_ttnn_result = ttnn_op(ttnn_tensor, scale=scale, dim=dim) if is_scale_op else ttnn_op(ttnn_tensor, dim=dim)
     except RuntimeError as e:
         ttnn_errored = True
         ttnn_error_msg = str(e)
@@ -79,25 +81,22 @@ def run_softmax(device, tensor_shape, dim, op) -> tuple:
         logger.warning(f"both torch and ttnn raised errors: torch: {torch_error_msg}, ttnn: {ttnn_error_msg}")
         return (True, "")
 
-    ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
+    ttnn_result = ttnn.to_torch(ttnn.from_device(op_ttnn_result))
+    e2e_perf = stop_measuring_time(start_time)
 
     # Add scaling to the torch result to match the ttnn result
     if is_scale_op:
         torch_result *= scale
 
-    pcc_result, msg = check_with_pcc(torch_result, ttnn_result, 0.99)
-
-    if not pcc_result:
-        return (False, msg)
-
     atol = rtol = 0.1
 
-    return (
-        torch.allclose(torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True),
-        f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}",
-    )
-
+    allclose = (torch.allclose(torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True),)
+    if not allclose:
+        return [(False, f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}"), e2e_perf]
     # TODO: Verify that the sum of the output tensor is equal to 1.0 over the specified dimension
+    expected_pcc = 0.99
+    tensors = [ttnn_tensor, op_ttnn_result]
+    return get_run_return(torch_result, ttnn_result, expected_pcc, tensors, e2e_perf)
 
 
 @pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))

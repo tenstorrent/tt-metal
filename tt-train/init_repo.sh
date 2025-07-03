@@ -9,9 +9,9 @@ sudo ln -sf /usr/bin/clang-tidy-17 /usr/bin/clang-tidy
 sudo ln -sf /usr/bin/clang-format-17 /usr/bin/clang-format
 sudo apt install pre-commit
 pre-commit install
-chmod +x init_tt_metal.sh
-source ./init_tt_metal.sh
 
 sudo apt-get install python3-dev python3-numpy cargo
 pip install wandb
 pip install numpy
+
+sudo apt-get install -y libopenmpi-dev openmpi-bin

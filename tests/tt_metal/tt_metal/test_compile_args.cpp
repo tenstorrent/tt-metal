@@ -10,7 +10,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include "dprint_server.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/jit_build/build_env_manager.hpp"
 
@@ -86,7 +85,7 @@ int main(int argc, char** argv) {
             std::distance(std::filesystem::directory_iterator(binary_path), std::filesystem::directory_iterator{});
         TT_FATAL(num_built_kernels == 2, "Expected compute kernel test_compile_args to be compiled twice!");
 
-        if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
             // Test that the kernel_args.csv file was generated for both kernels
             log_info(LogTest, "Test kernel args logging");
             auto kernel_args_path = binary_path.parent_path() / "kernel_args.csv";

@@ -8,7 +8,7 @@
 // #include <type_traits>
 #include <limits>
 #include <vector>
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 
 /*
  *    ------   ATTENTION  ATTENTION  ATTENTION  ATTENTION  ATTENTION   ------
@@ -304,22 +304,6 @@ inline void advance_worker_global_page_interleaved (
 
 static constexpr uint32_t UNINITIALIZED_VALUE_U32 = std::numeric_limits<uint32_t>::max();
 static constexpr uint16_t UNINITIALIZED_VALUE_U16 = std::numeric_limits<uint16_t>::max();
-
-template <bool T>
-struct ArchDependentTypes;
-
-template <>
-struct ArchDependentTypes<true> {
-    using workers_list_t = std::vector<ccl::WorkerXY>;
-    static const workers_list_t WORKERS_LIST_UNINITIALIZED_VALUE;
-};
-
-template <>
-struct ArchDependentTypes<false> {
-    using workers_list_t = ccl::WorkerXY *;
-    static const workers_list_t WORKERS_LIST_UNINITIALIZED_VALUE;
-};
-
 
 }  // namespace ccl
 }  // namespace ttnn

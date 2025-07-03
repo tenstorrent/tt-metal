@@ -19,6 +19,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
 
 jobs:
   models:
@@ -31,10 +35,11 @@ jobs:
           {name: model},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - in-service
-      - cloud-virtual-machine
+    runs-on: >-
+      ${{
+        github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+      }}
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -55,6 +60,7 @@ jobs:
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
@@ -72,8 +78,6 @@ jobs:
           prefix: "test_reports_"
 
   models-tests-slow-runtime-mode:
-    # BH runs only FD tests to avoid using too many CI resources
-    if: ${{ inputs.arch != 'blackhole' }}
     strategy:
       fail-fast: false
       matrix:
@@ -106,6 +110,7 @@ jobs:
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher }}
       - name: ${{ matrix.test-group.name }} slow runtime mode tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |

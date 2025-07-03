@@ -17,7 +17,7 @@ namespace operations {
 
 using namespace tt::tt_metal;
 
-inline bool is_dram(const Tensor& tensor) { return tensor.memory_config().buffer_type == BufferType::DRAM; }
+inline bool is_dram(const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; }
 inline bool is_dram(const std::optional<const Tensor> tensor) {
     return tensor.has_value() ? is_dram(tensor.value()) : true;
 }
@@ -28,7 +28,7 @@ inline bool is_dram(const Buffer* buffer) { return buffer->buffer_type() == Buff
 
 inline bool is_scalar(const Tensor& tensor) {
     // TODO(dongjin): current impl requires finding a scalar in a 2d shape
-    const auto& shape = tensor.get_logical_shape();
+    const auto& shape = tensor.logical_shape();
     const uint32_t rank = shape.rank();
 
     // TODO(dongjin): refactor dot op
@@ -40,7 +40,7 @@ inline bool is_scalar(const Tensor& tensor) {
 
 inline bool is_1d_tensor(const Tensor& tensor) {
     // TODO(dongjin): current impl requires finding a 1d in a 2d shape
-    const auto& shape = tensor.get_logical_shape();
+    const auto& shape = tensor.logical_shape();
     const uint32_t rank = shape.rank();
 
     // TODO(dongjin): refactor dot op
@@ -51,8 +51,8 @@ inline bool is_1d_tensor(const Tensor& tensor) {
 }
 
 inline bool is_same_shape(const Tensor& tensor_a, const Tensor& tensor_b) {
-    const auto& tensor_a_shape = tensor_a.get_logical_shape();
-    const auto& tensor_b_shape = tensor_b.get_logical_shape();
+    const auto& tensor_a_shape = tensor_a.logical_shape();
+    const auto& tensor_b_shape = tensor_b.logical_shape();
     return (tensor_a_shape == tensor_b_shape);
 }
 

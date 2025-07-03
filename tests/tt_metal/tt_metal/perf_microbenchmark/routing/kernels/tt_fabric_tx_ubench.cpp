@@ -117,12 +117,12 @@ void kernel_main() {
         reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
 
     // initalize client
-    fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
+    fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
 
     uint64_t data_words_sent = 0;
     uint32_t packet_count = 0;
 
-    uint64_t dst_addr = ((uint64_t)noc_offset << 32 | target_address);
+    uint64_t dst_addr = get_noc_addr_helper(noc_offset, target_address);
     if constexpr (mcast_data) {
         fabric_async_write_multicast_add_header(
             client_interface,
@@ -136,7 +136,7 @@ void kernel_main() {
             n_depth,
             s_depth);
     } else {
-        fabric_async_write_add_header<decltype(client_interface), (ClientDataMode)data_mode>(
+        fabric_async_write_add_header<(ClientDataMode)data_mode>(
             client_interface,
             data_buffer_start_addr,  // source address in sender’s memory
             dest_device >> 16,
@@ -146,8 +146,7 @@ void kernel_main() {
         );
 #ifndef FVC_MODE_PULL
 #ifdef LOW_LATENCY_ROUTING
-        uint32_t outgoing_direction =
-            get_next_hop_router_direction(client_interface, 0, dest_device >> 16, dest_device & 0xFFFF);
+        uint32_t outgoing_direction = get_next_hop_router_direction(dest_device >> 16, dest_device & 0xFFFF);
         if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
             fabric_set_unicast_route(
                 client_interface,
@@ -193,7 +192,6 @@ void kernel_main() {
         client_interface->local_pull_request.pull_request.words_read = 0;
         if constexpr (mcast_data) {
             fabric_async_write_multicast<
-                decltype(client_interface),
                 (ClientDataMode)data_mode,
                 AsyncWriteMode::SEND_PR,
                 RoutingType::ROUTING_TABLE>(
@@ -209,11 +207,7 @@ void kernel_main() {
                 n_depth,
                 s_depth);
         } else {
-            fabric_async_write<
-                decltype(client_interface),
-                (ClientDataMode)data_mode,
-                AsyncWriteMode::SEND_PR,
-                RoutingType::ROUTING_TABLE>(
+            fabric_async_write<(ClientDataMode)data_mode, AsyncWriteMode::SEND_PR, RoutingType::ROUTING_TABLE>(
                 client_interface,
                 0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory
@@ -244,7 +238,7 @@ void kernel_main() {
     while (true) {
         packet_count++;
         payload[12] = packet_count;
-        fabric_async_write<decltype(client_interface), (ClientDataMode)data_mode, AsyncWriteMode::PUSH>(
+        fabric_async_write<(ClientDataMode)data_mode, AsyncWriteMode::PUSH>(
             client_interface,
             0,                       // the network plane to use for this transaction
             data_buffer_start_addr,  // source address in sender’s memory

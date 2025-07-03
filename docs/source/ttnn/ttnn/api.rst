@@ -280,6 +280,7 @@ Pointwise Unary
    ttnn.conj_bw
    ttnn.conj
    ttnn.polar
+   ttnn.alt_complex_rotate90
 
 Pointwise Binary
 ================
@@ -399,7 +400,7 @@ Reduction
    :nosignatures:
    :template: function.rst
 
-   ttnn.experimental.cumprod
+   ttnn.cumprod
    ttnn.max
    ttnn.mean
    ttnn.min
@@ -410,6 +411,7 @@ Reduction
    ttnn.prod
    ttnn.topk
    ttnn.experimental.sort
+   ttnn.experimental.cumsum
 
 Data Movement
 =============
@@ -434,6 +436,7 @@ Data Movement
    ttnn.untilize
    ttnn.untilize_with_unpadding
    ttnn.indexed_fill
+   ttnn.experimental.gather
 
 Normalization
 =============
@@ -498,6 +501,31 @@ Embedding
 
    ttnn.embedding
 
+Convolution
+===========
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: function.rst
+
+   ttnn.conv1d
+   ttnn.conv2d
+   ttnn.experimental.conv3d
+   ttnn.conv_transpose2d
+   ttnn.prepare_conv_weights
+   ttnn.prepare_conv_bias
+   ttnn.prepare_conv_transpose2d_weights
+   ttnn.prepare_conv_transpose2d_bias
+
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: class.rst
+
+   ttnn.Conv2dConfig
+   ttnn.Conv2dSliceConfig
+
 Pooling
 =======
 
@@ -518,7 +546,6 @@ Vision
    :template: function.rst
 
    ttnn.upsample
-   ttnn.downsample
 
 KV Cache
 ========

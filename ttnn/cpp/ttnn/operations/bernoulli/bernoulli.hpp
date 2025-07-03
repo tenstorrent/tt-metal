@@ -10,7 +10,7 @@ namespace ttnn::operations::bernoulli {
 struct Bernoulli {
     static Tensor invoke(
         const Tensor& input,
-        const uint32_t seed,
+        uint32_t seed,
         const std::optional<Tensor>& output,
         const std::optional<DataType>& dtype,
         const std::optional<MemoryConfig>& memory_config,
@@ -19,6 +19,5 @@ struct Bernoulli {
 }  // namespace ttnn::operations::bernoulli
 
 namespace ttnn {
-constexpr auto bernoulli =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::bernoulli", ttnn::operations::bernoulli::Bernoulli>();
+constexpr auto bernoulli = ttnn::register_operation<"ttnn::bernoulli", ttnn::operations::bernoulli::Bernoulli>();
 }  // namespace ttnn

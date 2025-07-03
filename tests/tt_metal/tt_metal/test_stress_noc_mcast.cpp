@@ -28,10 +28,9 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "llrt/hal.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/xy_pair.h"
@@ -104,12 +103,12 @@ void init(int argc, char** argv) {
     srand(seed);
 
     if (mcast_from_eth_g && ucast_only) {
-        log_fatal("Cannot request both mcast from eth and ucast only");
+        log_fatal(tt::LogTest, "Cannot request both mcast from eth and ucast only");
     }
 
     if (!ucast_only && !mcast_from_eth_g && mcast_x_g >= tlx_g && mcast_x_g <= tlx_g + width_g - 1 &&
         mcast_y_g >= tly_g && mcast_y_g <= tly_g + height_g - 1) {
-        log_fatal("Mcast core can't be within mcast grid");
+        log_fatal(tt::LogTest, "Mcast core can't be within mcast grid");
         exit(-1);
     }
 }
@@ -136,7 +135,7 @@ int main(int argc, char** argv) {
             }
         }
         if (!found) {
-            log_fatal("{} not found in the list of idle eth cores", mcast_from_n_eth_g);
+            log_fatal(tt::LogTest, "{} not found in the list of idle eth cores", mcast_from_n_eth_g);
             tt_metal::CloseDevice(device);
             exit(-1);
         }
@@ -144,7 +143,7 @@ int main(int argc, char** argv) {
     }
 
     CoreCoord mcast_end = device->worker_core_from_logical_core(workers_logical.end_coord);
-    bool virtualization_enabled = tt::tt_metal::hal_ref.is_coordinate_virtualization_enabled();
+    bool virtualization_enabled = tt::tt_metal::MetalContext::instance().hal().is_coordinate_virtualization_enabled();
     uint32_t num_dests = workers_logical.size();
     CoreCoord virtual_offset = virtualization_enabled
                                    ? device->worker_core_from_logical_core({0, 0})
@@ -165,9 +164,9 @@ int main(int argc, char** argv) {
         N_RANDS,
         rnd_delay_g,
         device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
-        mcast_from_eth_g
-            ? tt::tt_metal::hal_ref.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED)
-            : device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
+        mcast_from_eth_g ? tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+                               HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED)
+                         : device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
     };
 
     KernelHandle ucast_kernel = tt_metal::CreateKernel(
@@ -228,6 +227,7 @@ int main(int argc, char** argv) {
         }
 
         std::vector<uint32_t> runtime_args;
+        runtime_args.reserve(128);
         for (int i = 0; i < 128; i++) {
             runtime_args.push_back(rand());
         }
@@ -262,15 +262,15 @@ int main(int argc, char** argv) {
     log_info(LogTest, "Unicast grid: {}, writing {} bytes per xfer", workers_logical.str(), ucast_size_g);
 
     if (rnd_coord_g) {
-        log_info("Randomizing ucast noc write destinations");
+        log_info(tt::LogTest, "Randomizing ucast noc write destinations");
     } else {
-        log_info("Non-random ucast noc write destinations TBD");
+        log_info(tt::LogTest, "Non-random ucast noc write destinations TBD");
     }
 
-    log_info("Using NOC {}", (noc_g == tt_metal::NOC::NOC_0) ? 0 : 1);
+    log_info(tt::LogTest, "Using NOC {}", (noc_g == tt_metal::NOC::NOC_0) ? 0 : 1);
 
     if (rnd_delay_g) {
-        log_info("Randomizing delay");
+        log_info(tt::LogTest, "Randomizing delay");
     }
     log_info(LogTest, "Running for {} seconds", time_secs_g);
 

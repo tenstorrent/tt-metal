@@ -56,7 +56,7 @@ TEST_F(DeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
         this->RunProgram(device, program);
 
         const std::vector<uint32_t> compile_time_args_expected{
-            std::accumulate(compile_time_args.begin(), compile_time_args.end(), 0)};
+            std::accumulate(compile_time_args.begin(), compile_time_args.end(), 0u)};
 
         std::vector<uint32_t> compile_time_args_actual;
         detail::ReadFromDeviceL1(device, core, write_addr, sizeof(uint32_t), compile_time_args_actual);

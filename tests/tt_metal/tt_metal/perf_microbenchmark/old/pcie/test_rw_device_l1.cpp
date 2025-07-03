@@ -20,8 +20,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include "fmt/base.h"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
 
 namespace tt {

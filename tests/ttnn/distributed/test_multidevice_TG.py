@@ -710,9 +710,7 @@ def test_galaxy_rotary_matmul(batch, seq_len, head_dim, n_local_heads, n_local_k
 @pytest.mark.parametrize("input_dtype", [ttnn.DataType.BFLOAT16])
 class TestUpdateCache:
     @pytest.mark.parametrize("seq_len", [128, 2048])
-    def test_fill_cache(
-        self, seq_len, head_dim, max_seq_len, num_users, num_heads, input_dtype, mesh_device, use_program_cache
-    ):
+    def test_fill_cache(self, seq_len, head_dim, max_seq_len, num_users, num_heads, input_dtype, mesh_device):
         torch.manual_seed(1234)
 
         cache_dtype = input_dtype
@@ -778,7 +776,6 @@ class TestUpdateCache:
         input_dtype,
         cache_dtype,
         mesh_device,
-        use_program_cache,
     ):
         torch.manual_seed(1234)
 
@@ -1376,6 +1373,7 @@ def test_shard_and_concat_2d_various_shapes(mesh_device, tensor_shape):
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.skip(reason="Uneven Sharding across devices is not supported by TT-Mesh")
 def test_shard_and_concat_2d_non_divisible(mesh_device):
     rows, cols = mesh_device.shape
     # Create a tensor with dimensions not perfectly divisible by the mesh shape
@@ -1430,8 +1428,7 @@ def test_line_all_gather_column_major(mesh_device):
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", (1,))
 @pytest.mark.parametrize("dim", (0,))
-@pytest.mark.parametrize("async_mode", (False, True))
-def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: int, async_mode: bool):
+def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: int):
     """
     Test the line-all-gather operation on a 8x4 mesh.
     Data Pattern for initial sharding [TILE_SIZE*mesh_device_ROWS, TILE_SIZE*mesh_device_COLS]:
@@ -1447,8 +1444,6 @@ def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: in
     - Every device along the column contains the whole column tensor stacked on `dim` dimension
     - Every device will have the shape: [4, 1, 32, 32]
     """
-    if async_mode:
-        mesh_device.enable_async(True)
 
     (rows, cols), tile_size = mesh_device.shape, 32
     full_tensor = torch.zeros((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)

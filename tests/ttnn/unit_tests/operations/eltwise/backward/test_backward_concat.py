@@ -120,7 +120,7 @@ def test_bw_concat_Default_with_output(input_shapes, input_shapes_2, device, are
         )
     cq_id = 0
 
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.concat_bw(
         grad_tensor,
         input_tensor,
@@ -130,7 +130,7 @@ def test_bw_concat_Default_with_output(input_shapes, input_shapes_2, device, are
         input_b_grad=other_grad,
         queue_id=cq_id,
     )
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
 
     tt_output_tensor_on_device = [input_grad, other_grad]
 
@@ -189,7 +189,7 @@ def test_bw_concat_with_output(input_shapes, input_shapes_2, dimension, device, 
 
     cq_id = 0
 
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.concat_bw(
         grad_tensor,
         input_tensor,
@@ -200,7 +200,7 @@ def test_bw_concat_with_output(input_shapes, input_shapes_2, dimension, device, 
         input_b_grad=other_grad,
         queue_id=cq_id,
     )
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
 
     tt_output_tensor_on_device = [input_grad, other_grad]
 

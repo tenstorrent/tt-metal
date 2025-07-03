@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,6 +29,7 @@
 #include "dev_msgs.h"
 #include "dataflow_api_common.h"
 #include "dataflow_api_addrgen.h"
+#include "accessor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 // clang-format off
@@ -377,6 +378,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
     do {
         // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
+        invalidate_l1_cache();
         uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
         uint16_t free_space_pages_wrap =
             get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
@@ -456,12 +458,16 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
     WAYPOINT("CWFD");
 }
 
-// NOC transfers
+// #######################################################################################
+// #################################### NOC transfers ####################################
+// #######################################################################################
 
-// simple APIs
-
-// TODO: write docs
-// this issues only a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
+// clang-format off
+/**
+ * Initiates an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
+ * Refer to \a noc_async_read for more details.
+ */
+// clang-format on
 FORCE_INLINE
 void noc_async_read_one_packet(
     std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index) {
@@ -469,39 +475,13 @@ void noc_async_read_one_packet(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
-    }
-
     WAYPOINT("RP2W");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
     WAYPOINT("RP2D");
 
     WAYPOINT("NAOW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
-    }
-    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_noc_addr);
-#ifdef ARCH_BLACKHOLE
-    // Handles reading from PCIe
-    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_noc_addr >> 32) & 0x1000000F);
-#endif
-    NOC_CMD_BUF_WRITE_REG(
-        noc,
-        read_cmd_buf,
-        NOC_TARG_ADDR_COORDINATE,
-        (uint32_t)(src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);
-    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        noc_reads_num_issued[noc] += 1;
-    }
-
+    ncrisc_noc_fast_read<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
     WAYPOINT("NAOD");
 }
 
@@ -516,16 +496,17 @@ void noc_async_read_one_packet(
  *
  * Return value: None
  *
- * | Argument          | Description                                        | Data type | Valid range                              | required |
- * |-------------------|----------------------------------------------------|-----------|------------------------------------------|----------|
- * | src_noc_addr      | Encoding of the source NOC location (x,y)+address  | uint64_t  | DOX-TODO (ref to explain valid coords)   | Yes      |
- * | dst_local_l1_addr | Address in local L1 memory                         | uint32_t  | 0..1MB                                   | Yes      |
- * | size              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                                   | Yes      |
+ * | Argument                          | Description                                        | Data type | Valid range                      | required |
+ * |-----------------------------------|----------------------------------------------------|-----------|----------------------------------|----------|
+ * | src_noc_addr                      | Encoding of the source NOC location (x,y)+address  | uint64_t  | Results of \a get_noc_addr calls | True     |
+ * | dst_local_l1_addr                 | Address in local L1 memory                         | uint32_t  | 0..1MB                           | True     |
+ * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                           | True     |
+ * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                           | False    |
+ * | max_page_size (template argument) | Maximum size of a single transaction in bytes      | uint32_t  | Any uint32_t number              | False    |
  */
 // clang-format on
-template <uint32_t max_page_size>
-inline void noc_async_read(
-    std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc) {
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
+inline void noc_async_read(uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -719,49 +700,67 @@ void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc, uint8_t n
     }
 }
 
-// TODO: write docs
-// this issues only a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
+// clang-format off
+/**
+ * Initiates an asynchronous write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
+ * Refer to \a noc_async_write for more details.
+ */
+// clang-format on
 FORCE_INLINE
 void noc_async_write_one_packet(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_,dst_noc_addr,size,NOC_UNICAST_WRITE_VC);
-
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
-    }
     WAYPOINT("NWPW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     WAYPOINT("NWPD");
 
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
-                             0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
-                             0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                             NOC_CMD_RESP_MARKED;
+    ncrisc_noc_fast_write<noc_mode>(
+        noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
+}
 
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
-#ifdef ARCH_BLACKHOLE
-    // Handles writing to PCIe
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & 0x1000000F);
-#endif
-    NOC_CMD_BUF_WRITE_REG(
-        noc,
-        write_cmd_buf,
-        NOC_RET_ADDR_COORDINATE,
-        (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, size);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        noc_nonposted_writes_num_issued[noc] += 1;
-        noc_nonposted_writes_acked[noc] += 1;  // num_dests
+// clang-format off
+/**
+ * Initiates an asynchronous write from a source address in L1 memory on the
+ * Tensix core executing this function call. The destination is specified using
+ * a uint64_t encoding referencing an on-chip node located at NOC coordinates
+ * (x,y) and a local address created using get_noc_addr function. Also, see
+ * \a noc_async_write_barrier.
+ *
+ * The destination node can be either a DRAM bank, Tensix core+L1 memory
+ * address or a PCIe controller.
+ *
+ * Return value: None
+ *
+ * | Argument                          | Description                                             | Type     | Valid Range                      | Required |
+ * |-----------------------------------|---------------------------------------------------------|----------|----------------------------------|----------|
+ * | src_local_l1_addr                 | Source address in local L1 memory                       | uint32_t | 0..1MB                           | True     |
+ * | dst_noc_addr                      | Encoding of the destination NOC location (x,y)+address  | uint64_t | Results of \a get_noc_addr calls | True     |
+ * | size                              | Size of data transfer in bytes                          | uint32_t | 0..1MB                           | True     |
+ * | noc                               | Which NOC to use for the transaction                    | uint8_t  | 0 or 1                           | False    |
+ * | max_page_size (template argument) | Maximum size of a single transaction in bytes           | uint32_t | Any uint32_t number              | False    |
+ */
+// clang-format on
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
+inline void noc_async_write(uint32_t src_local_l1_addr, uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, NOC_UNICAST_WRITE_VC);
+
+    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, noc);
+    } else {
+        WAYPOINT("NAWW");
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
+        ncrisc_noc_fast_write_any_len<noc_mode>(
+            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
+        WAYPOINT("NAWD");
     }
 }
 
-// TODO: write docs
-// this issues only a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
+// clang-format off
+/**
+ * Initiates an asynchronous multicast write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
+ * Refer to \a noc_async_write_multicast for more details.
+ */
+// clang-format on
 FORCE_INLINE
 void noc_async_write_multicast_one_packet(
     std::uint32_t src_local_l1_addr,
@@ -769,41 +768,91 @@ void noc_async_write_multicast_one_packet(
     std::uint32_t size,
     std::uint32_t num_dests,
     bool linked = false,
-    bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST,dst_noc_addr_multicast,size, NOC_MULTICAST_WRITE_VC);
-
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
-    }
-    WAYPOINT("NWPW");
+    NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC);
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     WAYPOINT("NWPD");
 
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_MULTICAST_WRITE_VC) |
-                             (linked ? NOC_CMD_VC_LINKED : 0x0) |
-                             ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) |
-                             NOC_CMD_RESP_MARKED;
-
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr_multicast);
-#ifdef ARCH_BLACKHOLE
-    // Handles writing to PCIe
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr_multicast >> 32) & 0x1000000F);
-#endif
-    NOC_CMD_BUF_WRITE_REG(
+    ncrisc_noc_fast_write<noc_mode>(
         noc,
         write_cmd_buf,
-        NOC_RET_ADDR_COORDINATE,
-        (uint32_t)(dst_noc_addr_multicast >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, size);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        noc_nonposted_writes_num_issued[noc] += 1;
-        noc_nonposted_writes_acked[noc] += num_dests;
+        src_local_l1_addr,
+        dst_noc_addr_multicast,
+        size,
+        NOC_MULTICAST_WRITE_VC,
+        true /* mcast */,
+        linked,
+        num_dests,
+        true /* multicast_path_reserve */);
+}
+
+// clang-format off
+/**
+ * Initiates an asynchronous write from a source address in L1 memory on the
+ * Tensix core executing this function call to a rectangular destination grid.
+ * The destinations are specified using a uint64_t encoding referencing an
+ * on-chip grid of nodes located at NOC coordinate range
+ * (x_start,y_start,x_end,y_end) and a local address created using
+ * *get_noc_multicast_addr* function. Also, *see noc_async_write_barrier*.
+ *
+ * The destination nodes can only be a set of Tensix cores + L1 memory address.
+ * The destination nodes must form a rectangular grid. The destination L1
+ * memory address must be the same on all destination nodes.
+ *
+ * With this API, the multicast sender cannot be part of the multicast
+ * destinations. If the multicast sender has to be in the multicast
+ * destinations (i.e. must perform a local L1 write), the other API variant
+ * *noc_async_write_multicast_loopback_src* can be used.
+ *
+ * Note: The number of destinations needs to be non-zero. Besides that,
+ * there is no restriction on the number of destinations, i.e. the
+ * multicast destinations can span the full chip. However, as mentioned
+ * previously, the multicast source cannot be part of the destinations. So, the
+ * maximum number of destinations is number of cores - 1.
+ *
+ * Return value: None
+ *
+ * | Argument                          | Description                                                              | Type     | Valid Range                                | Required |
+ * |-----------------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
+ * | src_local_l1_addr                 | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
+ * | dst_noc_addr_multicast            | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
+ * | size                              | Size of data transfer in bytes                                           | uint32_t | 0..1MB                                     | True     |
+ * | num_dests                         | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores -1)                    | True     |
+ * | linked                            | Whether the transaction is linked                                        | bool     | true or false                              | False    |
+ * | noc                               | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
+ * | max_page_size (template argument) | Maximum size of a single transaction in bytes                            | uint32_t | Any uint32_t number                        | False    |
+ */
+// clang-format on
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
+inline void noc_async_write_multicast(
+    uint32_t src_local_l1_addr,
+    uint64_t dst_noc_addr_multicast,
+    uint32_t size,
+    uint32_t num_dests,
+    bool linked = false,
+    uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC);
+
+    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+        noc_async_write_multicast_one_packet(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked);
+    } else {
+        WAYPOINT("NMWW");
+        NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
+        DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
+        ncrisc_noc_fast_write_any_len<noc_mode>(
+            noc,
+            write_cmd_buf,
+            src_local_l1_addr,
+            dst_noc_addr_multicast,
+            size,
+            NOC_MULTICAST_WRITE_VC,
+            true /* mcast */,
+            linked,
+            num_dests,
+            true /* multicast_path_reserve */);
+        WAYPOINT("NMWD");
     }
 }
 
@@ -848,6 +897,10 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
         }
+    } else {
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+        }
     }
     WAYPOINT("NWPW");
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
@@ -865,7 +918,75 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;  // num_dests
         }
+    } else {
+        if constexpr (noc_mode == DM_DEDICATED_NOC) {
+            noc_posted_writes_num_issued[noc] += 1;
+        }
     }
+}
+
+template <typename DSpec>
+FORCE_INLINE void noc_async_read_page(
+    const uint32_t id,
+    const TensorAccessor<DSpec>& s,
+    std::uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_read(s.get_noc_addr(id, offset, noc), dst_local_l1_addr, s.page_size, noc);
+}
+
+template <typename DSpec>
+FORCE_INLINE void noc_async_read_tile(
+    const uint32_t id,
+    const TensorAccessor<DSpec>& s,
+    std::uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_read(s.get_noc_addr(id, offset, noc), dst_local_l1_addr, s.page_size, noc);
+}
+
+template <bool DRAM>
+FORCE_INLINE void noc_async_read_tile(
+    const uint32_t id,
+    const InterleavedAddrGen<DRAM>& s,
+    std::uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_read(s.get_noc_addr(id, offset, noc), dst_local_l1_addr, s.page_size, noc);
+}
+
+template <typename DSpec>
+FORCE_INLINE void noc_async_write_page(
+    const uint32_t id,
+    const TensorAccessor<DSpec>& s,
+    std::uint32_t src_local_l1_addr,
+    const uint32_t write_size_bytes,
+    const uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_write(src_local_l1_addr, s.get_noc_addr(id, offset, noc), write_size_bytes, noc);
+}
+
+template <bool DRAM>
+FORCE_INLINE void noc_async_write_page(
+    const uint32_t id,
+    const InterleavedAddrGen<DRAM>& s,
+    std::uint32_t src_local_l1_addr,
+    const uint32_t write_size_bytes,
+    const uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_write(src_local_l1_addr, s.get_noc_addr(id, offset, noc), write_size_bytes, noc);
+}
+
+template <typename DSpec>
+FORCE_INLINE void noc_async_write_tile(
+    const uint32_t id, const TensorAccessor<DSpec>& s, std::uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
+    noc_async_write(src_local_l1_addr, s.get_noc_addr(id, 0, noc), s.page_size, noc);
+}
+
+template <bool DRAM>
+FORCE_INLINE void noc_async_write_tile(
+    const uint32_t id, const InterleavedAddrGen<DRAM>& s, std::uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
+    noc_async_write(src_local_l1_addr, s.get_noc_addr(id, 0, noc), s.page_size, noc);
 }
 
 template <bool DRAM>
@@ -881,7 +1002,7 @@ FORCE_INLINE void noc_async_read_page(
     */
     RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, s.page_size, -1);
 
-    s.noc_async_read_page(id, dst_local_l1_addr, offset, noc);
+    noc_async_read(s.get_noc_addr(id, offset), dst_local_l1_addr, s.page_size, noc);
 }
 
 template <bool DRAM, uint32_t tile_hw>
@@ -897,42 +1018,31 @@ FORCE_INLINE void noc_async_read_tile(
     */
     RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, s.page_size, -1);
 
-    s.noc_async_read_tile(id, dst_local_l1_addr, offset, noc);
-}
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    }
+    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
+    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
+    uint32_t src_addr = s.get_addr(id, bank_offset_index, bank_index, offset);
+    uint32_t src_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
 
-// clang-format off
-/**
- * Initiates an asynchronous write from a source address in L1 memory on the
- * Tensix core executing this function call. The destination is specified using
- * a uint64_t encoding referencing an on-chip node located at NOC coordinates
- * (x,y) and a local address created using get_noc_addr function. Also, see
- * \a noc_async_write_barrier.
- *
- * The destination node can be either a DRAM bank, Tensix core+L1 memory
- * address or a PCIe controller.
- *
- * Return value: None
- *
- * | Argument          | Description                                             | Type     | Valid Range                                                    | Required |
- * |-------------------|---------------------------------------------------------|----------|----------------------------------------------------------------|----------|
- * | src_local_l1_addr | Source address in local L1 memory                       | uint32_t | 0..1MB                                                         | True     |
- * | dst_noc_addr      | Encoding of the destination NOC location (x,y)+address  | uint64_t | DOX-TODO (insert a reference to what constitutes valid coords) | True     |
- * | size              | Size of data transfer in bytes                          | uint32_t | 0..1MB                                                         | True     |
- */
-// clang-format on
-template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
-inline void noc_async_write(
-    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
-    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, noc);
-    } else {
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, NOC_UNICAST_WRITE_VC);
+    WAYPOINT("NRTW");
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, get_noc_addr_helper(src_noc_xy, src_addr), dst_local_l1_addr, s.page_size);
+    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
+    WAYPOINT("NRTD");
 
-        WAYPOINT("NAWW");
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-        ncrisc_noc_fast_write_any_len<noc_mode>(
-            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
-        WAYPOINT("NAWD");
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);            // (uint32_t)src_addr
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_xy);  // src_addr >> 32
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, s.page_size);            // len_bytes
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        noc_reads_num_issued[noc] += 1;
     }
 }
 
@@ -944,7 +1054,152 @@ FORCE_INLINE void noc_async_write_tile(
     uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE_, id, s.page_size, NOC_UNICAST_WRITE_VC);
 
-    s.noc_async_write_tile(id, src_local_l1_addr, noc);
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+    }
+    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
+    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
+    uint32_t dest_addr = s.get_addr(id, bank_offset_index, bank_index);
+    uint32_t dest_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
+
+    WAYPOINT("NWTW");
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(
+        noc, get_noc_addr_helper(dest_noc_xy, dest_addr), src_local_l1_addr, s.page_size);
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    WAYPOINT("NWTD");
+
+    constexpr uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
+                                       NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
+                                       0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
+                                       0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
+                                       NOC_CMD_RESP_MARKED;
+
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dest_addr);            // (uint32_t)dest_addr
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_COORDINATE, dest_noc_xy);  // dest_addr >> 32
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, s.page_size);            // len_bytes
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        noc_nonposted_writes_num_issued[noc] += 1;
+        noc_nonposted_writes_acked[noc] += 1;  // num_dests
+    }
+}
+
+template <bool DRAM>
+FORCE_INLINE void noc_async_read_page(
+    const uint32_t id,
+    const InterleavedPow2AddrGenFast<DRAM>& s,
+    std::uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    }
+    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
+    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
+    uint32_t src_addr = s.get_addr(id, bank_offset_index, bank_index, offset);
+    uint32_t src_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
+
+    WAYPOINT("NRPW");
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION(
+        noc, get_noc_addr_helper(src_noc_xy, src_addr), dst_local_l1_addr, 1 << s.aligned_log_base_2_of_page_size);
+    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
+    WAYPOINT("NRPD");
+
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);            // (uint32_t)src_addr
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_xy);  // src_addr >> 32
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, 1 << s.aligned_log_base_2_of_page_size);  // len_bytes
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        noc_reads_num_issued[noc] += 1;
+    }
+}
+
+template <bool DRAM>
+FORCE_INLINE void noc_async_read_partial_page(
+    const uint32_t id,
+    const InterleavedPow2AddrGenFast<DRAM>& s,
+    std::uint32_t dst_local_l1_addr,
+    const uint32_t size,
+    const uint32_t offset,
+    uint8_t noc = noc_index) {
+    // Note: This is not used anywhere in tt-metal
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    }
+    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
+    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
+    uint32_t src_addr = s.get_addr(id, bank_offset_index, bank_index, offset);
+    uint32_t src_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
+
+    WAYPOINT("RP1W");
+    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
+    WAYPOINT("RP1D");
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, get_noc_addr_helper(src_noc_xy, src_addr), dst_local_l1_addr, size);
+
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);            // (uint32_t)src_addr
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_xy);  // src_addr >> 32
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);                   // len_bytes
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        noc_reads_num_issued[noc] += 1;
+    }
+}
+
+template <bool DRAM>
+FORCE_INLINE void noc_async_write_page(
+    const uint32_t id,
+    const InterleavedPow2AddrGenFast<DRAM>& s,
+    std::uint32_t src_local_l1_addr,
+    const uint32_t write_size_bytes,
+    const uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    // Note: This is not used anywhere in tt-metal
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+    }
+    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
+    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
+    uint32_t dest_addr = s.get_addr(id, bank_offset_index, bank_index, offset);
+    uint32_t dest_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
+
+    WAYPOINT("NWPW");
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(
+        noc, get_noc_addr_helper(dest_noc_xy, dest_addr), src_local_l1_addr, write_size_bytes);
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    WAYPOINT("NWPD");
+
+    constexpr uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
+                                       NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
+                                       0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
+                                       0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
+                                       NOC_CMD_RESP_MARKED;
+
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dest_addr);            // (uint32_t)dest_addr
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_COORDINATE, dest_noc_xy);  // dest_addr >> 32
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, write_size_bytes);       // len_bytes
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        noc_nonposted_writes_num_issued[noc] += 1;
+        noc_nonposted_writes_acked[noc] += 1;  // num_dests
+    }
 }
 
 template <ProgrammableCoreType type = ProgrammableCoreType::TENSIX>
@@ -977,71 +1232,6 @@ inline void noc_semaphore_set_remote(
  * The destinations are specified using a uint64_t encoding referencing an
  * on-chip grid of nodes located at NOC coordinate range
  * (x_start,y_start,x_end,y_end) and a local address created using
- * *get_noc_multicast_addr* function. Also, *see noc_async_write_barrier*.
- *
- * The destination nodes can only be a set of Tensix cores + L1 memory address.
- * The destination nodes must form a rectangular grid. The destination L1
- * memory address must be the same on all destination nodes.
- *
- * With this API, the multicast sender cannot be part of the multicast
- * destinations. If the multicast sender has to be in the multicast
- * destinations (i.e. must perform a local L1 write), the other API variant
- * *noc_async_write_multicast_loopback_src* can be used.
- *
- * Note: The number of destinations needs to be non-zero. Besides that,
- * there is no restriction on the number of destinations, i.e. the
- * multicast destinations can span the full chip. However, as mentioned
- * previously, the multicast source cannot be part of the destinations. So, the
- * maximum number of destinations is number of cores - 1.
- *
- * Return value: None
- *
- * | Argument               | Description                                                              | Type     | Valid Range                                                   | Required |
- * |------------------------|--------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
- * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | size                   | Size of data transfer in bytes                                           | uint32_t | 0..1MB                                                        | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores -1)                                       | True     |
- */
-// clang-format on
-template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
-inline void noc_async_write_multicast(
-    std::uint32_t src_local_l1_addr,
-    std::uint64_t dst_noc_addr_multicast,
-    std::uint32_t size,
-    std::uint32_t num_dests,
-    bool linked = false,
-    bool multicast_path_reserve = true,
-    uint8_t noc = noc_index) {
-    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_multicast_one_packet(
-            src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked, multicast_path_reserve);
-    } else {
-        WAYPOINT("NMWW");
-        DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC);
-        ncrisc_noc_fast_write_any_len<noc_mode>(
-            noc,
-            write_cmd_buf,
-            src_local_l1_addr,
-            dst_noc_addr_multicast,
-            size,
-            NOC_MULTICAST_WRITE_VC,
-            true,
-            linked,
-            num_dests,
-            multicast_path_reserve);
-        WAYPOINT("NMWD");
-    }
-}
-
-// clang-format off
-/**
- * Initiates an asynchronous write from a source address in L1 memory on the
- * Tensix core executing this function call to a rectangular destination grid.
- * The destinations are specified using a uint64_t encoding referencing an
- * on-chip grid of nodes located at NOC coordinate range
- * (x_start,y_start,x_end,y_end) and a local address created using
  * *get_noc_multicast_addr* function. The size of data that is sent is 4 Bytes.
  * This is usually used to set a semaphore value at the destination nodes, as a
  * way of a synchronization mechanism. The same as *noc_async_write_multicast*
@@ -1054,19 +1244,20 @@ inline void noc_async_write_multicast(
  *
  * Return value: None
  *
- * | Argument               | Description                                                              | Type     | Valid Range                                                   | Required |
- * |------------------------|--------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
- * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                                      | True     |
+ * | Argument               | Description                                                              | Type     | Valid Range                                | Required |
+ * |------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
+ * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
+ * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                   | True     |
+ * | linked                 | Whether the transaction is linked                                        | bool     | true or false                              | False    |
+ * | noc                    | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */
 // clang-format on
 inline void noc_semaphore_set_multicast(
-    std::uint32_t src_local_l1_addr,
-    std::uint64_t dst_noc_addr_multicast,
-    std::uint32_t num_dests,
+    uint32_t src_local_l1_addr,
+    uint64_t dst_noc_addr_multicast,
+    uint32_t num_dests,
     bool linked = false,
-    bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
     WAYPOINT("NSNW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
@@ -1080,7 +1271,7 @@ inline void noc_semaphore_set_multicast(
         true,
         linked,
         num_dests,
-        multicast_path_reserve);
+        true /* multicast_path_reserve */);
     WAYPOINT("NSND");
 }
 // clang-format off
@@ -1102,19 +1293,20 @@ inline void noc_semaphore_set_multicast(
  *
  * Return value: None
  *
- * | Argument               | Description                                                              | Type     | Valid Range                                                   | Required |
- * |------------------------|--------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
- * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores)                                          | True     |
+ * | Argument               | Description                                                              | Type     | Valid Range                                | Required |
+ * |------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
+ * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
+ * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores)                       | True     |
+ * | linked                 | Whether the transaction is linked                                        | bool     | true or false                              | False    |
+ * | noc                    | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */
 // clang-format on
 inline void noc_semaphore_set_multicast_loopback_src(
-    std::uint32_t src_local_l1_addr,
-    std::uint64_t dst_noc_addr_multicast,
-    std::uint32_t num_dests,
+    uint32_t src_local_l1_addr,
+    uint64_t dst_noc_addr_multicast,
+    uint32_t num_dests,
     bool linked = false,
-    bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
     WAYPOINT("NSLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
@@ -1128,7 +1320,7 @@ inline void noc_semaphore_set_multicast_loopback_src(
         true,
         linked,
         num_dests,
-        multicast_path_reserve);
+        true /* multicast_path_reserve */);
     WAYPOINT("NSLD");
 }
 
@@ -1138,8 +1330,12 @@ inline void noc_async_write_multicast_loopback_src(
     std::uint32_t size,
     std::uint32_t num_dests,
     bool linked = false,
-    bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
+    constexpr bool multicast_path_reserve = true;
+
+    NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC);
+
     WAYPOINT("NMLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
@@ -1156,73 +1352,6 @@ inline void noc_async_write_multicast_loopback_src(
     WAYPOINT("NMLD");
 }
 
-// clang-format off
-/**
- * Initiates an asynchronous write from a source address in L1 memory on the
- * Tensix core executing this function call to an L-shaped destination which is defined by
- * a grid and an exclusion zone.
- * The destinations are specified using a uint64_t encoding referencing an
- * on-chip grid of nodes located at NOC coordinate range
- * (x_start,y_start,x_end,y_end) and a local address created using
- * *get_noc_multicast_addr* function. Also, *see noc_async_write_barrier*.
- * Similarly, the exclusion zone is specified using uint32_t encoding referencing
- * an on-chip core and directions relative to it created using *get_noc_exclude_region* function.
- *
- * The destination nodes can only be a set of Tensix cores + L1 memory address.
- * The destination nodes must form an L-shaped grid (where dst_noc_addr_multicast defines a grid
- * and exclude_region define a subgrid to exclude, the inner part of the L). The destination L1
- * memory address must be the same on all destination nodes.
- *
- * With this API, the multicast sender cannot be part of the multicast
- * destinations.
- *
- * Note: The number of destinations needs to be non-zero. Besides that,
- * there is no restriction on the number of destinations, i.e. the
- * multicast destinations can span the full chip. However, as mentioned
- * previously, the multicast source cannot be part of the destinations. So, the
- * maximum number of destinations is number of cores - 1.
- *
- * Return value: None
- *
- * NOTE: only supported on Blackhole
- *
- * | Argument               | Description                                                               | Type     | Valid Range                                                   | Required |
- * |------------------------|---------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | src_local_l1_addr      | Source address in local L1 memory                                         | uint32_t | 0..1MB                                                        | True     |
- * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address  | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | size                   | Size of data transfer in bytes                                            | uint32_t | 0..1MB                                                        | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting            | uint32_t | 0..(number of cores - 1)                                      | True     |
- * | exclude_region         | Encoding of the excluded region (x_start,y_start,x_direction,y_direction) | uint32_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- */
-// clang-format on
-#ifdef ARCH_BLACKHOLE
-inline void noc_async_write_multicast_exclude_region(
-    std::uint32_t src_local_l1_addr,
-    std::uint64_t dst_noc_addr_multicast,
-    std::uint32_t size,
-    std::uint32_t num_dests,
-    std::uint32_t exclude_region,
-    bool linked = false,
-    bool multicast_path_reserve = true,
-    uint8_t noc = noc_index) {
-    WAYPOINT("NMEW");
-    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-    ncrisc_noc_fast_write_any_len_exclude_region<noc_mode>(
-        noc,
-        write_cmd_buf,
-        src_local_l1_addr,
-        dst_noc_addr_multicast,
-        size,
-        NOC_MULTICAST_WRITE_VC,
-        true,
-        linked,
-        num_dests,
-        multicast_path_reserve,
-        exclude_region);
-    WAYPOINT("NMED");
-}
-#endif
-
 /**
  * This blocking call waits for all the outstanding enqueued *noc_async_read*
  * calls issued on the current Tensix core to complete. After returning from
@@ -1230,6 +1359,10 @@ inline void noc_async_write_multicast_exclude_region(
  * core.
  *
  * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
  */
 void noc_async_read_barrier(uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_BARRIER_START);
@@ -1255,6 +1388,10 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
  * core.
  *
  * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
  */
 FORCE_INLINE
 void noc_async_write_barrier(uint8_t noc = noc_index) {
@@ -1462,22 +1599,25 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * Unlike using \a noc_async_write, there are also no address alignment concerns.
  * Also, see \a noc_async_write_barrier.
  *
- * The destination node can be either a DRAM bank, Tensix core+L1 memory
+ * The destination node can be either a Tensix core+L1 memory
  * address or a PCIe controller.
  *
  * Return value: None
  *
- * | Argument  | Description                                            | Type     | Valid Range                                                   | Required |
- * |-----------|--------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | addr      | Encoding of the destination location (x,y)+address     | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | val       | The value to be written                                | uint32_t | Any uint32_t value                                            | True     |
- * | be        | Byte-enable                                            | uint8_t  | 0x1-0xF                                                       | False    |
+ * | Argument  | Description                                            | Type     | Valid Range                      | Required |
+ * |-----------|--------------------------------------------------------|----------|----------------------------------|----------|
+ * | addr      | Encoding of the destination location (x,y)+address     | uint64_t | Results of \a get_noc_addr calls | True     |
+ * | val       | The value to be written                                | uint32_t | Any uint32_t value               | True     |
+ * | be        | Byte-enable                                            | uint8_t  | 0x1-0xF                          | False    |
  */
 // clang-format on
 template <bool write_to_stream_reg = false, bool posted = false>
-FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
+FORCE_INLINE void noc_inline_dw_write(
+    uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+    // This API does not support DRAM addresses
+    DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
 #ifdef ARCH_BLACKHOLE
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
     // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
@@ -1491,9 +1631,9 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
             val,
             addr,
             be,  // byte-enable
-            NOC_UNICAST_WRITE_VC,
+            vc,
             false,  // mcast
-            false   // posted
+            posted  // posted
         );
         WAYPOINT("NWID");
         return;
@@ -1511,12 +1651,12 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
         src_addr,
         addr,
         4,
-        NOC_UNICAST_WRITE_VC,
+        vc,
         false,  // mcast
         false,  // linked
         1,      // num_dests
         true,   // multicast_path_reserve
-        false   // posted
+        posted  // posted
     );
     noc_async_writes_flushed(noc);
 #else
@@ -1526,7 +1666,7 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
         val,
         addr,
         be,  // byte-enable
-        NOC_UNICAST_WRITE_VC,
+        vc,
         false,  // mcast
         posted  // posted
     );
@@ -1535,15 +1675,20 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
 }
 
 // on BH this api can only write to stream register, writing to L1 will cause hangs!
-template <bool posted = false>
+template <bool posted = false, bool set_val = false>
 FORCE_INLINE void noc_inline_dw_write_set_state(
-    uint64_t addr, uint8_t be = 0xF, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
+    uint64_t addr,
+    uint32_t val = 0,
+    uint8_t be = 0xF,
+    uint8_t cmd_buf = write_at_cmd_buf,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NWIW");
     // DEBUG_SANITIZE_NOC_ADDR is not needed here because it doesn't send out the request
     // The address could be set here or later in noc_inline_dw_write_with_state
 
-    uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | NOC_CMD_CPY | NOC_CMD_WR |
-                             NOC_CMD_WR_INLINE | 0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
+    uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_WR_INLINE |
+                             0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
 
     uint32_t be32 = be;
     uint32_t be_shift = (addr & (NOC_WORD_BYTES - 1));
@@ -1551,15 +1696,27 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
     be32 = (be32 << be_shift);
 
     while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (set_val) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
+    }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, addr & 0xFFFFFFFF);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT));
+#ifdef ARCH_BLACKHOLE
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32) & 0x1000000F);
+#endif
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
     WAYPOINT("NWID");
 }
 
 // on BH this api can only write to stream register, writing to L1 will cause hangs!
-template <bool update_addr_lo = false, bool update_counter = true, bool posted = false, bool update_addr_hi = false>
+template <
+    bool update_addr_lo = false,
+    bool update_counter = true,
+    bool posted = false,
+    bool update_addr_hi = false,
+    bool update_val = false>
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
     // only either hi or lo address should be getting updated
@@ -1582,7 +1739,9 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
     } else if constexpr (update_addr_hi) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, addr);
     }
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
+    if constexpr (update_val) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
+    }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if constexpr (update_counter) {
@@ -1602,23 +1761,23 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
  * The Tensix core executing this function call initiates an atomic increment
  * (with 32-bit wrap) of a remote Tensix core L1 memory address. This L1 memory
  * address is used as a semaphore of size 4 Bytes, as a synchronization
- * mechanism.
+ * mechanism. Refer to <arch>/noc/noc.h for the documentation of noc_atomic_increment.
  *
  * Return value: None
  *
- * | Argument  | Description                                                    | Type     | Valid Range                                                   | Required |
- * |-----------|----------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | addr      | Encoding of the destination location (x,y)+address             | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | incr      | The value to increment by                                      | uint32_t | Any uint32_t value                                            | True     |
+ * | Argument                   | Description                                                      | Type     | Valid Range                      | Required |
+ * |----------------------------|------------------------------------------------------------------|----------|----------------------------------|----------|
+ * | addr                       | Encoding of the destination location (x,y)+address               | uint64_t | Results of \a get_noc_addr calls | True     |
+ * | incr                       | The value to increment by                                        | uint32_t | Any uint32_t value               | True     |
+ * | noc_id                     | Which NOC to use for the transaction                             | uint8_t  | 0 or 1                           | False    |
+ * | vc                         | Which NOC to use for the transaction                             | uint8_t  | 0-3 (Unicast VCs)                | False    |
+ * | posted (template argument) | Whether the call is posted or nonposted (i.e. needs to be acked) | uint32_t | true or false                    | False    |
  */
 // clang-format on
 template <bool posted = false>
-FORCE_INLINE void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index) {
-    /*
-    [REFER TO grayskull/noc/noc.h for the documentation of noc_atomic_increment()]
-    Generic increment with 32-bit wrap.
-  */
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC,addr,0, NOC_UNICAST_WRITE_VC);
+FORCE_INLINE void noc_semaphore_inc(
+    uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, addr, 0, vc);
 
     WAYPOINT("NSIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
@@ -1627,7 +1786,7 @@ FORCE_INLINE void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id
         noc_id,
         write_at_cmd_buf,
         addr,
-        NOC_UNICAST_WRITE_VC,
+        vc,
         incr,
         31 /*wrap*/,
         false /*linked*/,
@@ -1642,9 +1801,6 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
     heartbeat++;
     ptr[0] = 0xAABB0000 | (heartbeat & 0xFFFF);
 }
-
-FORCE_INLINE
-uint32_t min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
 
 template <bool use_vc>
 FORCE_INLINE uint32_t noc_async_read_tile_dram_sharded_set_state(
@@ -1701,15 +1857,14 @@ void noc_async_read_tile_dram_sharded_with_state(
     }
 }
 
-FORCE_INLINE
-void noc_async_read_tile_dram_sharded_with_state_with_trid(
+template <bool skip_ptr_update = false>
+FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
 
     WAYPOINT("NRDW");
-#ifndef ARCH_GRAYSKULL
-    ncrisc_noc_fast_read_with_transaction_id<noc_mode>(noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
-#endif
+    ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update>(
+        noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
     WAYPOINT("NRDD");
 }
 
@@ -1718,9 +1873,7 @@ void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = 
     RECORD_NOC_EVENT(NocEventType::READ_SET_TRID);
 
     WAYPOINT("NSTW");
-#ifndef ARCH_GRAYSKULL
     ncrisc_noc_set_transaction_id(noc, read_cmd_buf, trid);
-#endif
     WAYPOINT("NSTD");
 }
 
@@ -1728,21 +1881,24 @@ FORCE_INLINE
 void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTW");
     RECORD_NOC_EVENT(NocEventType::READ_BARRIER_WITH_TRID);
-#ifndef ARCH_GRAYSKULL
-    while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid));
-#endif
+    while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid)) {
+        continue;
+    }
     invalidate_l1_cache();
     WAYPOINT("NBTD");
 }
 
 template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
-    std::uint64_t dst_noc_addr, uint8_t cmd_buf = write_cmd_buf, uint8_t noc = noc_index) {
+    std::uint64_t dst_noc_addr,
+    uint8_t cmd_buf = write_cmd_buf,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NAWW");
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, NOC_UNICAST_WRITE_VC);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, vc);
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     WAYPOINT("NAWD");
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
+    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
                              0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
                              0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
                              (posted ? 0 : NOC_CMD_RESP_MARKED);
@@ -1780,7 +1936,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     WAYPOINT("NWPD");
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_noc_addr, src_local_l1_addr);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_noc_addr, src_local_l1_addr, size);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
@@ -1805,7 +1961,8 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     std::uint32_t size,
     std::uint32_t trid,
     uint8_t cmd_buf = write_cmd_buf,
-    uint8_t noc = noc_index) {
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if constexpr (update_counter) {
             if constexpr (posted) {
@@ -1822,7 +1979,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     WAYPOINT("NWPD");
 
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
+    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
                              0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
                              0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
                              (posted ? 0 : NOC_CMD_RESP_MARKED);
@@ -1854,9 +2011,9 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
 FORCE_INLINE
 void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NWTW");
-#ifndef ARCH_GRAYSKULL
-    while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid));
-#endif
+    while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid)) {
+        continue;
+    }
     invalidate_l1_cache();
     WAYPOINT("NWTD");
 }

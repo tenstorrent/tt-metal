@@ -12,7 +12,7 @@ void FullOperation::validate_inputs(
     auto any = tensor_args.any;
     TT_FATAL(any.storage_type() == StorageType::DEVICE, "Full operation error: Any tensor must be on device");
     TT_FATAL(
-        operation_attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Full operation error: Not currently supporting sharding");
     TT_FATAL(
         operation_attributes.layout == Layout::TILE, "Full operation error: Not currently supporting row major layout");
@@ -77,8 +77,8 @@ std::tuple<FullOperation::operation_attributes_t, FullOperation::tensor_args_t> 
         operation_attributes_t{
             std::move(shape),
             std::move(fill_value),
-            dtype.value_or(any.get_dtype()),
-            layout.value_or(any.get_layout()),
+            dtype.value_or(any.dtype()),
+            layout.value_or(any.layout()),
             memory_config.value_or(any.memory_config()),
         },
         tensor_args_t{

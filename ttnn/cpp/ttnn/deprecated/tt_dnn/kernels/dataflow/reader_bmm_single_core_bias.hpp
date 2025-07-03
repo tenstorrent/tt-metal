@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ FORCE_INLINE void read_bias(
     cb_reserve_back(bias_cb_id, bias_ntiles);
     uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
     for (uint32_t bias_tile = 0; bias_tile < bias_ntiles; ++bias_tile) {
-        s_bias.noc_async_read_page(bias_tile, bias_l1_addr);
+        noc_async_read_page(bias_tile, s_bias, bias_l1_addr);
         bias_l1_addr += bias_pagesize;
     }
     noc_async_read_barrier();
@@ -41,7 +41,7 @@ FORCE_INLINE void read_bias_with_offset(
     cb_reserve_back(bias_cb_id, bias_ntiles);
     uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
     for (uint32_t bias_tile = bias_tile_offset; bias_tile < bias_tile_offset + bias_ntiles; ++bias_tile) {
-        s_bias.noc_async_read_page(bias_tile, bias_l1_addr);
+        noc_async_read_page(bias_tile, s_bias, bias_l1_addr);
         bias_l1_addr += bias_pagesize;
     }
     noc_async_read_barrier();

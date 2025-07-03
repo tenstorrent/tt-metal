@@ -4,26 +4,15 @@
 
 
 import pytest
-from loguru import logger
 import torch
-import ttnn
+from loguru import logger
 
+import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.t3000.llama2_70b.tt.model_config import (
-    get_model_config,
-)
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    get_llama_path,
-)
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    tt_all_gather_torch,
-    get_weight_cache_path,
-)
+from models.demos.t3000.llama2_70b.tt.llama_common import get_llama_path, get_weight_cache_path, tt_all_gather_torch
+from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
+from models.utility_functions import get_devices_for_t3000, skip_for_grayskull, torch2tt_tensor, tt2torch_tensor
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 class TtLlamaQKV(torch.nn.Module):

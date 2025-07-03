@@ -4,14 +4,12 @@
 
 
 import pytest
-from loguru import logger
 import torch
-import ttnn
+from loguru import logger
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+import ttnn
+from models.utility_functions import get_devices_for_t3000, skip_for_grayskull, torch2tt_tensor, tt2torch_tensor
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 def run_test_concat_head1(
@@ -156,7 +154,6 @@ def test_concat_head2(
     batch,
     seq_len,
     all_devices,
-    use_program_cache,
 ):
     n_devices = 8
     devices = get_devices_for_t3000(all_devices, num_devices=1)

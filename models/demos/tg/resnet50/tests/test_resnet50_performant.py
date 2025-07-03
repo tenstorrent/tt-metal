@@ -3,16 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 import ttnn
-from models.utility_functions import (
-    run_for_wormhole_b0,
-)
 from models.demos.ttnn_resnet.tests.resnet50_performant import (
-    run_resnet50_inference,
     run_resnet50_2cqs_inference,
-    run_resnet50_trace_inference,
+    run_resnet50_inference,
     run_resnet50_trace_2cqs_inference,
+    run_resnet50_trace_inference,
 )
+from models.utility_functions import run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()
@@ -21,7 +20,6 @@ from models.demos.ttnn_resnet.tests.resnet50_performant import (
     "device_batch_size, act_dtype, weight_dtype, math_fidelity",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-@pytest.mark.parametrize("enable_async_mode", [True], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     ((8, 4),),
@@ -29,12 +27,10 @@ from models.demos.ttnn_resnet.tests.resnet50_performant import (
 )
 def test_run_resnet50_inference(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     act_dtype,
     weight_dtype,
     math_fidelity,
-    enable_async_mode,
     model_location_generator,
 ):
     run_resnet50_inference(
@@ -53,7 +49,6 @@ def test_run_resnet50_inference(
     "device_batch_size, act_dtype, weight_dtype, math_fidelity",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-@pytest.mark.parametrize("enable_async_mode", [True], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     ((8, 4),),
@@ -61,12 +56,10 @@ def test_run_resnet50_inference(
 )
 def test_run_resnet50_trace_inference(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     act_dtype,
     weight_dtype,
     math_fidelity,
-    enable_async_mode,
     model_location_generator,
 ):
     run_resnet50_trace_inference(
@@ -85,7 +78,6 @@ def test_run_resnet50_trace_inference(
     "device_batch_size, act_dtype, weight_dtype, math_fidelity",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-@pytest.mark.parametrize("enable_async_mode", [True], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     ((8, 4),),
@@ -93,12 +85,10 @@ def test_run_resnet50_trace_inference(
 )
 def test_run_resnet50_2cqs_inference(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     act_dtype,
     weight_dtype,
     math_fidelity,
-    enable_async_mode,
     model_location_generator,
 ):
     run_resnet50_2cqs_inference(
@@ -119,7 +109,6 @@ def test_run_resnet50_2cqs_inference(
     "device_batch_size, act_dtype, weight_dtype, math_fidelity",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-@pytest.mark.parametrize("enable_async_mode", [True], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     ((8, 4),),
@@ -127,12 +116,10 @@ def test_run_resnet50_2cqs_inference(
 )
 def test_run_resnet50_trace_2cqs_inference(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     act_dtype,
     weight_dtype,
     math_fidelity,
-    enable_async_mode,
     model_location_generator,
 ):
     run_resnet50_trace_2cqs_inference(

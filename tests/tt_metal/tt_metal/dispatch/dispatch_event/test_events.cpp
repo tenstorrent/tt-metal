@@ -17,15 +17,14 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
+#include "impl/dispatch/dispatch_settings.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
 #include "gtest/gtest.h"
 #include "impl/debug/watcher_server.hpp"
-#include <tt-metalium/logger.hpp>
-#include "rtoptions.hpp"
-#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
@@ -67,7 +66,7 @@ TEST_F(CommandQueueEventFixture, TestEventsDataMovementWrittenToCompletionQueueI
         Finish(this->device_->command_queue());
 
         std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-        tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+        log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 
         // Read completion queue and ensure we see events 0-99 inclusive in order
         uint32_t event;
@@ -109,7 +108,7 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
     Finish(this->device_->command_queue());
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Test where Host synchronously waits for event to be completed.
@@ -140,13 +139,14 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
     Finish(this->device_->command_queue());
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Negative test. Host syncing on a future event that isn't actually issued.
 // Ensure that expected hang is seen, which indicates event sync feature is working properly.
 TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang) {
-    tt::llrt::RunTimeOptions::get_instance().set_test_mode_enabled(true);  // Required for finish hang breakout.
+    tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(
+        true);  // Required for finish hang breakout.
 
     auto future_event = std::make_shared<Event>();
     EnqueueRecordEvent(this->device_->command_queue(), future_event);
@@ -177,7 +177,8 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang)
 TEST_F(CommandQueueEventFixture, TestEventsQueueWaitForEventHang) {
     // Skip this test until #7216 is implemented.
     GTEST_SKIP();
-    tt::llrt::RunTimeOptions::get_instance().set_test_mode_enabled(true);  // Required for finish hang breakout.
+    tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(
+        true);  // Required for finish hang breakout.
 
     auto future_event = std::make_shared<Event>();
     EnqueueRecordEvent(this->device_->command_queue(), future_event);
@@ -230,7 +231,7 @@ TEST_F(CommandQueueEventFixture, TestEventsQueueWaitForEventBasic) {
     Finish(this->device_->command_queue());
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Device sync. Single CQ here, less interesting than 2CQ but still useful. Ensure no hangs.
@@ -274,7 +275,7 @@ TEST_F(CommandQueueEventFixture, TestEventsEventsQueryBasic) {
 
     Finish(this->device_->command_queue());
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Mix of WritesBuffers, RecordEvent, WaitForEvent, EventSynchronize with some checking.
@@ -322,7 +323,7 @@ TEST_F(CommandQueueEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize
     }
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 }  // namespace tt::tt_metal

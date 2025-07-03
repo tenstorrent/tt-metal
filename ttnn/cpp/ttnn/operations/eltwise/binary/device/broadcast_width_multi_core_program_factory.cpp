@@ -15,7 +15,7 @@ namespace ttnn::operations::binary {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
+BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: return BcastOpMath::ADD;
         case BinaryOpType::SUB: return BcastOpMath::SUB;
@@ -65,9 +65,9 @@ BinaryDeviceOperation::BroadcastWidthMultiCore::cached_program_t BinaryDeviceOpe
 
     tt_metal::IDevice* device = a.device();
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b->get_dtype());
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b->dtype());
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
     uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
@@ -111,11 +111,11 @@ BinaryDeviceOperation::BroadcastWidthMultiCore::cached_program_t BinaryDeviceOpe
             .set_page_size(output_cb_index, dst_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, output_cb_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(

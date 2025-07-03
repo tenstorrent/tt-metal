@@ -18,7 +18,7 @@
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "system_memory_cq_interface.hpp"
 #include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
@@ -90,14 +90,14 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
 
         for (const std::vector<string>& device_data : device_map) {
             if (host_data == device_data) {
-                tt::log_info("Matched on {}", type);
+                log_info(tt::LogMetal, "Matched on {}", type);
                 match = true;
                 break;
             }
         }
 
         if (not match) {
-            tt::log_info("Mismatch between host and device program data on {}", type);
+            log_info(tt::LogMetal, "Mismatch between host and device program data on {}", type);
         }
         all_match &= match;
     }
@@ -106,7 +106,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
     device_dispatch_dump_file.close();
 
     if (all_match) {
-        tt::log_info("Full match between host and device program data");
+        log_info(tt::LogMetal, "Full match between host and device program data");
     }
 }
 
@@ -212,7 +212,7 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
             case CQ_DISPATCH_CMD_SINK: break;
             case CQ_DISPATCH_CMD_EXEC_BUF_END: break;
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: break;
-            case CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL: break;
+            case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL: break;
             case CQ_DISPATCH_CMD_TERMINATE: break;
             case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: break;
             default: TT_THROW("Unrecognized dispatch command: {}", cmd_id); break;
@@ -223,7 +223,8 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
 
 // Returns the number of bytes taken up by this prefetch command (including header).
 uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream& iq_file) {
-    uint32_t stride = hal_ref.get_alignment(HalMemType::HOST);  // Default stride matches alignment.
+    uint32_t stride =
+        MetalContext::instance().hal().get_alignment(HalMemType::HOST);  // Default stride matches alignment.
     CQPrefetchCmdId cmd_id = cmd->base.cmd_id;
 
     if (cmd_id < CQ_PREFETCH_CMD_MAX_COUNT) {
@@ -326,14 +327,15 @@ void dump_completion_queue_entries(
     // Read out in pages, this is fine since all completion Q entries are page aligned.
     std::vector<uint8_t> read_data;
     read_data.resize(DispatchSettings::TRANSFER_PAGE_SIZE);
-    tt::log_info("Reading Device {} CQ {}, Completion Queue...", sysmem_manager.get_device_id(), cq_interface.id);
+    log_info(
+        tt::LogMetal, "Reading Device {} CQ {}, Completion Queue...", sysmem_manager.get_device_id(), cq_interface.id);
     cq_file << fmt::format(
         "Device {}, CQ {}, Completion Queue: write_ptr={:#010x}, read_ptr={:#010x}\n",
         sysmem_manager.get_device_id(),
         cq_interface.id,
         completion_write_ptr,
         completion_read_ptr);
-    uint32_t last_span_start;
+    uint32_t last_span_start{};
     bool last_span_invalid = false;
     print_progress_bar(0.0, true);
     for (uint32_t page_offset = 0; page_offset < completion_q_bytes;) {  // page_offset increment at end of loop
@@ -422,14 +424,14 @@ void dump_issue_queue_entries(
     // Read out in 4K pages, could do ISSUE_Q_ALIGNMENT chunks to match the entries but this is ~2x faster.
     std::vector<uint8_t> read_data;
     read_data.resize(DispatchSettings::TRANSFER_PAGE_SIZE);
-    tt::log_info("Reading Device {} CQ {}, Issue Queue...", sysmem_manager.get_device_id(), cq_interface.id);
+    log_info(tt::LogMetal, "Reading Device {} CQ {}, Issue Queue...", sysmem_manager.get_device_id(), cq_interface.id);
     iq_file << fmt::format(
         "Device {}, CQ {}, Issue Queue: write_ptr={:#010x}, read_ptr={:#010x} (read_ptr not currently implemented)\n",
         sysmem_manager.get_device_id(),
         cq_interface.id,
         issue_write_ptr,
         issue_read_ptr);
-    uint32_t last_span_start;
+    uint32_t last_span_start{};
     bool last_span_invalid = false;
     print_progress_bar(0.0, true);
     uint32_t first_page_addr = issue_q_base_addr - (issue_q_base_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
@@ -437,6 +439,7 @@ void dump_issue_queue_entries(
         first_page_addr + DispatchSettings::TRANSFER_PAGE_SIZE - 1;  // To track offset of latest page read out
     tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
         read_data.data(), read_data.size(), first_page_addr, mmio_device_id, channel);
+    const auto& hal = MetalContext::instance().hal();
     for (uint32_t offset = 0; offset < issue_q_bytes;) {  // offset increments at end of loop
         uint32_t curr_addr = issue_q_base_addr + offset;
         uint32_t page_offset = curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE;
@@ -453,21 +456,21 @@ void dump_issue_queue_entries(
         CQPrefetchCmd* cmd = (CQPrefetchCmd*)(read_data.data() + page_offset);
         if (cmd->base.cmd_id < CQ_PREFETCH_CMD_MAX_COUNT && cmd->base.cmd_id != CQ_PREFETCH_CMD_ILLEGAL) {
             if (last_span_invalid) {
-                if (curr_addr == last_span_start + hal_ref.get_alignment(HalMemType::HOST)) {
+                if (curr_addr == last_span_start + hal.get_alignment(HalMemType::HOST)) {
                     iq_file << fmt::format("{:#010x}: No valid prefetch command detected.", last_span_start);
                 } else {
                     iq_file << fmt::format(
                         "{:#010x}-{:#010x}: No valid prefetch commands detected.",
                         last_span_start,
-                        curr_addr - hal_ref.get_alignment(HalMemType::HOST));
+                        curr_addr - hal.get_alignment(HalMemType::HOST));
                 }
                 last_span_invalid = false;
                 if (last_span_start <= (issue_write_ptr) &&
-                    curr_addr - hal_ref.get_alignment(HalMemType::HOST) >= (issue_write_ptr)) {
+                    curr_addr - hal.get_alignment(HalMemType::HOST) >= (issue_write_ptr)) {
                     iq_file << fmt::format(" << write_ptr (0x{:08x})", issue_write_ptr);
                 }
                 if (last_span_start <= (issue_read_ptr) &&
-                    curr_addr - hal_ref.get_alignment(HalMemType::HOST) >= (issue_read_ptr)) {
+                    curr_addr - hal.get_alignment(HalMemType::HOST) >= (issue_read_ptr)) {
                     iq_file << fmt::format(" << read_ptr (0x{:08x})", issue_read_ptr);
                 }
                 iq_file << std::endl;
@@ -477,8 +480,8 @@ void dump_issue_queue_entries(
 
             // Check for a bad stride (happen to have a valid cmd_id, overwritten values, etc.)
             if (cmd_stride + offset >= issue_q_bytes || cmd_stride == 0 ||
-                cmd_stride % hal_ref.get_alignment(HalMemType::HOST) != 0) {
-                cmd_stride = hal_ref.get_alignment(HalMemType::HOST);
+                cmd_stride % hal.get_alignment(HalMemType::HOST) != 0) {
+                cmd_stride = hal.get_alignment(HalMemType::HOST);
                 iq_file << " (bad stride)";
             }
 
@@ -493,7 +496,7 @@ void dump_issue_queue_entries(
             // If it's a RELAY_INLINE command, then the data inside is dispatch commands, show them.
             if ((cmd->base.cmd_id == CQ_PREFETCH_CMD_RELAY_INLINE ||
                  cmd->base.cmd_id == CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH) &&
-                cmd_stride > hal_ref.get_alignment(HalMemType::HOST)) {
+                cmd_stride > hal.get_alignment(HalMemType::HOST)) {
                 uint32_t dispatch_offset = offset + sizeof(CQPrefetchCmd);
                 uint32_t dispatch_curr_addr = issue_q_base_addr + dispatch_offset;
                 while (dispatch_offset < offset + cmd_stride) {
@@ -529,7 +532,7 @@ void dump_issue_queue_entries(
                 last_span_start = curr_addr;
             }
             last_span_invalid = true;
-            offset += hal_ref.get_alignment(HalMemType::HOST);
+            offset += hal.get_alignment(HalMemType::HOST);
         }
         print_progress_bar((float)offset / issue_q_bytes + 0.005);
     }
@@ -543,7 +546,7 @@ void dump_issue_queue_entries(
 }
 
 // Define a queue type, for when they're interchangeable.
-typedef enum e_cq_queue_t { CQ_COMPLETION_QUEUE = 0, CQ_ISSUE_QUEUE = 1 } cq_queue_t;
+enum cq_queue_t { CQ_COMPLETION_QUEUE = 0, CQ_ISSUE_QUEUE = 1 };
 
 void dump_command_queue_raw_data(
     std::ofstream& out_file,
@@ -593,7 +596,8 @@ void dump_command_queue_raw_data(
                     cq_interface.id,
                     queue_type_name)
              << std::hex;
-    tt::log_info(
+    log_info(
+        tt::LogMetal,
         "Reading Device {} CQ {}, {} Queue Raw Data...",
         sysmem_manager.get_device_id(),
         cq_interface.id,

@@ -6,6 +6,8 @@
 
 #include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/assert.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/fabric_types.hpp>
 #include <tt_stl/reflection.hpp>
 #include <umd/device/types/arch.h>                      // tt::ARCH
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
@@ -15,13 +17,19 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
-#include <vector>
 
+#include <vector>
 namespace tt {
 enum class ARCH;
 }  // namespace tt
 
 namespace tt::tt_fabric {
+
+using tt::tt_metal::distributed::MeshContainer;
+using tt::tt_metal::distributed::MeshCoordinate;
+using tt::tt_metal::distributed::MeshCoordinateRange;
+using tt::tt_metal::distributed::MeshShape;
+
 struct ChipSpec {
     tt::ARCH arch;
     std::uint32_t num_eth_ports_per_direction;
@@ -39,7 +47,8 @@ enum class RoutingDirection {
     E = 2,
     S = 4,
     W = 8,
-    C = 16,  // Centre, means that destination is same as source
+    C = 16,     // Centre, means that destination is same as source
+    NONE = 32,  // No direction, means that destination is not reachable
 };
 
 struct RouterEdge {
@@ -58,8 +67,7 @@ struct hash_pair {
 };
 
 using port_id_t = std::pair<RoutingDirection, uint32_t>;
-using mesh_id_t = uint32_t;
-using InterMeshConnectivity = std::vector<std::vector<std::unordered_map<mesh_id_t, RouterEdge>>>;
+using InterMeshConnectivity = std::vector<std::vector<std::unordered_map<MeshId, RouterEdge>>>;
 using IntraMeshConnectivity = std::vector<std::vector<std::unordered_map<chip_id_t, RouterEdge>>>;
 
 class MeshGraph {
@@ -70,29 +78,55 @@ public:
 
     void print_connectivity() const;
 
-    const IntraMeshConnectivity& get_intra_mesh_connectivity() const { return intra_mesh_connectivity_; }
-    const InterMeshConnectivity& get_inter_mesh_connectivity() const { return inter_mesh_connectivity_; }
+    const IntraMeshConnectivity& get_intra_mesh_connectivity() const;
+    const InterMeshConnectivity& get_inter_mesh_connectivity() const;
 
     const ChipSpec& get_chip_spec() const { return chip_spec_; }
 
-    std::uint32_t get_mesh_ns_size(mesh_id_t mesh_id) const { return mesh_shapes_[mesh_id].first; }
-    std::uint32_t get_mesh_ew_size(mesh_id_t mesh_id) const { return mesh_shapes_[mesh_id].second; }
+    // Get the host ranks for a given mesh_id
+    // Returned MeshContainer has a shape denoting the shape of how the "board" are arranged
+    const MeshContainer<HostRankId>& get_host_ranks(MeshId mesh_id) const;
+
+    // Get the shape of the mesh, or the shape of the submesh for a given host rank if provided
+    MeshShape get_mesh_shape(MeshId mesh_id, std::optional<HostRankId> host_rank = std::nullopt) const;
+
+    // Get the coordinate range of the mesh, or the coordinate range of the submesh for a given host rank if provided
+    MeshCoordinateRange get_coord_range(MeshId mesh_id, std::optional<HostRankId> host_rank = std::nullopt) const;
+
+    std::vector<MeshId> get_mesh_ids() const;
+
+    // Get the chip ids for a given mesh_id
+    // If host_rank is provided, return the chip ids for the submesh for that host rank
+    // Otherwise, return the chip ids for the entire mesh
+    MeshContainer<chip_id_t> get_chip_ids(MeshId mesh_id, std::optional<HostRankId> host_rank = std::nullopt) const;
+
+    // Get the host rank that owns a given chip in a mesh
+    std::optional<HostRankId> get_host_rank_for_chip(MeshId mesh_id, chip_id_t chip_id) const;
+
+    // Translation functions for chip_id and coordinate using RM-convention
+    MeshCoordinate chip_to_coordinate(MeshId mesh_id, chip_id_t chip_id) const;
+    chip_id_t coordinate_to_chip(MeshId mesh_id, MeshCoordinate coordinate) const;
 
 private:
+    void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
         chip_id_t src_chip_id, std::uint32_t row_size, std::uint32_t num_chips_in_mesh, FabricType fabric_type) const;
     void initialize_from_yaml(const std::string& mesh_graph_desc_file_path);
 
     void add_to_connectivity(
-        mesh_id_t src_mesh_id,
+        MeshId src_mesh_id,
         chip_id_t src_chip_id,
-        chip_id_t dest_mesh_id,
+        MeshId dest_mesh_id,
         chip_id_t dest_chip_id,
         RoutingDirection port_direction);
 
     ChipSpec chip_spec_;
-    std::vector<std::pair<std::uint32_t, std::uint32_t>> mesh_shapes_;
+    std::map<MeshId, MeshContainer<chip_id_t>> mesh_to_chip_ids_;
     IntraMeshConnectivity intra_mesh_connectivity_;
     InterMeshConnectivity inter_mesh_connectivity_;
+
+    // For distributed context, bookkeeping of host ranks and their shapes
+    std::vector<MeshContainer<HostRankId>> mesh_host_ranks_;
+    std::unordered_map<std::pair<MeshId, HostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
 };
 }  // namespace tt::tt_fabric

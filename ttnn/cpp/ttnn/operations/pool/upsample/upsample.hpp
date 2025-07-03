@@ -22,6 +22,5 @@ struct ExecuteUpSample {
 };
 }  // namespace upsample
 }  // namespace operations
-constexpr auto upsample =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::upsample", ttnn::operations::upsample::ExecuteUpSample>();
+constexpr auto upsample = ttnn::register_operation<"ttnn::upsample", ttnn::operations::upsample::ExecuteUpSample>();
 }  // namespace ttnn

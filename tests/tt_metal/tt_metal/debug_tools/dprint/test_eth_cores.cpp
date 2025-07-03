@@ -15,10 +15,9 @@
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include <tt-metalium/device.hpp>
-#include "dprint_server.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
@@ -47,7 +46,7 @@ SETW:
 HEX/OCT/DEC:
 1e240361100123456)";
 
-static void RunTest(
+void RunTest(
     DPrintFixture* fixture,
     IDevice* device,
     bool active,
@@ -94,7 +93,7 @@ static void RunTest(
         );
 
         // Clear the log file for the next core's test
-        DPrintServerClearLogFile();
+        MetalContext::instance().dprint_server()->clear_log_file();
     }
 }
 }

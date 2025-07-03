@@ -20,15 +20,15 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
-    tt::DataFormat src1_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(grad_output.get_dtype());
+    tt::DataFormat src1_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(grad_output.dtype());
     uint32_t src1_single_tile_size = tt::tt_metal::detail::TileSize(src1_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
 
     // NOTE: There is an assumption that number of tiles in grad_output is the same as in input
-    uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
     tt::tt_metal::IDevice* device = input.device();
 
@@ -66,11 +66,11 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
 
     auto dst_buffer = output.buffer();
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram, 0};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
     tt::tt_metal::KernelHandle binary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -158,7 +158,7 @@ void GeluBackwardProgramFactory::override_runtime_arguments(
     auto& compute_runtime_args = GetRuntimeArgs(program, gelu_bw_compute_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, gelu_bw_writer_kernel_id);
 
-    uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
     tt::tt_metal::IDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();

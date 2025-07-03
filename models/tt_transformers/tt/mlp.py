@@ -3,11 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.common import pad_to_size
 from models.tt_transformers.tt.ccl import tt_all_reduce
-from models.tt_transformers.tt.model_config import TensorGroup, OpGroup
+from models.tt_transformers.tt.common import pad_to_size
+from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
 class MLP(LightweightModule):
@@ -55,6 +56,8 @@ class MLP(LightweightModule):
         w1_dims = (-1, -2) if args.is_galaxy else (-2, -1)
         w2_dims = (-2, -1) if args.is_galaxy else (-1, -2)
 
+        layer_num = max(layer_num, 0)  # cross_block uses the configutation of the first decoder
+
         ff1_3_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.FF1_FF3
         )
@@ -77,11 +80,12 @@ class MLP(LightweightModule):
         """
         seq_len = x.shape[-2]
         TG = self.args.is_galaxy
+        layer_num = max(self.layer_num, 0)  # cross_block uses the configutation of the first decoder
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
-            decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
+            decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
         )
         li_ff1_3_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
-            decoder_id=self.layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
+            decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
         )
 
         if mode == "decode":  # Sharded config
@@ -103,6 +107,7 @@ class MLP(LightweightModule):
 
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
+        memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -110,7 +115,7 @@ class MLP(LightweightModule):
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_1,
-            memory_config=x.memory_config(),
+            memory_config=memory_config,
         )
 
         w3_out = ttnn.linear(
@@ -120,7 +125,7 @@ class MLP(LightweightModule):
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_3,
-            memory_config=x.memory_config(),
+            memory_config=memory_config,
         )
         ttnn.deallocate(x)
 
@@ -199,7 +204,7 @@ class MLP(LightweightModule):
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
         li_ff2_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
-            decoder_id=self.layer_num, op=OpGroup.LI_FF2, configuration=self.args
+            decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
         w2_out = ttnn.linear(
             w2_in,
@@ -207,11 +212,7 @@ class MLP(LightweightModule):
             compute_kernel_config=li_ff2_compute_kernel_cfg,
             dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
             program_config=pc_2,
-            memory_config=(
-                (ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)
-                if TG
-                else w2_in.memory_config()
-            ),
+            memory_config=memory_config,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
         ttnn.deallocate(w2_in)

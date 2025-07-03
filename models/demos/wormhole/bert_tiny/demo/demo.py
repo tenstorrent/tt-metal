@@ -3,25 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+
+import evaluate
 import pytest
 import torch
 from loguru import logger
+from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    profiler,
-)
-
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
-
-from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from models.demos.wormhole.bert_tiny.tt.bert_tiny import bert_for_question_answering, preprocess_inputs
-import evaluate
-from models.utility_functions import skip_for_grayskull, is_wormhole_b0
+from models.utility_functions import disable_persistent_kernel_cache, is_wormhole_b0, profiler, skip_for_grayskull
 
 
 def load_inputs(input_path, batch):
@@ -49,7 +42,6 @@ def positional_ids(config, input_ids, past_key_values_length=0):
 
 def run_bert_question_and_answering_inference(
     mesh_device,
-    use_program_cache,
     model_name,
     sequence_size,
     model_location_generator,
@@ -167,7 +159,6 @@ def run_bert_question_and_answering_inference(
 
 def run_bert_question_and_answering_inference_squad_v2(
     mesh_device,
-    use_program_cache,
     model_name,
     sequence_size,
     model_location_generator,
@@ -271,13 +262,11 @@ def test_demo(
     model_name,
     model_location_generator,
     mesh_device,
-    use_program_cache,
 ):
     disable_persistent_kernel_cache()
 
     return run_bert_question_and_answering_inference(
         mesh_device=mesh_device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         sequence_size=sequence_size,
         model_location_generator=model_location_generator,
@@ -299,13 +288,11 @@ def test_demo_squadv2(
     n_iterations,
     model_location_generator,
     mesh_device,
-    use_program_cache,
 ):
     disable_persistent_kernel_cache()
 
     return run_bert_question_and_answering_inference_squad_v2(
         mesh_device=mesh_device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         sequence_size=sequence_size,
         model_location_generator=model_location_generator,

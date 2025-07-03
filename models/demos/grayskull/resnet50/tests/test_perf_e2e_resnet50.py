@@ -5,8 +5,8 @@
 
 import pytest
 
-from models.utility_functions import run_for_grayskull
 from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
+from models.utility_functions import run_for_grayskull
 
 
 @run_for_grayskull()
@@ -18,7 +18,6 @@ from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
 )
 def test_perf(
     device,
-    use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,
@@ -40,31 +39,24 @@ def test_perf(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1332224}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    (
-        (20, True, 0.0068, 20),
-        (20, False, 0.0068, 20),
-    ),
-    indirect=["enable_async_mode"],
+    "batch_size, expected_inference_time, expected_compile_time",
+    ((20, 0.0068, 20)),
 )
 def test_perf_trace(
     device,
-    use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
-    enable_async_mode,
     model_location_generator,
 ):
-    mode = "async" if enable_async_mode else "sync"
     run_perf_resnet(
         batch_size,
         expected_inference_time,
         expected_compile_time,
         hf_cat_image_sample_input,
         device,
-        f"resnet50_trace_{mode}",
+        f"resnet50_trace",
         model_location_generator,
     )
 
@@ -78,7 +70,6 @@ def test_perf_trace(
 )
 def test_perf_2cqs(
     device,
-    use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,
@@ -107,7 +98,6 @@ def test_perf_2cqs(
 )
 def test_perf_trace_2cqs(
     device,
-    use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,

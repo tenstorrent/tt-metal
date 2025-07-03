@@ -22,7 +22,6 @@ from models.utility_functions import run_for_wormhole_b0
     "batch_size, act_dtype, weight_dtype",
     ((1, ttnn.bfloat16, ttnn.bfloat16),),
 )
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize(
     "resolution",
     [
@@ -34,11 +33,9 @@ from models.utility_functions import run_for_wormhole_b0
 @pytest.mark.parametrize("pcc_check_interval", [5])
 def test_yolov4_stability(
     device,
-    use_program_cache,
     batch_size,
     act_dtype,
     weight_dtype,
-    enable_async_mode,
     model_location_generator,
     resolution,
     test_duration,
@@ -71,7 +68,7 @@ def test_yolov4_stability(
                 check_pcc = True
                 pcc_iter += 1
 
-            torch_input_tensor = torch.randn((1, *resolution, 3), dtype=torch.float32)
+            torch_input_tensor = torch.randn((1, 3, *resolution), dtype=torch.float32)
             _ = performant_runner.run(torch_input_tensor, check_pcc=check_pcc)
             check_pcc = False
 

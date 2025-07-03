@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Callable
+
 import torch
 
 import ttnn
-from typing import Callable
-
 from models.demos.wormhole.mamba.reference.args import ModelArgs, ModelMode
 from models.demos.wormhole.mamba.tt.cache import TensorCache
 

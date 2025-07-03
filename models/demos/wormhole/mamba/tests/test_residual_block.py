@@ -2,20 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
+
 import ttnn
-from models.demos.wormhole.mamba.tt.mamba_model import TtTensorLoader
-from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
 from models.demos.wormhole.mamba.reference.args import ModelMode
-from models.demos.wormhole.mamba.tt.residual_block import TtResidualBlock
+from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
 from models.demos.wormhole.mamba.tt import model_config
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
+from models.demos.wormhole.mamba.tt.mamba_model import TtTensorLoader
+from models.demos.wormhole.mamba.tt.residual_block import TtResidualBlock
 from models.utility_functions import skip_for_grayskull
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 class PytorchResidualBlock(torch.nn.Module):
@@ -68,7 +66,6 @@ def test_residual_block(
     use_pretrained_weights: bool,
     layer: int,
     device: ttnn.Device,
-    use_program_cache,
     reset_seeds,
 ):
     load_reference_model = Mamba.from_pretrained if use_pretrained_weights else Mamba.from_random

@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -21,8 +21,8 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -33,7 +33,7 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include <tt-metalium/lightmetal_capture_utils.hpp>
 #include "lightmetal_fixture.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
@@ -83,17 +83,16 @@ bool l1_buffer_read_write_test(IDevice* device, const L1Config& test_config) {
     for (uint32_t loop_idx = 0; loop_idx < num_loops; loop_idx++) {
         log_debug(tt::LogTest, "Running loop: {}", loop_idx);
 
-        auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
-                                                .device = device,
-                                                .size = test_config.size_bytes,
-                                                .page_size = test_config.page_size_bytes,
-                                                .buffer_layout = test_config.buffer_layout,
-                                                .shard_parameters = test_config.shard_spec()})
-                                          : CreateBuffer(tt::tt_metal::BufferConfig{
-                                                .device = device,
-                                                .size = test_config.size_bytes,
-                                                .page_size = test_config.page_size_bytes,
-                                                .buffer_layout = test_config.buffer_layout});
+        auto buffer =
+            test_config.sharded
+                ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
+                      .device = device,
+                      .size = test_config.size_bytes,
+                      .page_size = test_config.page_size_bytes,
+                      .buffer_layout = test_config.buffer_layout,
+                      .shard_parameters = test_config.shard_spec()})
+                : CreateBuffer(tt::tt_metal::BufferConfig{
+                      .device = device, .size = test_config.size_bytes, .page_size = test_config.page_size_bytes});
 
         if (loop_idx > 1) {
             buffers_vec.push_back(buffer);

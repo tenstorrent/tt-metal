@@ -2,22 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import json
-import torch
-import pytest
+
 import evaluate
-
+import pytest
+import torch
 from loguru import logger
-from models.utility_functions import (
-    profiler,
-    disable_persistent_kernel_cache,
-)
+from transformers import SqueezeBertForQuestionAnswering, SqueezeBertTokenizer, pipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.squeezebert.tt import ttnn_functional_squeezebert
-from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 
-from transformers import SqueezeBertForQuestionAnswering, pipeline, SqueezeBertTokenizer
+import ttnn
+from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
+from models.demos.squeezebert.tt import ttnn_functional_squeezebert
+from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path, batch):
@@ -45,7 +42,6 @@ def positional_ids(config, input_ids, past_key_values_length=0):
 
 def run_squeezebert_question_and_answering_inference(
     device,
-    use_program_cache,
     model_name,
     batch_size,
     sequence_size,
@@ -162,7 +158,6 @@ def run_squeezebert_question_and_answering_inference(
 
 def run_squeezebert_question_and_answering_inference_squad_v2(
     device,
-    use_program_cache,
     model_name,
     batch_size,
     sequence_size,
@@ -274,12 +269,11 @@ def run_squeezebert_question_and_answering_inference_squad_v2(
     ((["squeezebert/squeezebert-uncased", "models/demos/squeezebert/demo/input_data.json"]),),
 )
 @pytest.mark.parametrize("squeezebert", [ttnn_functional_squeezebert])
-def test_demo(input_loc, batch_size, sequence_size, model_name, squeezebert, device, use_program_cache, reset_seeds):
+def test_demo(input_loc, batch_size, sequence_size, model_name, squeezebert, device, reset_seeds):
     disable_persistent_kernel_cache()
 
     return run_squeezebert_question_and_answering_inference(
         device=device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         batch_size=batch_size,
         sequence_size=sequence_size,
@@ -301,14 +295,11 @@ def test_demo(input_loc, batch_size, sequence_size, model_name, squeezebert, dev
     "n_iterations",
     ((3),),
 )
-def test_demo_squadv2(
-    batch_size, sequence_size, model_name, squeezebert, n_iterations, device, use_program_cache, reset_seeds
-):
+def test_demo_squadv2(batch_size, sequence_size, model_name, squeezebert, n_iterations, device, reset_seeds):
     disable_persistent_kernel_cache()
 
     return run_squeezebert_question_and_answering_inference_squad_v2(
         device=device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         batch_size=batch_size,
         sequence_size=sequence_size,

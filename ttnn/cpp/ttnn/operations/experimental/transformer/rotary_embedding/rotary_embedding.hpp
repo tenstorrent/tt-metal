@@ -16,16 +16,16 @@ struct RotaryEmbeddingOperation {
         const Tensor& input_tensor,
         const Tensor& cos_cache,
         const Tensor& sin_cache,
-        const std::optional<uint32_t> token_index = std::nullopt,
+        std::optional<uint32_t> token_index = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
 }  // namespace operations::experimental::transformer
 
 namespace experimental {
 
-constexpr auto rotary_embedding = ttnn::register_operation_with_auto_launch_op<
+constexpr auto rotary_embedding = ttnn::register_operation<
     "ttnn::experimental::rotary_embedding",
     ttnn::operations::experimental::transformer::RotaryEmbeddingOperation>();
 

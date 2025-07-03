@@ -1,6 +1,7 @@
 training_config:
   project_name: "tt_train_nano_gpt"
   model_type: "gpt2"
+  model_path: "data/gpt2s_exported.msgpack"
   seed: 5489
   model_save_interval: 500
   batch_size: 4
@@ -12,6 +13,7 @@ training_config:
   use_kahan_summation: false
   gradient_accumulation_steps: 8
   tokenizer_type: bpe
+  tokenizer_path: "data/gpt2-tokenizer.json"
 
   transformer_config:
     runner_type: memory_efficient

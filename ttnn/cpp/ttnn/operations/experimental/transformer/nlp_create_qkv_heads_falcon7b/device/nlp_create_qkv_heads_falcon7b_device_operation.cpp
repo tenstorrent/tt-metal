@@ -11,20 +11,20 @@ namespace ttnn::operations::experimental::transformer {
 // Hard-coded for Falcon7B
 void NlpCreateHeadsFalcon7BDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
-        input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 ||
-            input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
-            input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||
+            input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
-    TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
+    TT_FATAL(input_tensor.layout() == Layout::TILE, "Error");
 
     TT_FATAL(input_shape[2] % tt::constants::TILE_HEIGHT == 0, "Error");
     TT_FATAL((input_shape == ttnn::Shape({input_shape[0], 1, input_shape[2], 4672})), "Unsupported input shape");
-    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
 }
 
 std::vector<ttnn::TensorSpec> NlpCreateHeadsFalcon7BDeviceOperation::compute_output_specs(
@@ -35,9 +35,8 @@ std::vector<ttnn::TensorSpec> NlpCreateHeadsFalcon7BDeviceOperation::compute_out
     }
 
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_padded_shape();
-    tt::tt_metal::TensorLayout layout(
-        input_tensor.get_dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_mem_config);
+    const auto& input_shape = input_tensor.padded_shape();
+    tt::tt_metal::TensorLayout layout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_mem_config);
     return {
         TensorSpec(Shape({input_shape[0], 71, input_shape[2], 64}), layout),
         TensorSpec(Shape({input_shape[0], 1, input_shape[2], 64}), layout),

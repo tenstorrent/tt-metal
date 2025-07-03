@@ -5,7 +5,7 @@
 #include "moreh_matmul_backward_pybind.hpp"
 
 #include "pybind11/cast.h"
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_matmul_backward/moreh_matmul_backward.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul_backward {

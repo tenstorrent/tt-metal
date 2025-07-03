@@ -128,7 +128,7 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
 )
 @pytest.mark.parametrize(
     "test_id",
-    (0, 1, 2),
+    (0, 1, pytest.param(2, marks=pytest.mark.xfail(reason="GH Issue #22069"))),
     ids=["RMSN", "RMSN_G", "RMSN_GB"],
 )
 def test_rmsnorm_test(test_id, dtype, in0_mem_config, out_mem_config, device):

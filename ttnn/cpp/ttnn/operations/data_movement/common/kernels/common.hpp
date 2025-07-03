@@ -8,10 +8,14 @@
 // issues
 #include <stdio.h>
 #include <cstring>
-#define MASK_64      0xFFFFFFFFFFFFFFC0
-#define OFFSET_64    0x000000000000003F
-#define MASK_16      0xFFFFFFFFFFFFFFF0
-#define OFFSET_16    0x000000000000000F
+#include <type_traits>
+
+constexpr uint64_t ALIGN_REQ_64 = 64;
+constexpr uint64_t MASK_64 = 0xFFFFFFFFFFFFFFC0;
+constexpr uint64_t OFFSET_64 = 0x000000000000003F;
+constexpr uint64_t ALIGN_REQ_16 = 16;
+constexpr uint64_t MASK_16 = 0xFFFFFFFFFFFFFFF0;
+constexpr uint64_t OFFSET_16 = 0x000000000000000F;
 
 namespace tt::data_movement::common {
 
@@ -20,7 +24,7 @@ FORCE_INLINE void enhanced_noc_async_read(
     const uint64_t src_noc_addr, const uint32_t dst_l1_addr, const uint32_t bytes) {
     // If you do not know the max_transfer_size at compile time write 0 to it.
     // only reads is true if we ONLY use noc_async_read and all calls to tt_memmove have use_read_datamover as True
-    if constexpr (only_reads) {
+    if constexpr (only_reads && max_transfer_size <= NOC_MAX_BURST_SIZE) {
         noc_async_read_one_packet(src_noc_addr, dst_l1_addr, bytes);
     } else {
         noc_async_read<max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size>(
@@ -33,7 +37,7 @@ FORCE_INLINE void enhanced_noc_async_write(
     const uint32_t src_l1_addr, const uint64_t dst_noc_addr, const uint32_t bytes) {
     // If you do not know the max_transfer_size at compile time write 0 to it.
     // only writes is true if we ONLY use noc_async_read and all calls to tt_memmove have use_read_datamover as False
-    if constexpr (only_writes) {
+    if constexpr (only_writes && max_transfer_size <= NOC_MAX_BURST_SIZE) {
         noc_async_write_one_packet(src_l1_addr, dst_noc_addr, bytes);
     } else {
         noc_async_write<max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size>(
@@ -180,6 +184,19 @@ FORCE_INLINE void transpose_2d(
 template <uint32_t AlignReq>
 FORCE_INLINE uint32_t align_address(const uint32_t address, const uint64_t mask) {
     return (address & mask) + AlignReq;
+}
+
+// Wait for a specified number of cycles
+// This is a blocking wait, so it should only be used for debugging purposes
+// It is not recommended to use this in production code
+inline void spin(uint32_t cycles) {
+    volatile uint tt_reg_ptr* clock_lo = reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    volatile uint tt_reg_ptr* clock_hi = reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    uint64_t wall_clock_timestamp = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
+    uint64_t wall_clock = 0;
+    do {
+        wall_clock = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
+    } while (wall_clock < (wall_clock_timestamp + cycles));
 }
 
 }  // namespace tt::data_movement::common

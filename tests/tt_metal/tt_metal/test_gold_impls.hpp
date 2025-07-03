@@ -53,7 +53,7 @@ struct BcastDim {
     };
     // TODO(AP): fix the gap to match defines in llk_3c.h
 
-    static const std::vector<Enum> all() { return {W, H, HW}; }
+    static std::vector<Enum> all() { return {W, H, HW}; }
 };
 
 struct BcastOp {
@@ -65,7 +65,7 @@ struct BcastOp {
     // These constants above map to ops in llk_3c.h:
     // add_tiles_bcast, sub_tiles_bcast, mul_tiles_bcast
 
-    static const std::vector<Enum> all() { return {ADD, SUB, MUL}; }
+    static std::vector<Enum> all() { return {ADD, SUB, MUL}; }
 };
 
 // input shape.x is assumed to have the full number of elements in bfloat16
@@ -174,4 +174,4 @@ inline std::vector<uint16_t> gold_bmm(
     return result;
 }
 
-typedef BcastOp EltwiseOp;
+using EltwiseOp = BcastOp;

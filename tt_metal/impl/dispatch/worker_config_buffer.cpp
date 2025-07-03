@@ -2,15 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "worker_config_buffer.hpp"
+
 #include <assert.hpp>
 #include <stdint.h>
 #include <stdio.h>
-#include <worker_config_buffer.hpp>
 #include <algorithm>
 #include <utility>
 #include <vector>
 
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt {
 
@@ -41,7 +42,7 @@ void WorkerConfigBufferMgr::init_add_buffer(uint32_t base_addr, uint32_t size) {
 // First part of returned pair is true if reserving size bytes requires a sync on some core type
 // The vector contains whether or not the core type needs a sync and if so the sync value
 // To avoid allocs in a perf path, returns a reference to internal data
-const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigBufferMgr::reserve(
+std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigBufferMgr::reserve(
     const std::vector<uint32_t>& sizes) {
     ConfigBufferSync sync_info;
     sync_info.need_sync = false;

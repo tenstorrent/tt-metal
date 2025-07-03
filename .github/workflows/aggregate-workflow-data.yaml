@@ -1,0 +1,111 @@
+name: Aggregate Workflow Data
+on:
+  push:
+    branches:
+      - mchiou/0-aggregate-workflow-report
+  schedule:
+    - cron: '0 * * * *' # every hour
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Number of days to look back for workflow runs'
+        required: false
+        default: '15'
+
+jobs:
+  fetch-data:
+    runs-on: ubuntu-latest
+    outputs:
+      cache-path: ${{ steps.fetch.outputs.cache-path }}
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
+
+      - name: Set rolling cache index
+        id: cache-index
+        run: echo "CACHE_INDEX=$(( ${{ github.run_number }} % 3 ))" >> $GITHUB_ENV
+
+      - name: Restore workflow data cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 #@v4
+        with:
+          path: ${{ github.workspace }}/workflow-data.json
+          key: metal-workflow-data-${{ github.ref }}-${{ env.CACHE_INDEX }}
+          restore-keys: |
+            metal-workflow-data-${{ github.ref }}-
+            metal-workflow-data-
+
+      - name: Install fetch-workflow-data dependencies
+        shell: bash
+        working-directory: .github/actions/fetch-workflow-data
+        run: npm install
+      - name: Fetch workflow data
+        id: fetch
+        uses: ./.github/actions/fetch-workflow-data
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          cache-path: ${{ github.workspace }}/workflow-data.json
+          days: ${{ github.event.inputs.days || 15 }}
+      - name: Upload workflow data
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: workflow-data
+          path: ${{ github.workspace }}/workflow-data.json
+          retention-days: 1
+
+      - name: Save workflow data cache
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 #@v4
+        with:
+          path: ${{ github.workspace }}/workflow-data.json
+          key: metal-workflow-data-${{ github.ref }}-${{ env.CACHE_INDEX }}-${{ github.run_id }}
+
+      - name: Debug cache file
+        run: ls -l ${{ github.workspace }}/workflow-data.json || echo "File not found"
+
+  analyze-data:
+    needs: fetch-data
+    runs-on: ubuntu-latest
+    outputs:
+      failed_workflows: ${{ steps.analyze.outputs.failed_workflows }}
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
+      - name: Install analyze-workflow-data dependencies
+        shell: bash
+        working-directory: .github/actions/analyze-workflow-data
+        run: npm install
+      - name: Download workflow data
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 #@v4
+        with:
+          name: workflow-data
+          path: ${{ github.workspace }}
+      - name: Analyze workflow data
+        id: analyze
+        uses: ./.github/actions/analyze-workflow-data
+        with:
+          days: ${{ github.event.inputs.days || 15 }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          cache-path: ${{ github.workspace }}/workflow-data.json
+          workflow_configs: |
+            [
+              {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
+              {"display": "Blackhole post-commit tests", "wkflw_name": "Blackhole post-commit tests"},
+              {"display": "(Blackhole) prefix", "wkflw_prefix": "(Blackhole)"},
+              {"display": "(TG) prefix", "wkflw_prefix": "(TG)"},
+              {"display": "Galaxy prefix", "wkflw_prefix": "Galaxy"},
+              {"display": "(T3K) prefix", "wkflw_prefix": "(T3K)"},
+              {"display": "(Single-card) prefix", "wkflw_prefix": "(Single-card)"},
+              {"display": "Nightly tt-metal L2 tests", "wkflw_name": "Nightly tt-metal L2 tests"},
+              {"display": "ttnn - Run sweeps", "wkflw_name": "ttnn - Run sweeps"},
+              {"display": "vLLM nightly tests", "wkflw_name": "vLLM nightly tests"},
+              {"display": "Metal microbenchmarks", "wkflw_name": "metal - Run microbenchmarks"},
+              {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
+            ]
+
+  handle-failures:
+    needs: analyze-data
+    if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Handle failed workflows
+        run: |
+          echo "The following workflows have failed:"
+          echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
+          # Add any additional failure handling steps here

@@ -2,16 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-
-from loguru import logger
-
 from pathlib import Path
 from typing import Callable, Optional
 
-from models.demos.wormhole.mamba.tt.residual_block import TtResidualBlock
+import torch
+from loguru import logger
+
+import ttnn
 from models.demos.wormhole.mamba.reference.args import ModelMode
+from models.demos.wormhole.mamba.tt.residual_block import TtResidualBlock
 
 
 class TtTensorLoader:

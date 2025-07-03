@@ -20,7 +20,7 @@ enum class ExpPrecision : std::uint8_t {
 
 bool is_valid_conversion(DataFormat input_format, DataFormat output_format);
 bool is_exp_b_format(DataFormat data_format);
-ExpPrecision get_exp_precison(DataFormat data_format);
+ExpPrecision get_exp_precision(DataFormat data_format);
 void dump_data_formats(DataFormat data_format[NUM_CIRCULAR_BUFFERS]);
 
 /*
@@ -57,7 +57,7 @@ std::vector<DataFormat> get_pack_src_formats(
     bool fp32_dest_acc_en,
     bool bfp8_pack_precise,
     bool int_fpu_en = false,
-    tt::ARCH arch = tt::ARCH::GRAYSKULL);
+    tt::ARCH arch = tt::ARCH::WORMHOLE_B0);
 std::vector<DataFormat> get_pack_dst_formats(DataFormat buf_formats[NUM_CIRCULAR_BUFFERS]);
 
 }  // namespace tt

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include "index_fill_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
@@ -27,9 +27,9 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     const Tensor& input = tensor_args.input;
     uint32_t dim = operation_attributes.dim;
 
-    auto dtype = input.get_dtype();
+    auto dtype = input.dtype();
 
-    const auto input_shape = input.get_logical_shape();
+    const auto input_shape = input.logical_shape();
     const auto n = input_shape.rank();
 
     uint32_t num_rows_to_fill_per_index = 1;
@@ -44,7 +44,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         u_fill_value.f32 = std::get<float>(fill_value);
     }
 
-    auto num_rows = input.volume() / input.get_logical_shape()[-1];
+    auto num_rows = input.physical_volume() / input.logical_shape()[-1];
     Program program{};
     IDevice* device = input.device();
 
@@ -56,16 +56,16 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
 
     auto input_data_format = datatype_to_dataformat_converter(dtype);
-    auto index_data_format = datatype_to_dataformat_converter(index.get_dtype());
-    auto output_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    auto index_data_format = datatype_to_dataformat_converter(index.dtype());
+    auto output_data_format = datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_unit_size = input.get_logical_shape()[-1] * input.element_size();
+    uint32_t input_unit_size = input.logical_shape()[-1] * input.element_size();
     uint32_t rounded_input_unit_size = round_up_to_mul32(input_unit_size);
 
-    uint32_t index_unit_size = index.volume() * index.element_size();
+    uint32_t index_unit_size = index.physical_volume() * index.element_size();
     uint32_t rounded_index_unit_size = round_up_to_mul32(index_unit_size);
 
-    uint32_t output_unit_size = output.get_logical_shape()[-1] * output.element_size();
+    uint32_t output_unit_size = output.logical_shape()[-1] * output.element_size();
     uint32_t rounded_output_unit_size = round_up_to_mul32(output_unit_size);
 
     auto src_cb_index = CBIndex::c_0;
@@ -106,7 +106,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         (std::uint32_t)src_cb_index,
         (std::uint32_t)index_cb_index,
         (std::uint32_t)(dim == n - 1),
-        (std::uint32_t)index.volume()};
+        (std::uint32_t)index.physical_volume()};
 
     auto reader_kernel_id = CreateKernel(
         program,

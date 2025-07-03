@@ -1,15 +1,13 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-from models.demos.segformer.tt.ttnn_segformer_overlap_patch_embeddings import (
-    TtSegformerOverlapPatchEmbeddings,
-)
-from models.demos.segformer.tt.ttnn_segformer_layer import TtSegformerLayer
+from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
-from dataclasses import dataclass
+import ttnn
+from models.demos.segformer.tt.ttnn_segformer_layer import TtSegformerLayer
+from models.demos.segformer.tt.ttnn_segformer_overlap_patch_embeddings import TtSegformerOverlapPatchEmbeddings
 
 
 @dataclass
@@ -74,13 +72,13 @@ class TtSegformerEncoder:
 
     def __call__(
         self,
+        device,
         pixel_values: ttnn.Tensor,
         output_attentions: Optional[bool] = False,
         output_hidden_states: Optional[bool] = False,
         return_dict: Optional[bool] = True,
         parameters=None,
     ) -> Union[Tuple, TtBaseModelOutput]:
-        device = pixel_values.device()
         all_hidden_states = () if output_hidden_states else None
         all_hidden_states_unfolded = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
@@ -92,6 +90,7 @@ class TtSegformerEncoder:
             embedding_layer, block_layer = x[0], x[1]
             # first, obtain patch embeddings
             hidden_states, height, width = embedding_layer(
+                device,
                 pixel_values=hidden_states,
                 parameters=parameters[f"patch_embeddings"][idx],
             )
@@ -99,11 +98,11 @@ class TtSegformerEncoder:
             # second, send embeddings through blocks
             for i, blk in enumerate(block_layer):
                 layer_outputs = blk(
+                    device,
                     hidden_states,
                     height,
                     width,
                     parameters["block"][idx][i],
-                    device=device,
                     output_attentions=output_attentions,
                 )
                 hidden_states = layer_outputs[0]

@@ -2,12 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "moreh_cumsum_pybind.hpp"
+
+#include <optional>
+
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_cumsum/moreh_cumsum.hpp"
-
-namespace py = pybind11;
 
 namespace ttnn::operations::moreh::moreh_cumsum {
 

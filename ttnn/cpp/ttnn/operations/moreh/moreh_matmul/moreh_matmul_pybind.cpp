@@ -6,7 +6,7 @@
 
 #include "moreh_matmul.hpp"
 #include "pybind11/cast.h"
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul {

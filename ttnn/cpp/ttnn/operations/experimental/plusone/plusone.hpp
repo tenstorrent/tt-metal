@@ -19,6 +19,6 @@ struct PlusOneOperation {
 }  // namespace operations::experimental
 
 constexpr auto plus_one =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::plus_one", ttnn::operations::experimental::PlusOneOperation>();
+    ttnn::register_operation<"ttnn::plus_one", ttnn::operations::experimental::PlusOneOperation>();
 
 }  // namespace ttnn

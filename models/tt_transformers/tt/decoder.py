@@ -1,12 +1,12 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
-from models.tt_transformers.tt.attention import Attention
-from models.tt_transformers.tt.mlp import MLP
-from models.common.rmsnorm import RMSNorm
 from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
+from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
+from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
 
 
@@ -65,6 +65,7 @@ class TransformerBlock(LightweightModule):
             RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
+                eps=args.norm_eps,
                 state_dict=state_dict,
                 state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
@@ -82,6 +83,7 @@ class TransformerBlock(LightweightModule):
             RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
+                eps=args.norm_eps,
                 state_dict=state_dict,
                 state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,

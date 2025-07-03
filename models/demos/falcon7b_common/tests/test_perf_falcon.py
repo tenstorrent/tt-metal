@@ -10,16 +10,13 @@ from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     DeviceSetup,
     run_test_FalconCausalLM_end_to_end,
 )
-from models.demos.falcon7b_common.tt.model_config import (
-    get_model_config,
-)
-
+from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.utility_functions import (
     disable_persistent_kernel_cache,
-    is_e75,
-    skip_for_grayskull,
-    is_wormhole_b0,
     is_blackhole,
+    is_e75,
+    is_wormhole_b0,
+    skip_for_grayskull,
 )
 
 
@@ -71,7 +68,6 @@ class TestParametrized:
         model_location_generator,
         get_tt_cache_path,
         device,
-        use_program_cache,
     ):
         if is_e75(device) and batch == 32:
             pytest.skip("Falcon batch 32 is not supported on E75")
@@ -126,7 +122,6 @@ class TestParametrized:
         model_location_generator,
         get_tt_cache_path,
         mesh_device,
-        async_mode,
     ):
         if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == "prefill":
             pytest.skip(f"prefill does not support L1_SHARDED")
@@ -153,7 +148,6 @@ class TestParametrized:
             model_location_generator,
             e2e_perf=True,
             expected_inference_time=expected_inference_time,
-            async_mode=async_mode,
         )
 
     @pytest.mark.models_performance_bare_metal
@@ -188,7 +182,6 @@ class TestParametrized:
             "decode_batch32_2047_bf16_l1_sharded",
         ],
     )
-    @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True, ids=["noasync", "async"])
     @pytest.mark.parametrize("mesh_device", (1,), indirect=True)
     @skip_for_grayskull()
     def test_perf_wh_bare_metal(
@@ -204,15 +197,7 @@ class TestParametrized:
         model_location_generator,
         get_tt_cache_path,
         mesh_device,
-        use_program_cache,
-        enable_async_mode,
     ):
-        if enable_async_mode:
-            if llm_mode == "decode" and not (kv_cache_len == 2047):
-                pytest.skip(
-                    f"Skipping {llm_mode} with {kv_cache_len} in async mode. Config is supported but provides redundant testing."
-                )
-
         if llm_mode == "prefill":
             expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
                 DeviceSetup.WORMHOLE_B0
@@ -235,27 +220,19 @@ class TestParametrized:
             model_location_generator,
             get_tt_cache_path,
             mesh_device,
-            enable_async_mode,
         )
 
     @pytest.mark.model_perf_t3000
     @pytest.mark.parametrize(
-        "llm_mode, mesh_device, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_inference_time, enable_async_mode",
+        "llm_mode, mesh_device, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_inference_time",
         (
-            ("prefill", 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.071, False),
-            ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.142, False),
-            ("prefill", 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.42, False),
-            ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 1.02, False),
-            ("decode", 4, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.067, False),
-            ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.069, False),
-            ("decode", 4, 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.073, False),
-            ("prefill", 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.070, True),  # Issue 9422
-            ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.142, True),
-            ("prefill", 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.41, True),
-            ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.98, True),
-            ("decode", 4, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.059, True),
-            ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.065, True),
-            ("decode", 4, 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.071, True),
+            ("prefill", 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.070),
+            ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.142),
+            ("prefill", 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.41),
+            ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.98),
+            ("decode", 4, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.059),
+            ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.065),
+            ("decode", 4, 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.071),
         ),
         ids=[
             "prefill_seq128",
@@ -265,27 +242,18 @@ class TestParametrized:
             "decode_batch32_128",
             "decode_batch32_1024",
             "decode_batch32_2047",
-            "prefill_seq128_async",
-            "prefill_seq256_async",
-            "prefill_seq1024_async",
-            "prefill_seq2048_async",
-            "decode_batch32_128_async",
-            "decode_batch32_1024_async",
-            "decode_batch32_2047_async",
         ],
-        indirect=["mesh_device", "enable_async_mode"],
+        indirect=["mesh_device"],
     )
     @skip_for_grayskull()
     def test_perf_t3000_bare_metal(
         self,
-        use_program_cache,
         model_version,
         llm_mode,
         batch,
         seq_len,
         kv_cache_len,
         expected_inference_time,
-        enable_async_mode,
         num_layers,
         model_config_str,
         model_location_generator,
@@ -314,5 +282,4 @@ class TestParametrized:
             model_location_generator,
             get_tt_cache_path,
             mesh_device,
-            enable_async_mode,
         )

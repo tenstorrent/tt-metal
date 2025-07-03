@@ -8,13 +8,14 @@ single layer is slow since we load all 80 layers into memory to construct the
 model. This script repacks the weights into checkpoints chunked by layers to
 speed up development.
 """
+import argparse
 import math
+import shutil
+from collections import defaultdict
 from pathlib import Path
+
 import torch
 from tqdm import tqdm
-from collections import defaultdict
-import argparse
-import shutil
 
 
 def layer_num(key):

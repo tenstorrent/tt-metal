@@ -15,7 +15,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -23,7 +23,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_event.hpp>
 #include <tt-metalium/shape2d.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -41,10 +41,7 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
     int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+        .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
     ReplicatedBufferConfig global_buffer_config = {
         .size = NUM_TILES * single_tile_size,
     };
@@ -81,10 +78,7 @@ TEST_F(MeshEventsTestT3000, ShardedAsyncIO) {
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
 
     Shape2D global_buffer_shape = {2048, 2048};
     Shape2D shard_shape = {512, 1024};
@@ -215,10 +209,7 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
     int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+        .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
     ReplicatedBufferConfig global_buffer_config = {
         .size = NUM_TILES * single_tile_size,
     };
@@ -273,10 +264,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
     constexpr uint32_t NUM_ITERS = 500;
 
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = dram_buffer_size,
-        .buffer_type = tt_metal::BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = dram_buffer_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = true};
     ReplicatedBufferConfig global_buffer_config{.size = dram_buffer_size};
     MeshCoordinateRange devices_0(mesh_device_->shape());
 
@@ -332,6 +320,21 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
         EXPECT_EQ(dst_vec, input_shard_data[idx / num_devices]);
         idx++;
     }
+}
+
+TEST_F(MeshEventsTestSuite, EventQuery) {
+    uint32_t NUM_ITERS = 500;
+    // Stress EventQuery API and ensure that an event is marked as completed post synchronization.
+    for (auto i = 0; i < NUM_ITERS; i++) {
+        auto event = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(0));
+        if (i % 10 == 0) {
+            EventSynchronize(event);
+            EXPECT_TRUE(EventQuery(event));
+        }
+    }
+    // Create a dummy event from the future that has not been issued yet.
+    auto event = MeshEvent(0xffff, mesh_device_.get(), 0, MeshCoordinateRange(mesh_device_->shape()));
+    EXPECT_FALSE(EventQuery(event));  // Querying an event that has not been issued should return false.
 }
 
 }  // namespace

@@ -17,6 +17,7 @@ from models.experimental.functional_unet.tt import unet_shallow_ttnn
 from models.experimental.functional_unet.tests.common import (
     check_pcc_conv,
     is_n300_with_eth_dispatch_cores,
+    UNET_L1_SMALL_REGION_SIZE,
 )
 
 
@@ -31,7 +32,7 @@ from models.experimental.functional_unet.tests.common import (
         ("upblock4", 16, 528, 80, 16),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
 def test_unet_upblock(
     batch: int,
     groups: int,
@@ -82,7 +83,6 @@ def test_unet_upblock(
         ("upblock4", 16, 528, 80, 16),
     ],
 )
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_unet_upblock_multi_device(
     batch,
@@ -94,7 +94,6 @@ def test_unet_upblock_multi_device(
     residual_channels,
     mesh_device,
     reset_seeds,
-    enable_async_mode,
 ):
     if not is_n300_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300")
@@ -139,5 +138,5 @@ def test_unet_upblock_multi_device(
     ttnn_input, ttnn_residual = ttnn_input.to(mesh_device), ttnn_residual.to(mesh_device)
     ttnn_output = getattr(ttnn_model, block_name)(ttnn_input, ttnn_residual)
 
-    assert len(ttnn_output.devices()) == 2, "Expected output tensor to be sharded across 2 devices"
+    assert ttnn_output.device().get_num_devices() == 2, "Expected output tensor to be sharded across 2 devices"
     check_pcc_conv(torch_output, ttnn_output, pcc=0.999, mesh_composer=output_mesh_composer)

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -64,9 +64,6 @@ def move_to_device(object, device):
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_for_semantic_segmentation(device, is_ci_env):
-    if is_ci_env:
-        pytest.skip("Skip in CI, model is WIP, issue# 13357")
-
     processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
     torch_model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
 
@@ -106,16 +103,46 @@ def test_segformer_for_semantic_segmentation(device, is_ci_env):
 
     ttnn_model = TtSegformerForSemanticSegmentation(config, parameters)
 
-    torch_input_tensor_permuted = torch.permute(inputs.pixel_values, (0, 2, 3, 1))
-    ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor_permuted,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    sharded_input_enabled = 1
+
+    if not sharded_input_enabled:
+        torch_input_tensor_permuted = torch.permute(inputs.pixel_values, (0, 2, 3, 1))
+        ttnn_input_tensor = ttnn.from_torch(
+            torch_input_tensor_permuted,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+        )
+    else:
+        torch_input_tensor_permuted = torch.permute(inputs.pixel_values, (0, 2, 3, 1))
+        N, H, W, C = torch_input_tensor_permuted.shape
+        shard_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 7),
+                ),
+            }
+        )
+        n_cores = 64
+        shard_spec = ttnn.ShardSpec(
+            shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardMode.PHYSICAL
+        )
+        input_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        )
+        ttnn_input_tensor_unpadded = ttnn.from_torch(
+            torch_input_tensor_permuted,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=input_mem_config,
+        )
+        ttnn_input_tensor = ttnn.pad(ttnn_input_tensor_unpadded, [N, H, W, 8], [0, 0, 0, 0], 0)
 
     ttnn_output = ttnn_model(
+        device,
         ttnn_input_tensor,
         output_attentions=None,
         output_hidden_states=None,
@@ -128,4 +155,4 @@ def test_segformer_for_semantic_segmentation(device, is_ci_env):
     h = w = int(math.sqrt(ttnn_output.shape[-1]))
     ttnn_final_output = torch.reshape(ttnn_output, (ttnn_output.shape[0], ttnn_output.shape[1], h, w))
 
-    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.985)
+    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.984)

@@ -19,7 +19,7 @@ namespace ttnn::operations::binary {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
+BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: return BcastOpMath::ADD;
         case BinaryOpType::SUB: return BcastOpMath::SUB;
@@ -76,10 +76,10 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
         shard_spec = output.shard_spec().value();
     }
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat src1_cb_data_format =
-        b.has_value() ? tt_metal::datatype_to_dataformat_converter(b->get_dtype()) : tt::DataFormat::Float16_b;
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+        b.has_value() ? tt_metal::datatype_to_dataformat_converter(b->dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
     uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);

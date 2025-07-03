@@ -6,7 +6,7 @@
 
 #include <type_traits>
 
-namespace tt::stl {
+namespace ttsl {
 
 // `overloaded` allows to combine multiple lambdas into a single object with the overloaded `operator()`.
 // This is useful for creating visitor objects for using in `std::visit`, for example:
@@ -17,7 +17,7 @@ namespace tt::stl {
 // ...
 //
 // std::visit(
-//     tt::stl::overloaded{
+//     ttsl::overloaded{
 //         [](const A&) { /*Process A...*/ },
 //         [](const B&) { /*Process B...*/ },
 //         [](const C&) { /*Process C...*/ },
@@ -49,4 +49,10 @@ struct overloaded : detail::overloaded_base_t<Ts>... {
 template <typename... Ts>
 overloaded(Ts&&...) -> overloaded<Ts...>;
 
-}  // namespace tt::stl
+}  // namespace ttsl
+
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt

@@ -38,12 +38,19 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
     "batch_size",
     (1,),
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
-def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds):
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": True,
+        }
+    ],
+    indirect=True,
+)
+def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
-
-    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, dummy_weights=False, max_seq_len=128)
     model_args.n_layers = 1
@@ -130,7 +137,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
 
         tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]
 
-        reference_output = reference_model(torch_input[:, :1, :, : model_args.dim])
+        reference_output = reference_model(torch_input[:, :, :1, : model_args.dim])
 
         pcc_required = 0.99
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 #include "debug/dprint.h"
 
@@ -19,6 +19,8 @@ void kernel_main() {
     constexpr uint32_t max_block_size = get_compile_time_arg_val(5);
     constexpr uint32_t cb_id = get_compile_time_arg_val(6);
     constexpr uint32_t addrs_cb_id = get_compile_time_arg_val(7);
+    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(8);
+    constexpr bool skip_ptr_update = get_compile_time_arg_val(9);
 
     // Runtime args
     uint32_t rt_args_idx = 0;
@@ -68,7 +70,7 @@ void kernel_main() {
                 // Issue noc async read commands for current block
                 uint32_t temp_l1_write_addr = l1_write_addr;
                 for (uint32_t h = 0; h < curr_block_num_pages; ++h) {
-                    noc_async_read_tile_dram_sharded_with_state_with_trid(
+                    noc_async_read_tile_dram_sharded_with_state_with_trid<skip_ptr_update>(
                         src_base_addr, src_read_addr, temp_l1_write_addr, curr_block_trid);
                     src_read_addr += curr_page_size;
                     temp_l1_write_addr += curr_page_size;
@@ -105,5 +107,16 @@ void kernel_main() {
             noc_async_read_barrier_with_trid(block_trid_to_wait);
             cb_push_back(cb_id, max_block_num_tiles);
         }
+    }
+
+    // wait for signal to exit, since reader cannot exit early due to the ongoing traffic on the same noc.
+    cb_wait_front(sync_cb_id, 1);
+    cb_pop_front(sync_cb_id, 1);
+
+    // reset noc counters here because we didn't properly update ptrs for better perf.
+    if (noc_mode == DM_DEDICATED_NOC) {
+        ncrisc_noc_counters_init();
+    } else {
+        dynamic_noc_local_state_init();
     }
 }

@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.perf.perf_utils import today, merge_perf_files, check_perf_results
+from models.perf.perf_utils import check_perf_results, merge_perf_files, today
 
 expected_cols = [
     "Model",

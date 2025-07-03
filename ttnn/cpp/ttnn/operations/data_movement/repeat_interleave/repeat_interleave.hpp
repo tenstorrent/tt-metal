@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/types.hpp"
-#include "cpp/ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 
@@ -30,8 +30,7 @@ struct ExecuteRepeatInterleave {
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto repeat_interleave = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::repeat_interleave",
-    ttnn::operations::data_movement::ExecuteRepeatInterleave>();
+constexpr auto repeat_interleave =
+    ttnn::register_operation<"ttnn::repeat_interleave", ttnn::operations::data_movement::ExecuteRepeatInterleave>();
 
 }  // namespace ttnn

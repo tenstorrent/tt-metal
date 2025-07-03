@@ -74,7 +74,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_post_commit import
 )
 @pytest.mark.parametrize("num_iters", [1000])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 17068032}], indirect=True)
 def test_width_sharded_reduce_scatter_post_commit(
     t3k_mesh_device,
@@ -89,9 +88,7 @@ def test_width_sharded_reduce_scatter_post_commit(
     input_dtype,
     tensor_layout,
     tensor_mem_layout,
-    use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters,
     n_worker,
     n_buffer,
@@ -110,9 +107,7 @@ def test_width_sharded_reduce_scatter_post_commit(
         input_dtype,
         tensor_layout,
         tensor_mem_layout,
-        use_program_cache=use_program_cache,
         function_level_defaults=function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         n_worker=n_worker,
         n_buffer=n_buffer,

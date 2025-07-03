@@ -54,9 +54,33 @@ jobs:
           {
             arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "pipeline-perf", "config-t3000", "in-service"],
-            name: "T3K ubench",
+            name: "T3K ubench - Fabric BW",
             cmd: "pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py",
-          }, # Allan Liu
+          }, # Sean Nijjar
+          {
+            arch: wormhole_b0,
+            runs-on: ["arch-wormhole_b0", "pipeline-perf", "config-t3000", "in-service"],
+            name: "T3K ubench - Fabric Latency",
+            cmd: "pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_1d_fabric_latency.py",
+          }, # Sean Nijjar
+          {
+            arch: wormhole_b0,
+            runs-on: ["arch-wormhole_b0", "pipeline-perf", "config-t3000", "in-service"],
+            name: "T3K ubench - Fabric Mux BW",
+            cmd: "pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_bandwidth.py",
+          }, # Abhishek Agarwal
+          {
+            arch: wormhole_b0,
+            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
+            name: "WH Data Movement Regressions",
+            cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement --gtest-filter Directed --verbose-log",
+          }, # Ata Tuzuner
+          {
+            arch: blackhole,
+            runs-on: ["BH", "pipeline-perf", "in-service"],
+            name: "BH Data Movement Regressions",
+            cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement --gtest-filter Directed --verbose-log",
+          } # Ata Tuzuner
         ]
     container:
       image: ${{ inputs.docker-image }}
@@ -94,5 +118,5 @@ jobs:
         timeout-minutes: 10
         with:
           name: microbenchmark-report-csv-${{ join(matrix.test-group.name) }}
-          path: generated/profiler/.logs
+          path: /work/generated/profiler/.logs
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

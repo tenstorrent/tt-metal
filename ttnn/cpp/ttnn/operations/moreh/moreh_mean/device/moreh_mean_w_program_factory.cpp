@@ -23,7 +23,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     auto input = tensor_args.input;
     auto compute_kernel_config =
         init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
-    const auto shape = input.get_padded_shape();
+    const auto& shape = input.padded_shape();
 
     auto device = input.device();
     auto kernel_config_val =
@@ -39,7 +39,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     uint32_t Ht = H / constants::TILE_HEIGHT;
 
     // check mask for w-dim
-    const auto input_shape_without_padding = input.get_logical_shape();
+    const auto& input_shape_without_padding = input.logical_shape();
     const auto origin_W = input_shape_without_padding[-1];
     const bool do_mask_w = (origin_W % constants::TILE_WIDTH) != 0;
     const auto mask_w = do_mask_w ? origin_W % constants::TILE_WIDTH : constants::TILE_WIDTH;
@@ -48,7 +48,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
 
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
-    auto units_to_divide = input.volume() / W / H * Ht;
+    auto units_to_divide = input.physical_volume() / W / H * Ht;
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores_wt_core_range(core_range, units_to_divide);
 
@@ -57,7 +57,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     // create circular buffers
-    tt::DataFormat data_format = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 

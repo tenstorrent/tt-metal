@@ -15,18 +15,18 @@ struct CreateQKVHeadsSeparateTensorsOperation {
         QueueId queue_id,
         const Tensor& input_tensor,
         const Tensor& input_tensor_kv,
-        const uint32_t num_q_heads,
-        const std::optional<uint32_t> num_kv_heads,
-        const bool transpose_k_heads,
+        uint32_t num_q_heads,
+        std::optional<uint32_t> num_kv_heads,
+        bool transpose_k_heads,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<std::array<Tensor, 3>> optional_output_tensors = std::nullopt);
 
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
         const Tensor& input_tensor,
         const Tensor& input_tensor_kv,
-        const uint32_t num_q_heads,
-        const std::optional<uint32_t> num_kv_heads,
-        const bool transpose_k_heads,
+        uint32_t num_q_heads,
+        std::optional<uint32_t> num_kv_heads,
+        bool transpose_k_heads,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<std::array<Tensor, 3>> optional_output_tensors = std::nullopt);
 };
@@ -35,7 +35,7 @@ struct CreateQKVHeadsSeparateTensorsOperation {
 
 namespace experimental {
 
-constexpr auto create_qkv_heads_from_separate_tensors = ttnn::register_operation_with_auto_launch_op<
+constexpr auto create_qkv_heads_from_separate_tensors = ttnn::register_operation<
     "ttnn::experimental::create_qkv_heads_from_separate_tensors",
     ttnn::operations::experimental::transformer::CreateQKVHeadsSeparateTensorsOperation>();
 

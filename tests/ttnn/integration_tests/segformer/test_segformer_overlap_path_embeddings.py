@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -69,9 +69,6 @@ def test_segformer_overlap_patch_embeddings(
     reset_seeds,
     is_ci_env,
 ):
-    if is_ci_env:
-        pytest.skip("Skip in CI, model is WIP, issue# 13357")
-
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
 
     torch_model = SegformerModel.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
@@ -98,28 +95,28 @@ def test_segformer_overlap_patch_embeddings(
         stride=stride,
     )
 
-    post_process_it = 0
-    if width == 512:
-        torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-        ttnn_input_tensor = ttnn.from_torch(
-            torch_input_tensor,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
+    torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    CONV2D_MIN_CHANNEL_SIZE = 8
+    # adjust padding if necessary
+    if num_channels < CONV2D_MIN_CHANNEL_SIZE:
+        ttnn_input_tensor = ttnn.pad(
+            ttnn_input_tensor, [batch_size, height, width, CONV2D_MIN_CHANNEL_SIZE], [0, 0, 0, 0], 0
         )
-    else:
-        torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-        ttnn_input_tensor = ttnn.from_torch(
-            torch_input_tensor,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            device=device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+    elif num_channels > CONV2D_MIN_CHANNEL_SIZE and num_channels % 32 != 0:
+        ttnn_input_tensor = ttnn.pad(
+            ttnn_input_tensor, [batch_size, height, width, (num_channels + 31) // 32 * 32], [0, 0, 0, 0], 0
         )
-        post_process_it = 1
+
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     ttnn_output, height, width = ttnn_model(
+        device,
         ttnn_input_tensor,
         parameters=parameters,
     )

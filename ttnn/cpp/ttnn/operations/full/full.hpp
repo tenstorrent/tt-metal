@@ -10,7 +10,7 @@ namespace ttnn::operations::full {
 struct Full {
     static ttnn::Tensor invoke(
         const ttnn::SmallVector<uint32_t>& shape,
-        const std::variant<float, int> fill_value,
+        std::variant<float, int> fill_value,
         const ttnn::Tensor& any,
         const std::optional<DataType>& dtype,
         const std::optional<Layout>& layout,
@@ -19,6 +19,5 @@ struct Full {
 }  // namespace ttnn::operations::full
 
 namespace ttnn {
-constexpr auto moreh_full =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_full", ttnn::operations::full::Full>();
+constexpr auto moreh_full = ttnn::register_operation<"ttnn::moreh_full", ttnn::operations::full::Full>();
 }  // namespace ttnn

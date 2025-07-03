@@ -15,7 +15,6 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
-from models.utility_functions import skip_for_grayskull
 from enum import Enum
 
 
@@ -96,7 +95,6 @@ def run_uniform(shape, rand_range, dtype, device, seed=0, compute_kernel_options
         )
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -115,7 +113,6 @@ def test_uniform(shape, rand_range, dtype, seed, device):
     run_uniform(shape, rand_range, dtype, device, seed=seed)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [[2, 32, 32, 16]],
@@ -123,7 +120,7 @@ def test_uniform(shape, rand_range, dtype, seed, device):
 @pytest.mark.parametrize("rand_range", [[-3, 4]])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("seed", [0])
-def test_uniform_callback(shape, rand_range, dtype, seed, device, use_program_cache):
+def test_uniform_callback(shape, rand_range, dtype, seed, device):
     torch.manual_seed(seed)
     num_program_cache_entries_list = []
     for _ in range(2):
@@ -140,7 +137,6 @@ def test_uniform_callback(shape, rand_range, dtype, seed, device, use_program_ca
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 2, 4, 70, 40]],

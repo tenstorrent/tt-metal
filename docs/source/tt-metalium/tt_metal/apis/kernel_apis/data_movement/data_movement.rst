@@ -11,4 +11,7 @@ Data Movement APIs
   noc_semaphore_set
   noc_semaphore_wait
   noc_semaphore_inc
+  get_noc_addr
+  get_noc_addr_from_bank_id
+  get_noc_multicast_addr
   ordering

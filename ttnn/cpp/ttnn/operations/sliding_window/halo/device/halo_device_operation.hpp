@@ -7,7 +7,6 @@
 #include <string>
 #include <tuple>
 
-// #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 
@@ -21,7 +20,6 @@ struct HaloDeviceOperation {
     uint32_t pad_val_;
     bool remote_read_;
     bool transpose_mcast_;
-    uint32_t reshard_num_cores_nhw_;
     uint32_t max_out_nsticks_per_core_;
     uint32_t in_nsticks_per_core_;
     tt::tt_metal::MemoryConfig output_memory_config_;
@@ -40,19 +38,17 @@ struct HaloDeviceOperation {
         "pad_val_",
         "remote_read_",
         "transpose_mcast_",
-        "reshard_num_cores_nhw_",
         "max_out_nsticks_per_core_",
         "output_memory_config_",
         "is_out_tiled_",
         "in_place_");
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::make_tuple(
             std::cref(config_),
             std::cref(parallel_config_),
             std::cref(pad_val_),
             std::cref(remote_read_),
             std::cref(transpose_mcast_),
-            std::cref(reshard_num_cores_nhw_),
             std::cref(max_out_nsticks_per_core_),
             std::cref(output_memory_config_),
             std::cref(is_out_tiled_),
@@ -66,7 +62,6 @@ Tensor halo_op(
     uint32_t pad_val = 0x0,
     bool remote_read = false,
     bool transpose_mcast = true,
-    uint32_t reshard_num_cores_nhw = 0,
     const tt::tt_metal::MemoryConfig& output_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     bool is_out_tiled = true,
     bool in_place = false);

@@ -10,3 +10,4 @@ recursive-include tt_metal *.*
 recursive-include ttnn *.*
 recursive-include tt_stl *.*
 global-exclude *.so *.dylib .git *.pyc *.swp
+prune ttnn/ttnn/examples

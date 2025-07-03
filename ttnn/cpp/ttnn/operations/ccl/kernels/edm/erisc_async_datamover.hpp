@@ -11,7 +11,7 @@
 #include "debug/assert.h"
 #include "eth_l1_address_map.h"
 #include "ethernet/dataflow_api.h"
-#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
 
 using ttnn::ccl::EriscDataMoverBufferSharingMode;
@@ -149,6 +149,7 @@ public:
             if (is_sender_side) {
                 // Tell the sender side workers that we're ready to accept data on this channel
                 increment_worker_semaphores();
+                WAYPOINT("HER0");
             }
         } else {
             ASSERT(TERMINATION_MODE != ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED);
@@ -186,6 +187,7 @@ public:
     }
 
     [[nodiscard]] FORCE_INLINE bool is_local_semaphore_full() const {
+        invalidate_l1_cache();
         if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
             ASSERT(*(this->local_semaphore_address) <= this->num_workers);
         }
@@ -232,14 +234,17 @@ public:
     [[nodiscard]] FORCE_INLINE bool is_send_completion_pending() const { return this->is_sender_completion_pending; }
 
     FORCE_INLINE bool eth_is_receiver_channel_send_done() const {
+        invalidate_l1_cache();
         ASSERT(buffer_index < EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL);
         return *(this->channel_bytes_sent_addresses[buffer_index]) == 0;
     }
     FORCE_INLINE bool eth_bytes_are_available_on_channel() const {
+        invalidate_l1_cache();
         ASSERT(buffer_index < EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL);
         return *(this->channel_bytes_sent_addresses[buffer_index]) != 0;
     }
     FORCE_INLINE bool eth_is_receiver_channel_send_acked() const {
+        invalidate_l1_cache();
         return *(this->channel_bytes_acked_addresses[buffer_index]) != 0;
     }
     FORCE_INLINE void eth_clear_sender_channel_ack() const { *(this->channel_bytes_acked_addresses[buffer_index]) = 0; }
@@ -430,6 +435,7 @@ FORCE_INLINE bool sender_notify_workers_if_buffer_available_sequence(
 
     sender_buffer_channel.clear_local_semaphore();
     sender_buffer_channel.increment_worker_semaphores();
+    WAYPOINT("HER1");
 
     if (!channel_done) {
         sender_buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::SENDER_WAITING_FOR_WORKER);
@@ -498,6 +504,7 @@ FORCE_INLINE bool receiver_eth_notify_workers_payload_available_sequence(Channel
     buffer_channel.clear_local_semaphore();
     uint32_t worker_semaphore_address = buffer_channel.worker_semaphore_l1_address;
     buffer_channel.increment_worker_semaphores();
+    WAYPOINT("HER2");
 
     buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::RECEIVER_WAITING_FOR_WORKER);
     return true;

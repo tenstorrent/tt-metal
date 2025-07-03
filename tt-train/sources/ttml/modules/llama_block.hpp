@@ -21,7 +21,7 @@ private:
     std::shared_ptr<DropoutLayer> m_dropout;
 
 public:
-    LlamaMLP(uint32_t embedding_size, float dropout_prob = 0.0F);
+    LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob = 0.0F);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input);
 };
@@ -39,7 +39,8 @@ public:
         uint32_t num_heads,
         uint32_t num_groups,
         const ops::RotaryEmbeddingParams& rope_params,
-        float dropout_prob = 0.0F);
+        float dropout_prob = 0.0F,
+        std::optional<uint32_t> intermediate_dim = std::nullopt);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask);
 };

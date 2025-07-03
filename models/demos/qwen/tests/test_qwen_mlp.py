@@ -2,19 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.demos.qwen.tt.qwen_mlp import TtQwenMLP
-from models.demos.qwen.tt.model_config import TtModelArgs
 from models.demos.qwen.reference.model import FeedForward
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.demos.qwen.tt.model_config import TtModelArgs
+from models.demos.qwen.tt.qwen_mlp import TtQwenMLP
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
@@ -37,13 +35,11 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_qwen_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ensure_gc):
+def test_qwen_mlp_inference(mesh_device, seq_len, reset_seeds, ensure_gc):
     if mesh_device.shape != (1, 1):
         pytest.skip("Only N150 is supported")
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
-
-    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device)
     model_args.n_layers = 1

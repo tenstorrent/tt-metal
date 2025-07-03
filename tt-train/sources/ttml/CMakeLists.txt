@@ -31,6 +31,8 @@ set(METAL_OPS_FILES
     # General
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/operations.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ttnn_all_includes.hpp
+    # Common
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/common/program_utils.hpp
     # RMSNorm
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.hpp
@@ -39,6 +41,37 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.cpp
+    # CrossEntropy
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/cross_entropy_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/cross_entropy_bw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_program_factory.cpp
+    # Softmax
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/softmax.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/softmax.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_program_factory.cpp
+    # ProfilerNoOp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/profiler_no_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/profiler_no_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
@@ -66,6 +99,7 @@ if(NOT TARGET Metalium::Metal)
         "$ENV{TT_METAL_HOME}/tt_stl"
         # TTNN
         "$ENV{TT_METAL_HOME}/ttnn"
+        "$ENV{TT_METAL_HOME}/ttnn/api"
         "$ENV{TT_METAL_HOME}/ttnn/cpp"
         "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
         "${reflect_SOURCE_DIR}"
@@ -79,6 +113,7 @@ if(NOT TARGET Metalium::Metal)
     # Try to find the library
     find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(TTNN_LIBRARY NAMES "_ttnn.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+    find_library(TTNNCPP_LIBRARY NAMES "_ttnncpp.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
 
     if(TT_METAL_LIBRARY)
@@ -115,6 +150,20 @@ if(NOT TARGET Metalium::Metal)
     else()
         message(FATAL_ERROR "_ttnn.so not found in ${METALIUM_LIB_PATH}")
     endif()
+    if(TTNNCPP_LIBRARY)
+        add_library(Metalium::TTNNCPP SHARED IMPORTED)
+        set_target_properties(
+            Metalium::TTNNCPP
+            PROPERTIES
+                IMPORTED_LOCATION
+                    "${TTNNCPP_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES
+                    "${METALIUM_INCLUDE_DIRS}"
+        )
+        message(STATUS "Successfully found _ttnncpp.so at ${TTNNCPP_LIBRARY}")
+    else()
+        message(FATAL_ERROR "_ttnncpp.so not found in ${METALIUM_LIB_PATH}")
+    endif()
 else()
     message(STATUS "Metalium targets already exists")
 endif()
@@ -123,7 +172,7 @@ add_library(ttml STATIC ${SOURCES})
 
 target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
-find_package(Python REQUIRED Development)
+find_package(Python3 REQUIRED Development)
 
 foreach(lib ${BoostPackages})
     target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
@@ -138,7 +187,8 @@ target_link_libraries(
         atomic
         Metalium::Metal
         Metalium::TTNN
-        Python::Python
+        Metalium::TTNNCPP
+        Python3::Python
         fmt::fmt-header-only
         magic_enum::magic_enum
         yaml-cpp::yaml-cpp
@@ -149,10 +199,12 @@ target_link_libraries(
         wandbcpp
         Boost::core
         Boost::container
+        tt-logger
 )
 
 message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")
 message(STATUS "xtl_SOURCE_DIR: ${xtl_SOURCE_DIR}")
+message(STATUS "xtensor-blas_SOURCE_DIR: ${xtensor-blas_SOURCE_DIR}")
 
 message(STATUS "msgpack_SOURCE_DIR: ${msgpack_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${msgpack_SOURCE_DIR}/include)

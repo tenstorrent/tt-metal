@@ -12,14 +12,13 @@
 #include <utility>
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
-#include "fmt/base.h"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
-#include "span.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/decorators.hpp"
@@ -103,38 +102,28 @@ void build_and_enqueue(const std::vector<IDevice*>& devices, std::vector<Program
 
 void setup_test_with_persistent_fabric(
     const std::vector<IDevice*>& devices,
-    std::vector<Program>& programs,
     std::optional<SubdeviceInfo>& subdevice_managers,
     std::optional<std::vector<Program>>& fabric_programs,
     std::vector<Program*>& fabric_program_ptrs,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
-    bool enable_persistent_fabric,
     std::optional<size_t> num_links) {
-    if (enable_persistent_fabric) {
-        log_info(tt::LogTest, "Enabling persistent fabric");
-        fabric_programs = std::vector<Program>(devices.size());
-        subdevice_managers = create_subdevices(devices);
-        std::transform(
-            fabric_programs->begin(), fabric_programs->end(), std::back_inserter(fabric_program_ptrs), [](auto& p) {
-                return &p;
-            });
-    } else {
-        std::transform(
-            programs.begin(), programs.end(), std::back_inserter(fabric_program_ptrs), [](auto& p) { return &p; });
-    }
+    log_info(tt::LogTest, "Enabling persistent fabric");
+    fabric_programs = std::vector<Program>(devices.size());
+    subdevice_managers = create_subdevices(devices);
+    std::transform(
+        fabric_programs->begin(), fabric_programs->end(), std::back_inserter(fabric_program_ptrs), [](auto& p) {
+            return &p;
+        });
 
-    line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
-        devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1));
+    line_fabric = ttnn::ccl::EdmLineFabricOpInterface(devices, fabric_program_ptrs, num_links.value_or(1));
     line_fabric->set_firmware_context_switch_interval(0);
 
-    if (enable_persistent_fabric) {
-        TT_FATAL(fabric_programs.has_value(), "Fabric programs must be set if fabric is enabled");
-        TT_FATAL(devices.size() == fabric_programs->size(), "Number of devices must match number of programs");
+    TT_FATAL(fabric_programs.has_value(), "Fabric programs must be set if fabric is enabled");
+    TT_FATAL(devices.size() == fabric_programs->size(), "Number of devices must match number of programs");
 
-        log_info(tt::LogTest, "Building EDM kernels");
-        line_fabric->build_kernels();
-        build_and_enqueue(devices, *fabric_programs);
-    }
+    log_info(tt::LogTest, "Building EDM kernels");
+    line_fabric->build_kernels();
+    build_and_enqueue(devices, *fabric_programs);
 }
 
 void persistent_fabric_teardown_sequence(
@@ -142,7 +131,7 @@ void persistent_fabric_teardown_sequence(
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
     tt::tt_fabric::TerminationSignal termination_mode) {
-    log_info("Tearing down fabric");
+    log_info(tt::LogTest, "Tearing down fabric");
 
     // Wait for workers to finish
     auto d0_worker_subdevice = devices[0]->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
@@ -163,7 +152,7 @@ std::tuple<
     ttnn::global_semaphore::MultiDeviceGlobalSemaphore>
 create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, IDevice* device) {
     auto from_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device.get(),
+        mesh_device->get_devices(),
         device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                             // initial value
         tt::tt_metal::BufferType::L1,  // buffer type
@@ -171,7 +160,7 @@ create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&
     );
 
     auto to_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device.get(),
+        mesh_device->get_devices(),
         device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                             // initial value
         tt::tt_metal::BufferType::L1,  // buffer type
@@ -179,7 +168,7 @@ create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&
     );
 
     auto multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device.get(),
+        mesh_device->get_devices(),
         device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                             // initial value
         tt::tt_metal::BufferType::L1,  // buffer type

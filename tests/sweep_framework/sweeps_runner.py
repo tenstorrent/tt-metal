@@ -21,6 +21,7 @@ import framework.tt_smi_util as tt_smi_util
 from elasticsearch import Elasticsearch, NotFoundError
 from framework.elastic_config import *
 from framework.sweeps_logger import sweeps_logger as logger
+from sweep_utils.roofline_utils import get_updated_message
 
 ARCH = os.getenv("ARCH_NAME")
 
@@ -48,7 +49,7 @@ def get_devices(test_module):
 
 
 def gather_single_test_perf(device, test_passed):
-    if not isinstance(device, ttnn.Device):
+    if device.get_num_devices() > 1:
         logger.error("Multi-device perf is not supported. Failing.")
         return None
     ttnn.DumpDeviceProfiler(device)
@@ -61,8 +62,20 @@ def gather_single_test_perf(device, test_passed):
         logger.error("No profiling data available. Ensure you are running with the profiler build.")
         return None
     elif len(opPerfData) > 1:
-        logger.info("Composite op detected in device perf measurement. Composite op perf is not supported. Failing.")
-        return None
+        logger.info("Composite op detected in device perf measurement. Will aggregate results.")
+        try:
+            for key in opPerfData[0].keys():
+                value = opPerfData[0][key]
+                for i in range(1, len(opPerfData)):
+                    if key in opPerfData[i]:
+                        if type(value) == str:
+                            opPerfData[0][key] = str(float(value) + float(opPerfData[i][key]))
+                        else:
+                            opPerfData[0][key] = value + opPerfData[i][key]
+            return opPerfData[0]
+        except Exception as e:
+            logger.info(e)
+            return None
     else:
         return opPerfData[0]
 
@@ -92,6 +105,7 @@ def run(test_module, input_queue, output_queue):
                 e2e_perf = None
             if MEASURE_DEVICE_PERF:
                 perf_result = gather_single_test_perf(device, status)
+                message = get_updated_message(message, perf_result)
                 output_queue.put([status, message, e2e_perf, perf_result])
             else:
                 output_queue.put([status, message, e2e_perf, None])
@@ -497,6 +511,7 @@ if __name__ == "__main__":
         required=False,
         help="Add this flag to perform a dry run.",
     )
+
     parser.add_argument(
         "--tag",
         required=False,

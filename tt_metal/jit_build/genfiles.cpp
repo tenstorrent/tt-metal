@@ -6,7 +6,6 @@
 
 #include <circular_buffer_constants.h>
 #include <data_format.hpp>
-#include <jit_build_options.hpp>
 #include <stdint.h>
 #include <tt_backend_api_types.hpp>
 #include <utils.hpp>
@@ -24,10 +23,11 @@
 #include "assert.hpp"
 #include "build.hpp"
 #include "hlk_desc.hpp"
+#include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
 #include "kernel.hpp"
-#include "logger.hpp"
-#include "rtoptions.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include "impl/context/metal_context.hpp"
 
 enum class UnpackToDestMode : uint8_t;
 namespace tt {
@@ -65,12 +65,17 @@ static fs::path get_file_path_relative_to_dir(const string& dir, const fs::path&
 static fs::path get_relative_file_path_from_config(const fs::path& file_path) {
     fs::path file_path_relative_to_dir;
 
-    if (llrt::RunTimeOptions::get_instance().is_root_dir_specified()) {
-        file_path_relative_to_dir = get_file_path_relative_to_dir(llrt::RunTimeOptions::get_instance().get_root_dir(), file_path);
+    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    if (rtoptions.is_root_dir_specified()) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(rtoptions.get_root_dir(), file_path);
     }
 
-    if (!fs::exists(file_path_relative_to_dir) && llrt::RunTimeOptions::get_instance().is_kernel_dir_specified()) {
-        file_path_relative_to_dir = get_file_path_relative_to_dir(llrt::RunTimeOptions::get_instance().get_kernel_dir(), file_path);
+    if (!fs::exists(file_path_relative_to_dir) && rtoptions.is_kernel_dir_specified()) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(rtoptions.get_kernel_dir(), file_path);
+    }
+
+    if (!fs::exists(file_path_relative_to_dir)) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(rtoptions.get_system_kernel_dir(), file_path);
     }
 
     return file_path_relative_to_dir;

@@ -21,15 +21,14 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "fmt/base.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
@@ -56,7 +55,7 @@ using std::chrono::microseconds;
 
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        log_error("Test not supported w/ slow dispatch, exiting");
+        log_error(tt::LogTest, "Test not supported w/ slow dispatch, exiting");
     }
 
     bool pass = true;
@@ -223,7 +222,7 @@ int main(int argc, char** argv) {
 
     // Determine if it passes performance goal
     auto avg_elapsed_us = calculate_average(elapsed_us);
-    if (pass && bypass_check == false) {
+    if (pass && !bypass_check) {
         // goal is under 10us
         long target_us = 10;
 
@@ -239,10 +238,15 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:title:test_kernel_launch");
-    log_info("CSV_INPUT:num-cores-r:{}:num-cores-c:{}:core-groups:{}", num_cores_r, num_cores_c, num_core_groups);
-    log_info("CSV_OUTPUT:ElapsedTime(us):{}", avg_elapsed_us);
-    log_info("CSV_RESULT:pass:{}", pass);
+    log_info(tt::LogTest, "CSV_MICROBENCHMARK:title:test_kernel_launch");
+    log_info(
+        tt::LogTest,
+        "CSV_INPUT:num-cores-r:{}:num-cores-c:{}:core-groups:{}",
+        num_cores_r,
+        num_cores_c,
+        num_core_groups);
+    log_info(tt::LogTest, "CSV_OUTPUT:ElapsedTime(us):{}", avg_elapsed_us);
+    log_info(tt::LogTest, "CSV_RESULT:pass:{}", pass);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

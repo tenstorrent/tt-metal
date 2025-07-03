@@ -12,18 +12,16 @@
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
-#include "cpp/ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include <tt-metalium/constants.hpp>
-#include "cpp/ttnn/common/constants.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/creation.hpp"
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include <magic_enum/magic_enum.hpp>
 #include <utility>
@@ -215,7 +213,6 @@ std::vector<ComplexTensor> ExecuteBackwardSub::invoke(
     float alpha,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    ComplexTensor grad_a = grad;
     grad_tensor.emplace_back(grad);
     const Tensor& grad_r = grad.real();
     const Tensor& grad_i = grad.imag();
@@ -330,6 +327,10 @@ std::vector<ttnn::Tensor> ExecuteBackwardLogaddexp::invoke(
     const Tensor& input_a,
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(
+        !(is_block_float(input_a.dtype()) || is_block_float(grad.dtype()) || is_block_float(other.dtype())),
+        "BFLOAT8_B/BFLOAT4_B dtypes are not supported !!");
+
     std::vector<Tensor> grad_tensor;
     Tensor opexp = ttnn::add(
         ttnn::exp(ttnn::subtract(other, input_a, std::nullopt, output_mem_config), false, output_mem_config),
@@ -360,6 +361,10 @@ std::vector<ttnn::Tensor> ExecuteBackwardLogaddexp2::invoke(
     const Tensor& input_a,
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(
+        !(is_block_float(input_a.dtype()) || is_block_float(grad.dtype()) || is_block_float(other.dtype())),
+        "BFLOAT8_B/BFLOAT4_B dtypes are not supported !!");
+
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     Tensor oppow = ttnn::add(
@@ -388,13 +393,7 @@ std::vector<Tensor> ExecuteBackwardRemainder::invoke(
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    Tensor result_div = ttnn::floor(ttnn::add(
-        ttnn::multiply(input, ttnn::reciprocal(other), std::nullopt, output_mem_config),
-        0.005f,
-        std::nullopt,
-        output_mem_config));
-    result_div =
-        ttnn::where(ttnn::eq(input, other, std::nullopt, output_mem_config), 1.0f, result_div, output_mem_config);
+    Tensor result_div = ttnn::div(input, other, true, "floor", std::nullopt, output_mem_config);
     Tensor grad_b = ttnn::multiply(ttnn::neg(grad), result_div, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
@@ -414,18 +413,7 @@ std::vector<Tensor> ExecuteBackwardFmod::invoke(
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    Tensor sign = ttnn::multiply(
-        ttnn::sign(input, output_mem_config), ttnn::sign(other, output_mem_config), std::nullopt, output_mem_config);
-    Tensor result_div = ttnn::trunc(ttnn::add(
-        ttnn::multiply(input, ttnn::reciprocal(other), std::nullopt, output_mem_config),
-        0.005f,
-        std::nullopt,
-        output_mem_config));
-    result_div = ttnn::where(
-        ttnn::eq(ttnn::abs(input), ttnn::abs(other), std::nullopt, output_mem_config),
-        sign,
-        result_div,
-        output_mem_config);
+    Tensor result_div = ttnn::div(input, other, true, "trunc", std::nullopt, output_mem_config);
     Tensor grad_b = ttnn::multiply(ttnn::neg(grad), result_div, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
@@ -587,8 +575,7 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
         "Incorrect rounding mode (expected 'none' or 'tanh')",
         "Error");
     Tensor input = ttnn::add(input_tensor, bias);
-    std::vector<std::optional<Tensor>> gelu_result =
-        ttnn::gelu_bw(grad, input, approximate = approximate, output_mem_config);
+    std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad, input, approximate, output_mem_config);
     if (gelu_result[0].has_value()) {
         grad_tensor.push_back(gelu_result[0].value());
     }
@@ -687,8 +674,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
             result.push_back(input_grad);
         }
     } else {
-        ttnn::zeros_like(
-            queue_id, grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config, input_grad);
+        ttnn::zeros_like(queue_id, grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config, input_grad);
         result.push_back(input_grad);
     }
     return result;
@@ -780,13 +766,11 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
         }
     } else {
         if (are_required_outputs.at(0)) {
-            ttnn::zeros_like(
-                queue_id, grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config, input_grad);
+            ttnn::zeros_like(queue_id, grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config, input_grad);
             result[0] = input_grad;
         }
         if (are_required_outputs.at(1)) {
-            ttnn::zeros_like(
-                queue_id, grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config, other_grad);
+            ttnn::zeros_like(queue_id, grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config, other_grad);
             result[1] = other_grad;
         }
     }

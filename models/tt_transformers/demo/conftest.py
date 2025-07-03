@@ -15,6 +15,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--max_generated_tokens", action="store", type=int, help="Maximum number of tokens to generate for each user"
     )
+    parser.addoption("--data_parallel", action="store", type=int, help="Number of data parallel workers")
     parser.addoption(
         "--paged_attention", action="store", type=bool, help="Whether to use paged attention or default attention"
     )

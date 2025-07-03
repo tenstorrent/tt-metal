@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "pybind11/pybind_fwd.hpp"
+#include "ttnn-pybind/pybind_fwd.hpp"
 
 namespace ttnn::operations::experimental::conv3d::detail {
-
-void py_bind_conv3d(pybind11::module& module);
+namespace py = pybind11;
+void py_bind_conv3d(py::module& module);
 
 }  // namespace ttnn::operations::experimental::conv3d::detail

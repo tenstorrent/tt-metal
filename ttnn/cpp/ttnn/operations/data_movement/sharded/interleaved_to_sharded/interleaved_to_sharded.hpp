@@ -21,16 +21,16 @@ struct InterleavedToShardedOperation {
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const std::variant<CoreCoord, CoreRangeSet>& grid,
-        const std::array<uint32_t, 2> shard_shape,
-        const TensorMemoryLayout shard_scheme,
-        const tt::tt_metal::ShardOrientation shard_orientation,
+        std::array<uint32_t, 2> shard_shape,
+        TensorMemoryLayout shard_scheme,
+        tt::tt_metal::ShardOrientation shard_orientation,
         const std::optional<DataType>& data_type_arg,
         const std::optional<bool>& keep_l1_aligned = std::nullopt);
 };
 
 }  // namespace operations::data_movement
 
-constexpr auto interleaved_to_sharded = ttnn::register_operation_with_auto_launch_op<
+constexpr auto interleaved_to_sharded = ttnn::register_operation<
     "ttnn::interleaved_to_sharded",
     ttnn::operations::data_movement::InterleavedToShardedOperation>();
 }  // namespace ttnn

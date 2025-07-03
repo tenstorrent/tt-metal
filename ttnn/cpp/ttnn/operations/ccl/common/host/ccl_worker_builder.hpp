@@ -4,11 +4,12 @@
 
 #pragma once
 
-#include "cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -23,7 +24,6 @@ class IDevice;
 
 namespace ttnn::ccl {
 class WorkerEdmInterfaceArgs;
-class SenderWorkerAdapterSpec;
 
 namespace worker_detail {
 
@@ -82,6 +82,23 @@ void generate_multi_input_command_stream_kernel_rt_args(
     std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override = std::nullopt,
     std::optional<std::vector<size_t>> const& tensor_indices = std::nullopt,
     ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider = nullptr);
+
+void generate_multi_input_command_stream_kernel_rt_args(
+    tt::tt_metal::Program& program,
+    tt::tt_metal::KernelHandle kernel_id,
+    std::vector<Tensor const*> const& tensors,
+    std::vector<size_t> const& page_sizes,
+    IDevice* device,
+    uint32_t link,
+    uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
+    CoreRangeSet const& worker_core_range,
+    std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> const& ccl_command_stream0,
+    std::optional<std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>> const& ccl_command_stream1,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override = std::nullopt,
+    std::optional<std::vector<size_t>> const& tensor_indices = std::nullopt,
+    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider = nullptr);
 // Helper functions for building command processing datamovement kernels
 // TODO: Bundle into command bundle per command stream to cut down
 //       on args and improve usability
@@ -102,11 +119,11 @@ void generate_multi_command_stream_kernel_rt_args(
     std::vector<ttnn::ccl::cmd::CclCommandDestArgs> const& dest_args);
 tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     tt::tt_metal::Program& program,
-    std::vector<uint32_t> const& cb_indices,
-    std::vector<Tensor const*> const& tensors,
-    CoreRangeSet const& worker_core_range,
+    const std::vector<uint32_t>& cb_indices,
+    const std::vector<const Tensor*>& tensors,
+    const CoreRangeSet& worker_core_range,
     tt::tt_metal::DataMovementConfig datamovement_kernel_config,
-    const size_t num_command_streams = 2,
+    size_t num_command_streams = 2,
     std::optional<chip_id_t> my_chip_id = std::nullopt);
 
 // Maybe not the right place for this - re-evaluate
@@ -151,16 +168,16 @@ struct CCLWorkerArgBuilder {
         uint32_t worker_slice_index) const;
 
     std::vector<uint32_t> generate_sender_writer_kernel_rt_args(
-        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& forward_fabric_connection,
-        const size_t sender_worker_forward_flow_control_semaphore_id,
-        const size_t sender_worker_forward_teardown_semaphore_id,
-        const size_t sender_worker_forward_buffer_index_semaphore_id,
-        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& backward_fabric_connection,
-        const size_t sender_worker_backward_flow_control_semaphore_id,
-        const size_t sender_worker_backward_teardown_semaphore_id,
-        const size_t sender_worker_backward_buffer_index_semaphore_id,
-        const size_t forward_direction_distance_to_end_of_line,
-        const size_t backward_direction_distance_to_end_of_line,
+        const std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& forward_fabric_connection,
+        size_t sender_worker_forward_flow_control_semaphore_id,
+        size_t sender_worker_forward_teardown_semaphore_id,
+        size_t sender_worker_forward_buffer_index_semaphore_id,
+        const std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& backward_fabric_connection,
+        size_t sender_worker_backward_flow_control_semaphore_id,
+        size_t sender_worker_backward_teardown_semaphore_id,
+        size_t sender_worker_backward_buffer_index_semaphore_id,
+        size_t forward_direction_distance_to_end_of_line,
+        size_t backward_direction_distance_to_end_of_line,
         ttnn::ccl::InterleavedTensorWorkerSlice worker_slice,
         std::size_t operating_dim,
         uint32_t num_pages_per_packet,

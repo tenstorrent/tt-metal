@@ -7,15 +7,14 @@
 #include <iostream>
 #include "light_metal_binary_generated.h"
 #include "command_generated.h"
-#include <trace_buffer.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include <host_api.hpp>
 #include "env_lib.hpp"
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/trace_buffer.hpp>
+#include "trace/trace_buffer.hpp"
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/device.hpp>
 #include "flatbuffer/base_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
@@ -413,6 +412,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
 
     // Handle optionals
     const auto shard_parameters = from_flatbuffer(cmd->shard_parameters());
+    auto buffer_layout = static_cast<TensorMemoryLayout>(cmd->buffer_layout());
     const auto bottom_up = cmd->bottom_up() ? std::optional<bool>{cmd->bottom_up()->value()} : std::nullopt;
     const auto sub_device_id =
         cmd->sub_device_id() ? std::optional<SubDeviceId>{cmd->sub_device_id()->value()} : std::nullopt;
@@ -425,8 +425,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
             cmd->size(),
             cmd->page_size(),
             from_flatbuffer(cmd->buffer_type()),
-            from_flatbuffer(cmd->buffer_layout()),
-            shard_parameters,
+            BufferShardingArgs(shard_parameters, buffer_layout),
             bottom_up,
             sub_device_id);
         add_buffer_to_map(cmd->global_id(), buffer);
@@ -437,8 +436,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
             cmd->size(),
             cmd->page_size(),
             from_flatbuffer(cmd->buffer_type()),
-            from_flatbuffer(cmd->buffer_layout()),
-            shard_parameters,
+            BufferShardingArgs(shard_parameters, buffer_layout),
             bottom_up,
             sub_device_id);
         add_buffer_to_map(cmd->global_id(), buffer);
@@ -753,7 +751,7 @@ bool LightMetalReplayImpl::run() {
 
         return true;
     } catch (const std::exception& e) {
-        log_fatal(e.what());
+        log_fatal(tt::LogMetalTrace, "{}", e.what());
         clear_object_maps();
         if (replay_manages_device) {
             close_devices();

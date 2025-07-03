@@ -110,11 +110,11 @@ tt_metal::operation::ProgramWithCallbacks create_program(
             .set_page_size(interm0_cb_index, out_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)in0_is_dram, (uint32_t)in1_is_dram};
 
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)out_is_dram};
 
     // Create reader and writer kernels per core
@@ -246,11 +246,12 @@ namespace matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
-    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
 
-    tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat in1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    tt::DataFormat out_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat in1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat out_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
     tt_metal::Buffer* in0_buffer = a.buffer();
@@ -287,7 +288,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto cshape = output.get_padded_shape();  // C=A*B, N1MK*11KN->N1MN
     tt_metal::Buffer* out_buffer = output.buffer();
     TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 

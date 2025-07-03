@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,6 +26,6 @@ struct SliceWriteOperation {
 }  // namespace ttnn
 
 namespace ttnn::experimental {
-constexpr auto slice_write = ttnn::
-    register_operation_with_auto_launch_op<"ttnn::slice_write", ttnn::operations::experimental::SliceWriteOperation>();
+constexpr auto slice_write =
+    ttnn::register_operation<"ttnn::slice_write", ttnn::operations::experimental::SliceWriteOperation>();
 }

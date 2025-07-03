@@ -17,7 +17,7 @@
 #include "debug_tools_test_utils.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/utils.hpp>
 
@@ -37,10 +37,10 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 // Some machines will run this test on different virtual cores, so wildcard the exact coordinates.
 const std::string golden_output =
-    R"(DPRINT server timed out on Device *, worker core (x=*,y=*), riscv 4, waiting on a RAISE signal: 1
+    R"(DPRINT server timed out on Device ?, worker core (x=?,y=?), riscv 4, waiting on a RAISE signal: 1
 )";
 
-static void RunTest(DPrintFixture* fixture, IDevice* device) {
+void RunTest(DPrintFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 

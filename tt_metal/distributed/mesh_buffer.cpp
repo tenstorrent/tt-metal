@@ -98,9 +98,9 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             device_local_size,
             device_local_config.page_size,
             device_local_config.buffer_type,
-            device_local_config.buffer_layout,
-            device_local_config.shard_parameters,
-            device_local_config.bottom_up);
+            device_local_config.sharding_args,
+            device_local_config.bottom_up,
+            device_local_config.sub_device_id);
 
         mesh_buffer = std::shared_ptr<MeshBuffer>(new MeshBuffer(
             mesh_buffer_config, device_local_config, device_local_size, mesh_device, std::move(backing_buffer)));
@@ -122,9 +122,9 @@ void MeshBuffer::initialize_device_buffers() {
             device_local_size_,
             device_local_config_.page_size,
             device_local_config_.buffer_type,
-            device_local_config_.buffer_layout,
-            device_local_config_.shard_parameters,
-            device_local_config_.bottom_up);
+            device_local_config_.sharding_args,
+            device_local_config_.bottom_up,
+            /*sub_device_id=*/std::nullopt);  // TODO: sub_device_id is unsupported
         return buffer;
     };
 
@@ -133,7 +133,15 @@ void MeshBuffer::initialize_device_buffers() {
     }
 }
 
-bool MeshBuffer::is_allocated() const { return not std::holds_alternative<DeallocatedState>(state_); }
+bool MeshBuffer::is_allocated() const {
+    if (std::holds_alternative<DeallocatedState>(state_)) {
+        return false;
+    }
+    if (mesh_device_.lock() == nullptr) {
+        return false;
+    }
+    return true;
+}
 
 MeshBuffer::~MeshBuffer() { deallocate(); }
 
@@ -158,11 +166,18 @@ MeshDevice* MeshBuffer::device() const {
     return device.get();
 }
 
-std::shared_ptr<Buffer> MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
-    return buffers_.at(device_coord);
+Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
+    return buffers_.at(device_coord).get();
 }
 
-std::shared_ptr<Buffer> MeshBuffer::get_reference_buffer() const { return buffers_.values().front(); }
+Buffer* MeshBuffer::get_reference_buffer() const { return buffers_.values().front().get(); }
+
+Buffer* MeshBuffer::get_backing_buffer() const {
+    if (auto owned_state = std::get_if<OwnedBufferState>(&state_)) {
+        return owned_state->backing_buffer.get();
+    }
+    return nullptr;
+}
 
 DeviceAddr MeshBuffer::size() const {
     return std::visit(
@@ -208,11 +223,15 @@ std::pair<bool, bool> MeshBuffer::replicated_dims() const {
 
 AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(buffer.get()), holder_(std::move(buffer)) {}
 AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
-    buffer_(buffer->get_reference_buffer().get()), holder_(std::move(buffer)) {}
+    buffer_(buffer->get_reference_buffer()), holder_(std::move(buffer)) {}
 
-AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config) {
+AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address) {
+    // TODO #20966: Remove single device support and branches + dynamic_cast
     auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
     if (!mesh_device) {
+        if (address.has_value()) {
+            return AnyBuffer{CreateBuffer(config, *address)};
+        }
         return AnyBuffer{CreateBuffer(config)};
     }
     MeshBufferConfig mesh_config = ReplicatedBufferConfig{
@@ -221,15 +240,18 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config) {
     DeviceLocalBufferConfig local_config{
         .page_size = config.page_size,
         .buffer_type = config.buffer_type,
-        .buffer_layout = config.buffer_layout,
-        .shard_parameters = config.shard_parameters,
+        .sharding_args = BufferShardingArgs(config.shard_parameters, config.buffer_layout),
     };
-    return MeshBuffer::create(mesh_config, local_config, mesh_device);
+    return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
 }
 
-AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config) {
+AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config, std::optional<uint64_t> address) {
+    // TODO #20966: Remove single device support and branches + dynamic_cast
     auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
     if (!mesh_device) {
+        if (address.has_value()) {
+            return AnyBuffer{CreateBuffer(config, *address)};
+        }
         return AnyBuffer{CreateBuffer(config)};
     }
     MeshBufferConfig mesh_config = ReplicatedBufferConfig{
@@ -238,9 +260,8 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config)
     DeviceLocalBufferConfig local_config{
         .page_size = config.page_size,
         .buffer_type = config.buffer_type,
-        .buffer_layout = config.buffer_layout,
     };
-    return MeshBuffer::create(mesh_config, local_config, mesh_device);
+    return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
 }
 
 Buffer* AnyBuffer::get_buffer() const { return buffer_; }

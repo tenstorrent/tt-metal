@@ -15,7 +15,7 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& input = tensor_args.input;
-    const auto input_data_format = datatype_to_dataformat_converter(input.get_dtype());
+    const auto input_data_format = datatype_to_dataformat_converter(input.dtype());
 
     auto dim = operation_attributes.dim;
     auto flip = operation_attributes.flip;
@@ -31,10 +31,10 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
-    const auto& input_shape = input.get_padded_shape();
-    const auto& input_shape_without_padding = input.get_logical_shape();
+    const auto& input_shape = input.padded_shape();
+    const auto& input_shape_without_padding = input.logical_shape();
 
     const auto N = input_shape[0];
     const auto C = input_shape[1];

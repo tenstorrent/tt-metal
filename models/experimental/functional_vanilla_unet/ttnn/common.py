@@ -50,10 +50,10 @@ class Conv:
             weights_dtype=ttnn.bfloat16,
             activation=self.activation,
             shard_layout=self.shard_layout,
-            input_channels_alignment=8 if input_tensor.shape[3] < 16 else 32,
             reshard_if_not_optimal=self.reshard,
             deallocate_activation=self.deallocate,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            reallocate_halo_output=False,
         )
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
@@ -129,7 +129,6 @@ class ConvTranspose:
             dtype=self.dtype,
             weights_dtype=ttnn.bfloat16,
             shard_layout=self.shard_layout,
-            input_channels_alignment=8 if input_tensor.shape[3] < 16 else 32,
             reshard_if_not_optimal=self.reshard,
             deallocate_activation=self.deallocate,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -224,7 +223,6 @@ class ConvSplit:
             weights_dtype=ttnn.bfloat16,
             activation=self.activation,
             shard_layout=self.shard_layout,
-            input_channels_alignment=8 if input_tensor.shape[3] < 16 else 32,
             reshard_if_not_optimal=self.reshard,
             deallocate_activation=self.deallocate,
             output_layout=ttnn.TILE_LAYOUT,

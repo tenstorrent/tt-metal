@@ -13,8 +13,7 @@ void kernel_main() {
     constexpr bool values_is_dram = get_compile_time_arg_val(2) == 1;
     constexpr bool output_ind_is_dram = get_compile_time_arg_val(3) == 1;
     constexpr uint32_t Ht = get_compile_time_arg_val(4);
-    constexpr uint32_t K = get_compile_time_arg_val(5);
-    constexpr uint32_t Kt = K % 32 == 0 ? K / 32 : K / 32 + 1;
+    constexpr uint32_t Kt = get_compile_time_arg_val(5);
 
     // can amortize the noc reads by doing them side by side for the two tensors
     constexpr uint32_t onetile = 1;

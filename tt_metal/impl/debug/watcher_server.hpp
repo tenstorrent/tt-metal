@@ -5,7 +5,7 @@
 #pragma once
 #include <core_coord.hpp>
 #include <stdint.h>
-#include <system_memory_manager.hpp>  // For chip_id_t
+#include <umd/device/types/cluster_descriptor_types.h>
 #include <string>
 
 struct metal_SocDescriptor;
@@ -20,6 +20,7 @@ void watcher_sanitize_host_noc_read(const metal_SocDescriptor& soc_d, CoreCoord 
 void watcher_sanitize_host_noc_write(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t len);
 
 int watcher_register_kernel(const std::string& name);
+void watcher_register_kernel_elf_paths(int id, std::vector<std::string> paths);
 
 // Helper functions for manually dumping watcher contents.
 void watcher_dump();
@@ -41,5 +42,8 @@ std::string watcher_get_log_file_name();
 
 // Helper function to get the current watcher dump count
 int watcher_get_dump_count();
+
+// Helper to return the watcher mutex lock
+std::unique_lock<std::mutex> watcher_get_lock();
 
 }  // namespace tt

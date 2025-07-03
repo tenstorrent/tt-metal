@@ -30,8 +30,7 @@ class Emb(torch.nn.Module):
         return self.emb(x)
 
 
-def test_grok_embedding(device, use_program_cache, reset_seeds):
-    t3k_mesh_device.enable_async(True)
+def test_grok_embedding(device, reset_seeds):
     dtype = ttnn.bfloat16
 
     model_args = TtModelArgs(device, dummy_weights=os.getenv("CI") == "true")

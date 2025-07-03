@@ -10,7 +10,7 @@
 #include <typeinfo>
 #include <utility>
 
-namespace tt::stl {
+namespace ttsl {
 
 // Most types are not typically aligned more than the size of a pointer. If in the future there is a special case to
 // accommodate, these can be parameterized then.
@@ -361,8 +361,6 @@ private:
     }
 
 public:
-    AnyIterator() = delete;
-
     AnyIterator(const AnyIterator& other) { other.iterator_adaptor().uninitialized_copy_to(bytes); }
 
     AnyIterator(AnyIterator&& other) noexcept { other.iterator_adaptor().uninitialized_move_to(bytes); }
@@ -457,6 +455,9 @@ private:
         : std::enable_if<std::is_base_of_v<std::forward_iterator_tag, iterator_category>, enable_if_forward> {};
 
 public:
+    template <class TEnable = enable_if_forward, class = typename TEnable::type>
+    AnyIterator() noexcept : AnyIterator(static_cast<std::add_pointer_t<reference>>(nullptr)) {}
+
     template <class TEnable = enable_if_forward, class = typename TEnable::type>
     [[nodiscard]] AnyIterator operator++(int) {
         static_assert(std::is_same_v<TEnable, enable_if_forward>);
@@ -969,4 +970,10 @@ using AnySizedRandomAccessRangeFor = AnyRangeFor<TReference, sized_random_access
         using __VA_ARGS__::BasicAnyRange; \
     }
 
-}  // namespace tt::stl
+}  // namespace ttsl
+
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt

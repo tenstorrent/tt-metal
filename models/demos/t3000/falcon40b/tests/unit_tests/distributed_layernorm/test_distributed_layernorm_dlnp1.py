@@ -2,15 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+from models.utility_functions import get_devices_for_t3000, skip_for_grayskull, torch2tt_tensor, tt2torch_tensor
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 class PytorchDistributedLayernormDLNP1(torch.nn.Module):
@@ -64,14 +62,14 @@ class TtDistributedLayernormDLNP1:
             total_count += count_local
             counts.append(count_local)
 
-            meanx_local = ttnn.sum(xs[i], dim=3, scaler=1.0 / counts[i])
+            meanx_local = ttnn.sum(xs[i], keepdim=True, dim=3, scaler=1.0 / counts[i])
             meanxs.append(meanx_local)
 
         # meanx2 = torch.mean(torch.square(xs), dim=-1, keepdim=True)
         meanx2s = []
         for i in range(num_devices):
             x2_local = ttnn.pow(xs[i], 2)
-            meanx2_local = ttnn.sum(x2_local, dim=3, scaler=1.0 / counts[i])
+            meanx2_local = ttnn.sum(x2_local, keepdim=True, dim=3, scaler=1.0 / counts[i])
             meanx2s.append(meanx2_local)
 
         # Weighted meanx to number of samples per device

@@ -24,16 +24,15 @@
 #include <vector>
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "fmt/base.h"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
@@ -66,7 +65,7 @@ using std::chrono::microseconds;
 
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        log_error("Test not supported w/ slow dispatch, exiting");
+        log_error(tt::LogTest, "Test not supported w/ slow dispatch, exiting");
     }
 
     bool pass = true;
@@ -273,7 +272,7 @@ int main(int argc, char** argv) {
 
     // Determine if it passes performance goal
     auto avg_measured_bandwidth = calculate_average(measured_bandwidth);
-    if (pass && bypass_check == false) {
+    if (pass && !bypass_check) {
         // goal is 95% of theoretical peak using a single NOC channel
         // theoretical peak: 32bytes per clock cycle
         double target_bandwidth = 32.0 * 0.9;
@@ -289,8 +288,9 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:title:test_noc_adjacent");
+    log_info(tt::LogTest, "CSV_MICROBENCHMARK:title:test_noc_adjacent");
     log_info(
+        tt::LogTest,
         "CSV_INPUT:num-cores-r:{}:num-cores-c:{}:num-tiles:{}:tiles-per-transfer:{}:noc-index:{}:noc-direction:{}:"
         "access-type:{}:use-device-profiler:{}",
         num_cores_r,
@@ -301,8 +301,8 @@ int main(int argc, char** argv) {
         NOC_DIRECTIONToString(static_cast<NOC_DIRECTION>(noc_direction)),
         ACCESS_TYPEToString(static_cast<ACCESS_TYPE>(access_type)),
         use_device_profiler);
-    log_info("CSV_OUTPUT:Bandwidth(B/cc):{:.3f}", avg_measured_bandwidth);
-    log_info("CSV_RESULT:pass:{}", pass);
+    log_info(tt::LogTest, "CSV_OUTPUT:Bandwidth(B/cc):{:.3f}", avg_measured_bandwidth);
+    log_info(tt::LogTest, "CSV_RESULT:pass:{}", pass);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

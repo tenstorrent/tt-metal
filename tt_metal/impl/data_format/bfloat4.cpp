@@ -15,7 +15,7 @@
 #include "blockfloat_common.hpp"
 #include "constants.hpp"
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 #include "math.hpp"
 #include "tile.hpp"
 #include "tracy/Tracy.hpp"
@@ -30,13 +30,13 @@ std::vector<uint32_t> pack_fp32_vec_as_bfp4_tiles(
 }
 
 std::vector<float> unpack_bfp4_tiles_into_float_vec(
-    const std::vector<uint32_t>& bfp_tiles,
+    tt::stl::Span<const uint32_t> bfp_tiles,
     bool row_major_output,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile) {
     ZoneScoped;
 
-    uint32_t l1_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
 
     auto tile_H = tile.has_value() ? tile->get_tile_shape()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile.has_value() ? tile->get_tile_shape()[1] : tt::constants::TILE_WIDTH;
@@ -111,9 +111,9 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
 
                         int exponent_index =
                             (data_index >> data_dwords_per_exp_dword_log2) + (num_bfp_dwords_in_tile * tile_index);
-                        exp_word = bfp_tiles.at(
-                            exponent_index);  // Extract the uint32_t value that stores the shared exponent for this set
-                                              // of data. Each 32 bit word is shared amongst 64 datums
+                        // Extract the uint32_t value that stores the shared exponent for this set
+                        // of data. Each 32 bit word is shared amongst 64 datums
+                        exp_word = bfp_tiles[exponent_index];
 
                         int num_exponent_words_skip = tile_index * num_exp_words;
                         sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> data_dwords_per_exp_log2) &
@@ -125,10 +125,10 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
 
                         // Take 2 uint32_t values. These are 16 BFP4 values
                         // Replicate each uint32 value 8 times - one for each bfp4 value
-                        uint32_t first_val = bfp_tiles.at(num_exp_words + tile_and_data_index);
+                        uint32_t first_val = bfp_tiles[num_exp_words + tile_and_data_index];
                         simde__m128i first0 = simde_mm_set1_epi32(first_val);
                         simde__m128i first1 = simde_mm_set1_epi32(first_val);
-                        uint32_t second_val = bfp_tiles.at(num_exp_words + tile_and_data_index + 1);
+                        uint32_t second_val = bfp_tiles[num_exp_words + tile_and_data_index + 1];
                         simde__m128i second0 = simde_mm_set1_epi32(second_val);
                         simde__m128i second1 = simde_mm_set1_epi32(second_val);
 

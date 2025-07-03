@@ -15,9 +15,9 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
@@ -25,7 +25,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/semaphore.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "umd/device/tt_core_coordinates.h"
@@ -59,10 +59,7 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
 
         ReplicatedBufferConfig global_buffer_config{.size = dram_buffer_size};
         DeviceLocalBufferConfig per_device_buffer_config{
-            .page_size = page_size,
-            .buffer_type = tt_metal::BufferType::DRAM,
-            .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-            .bottom_up = true};
+            .page_size = page_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = true};
 
         bool allocate_bufs = src0_bufs.empty();
         for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
@@ -404,6 +401,31 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
         }
     }
     return programs;
+}
+
+ScopedEnvVar::ScopedEnvVar(const char* name, const char* value) : name_(name) {
+    // Save original value
+    const char* original = std::getenv(name);
+    if (original) {
+        original_value_ = original;
+        had_original_ = true;
+    }
+
+    // Set new value
+    if (value) {
+        setenv(name, value, /*overwrite=*/1);
+    } else {
+        unsetenv(name);
+    }
+}
+
+ScopedEnvVar::~ScopedEnvVar() {
+    // Restore original value
+    if (had_original_) {
+        setenv(name_, original_value_.c_str(), /*overwrite=*/1);
+    } else {
+        unsetenv(name_);
+    }
 }
 
 }  // namespace tt::tt_metal::distributed::test::utils

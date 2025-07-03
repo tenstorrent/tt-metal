@@ -5,24 +5,24 @@
 #include <cstdint>
 #include <utility>
 
-#include "cpp/ttnn/tensor/types.hpp"
-#include "cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
 namespace ttnn::operations::data_movement {
 
 PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto& dims = operation_attributes.dims;
-    if (tensor_args.input_tensor.get_layout() == Layout::ROW_MAJOR) {
+    if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
         // If the last dimension is not permuted, we can use the row-invariant kernel
-        if (dims.back() == tensor_args.input_tensor.get_logical_shape().rank() - 1) {
+        if (dims.back() == tensor_args.input_tensor.logical_shape().rank() - 1) {
             return MultiCoreRowInvariant{};
         }
         // Otherwise, we need to use the blocked generic, row moving kernel
         return MultiCoreBlockedGeneric{};
     } else {
         // If the input tensor is not row-major, we need to use the tiled kernels
-        uint32_t rank = tensor_args.input_tensor.get_logical_shape().rank();
+        uint32_t rank = tensor_args.input_tensor.logical_shape().rank();
         // When the tiled dimensions are not moved, we use this kernel
         if ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2) ||
             (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1)) {
@@ -39,9 +39,9 @@ PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program
 void PermuteDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     auto& dims = attributes.dims;
-    auto rank = tensor_args.input_tensor.get_logical_shape().rank();
+    auto rank = tensor_args.input_tensor.logical_shape().rank();
     TT_FATAL(
-        attributes.dims.size() == tensor_args.input_tensor.get_logical_shape().rank(),
+        attributes.dims.size() == tensor_args.input_tensor.logical_shape().rank(),
         "Permute dimensions must match input tensor rank");
     TT_FATAL(tensor_args.input_tensor.is_sharded() == false, "Permute operation does not support sharded input tensor");
 }
@@ -52,12 +52,12 @@ void PermuteDeviceOperation::validate_on_program_cache_hit(
 PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
-        return tensor_args.optional_output_tensor->get_tensor_spec();
+        return tensor_args.optional_output_tensor->tensor_spec();
     }
 
     SmallVector<uint32_t> shape;
     const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.logical_shape();
     shape.reserve(input_shape.rank());
     for (auto dim : attributes.dims) {
         shape.push_back(input_shape[dim]);

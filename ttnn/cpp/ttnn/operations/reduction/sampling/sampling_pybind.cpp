@@ -6,7 +6,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 #include "ttnn/operations/reduction/sampling/sampling.hpp"
 
@@ -88,7 +88,7 @@ void bind_reduction_sampling_operation(py::module& module) {
                const ttnn::Tensor& input_indices_tensor,
                const std::vector<uint16_t>& k,
                const std::vector<float>& p,
-               const uint32_t seed,
+               const std::optional<uint32_t>& seed,
                const std::optional<CoreRangeSet>& sub_core_grids,
                std::optional<ttnn::Tensor> optional_output_tensor,
                QueueId queue_id) {
@@ -107,7 +107,7 @@ void bind_reduction_sampling_operation(py::module& module) {
             py::kw_only(),
             py::arg("k").noconvert(),
             py::arg("p").noconvert(),
-            py::arg("seed").noconvert() = 0,
+            py::arg("seed").noconvert() = std::nullopt,
             py::arg("sub_core_grids") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});

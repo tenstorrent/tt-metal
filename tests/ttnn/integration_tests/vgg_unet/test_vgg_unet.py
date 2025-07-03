@@ -1,19 +1,19 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
-from models.utility_functions import skip_for_grayskull
-
-from tests.ttnn.utils_for_testing import assert_with_pcc
-import pytest
-from loguru import logger
 import os
 
-from models.experimental.functional_vgg_unet.reference.vgg_unet import UNetVGG19
-from models.experimental.functional_vgg_unet.ttnn.model_preprocessing import create_vgg_unet_model_parameters
-from models.experimental.functional_vgg_unet.ttnn.ttnn_vgg_unet import Tt_vgg_unet
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
+from models.demos.vgg_unet.ttnn.model_preprocessing import create_vgg_unet_model_parameters
+from models.demos.vgg_unet.ttnn.ttnn_vgg_unet import Tt_vgg_unet
+from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_grayskull()
@@ -21,11 +21,11 @@ from models.experimental.functional_vgg_unet.ttnn.ttnn_vgg_unet import Tt_vgg_un
     "use_pretrained_weight",
     [
         False,
-        # True,
+        True,
     ],
     ids=[
         "pretrained_weight_false",
-        # "pretrained_weight_true",
+        "pretrained_weight_true",
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True, ids=["0"])
@@ -41,7 +41,9 @@ def test_vgg_unet(device, reset_seeds, model_location_generator, use_pretrained_
 
     # Pre-trained weights processing
     if use_pretrained_weight:
-        weights_pth = "models/experimental/functional_vgg_unet/vgg_unet_torch.pth"
+        weights_pth = "models/demos/vgg_unet/vgg_unet_torch.pth"
+        if not os.path.exists(weights_pth):
+            os.system("bash models/demos/vgg_unet/weights_download.sh")
         torch_dict = torch.load(weights_pth)
         new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
         torch_model.load_state_dict(new_state_dict)

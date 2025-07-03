@@ -15,11 +15,11 @@ struct MorehMatmul {
         const std::optional<Tensor>& output,
         const std::optional<const Tensor>& bias,
         const std::optional<MemoryConfig>& memory_config,
-        const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+        std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_matmul
 
 namespace ttnn {
-constexpr auto moreh_matmul = ttnn::
-    register_operation_with_auto_launch_op<"ttnn::moreh_matmul", ttnn::operations::moreh::moreh_matmul::MorehMatmul>();
+constexpr auto moreh_matmul =
+    ttnn::register_operation<"ttnn::moreh_matmul", ttnn::operations::moreh::moreh_matmul::MorehMatmul>();
 }  // namespace ttnn

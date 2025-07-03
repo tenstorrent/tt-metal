@@ -1,0 +1,59 @@
+name: 'Pull, tag, and push a docker image to GHCR as latest'
+description: 'Tags a Docker image as latest and pushes to GitHub Container Registry'
+
+inputs:
+  docker-image-tag:
+    description: 'Docker image tag in format REPO_NAME:VERSION'
+    required: true
+    type: string
+  github-token:
+    description: 'GH Token for registry login'
+    required: true
+    type: string
+
+outputs:
+  repo-name:
+    description: 'Extracted repository name from docker image tag'
+    value: ${{ steps.parse-repo.outputs.repo-name }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate docker image tag format
+      shell: bash
+      run: |
+        if [[ ! "${{ inputs.docker-image-tag }}" =~ ^[a-zA-Z0-9._/-]+:[a-zA-Z0-9._-]+$ ]]; then
+          echo "Error: docker-image-tag must be in format REPO_NAME:VERSION"
+          echo "Provided: ${{ inputs.docker-image-tag }}"
+          exit 1
+        fi
+        echo "✅ Docker image tag format is valid"
+
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.github-token }}
+
+    - name: Parse repository name
+      id: parse-repo
+      shell: bash
+      run: |
+        FULL_TAG="${{ inputs.docker-image-tag }}"
+        REPO_NAME="${FULL_TAG%:*}"
+        echo "repo-name=${REPO_NAME}" >> $GITHUB_OUTPUT
+        echo "Extracted repository name: ${REPO_NAME}"
+
+    - name: Pull, tag and push image
+      shell: bash
+      run: |
+        echo "Pulling image: ${{ inputs.docker-image-tag }}"
+        docker pull ${{ inputs.docker-image-tag }}
+
+        LATEST_TAG="${{ steps.parse-repo.outputs.repo-name }}:latest"
+        echo "Tagging as: ${LATEST_TAG}"
+        docker tag ${{ inputs.docker-image-tag }} ${LATEST_TAG}
+
+        echo "Pushing: ${LATEST_TAG}"
+        docker push ${LATEST_TAG}

@@ -10,6 +10,7 @@
 #include "debug/assert.h"
 #include "debug/dprint.h"
 #include "eth_ubenchmark_types.hpp"
+#include "risc_common.h"
 
 // #define ENABLE_DEBUG 1
 
@@ -88,6 +89,7 @@ FORCE_INLINE void write_receiver(
 }
 
 FORCE_INLINE bool has_receiver_ack(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
+    invalidate_l1_cache();
     return buffer_slot_sync_addr->bytes_sent == 0;
 }
 
@@ -165,6 +167,7 @@ FORCE_INLINE uint32_t setup_receiver_buffer(
 FORCE_INLINE uint32_t get_buffer_slot_trid(uint32_t curr_ptr) { return curr_ptr % MAX_NUM_TRANSACTION_ID + 1; }
 
 FORCE_INLINE bool has_incoming_packet(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
+    invalidate_l1_cache();
     return buffer_slot_sync_addr->bytes_sent != 0;
 }
 

@@ -44,18 +44,24 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
         "decode",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": True,
+        }
+    ],
+    indirect=True,
+)
 def test_llama_rms_norm_inference(
     max_seq_len,
     batch_size,
     mode,
     mesh_device,
-    use_program_cache,
     reset_seeds,
 ):
     dtype = ttnn.bfloat16
-
-    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=True)
 
@@ -82,7 +88,13 @@ def test_llama_rms_norm_inference(
     )
 
     # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, model_args, TG=model_args.is_galaxy, tt_ccl=tt_ccl)
+    tt_model = DistributedNorm(
+        tt_inner_norm,
+        model_args,
+        TG=model_args.is_galaxy,
+        tt_ccl=tt_ccl,
+        ccl_topology=model_args.model_config["CCL_TOPOLOGY"],
+    )
 
     # Create reference model (unchanged)
     partial_state_dict = {

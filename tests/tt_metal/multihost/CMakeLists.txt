@@ -1,0 +1,4 @@
+add_subdirectory(single_host_mp_tests)
+add_subdirectory(fault_tolerance_tests)
+add_subdirectory(multi_host_tests)
+add_subdirectory(sockets)

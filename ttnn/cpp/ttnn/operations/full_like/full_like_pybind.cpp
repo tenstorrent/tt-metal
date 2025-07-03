@@ -4,14 +4,13 @@
 
 #include "full_like_pybind.hpp"
 
+#include <optional>
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "full_like.hpp"
-#include "cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/full_like/device/full_like_device_operation.hpp"
-
-namespace py = pybind11;
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::full_like {
 

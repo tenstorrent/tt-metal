@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -87,12 +87,9 @@ def test_ethernet_send_data_microbenchmark_concurrent_with_dram_read_and_write(
                         input_buffer_size_bytes: {input_buffer_size_bytes}"
     )
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
-    ARCH_NAME = os.getenv("ARCH_NAME")
     exec_path = (
         os.environ["TT_METAL_HOME"]
         + "/build/test/tt_metal/perf_microbenchmark/ethernet/test_ethernet_read_and_send_data"
-        + "_"
-        + ARCH_NAME
     )
     rc = os.system(
         f'TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 \
@@ -164,12 +161,9 @@ def test_decoupled_worker_and_erisc_data_mover_single_direction(
                         input_buffer_size_bytes: {input_buffer_size_bytes}"
     )
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
-    ARCH_NAME = os.getenv("ARCH_NAME")
     exec_path = (
         os.environ["TT_METAL_HOME"]
         + "/build/test/tt_metal/perf_microbenchmark/ethernet/test_workers_and_erisc_datamover_unidirectional"
-        + "_"
-        + ARCH_NAME
     )
     rc = os.system(
         f'TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 \

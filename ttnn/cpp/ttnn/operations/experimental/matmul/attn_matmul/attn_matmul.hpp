@@ -38,8 +38,8 @@ struct AttnMatmulFromCacheOperation {
         QueueId queue_id,
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
-        const uint32_t num_tokens,
-        const bool transpose_hw,
+        uint32_t num_tokens,
+        bool transpose_hw,
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
@@ -49,8 +49,8 @@ struct AttnMatmulFromCacheOperation {
     static ttnn::Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
-        const uint32_t num_tokens,
-        const bool transpose_hw,
+        uint32_t num_tokens,
+        bool transpose_hw,
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
@@ -62,11 +62,11 @@ struct AttnMatmulFromCacheOperation {
 
 namespace experimental {
 
-constexpr auto attn_matmul = ttnn::register_operation_with_auto_launch_op<
+constexpr auto attn_matmul = ttnn::register_operation<
     "ttnn::experimental::attn_matmul",
     ttnn::operations::experimental::matmul::AttnMatmulOperation>();
 
-constexpr auto attn_matmul_from_cache = ttnn::register_operation_with_auto_launch_op<
+constexpr auto attn_matmul_from_cache = ttnn::register_operation<
     "ttnn::experimental::attn_matmul_from_cache",
     ttnn::operations::experimental::matmul::AttnMatmulFromCacheOperation>();
 

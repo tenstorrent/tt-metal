@@ -74,7 +74,7 @@ namespace kernel_profiler {
 
 void set_deassert_addresses() {
 #ifdef ARCH_BLACKHOLE
-    WRITE_REG(SLAVE_IERISC_RESET_PC, MEM_SLAVE_IERISC_FIRMWARE_BASE);
+    WRITE_REG(SUBORDINATE_IERISC_RESET_PC, MEM_SUBORDINATE_IERISC_FIRMWARE_BASE);
 #endif
 }
 
@@ -89,15 +89,15 @@ void init_sync_registers() {
     }
 }
 
-inline void run_slave_eriscs(dispatch_core_processor_masks enables) {
+inline void run_subordinate_eriscs(dispatch_core_processor_masks enables) {
     if (enables & DISPATCH_CLASS_MASK_ETH_DM1) {
-        mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
+        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
     }
 }
 
-inline void wait_slave_eriscs(uint32_t &heartbeat) {
+inline void wait_subordinate_eriscs(uint32_t &heartbeat) {
     WAYPOINT("SEW");
-    while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
+    while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
         invalidate_l1_cache();
         RISC_POST_HEARTBEAT(heartbeat);
     }
@@ -105,8 +105,7 @@ inline void wait_slave_eriscs(uint32_t &heartbeat) {
 }
 
 int main() {
-    configure_l1_data_cache();
-    DIRTY_STACK_MEMORY();
+    configure_csr();
     WAYPOINT("I");
     do_crt1((uint32_t *)MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
     uint32_t heartbeat = 0;
@@ -118,7 +117,10 @@ int main() {
 
     risc_init();
 
-    mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
+    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+#ifdef ARCH_BLACKHOLE
+    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+#endif
     set_deassert_addresses();
     //device_setup();
 
@@ -128,6 +130,8 @@ int main() {
     }
 
     deassert_all_reset(); // Bring all riscs on eth cores out of reset
+    // Wait for all subordinate ERISCs to be ready before reporting the core is done initializing.
+    wait_subordinate_eriscs(heartbeat);
     mailboxes->go_message.signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
     // Cleanup profiler buffer incase we never get the go message
@@ -158,7 +162,7 @@ int main() {
             flush_erisc_icache();
 
             enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
-            run_slave_eriscs(enables);
+            run_subordinate_eriscs(enables);
 
             uint32_t kernel_config_base =
                 firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, DISPATCH_CLASS_ETH_DM0);
@@ -167,14 +171,14 @@ int main() {
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
                 int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
-                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))(
-                    kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
-                (*kernel_address)((uint32_t)kernel_address);
-                RECORD_STACK_USAGE();
+                uint32_t kernel_lma = (kernel_config_base +
+                                       launch_msg_address->kernel_config.kernel_text_offset[index]);
+                auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+                record_stack_usage(stack_free);
                 WAYPOINT("D");
             }
 
-            wait_slave_eriscs(heartbeat);
+            wait_subordinate_eriscs(heartbeat);
 
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
@@ -188,11 +192,6 @@ int main() {
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }
-#ifndef ARCH_BLACKHOLE
-        while (1) {
-            RISC_POST_HEARTBEAT(heartbeat);
-        }
-#endif
     }
 
     return 0;

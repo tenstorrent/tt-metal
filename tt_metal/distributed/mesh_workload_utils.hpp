@@ -7,6 +7,7 @@
 
 #include "core_coord.hpp"
 #include "sub_device_types.hpp"
+#include "tt_metal/impl/program/dispatch.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -28,6 +29,6 @@ void write_go_signal(
     CoreCoord dispatch_core,
     bool send_mcast,
     bool send_unicasts,
-    int num_unicast_txns = -1);
+    const program_dispatch::ProgramDispatchMetadata& dispatch_md);
 
 }  // namespace tt::tt_metal::distributed

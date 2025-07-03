@@ -11,7 +11,6 @@ import traceback
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
-from models.utility_functions import skip_for_grayskull
 
 
 def run_eltwise_sin_tests(
@@ -72,6 +71,5 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
     (test_sweep_args),
 )
-@skip_for_grayskull("Not supported for Grayskull")
 def test_eltwise_sin(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     run_eltwise_sin_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
