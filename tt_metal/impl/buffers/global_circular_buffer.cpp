@@ -106,7 +106,6 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         const auto& receiver_cores_vec = corerange_to_cores(receiver_cores);
         uint32_t sender_idx = core_to_core_id.at(sender_core) * cb_config_page_size / sizeof(uint32_t);
         uint32_t num_receivers = receiver_cores.num_cores();
-        uint32_t pages_acked_address = pages_sent_address + num_receivers * l1_alignment;
         cb_config_host_buffer[sender_idx++] = 1;
         cb_config_host_buffer[sender_idx++] = receiver_cores.num_cores();
         cb_config_host_buffer[sender_idx++] = buffer_address;

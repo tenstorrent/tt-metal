@@ -92,7 +92,7 @@ int main() {
     CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(dst_N * packed_data_size * 2, {{cb_id, cb_data_format}})
             .set_page_size(cb_id, packed_data_size);
-    auto cb_src = tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
+    tt_metal::CreateCircularBuffer(program, cores, cb_config);
 
     // specify compile time args
     bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM;

@@ -341,9 +341,6 @@ inline constexpr int constexpr_strlen(const char* str) { return *str ? 1 + const
 constexpr auto TENSOR_TYPE_STRING = "ttnn.Tensor";
 constexpr auto TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH = constexpr_strlen(TENSOR_TYPE_STRING) + 1;
 
-static constexpr auto TAB = "    ";
-static constexpr auto TAB_MINUS_1 = "   ";
-
 template <typename BufferType>
 void to_string_row_major(
     std::stringstream& ss,
@@ -428,7 +425,6 @@ std::string to_string(
 template <typename T>
 std::string to_string(
     const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout) {
-    const auto tile = tensor.tensor_spec().tile();
     const auto& shape = tensor.logical_shape();
     const auto dtype = original_dtype.value_or(tensor.dtype());
     const auto layout = original_layout.value_or(tensor.layout());
@@ -1278,7 +1274,6 @@ Tensor pad(
         input_padded_shape = input_padded_shape.to_rank(2);
     }
     const auto input_strides = tensor.strides();
-    const auto input_data_type = tensor.dtype();
 
     auto pad = [&input_padded_shape, &output_padded_shape, &input_tensor_start, &pad_value_](const auto& input_buffer) {
         const int rank = input_padded_shape.rank();

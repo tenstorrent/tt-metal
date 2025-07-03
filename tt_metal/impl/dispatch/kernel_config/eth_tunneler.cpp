@@ -118,7 +118,6 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
         auto other_ds_kernel = downstream_kernels_[1];
         if (!ds_tunneler_kernel) {
             ds_tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(downstream_kernels_[1]);
-            auto other_ds_kernel = downstream_kernels_[0];
         }
         TT_ASSERT(ds_tunneler_kernel == tunneler_kernel);
         for (uint32_t idx = 0; idx < static_config_.vc_count.value(); idx++) {

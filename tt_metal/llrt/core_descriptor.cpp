@@ -263,7 +263,6 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
 std::optional<uint32_t> get_storage_core_bank_size(
     chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
     if (core_desc.storage_core_bank_size.has_value()) {
         TT_FATAL(
             core_desc.storage_core_bank_size.value() %

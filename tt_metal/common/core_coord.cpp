@@ -316,7 +316,6 @@ bool CoreRangeSet::contains(const CoreRange& other) const {
     } else if (this->num_cores() < num_remaining_cores) {
         return false;
     }
-    uint32_t num_intersect_cores = 0;
     for (const auto& cr : this->ranges_) {
         const auto& intersection = cr.intersection(other);
         if (intersection.has_value()) {

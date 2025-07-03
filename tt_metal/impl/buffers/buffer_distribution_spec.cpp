@@ -240,7 +240,6 @@ UncompressedBufferPageMapping compute_page_mapping(
 
     size_t num_shards_per_core = (num_shards + cores.size() - 1) / cores.size();
     size_t shard_pages = shard_shape.volume();
-    size_t dev_pages = cores.size() * num_shards_per_core * shard_pages;
 
     page_mapping.core_host_page_indices.resize(cores.size());
     for (size_t i = 0; i < cores.size(); i++) {
