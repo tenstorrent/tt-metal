@@ -172,6 +172,8 @@ void append_fabric_connection_rt_args(
             worker_buffer_index_semaphore_id,
             worker_args);
     } else {
+        // TODO: will be deprecated. currently for ethernet dispatch case
+        //       ethernet core need to have same memory mapping as worker
         const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
 
         // src_chip_id is still required to get the fabric_router_virtual_core from tt_cluster

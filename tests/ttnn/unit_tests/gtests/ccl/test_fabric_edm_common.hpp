@@ -547,8 +547,6 @@ void generate_sender_worker_kernels(
     log_trace(tt::LogTest, "last_message_semaphore_address: {}", local_worker_last_message_semaphore_id);
     log_trace(
         tt::LogTest, "Sender communicating with EDM: x={}, y={}", (uint32_t)edm_noc_core.x, (uint32_t)edm_noc_core.y);
-    // Looks like `fabric_erisc_datamover_sender_worker_sender.cpp` is for ETH core? as written in
-    // edm_fabric_worker_adapters.hpp's template
     std::vector<uint32_t> sender_worker_writer_runtime_args{
         worker_fabric_connection.edm_buffer_base_addr,
         worker_fabric_connection.edm_l1_sem_addr,
@@ -2026,8 +2024,6 @@ bool RunPipelinedWorkersTest(
                 reader_cmd_stream,
                 std::nullopt,
                 std::nullopt,
-                std::nullopt,
-                std::nullopt,
                 std::nullopt);
             ttnn::ccl::worker_detail::generate_multi_input_command_stream_kernel_rt_args(
                 program,
@@ -2039,8 +2035,6 @@ bool RunPipelinedWorkersTest(
                 cb_packet_size_in_pages,
                 {worker_cores.at(worker)},
                 writer_cmd_stream,
-                std::nullopt,
-                std::nullopt,
                 std::nullopt,
                 std::nullopt,
                 std::nullopt);

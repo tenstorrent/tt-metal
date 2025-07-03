@@ -92,6 +92,8 @@ struct WorkerToFabricEdmSenderImpl {
             buffer_size_bytes = conn.buffer_size_bytes;
             edm_copy_of_wr_counter_addr = conn.buffer_index_semaphore_id;
         } else {
+            // TODO: will be deprecated. currently for ethernet dispatch case
+            //       ethernet core need to have same memory mapping as worker
             direction = get_arg_val<uint32_t>(arg_idx++);
             edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
             edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);

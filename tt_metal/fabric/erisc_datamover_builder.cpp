@@ -649,6 +649,8 @@ void get_runtime_args_for_edm_termination_infos(
     }
 }
 
+// TODO: will be deprecated. currently for ethernet dispatch case
+//       ethernet core need to have same memory mapping as worker
 void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
     size_t sender_worker_flow_control_semaphore_id,
@@ -697,7 +699,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
-// TODO: will be deprecated
+// TODO: will be deprecated. non device init fabric case
 void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
     const chip_id_t chip_id,
