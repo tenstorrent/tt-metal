@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include "tensix_types.h"
 
+// #include "debug/dprint.h"
 // #include "debug/dprint_pages.h"
 
 // DRAM to L1 read
@@ -36,6 +37,7 @@ void kernel_main() {
         DeviceZoneScopedN("RISCV1");
         for (uint32_t tile_id = 0; tile_id < num_tiles; tile_id++) {
             noc_async_read_tile(tile_id, s, l1_write_addr);
+            // DPRINT << "l1 write addr: " << l1_write_addr << ENDL();
             // tt::data_movement::common::print_bf16_pages(l1_write_addr, 32 * 32, 1);
             l1_write_addr += tile_size_bytes;
         }
