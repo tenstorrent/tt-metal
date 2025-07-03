@@ -59,6 +59,8 @@ void print_Wt_tiles(uint32_t cb_value, uint32_t Wt) {
     }
 }
 
+constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
+
 FORCE_INLINE
 void sync_packer_unpacker(uint32_t packer_unpacker_sync_cb_index) {
     constexpr uint32_t ONE_TILE = 1;
@@ -171,6 +173,8 @@ void MAIN {
             stages++;
         }
         for (uint32_t stage = 2; stage <= stages; stage++) {
+            const uint32_t m_iter = stage - 1;  // used as topk_merge / topk_rebuild argument
+
             for (uint32_t sub = stage; sub > 0; sub--) {
                 uint32_t sub_dist = 1 << (sub - 1);
                 uint16_t pair_id = 0;
@@ -209,7 +213,30 @@ void MAIN {
                             copy_tile(index_tensor_transposed_cb_index, left_tile_id, index_dest_start);
                             copy_tile(index_tensor_transposed_cb_index, right_tile_id, index_dest_end);
 
-                            ckernel::topk_local_sort(0, (int)dir, 5);
+                            // constexpr uint32_t K = Wt * 16;
+                            // constexpr uint32_t logK = ilog2(K);
+
+                            uint32_t tile_input_low = input_dest_start;
+                            uint32_t tile_input_high = input_dest_end;
+                            uint32_t tile_index_low = index_dest_start;
+                            uint32_t tile_index_high = index_dest_end;
+
+                            if (sub == 1) {
+                                ckernel::topk_local_sort(0, (int)dir, 5);
+                            } else {
+                                ckernel::topk_merge(0, m_iter, 32);
+
+                                // uint32_t select_lower = dir;
+                                if (dir) {
+                                    tile_input_low = input_dest_end;
+                                    tile_input_high = input_dest_start;
+                                    tile_index_low = index_dest_end;
+                                    tile_index_high = index_dest_start;
+                                }
+                            }
+                            // ckernel::topk_rebuild(0, (uint32_t)dir, m_iter, K, logK, false);
+
+                            //
 
                             // ckernel::topk_merge(0, m_iter, K);
 
@@ -218,13 +245,13 @@ void MAIN {
 
                             // Pack value tiles to CB
                             pack_reconfig_data_format(input_tensor_transposed_cb_index);
-                            pack_tile<true>(input_dest_start, input_tensor_transposed_cb_index, left_tile_id);
-                            pack_tile<true>(input_dest_end, input_tensor_transposed_cb_index, right_tile_id);
+                            pack_tile<true>(tile_input_low, input_tensor_transposed_cb_index, left_tile_id);
+                            pack_tile<true>(tile_input_high, input_tensor_transposed_cb_index, right_tile_id);
 
                             // Pack index tiles to CB
                             pack_reconfig_data_format(index_tensor_transposed_cb_index);
-                            pack_tile<true>(index_dest_start, index_tensor_transposed_cb_index, left_tile_id);
-                            pack_tile<true>(index_dest_end, index_tensor_transposed_cb_index, right_tile_id);
+                            pack_tile<true>(tile_index_low, index_tensor_transposed_cb_index, left_tile_id);
+                            pack_tile<true>(tile_index_high, index_tensor_transposed_cb_index, right_tile_id);
 
                             tile_regs_release();
                         }
@@ -295,7 +322,6 @@ void MAIN {
 
                         cb_pop_front(value_tensor_peer_cb_index, one_tile);
 
-                        uint32_t m_iter = stage - 1;
                         // ckernel::topk_local_sort(0, (int)dir, 5);
                         ckernel::topk_merge(0, m_iter, 32);
 
