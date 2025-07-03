@@ -82,10 +82,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     TT_ASSERT(experts % num_devices == 0, "Currently assuming that experts are evenly split among devices");
     const uint32_t experts_per_device = experts / num_devices;
 
-    auto input_spec = input_tensor.get_tensor_spec();
-    auto mapping_spec = mapping_tensor.get_tensor_spec();
-    auto output_spec = output_tensor.get_tensor_spec();
-    auto metadata_spec = metadata_tensor.get_tensor_spec();
+    const auto& input_spec = input_tensor.get_tensor_spec();
+    const auto& mapping_spec = mapping_tensor.get_tensor_spec();
+    const auto& metadata_spec = metadata_tensor.get_tensor_spec();
 
     const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
     const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
