@@ -166,6 +166,23 @@ protected:
 
 class UnitMeshMultiCQSingleDeviceProgramFixture : public UnitMeshMultiCQSingleDeviceFixture {};
 
+class UnitMeshMultiCQSingleDeviceTraceFixture : public UnitMeshMultiCQSingleDeviceFixture {
+protected:
+    void SetUp() override {
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+
+        this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
+
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    }
+
+    void CreateDevices(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+        this->create_devices(trace_region_size);
+    }
+};
+
 class MultiCommandQueueSingleDeviceEventFixture : public MultiCommandQueueSingleDeviceFixture {};
 
 class MultiCommandQueueSingleDeviceBufferFixture : public MultiCommandQueueSingleDeviceFixture {};
