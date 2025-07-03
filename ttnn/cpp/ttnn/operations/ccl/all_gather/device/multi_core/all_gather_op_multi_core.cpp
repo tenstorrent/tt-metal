@@ -41,8 +41,6 @@ get_all_worker_cores(
     uint32_t ring_index,
     const CoreCoord& grid_size) {
     uint32_t worker_grid_width = grid_size.x;
-    const bool fit_sender_and_receiver_workers_on_same_row =
-        (worker_grid_width / 2) >= all_gather_config.get_num_workers_per_link();
 
     std::set<CoreRange> receiver_worker_cores;
     std::set<CoreRange> sender_worker_cores;
@@ -466,9 +464,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     auto cb_src0_config = tt::tt_metal::CircularBufferConfig(CB_buffer_size, {{src0_cb_index, df}})
                               .set_page_size(src0_cb_index, input_page_size)
                               .set_tile_dims(src0_cb_index, input_tensor_config->get_tile());
-    tt::tt_metal::CBHandle cb_src0_sender_workers = CreateCircularBuffer(program, all_sender_workers, cb_src0_config);
-    tt::tt_metal::CBHandle cb_src0_receiver_workers =
-        CreateCircularBuffer(program, all_receiver_workers, cb_src0_config);
+    CreateCircularBuffer(program, all_sender_workers, cb_src0_config);
+    CreateCircularBuffer(program, all_receiver_workers, cb_src0_config);
 
     // This semaphore is used by the receiver core to tell workers that data is available to read
     auto receiver_worker_semaphore_id = CreateSemaphore(program, all_receiver_workers, 0);
