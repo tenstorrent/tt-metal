@@ -67,7 +67,7 @@ Tensor arange_impl(
     TensorSpec spec{
         ttnn::Shape{static_cast<uint32_t>(size)}, TensorLayout{data_type, PageConfig{layout}, output_mem_config}};
 
-    return Tensor::from_vector(owned_buffer, spec, device.has_value() ? std::addressof(device->get()) : nullptr);
+    return Tensor::from_vector(std::move(owned_buffer), spec, device.has_value() ? std::addressof(device->get()) : nullptr);
 }
 
 template <typename T>
