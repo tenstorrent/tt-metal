@@ -650,6 +650,35 @@ void get_runtime_args_for_edm_termination_infos(
 }
 
 void append_worker_to_fabric_edm_sender_rt_args(
+    const SenderWorkerAdapterSpec& connection,
+    size_t sender_worker_flow_control_semaphore_id,
+    size_t sender_worker_terminate_semaphore_id,
+    size_t sender_worker_buffer_index_semaphore_id,
+    std::vector<uint32_t>& args_out) {
+    auto edm_noc_xy = tt::tt_fabric::WorkerXY(connection.edm_noc_x, connection.edm_noc_y);
+
+    TT_FATAL(
+        (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
+        "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
+
+    const std::vector<uint32_t> values = {
+        connection.edm_direction,
+        edm_noc_xy.to_uint32(),
+        connection.edm_buffer_base_addr,
+        connection.num_buffers_per_channel,
+        connection.edm_l1_sem_addr,
+        connection.edm_connection_handshake_addr,
+        connection.edm_worker_location_info_addr,
+        connection.buffer_size_bytes,
+        connection.buffer_index_semaphore_id,
+        sender_worker_flow_control_semaphore_id,
+        sender_worker_terminate_semaphore_id,
+        sender_worker_buffer_index_semaphore_id};
+    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    std::ranges::copy(values, std::back_inserter(args_out));
+}
+
+void append_worker_to_fabric_edm_sender_rt_args(
     chan_id_t eth_channel,
     size_t sender_worker_flow_control_semaphore_id,
     size_t sender_worker_terminate_semaphore_id,
