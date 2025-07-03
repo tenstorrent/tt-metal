@@ -15,7 +15,6 @@ class TtBottleRep:
             conv=model_params.conv1.block.conv,
             conv_pth=parameters.conv1.block.conv,
             shard_layout=None,
-            # auto_shard=True,
             activation="silu",
             is_nhwc=True,
             reshape=True,

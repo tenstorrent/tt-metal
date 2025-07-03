@@ -43,10 +43,6 @@ def test_yolov6l_cspbep_backbone(device, reset_seeds):
 
     torch_output = model(torch_input)
 
-    # output = ttnn.to_torch(output)
-    # output = output.permute(0, 3, 1, 2)
-    # assert_with_pcc(torch_output, output, pcc=1.0)
-
     output_0 = ttnn.to_torch(output[0])
     output_0 = output_0.permute(0, 3, 1, 2)
     assert_with_pcc(torch_output[0], output_0, pcc=0.99)
