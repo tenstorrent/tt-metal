@@ -310,8 +310,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     // uint32_t ring_size = operation_attributes.ring_devices;
     // uint32_t num_devices = ring_size;
 
-    bool use_custom_worker_core_placement = true;
-
     const auto& input_tensor = tensor_args.input_tensor;
     // tt::tt_metal::IDevice* device = input_tensor.device();
     uint32_t num_links = operation_attributes.num_links;
@@ -470,7 +468,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     auto available_cores = sub_device_cores.subtract(packet_worker_cores_grid);
 
-    auto sender_core_grid = use_custom_worker_core_placement
+    auto sender_core_grid = operation_attributes.use_custom_worker_core_placement
                                 ? detail::rs_heads_fusion::get_custom_cores(
                                       available_cores,
                                       num_workers_per_link * num_links,

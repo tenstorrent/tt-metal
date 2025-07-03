@@ -291,6 +291,7 @@ class TtLlamaAttention(LightweightModule):
             num_links=4 if is_RING_6U else 3,
             dim=3,
             qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
+            use_custom_worker_core_placement=True,
         )
 
         # print("done create qkv heads")

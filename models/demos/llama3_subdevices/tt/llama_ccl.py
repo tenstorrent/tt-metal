@@ -626,6 +626,7 @@ class TT_CCL:
         dim,
         qkv_memory_config,
         use_noc1_only=False,
+        use_custom_worker_core_placement=False,
     ):
         persistent_interim_buffer = self.rs_create_heads_buffers[cluster_axis]
         (
@@ -647,6 +648,7 @@ class TT_CCL:
             memory_config=qkv_memory_config,
             qkv_memory_config=qkv_memory_config,
             use_noc1_only=use_noc1_only,
+            use_custom_worker_core_placement=use_custom_worker_core_placement,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
