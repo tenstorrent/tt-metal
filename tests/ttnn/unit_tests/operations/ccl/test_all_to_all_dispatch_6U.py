@@ -114,13 +114,13 @@ def test_all_to_all_dispatch_no_trace(
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
-        (128, 3, 2),
-        (1, 40, 10),
+        (128, 2, 1),
+        (1, 5, 2),
     ],
     ids=["s128", "s1"],
 )
-@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
-@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])

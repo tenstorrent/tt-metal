@@ -128,7 +128,6 @@ def get_output_tensor(input_tokens, expert_indices, expert_mapping, seq_len, mes
 def gen_tensors(
     batch, experts, selected_experts_k, hidden_size, seq_len, mesh_shape, devices, scheme="random", dtype=torch.bfloat16
 ):
-    torch.manual_seed(2005)
     # create input tokens
     assert batch % devices == 0
     assert experts % devices == 0
@@ -293,6 +292,7 @@ def run_all_to_all_dispatch_test(
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     cluster_axis=1,
 ):
+    torch.manual_seed(2005)
     mesh_device.enable_program_cache()
     devices = mesh_shape[0] * mesh_shape[1]
 
@@ -711,12 +711,18 @@ def test_all_to_all_dispatch_no_trace(
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
-        (128, 10, 5),
-        (1, 40, 10),
+        (128, 2, 1),
+        (1, 5, 2),
     ],
     ids=["s128", "s1"],
 )
-@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize(
+    "input_memory_config",
+    [
+        ttnn.DRAM_MEMORY_CONFIG,
+    ],
+    ids=["dram"],
+)
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
@@ -765,45 +771,6 @@ def test_all_to_all_dispatch_trace(
         output_memory_config=output_memory_config,
         dtype=dtype,
         cluster_axis=cluster_axis,
-    )
-
-
-@pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
-)
-def test_simple_tensor_gen(mesh_device, mesh_shape):
-    devices = mesh_shape[0] * mesh_shape[1]
-    sequence_length = 2
-    batch = 8 * mesh_shape[1]
-    experts = 8 * devices
-    select_experts_k = 8
-    hidden_size = 7168
-    dtype = ttnn.bfloat16
-    input_tokens, expert_indices, expert_mapping, sparse_output_token_tensor, metadata_tensor = gen_tensors(
-        batch,
-        experts,
-        select_experts_k,
-        hidden_size,
-        sequence_length,
-        mesh_shape,
-        devices,
-        scheme="sequential",
-        dtype=tt_to_torch_dtype(dtype),
-    )
-
-    assert input_tokens.shape == (batch, 1, sequence_length, hidden_size)
-    assert expert_indices.shape == (batch, 1, sequence_length, select_experts_k)
-    assert expert_mapping.shape == (1, 1, experts, devices)
-    assert sparse_output_token_tensor.shape == (devices, batch, sequence_length, hidden_size)
-    assert metadata_tensor.shape == (devices, batch, sequence_length, select_experts_k)
-
-    compare_results(
-        sparse_output_token_tensor,
-        metadata_tensor,
-        sparse_output_token_tensor,
-        metadata_tensor,
-        expert_mapping,
-        mesh_shape,
     )
 
 

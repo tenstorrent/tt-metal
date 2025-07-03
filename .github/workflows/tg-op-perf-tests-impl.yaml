@@ -1,4 +1,4 @@
-name: "[internal] TG model perf tests impl"
+name: "[internal] TG op perf tests impl"
 
 on:
   workflow_call:
@@ -31,9 +31,9 @@ jobs:
             name: "TG Op Perf Unit Tests",
             arch: wormhole_b0,
             cmd: 'tests/scripts/tg/run_tg_op_perf_tests.sh',
-            timeout: 200,
+            timeout: 10,
             tracy: true,
-            runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
           },
         ]
     name: ${{ matrix.test-group.name }}
@@ -66,7 +66,7 @@ jobs:
         with:
           name: ${{ inputs.wheel-artifact-name || 'wheel artifact not specified' }}
       - name: Run op perf regression tests
-        timeout-minutes: 60
+        timeout-minutes: 20
         uses: ./.github/actions/docker-run
         env:
           LOGURU_LEVEL: INFO

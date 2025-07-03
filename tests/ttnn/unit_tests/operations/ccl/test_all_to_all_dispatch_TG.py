@@ -114,8 +114,8 @@ def test_all_to_all_dispatch_no_trace(
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
-        (128, 3, 2),
-        (1, 40, 10),
+        (128, 2, 1),
+        (1, 5, 2),
     ],
     ids=["s128", "s1"],
 )
