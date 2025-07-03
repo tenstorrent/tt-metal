@@ -42,39 +42,39 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
         "Operands to bcast need to be on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to bcast need to be on the same device!");
 
-    const auto input_shape_a = input_tensor_a.get_padded_shape();
-    const auto input_shape_b = input_tensor_b.get_padded_shape();
+    const auto& input_shape_a = input_tensor_a.padded_shape();
+    const auto& input_shape_b = input_tensor_b.padded_shape();
 
-    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Error");
-    TT_FATAL(input_tensor_b.get_layout() == Layout::TILE, "Error");
-    TT_FATAL(is_floating_point(input_tensor_a.get_dtype()), "Unsupported data format");
+    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Error");
+    TT_FATAL(input_tensor_b.layout() == Layout::TILE, "Error");
+    TT_FATAL(is_floating_point(input_tensor_a.dtype()), "Unsupported data format");
     if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
-        TT_FATAL(is_floating_point(output_tensors.at(0).value().get_dtype()), "Unsupported data format");
+        TT_FATAL(is_floating_point(output_tensors.at(0).value().dtype()), "Unsupported data format");
         const auto output_spec_required = this->compute_output_specs(input_tensors, output_tensors);
         const auto& out_tensor = output_tensors.at(0).value();
         TT_FATAL(
-            out_tensor.get_logical_shape() == output_spec_required.at(0).logical_shape(),
+            out_tensor.logical_shape() == output_spec_required.at(0).logical_shape(),
             "The input tensors need a shape of {}, however the output tensor is only {}",
             output_spec_required.at(0).logical_shape(),
-            out_tensor.get_padded_shape());
+            out_tensor.padded_shape());
     }
     if (this->in_place) {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout, "Error");
-        TT_FATAL(input_tensor_a.memory_config().buffer_type == this->output_mem_config.buffer_type, "Error");
+        TT_FATAL(input_tensor_a.memory_config().memory_layout() == this->output_mem_config.memory_layout(), "Error");
+        TT_FATAL(input_tensor_a.memory_config().buffer_type() == this->output_mem_config.buffer_type(), "Error");
     }
     auto out_mem_config = (!output_tensors.empty() && output_tensors.at(0).has_value())
                               ? output_tensors.at(0).value().memory_config()
                               : this->output_mem_config;
     if (this->dim == BcastOpDim::W) {
         TT_FATAL(
-            input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED &&
-                out_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                out_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Bcast does not currently support input0 sharding, except if dim is W");
     } else if (this->dim == BcastOpDim::H) {
-        if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED) {
+        if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
             TT_FATAL(
-                input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED &&
-                    out_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+                input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                    out_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
                 "Bcast does not currently support input0 sharding, except if dim is HW");
         } else {
             TT_FATAL(
@@ -83,11 +83,11 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
         }
     } else {
         TT_FATAL(
-            input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
-                input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+                input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
             "HW bcast in0 supports Height Sharding or Interleaving");
         TT_FATAL(
-            input_tensor_a.memory_config().memory_layout == out_mem_config.memory_layout,
+            input_tensor_a.memory_config().memory_layout() == out_mem_config.memory_layout(),
             "Input and output mem layouts must be the same for bcast HW op!");
     }
 
@@ -125,7 +125,7 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
 std::vector<ttnn::TensorSpec> EltwiseBinaryBroadcast::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
-        return {output_tensors.at(0)->get_tensor_spec()};
+        return {output_tensors.at(0)->tensor_spec()};
     }
     if (this->in_place) {
         return {};
@@ -137,26 +137,25 @@ std::vector<ttnn::TensorSpec> EltwiseBinaryBroadcast::compute_output_specs(
             // Derive output shard_spec based on input
             shard_spec = input_tensor.shard_spec().value();
         }
-        auto mem_config = this->output_mem_config;
-        mem_config.shard_spec = shard_spec;
+        auto mem_config = this->output_mem_config.with_shard_spec(shard_spec);
         return {TensorSpec(
-            input_tensor.get_logical_shape(),
+            input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
-                input_tensor.get_dtype(),
+                input_tensor.dtype(),
                 PageConfig(Layout::TILE),
                 mem_config,
-                input_tensor.get_logical_shape(),
-                input_tensor.get_padded_shape()))};
+                input_tensor.logical_shape(),
+                input_tensor.padded_shape()))};
     }
 
     return {TensorSpec(
-        input_tensor.get_logical_shape(),
+        input_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
-            input_tensor.get_dtype(),
+            input_tensor.dtype(),
             PageConfig(Layout::TILE),
             output_mem_config,
-            input_tensor.get_logical_shape(),
-            input_tensor.get_padded_shape()))};
+            input_tensor.logical_shape(),
+            input_tensor.padded_shape()))};
 }
 
 std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(
@@ -195,15 +194,14 @@ operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(
 
 operation::Hash EltwiseBinaryBroadcast::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
-    bool bcast_scalar =
-        (input_tensors.at(1).get_padded_shape()[-2] * input_tensors.at(1).get_padded_shape()[-1] == 1) &&
-        this->dim == BcastOpDim::HW;
+    bool bcast_scalar = (input_tensors.at(1).padded_shape()[-2] * input_tensors.at(1).padded_shape()[-1] == 1) &&
+                        this->dim == BcastOpDim::HW;
     return operation::hash_operation<EltwiseBinaryBroadcast>(
         *this,
         parallelization_strategy,
-        std::get<DeviceStorage>(input_tensors.at(0).storage()).memory_config(),
+        input_tensors.at(0).memory_config(),
         input_tensors.at(0).dtype(),
-        std::get<DeviceStorage>(input_tensors.at(1).storage()).memory_config(),
+        input_tensors.at(1).memory_config(),
         input_tensors.at(1).dtype(),
         bcast_scalar,
         this->in_place);
@@ -215,14 +213,14 @@ BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strat
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
-    uint32_t Ht = input_tensor_a.get_padded_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wt = input_tensor_a.get_padded_shape()[-1] / TILE_WIDTH;
+    uint32_t num_tiles = input_tensor_a.physical_volume() / TILE_HW;
+    uint32_t Ht = input_tensor_a.padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t Wt = input_tensor_a.padded_shape()[-1] / TILE_WIDTH;
 
     if (this->dim == BcastOpDim::H) {
         if (input_tensor_a.is_sharded()) {
-            if (input_tensor_a.get_padded_shape()[0] == input_tensor_b.get_padded_shape()[0] ||
-                input_tensor_a.get_padded_shape()[0] > 1 and input_tensor_b.get_padded_shape()[0] == 1) {
+            if (input_tensor_a.padded_shape()[0] == input_tensor_b.padded_shape()[0] ||
+                input_tensor_a.padded_shape()[0] > 1 and input_tensor_b.padded_shape()[0] == 1) {
                 return BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED_OPTIMISED;
             } else {
                 return BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED;

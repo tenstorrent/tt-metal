@@ -4,7 +4,7 @@
 
 #include "moreh_adam_pybind.hpp"
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "pybind11/pytypes.h"
 #include "ttnn/operations/moreh/moreh_adam/moreh_adam.hpp"
 

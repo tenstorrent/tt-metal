@@ -584,9 +584,7 @@ def test_sharded_partial_op(
     [ttnn.bfloat16, ttnn.bfloat8_b],
     ids=["out_BFLOAT16", "out_BFLOAT8_B"],
 )
-def test_block_sharded_partial_op(
-    device, H, W, num_cores, activations_dtype, output_dtype, function_level_defaults, use_program_cache
-):
+def test_block_sharded_partial_op(device, H, W, num_cores, activations_dtype, output_dtype, function_level_defaults):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
@@ -960,7 +958,7 @@ def test_sharded_binary(
     assert passing
 
 
-def test_sharded_program_cache(device, use_program_cache, function_level_defaults):
+def test_sharded_program_cache(device, function_level_defaults):
     grid_size = device.compute_with_storage_grid_size()
     num_cores = 98
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -1852,9 +1850,9 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
             interleaved_mem_config,
         )
 
-    tt_got_back = yt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()[:, :, :1, :]
+    tt_got_back = yt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
-    y = torch.max(x, 2, True)[0]
+    y = torch.amax(x, 2)
 
     if dtype == ttnn.bfloat16:
         passing, output = comp_equal(y, tt_got_back)
@@ -2371,7 +2369,7 @@ def test_interleaved_2_sharded_DRAM(device, dtype, y):
     "seq_len",
     (32,),
 )
-def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_program_cache):
+def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len):
     dim_in = 4096
     dim_hidden = int(3.5 * dim_in / 4)  # 3584
     dim_out = dim_in
@@ -2412,26 +2410,32 @@ def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_pro
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 0) if is_wormhole_b0() else ttnn.CoreCoord(7, 0),  # Blackhole coord
+                ttnn.CoreCoord(device.dram_grid_size().x, 0),
             ),
         }
     )
-    if is_wormhole_b0():
-        w1_w3_shard_spec = ttnn.ShardSpec(dram_core_range_set, (4096, 320), ttnn.ShardOrientation.ROW_MAJOR)
-    else:
-        assert is_blackhole()
-        w1_w3_shard_spec = ttnn.ShardSpec(dram_core_range_set, (4096, 448), ttnn.ShardOrientation.ROW_MAJOR)
+
+    def nearest_32(x):
+        return int(math.ceil(x / 32) * 32)
+
+    w1_w3_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set,
+        (dim_in, nearest_32(dim_hidden / device.dram_grid_size().x)),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
     w1_w3_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
         w1_w3_shard_spec,
     )
 
-    if is_wormhole_b0():
-        w2_shard_spec = ttnn.ShardSpec(dram_core_range_set, (3584, 352), ttnn.ShardOrientation.ROW_MAJOR)
-    else:
-        assert is_blackhole()
-        w2_shard_spec = ttnn.ShardSpec(dram_core_range_set, (3584, 512), ttnn.ShardOrientation.ROW_MAJOR)
+    w2_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set,
+        (dim_hidden, nearest_32(dim_out / device.dram_grid_size().x)),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
     w2_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,

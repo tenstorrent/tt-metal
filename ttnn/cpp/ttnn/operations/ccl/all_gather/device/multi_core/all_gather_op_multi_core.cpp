@@ -16,7 +16,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 
 #include <sstream>
 #include <type_traits>
@@ -211,25 +211,25 @@ static void emit_sharded_tensor_kernel_rt_args(IDevice* d, Tensor const& tensor,
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }
 
-static bool shard_grid_is_transposed(Tensor const& t) {
+inline bool shard_grid_is_transposed(const Tensor& t) {
     TT_FATAL(
-        t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-            t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+            t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            t.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout {}.",
-        t.memory_config().memory_layout);
+        t.memory_config().memory_layout());
     bool shard_grid_transposed =
-        ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+        ((t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
           t.shard_spec()->orientation == ShardOrientation::ROW_MAJOR) ||
-         ((t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-           t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+         ((t.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+           t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) &&
           t.shard_spec()->orientation == ShardOrientation::COL_MAJOR));
     return shard_grid_transposed;
 }
 
 static void emit_sharded_tensor_kernel_ct_args(IDevice* d, const Tensor& tensor, std::vector<uint32_t>& args) {
     std::ranges::copy(
-        std::vector<uint32_t>{static_cast<uint32_t>(tensor.memory_config().memory_layout)}, std::back_inserter(args));
+        std::vector<uint32_t>{static_cast<uint32_t>(tensor.memory_config().memory_layout())}, std::back_inserter(args));
     std::ranges::copy(ShardedAddrGenArgBuilder::emit_ct_args(tensor), std::back_inserter(args));
 };
 
@@ -358,9 +358,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
     log_trace(tt::LogOp, "max_buffer_per_chunk: {}", max_buffer_per_chunk);
     log_trace(tt::LogOp, "max_pages_per_chunk: {}", max_pages_per_chunk);
-    bool rm = input_tensor.get_layout() == Layout::ROW_MAJOR;
-    bool width = input_tensor.get_padded_shape().rank() - 1 == dim;
-    tt::DataFormat df = datatype_to_dataformat_converter(input_tensor.get_dtype());
+    bool rm = input_tensor.layout() == Layout::ROW_MAJOR;
+    bool width = input_tensor.padded_shape().rank() - 1 == dim;
+    tt::DataFormat df = datatype_to_dataformat_converter(input_tensor.dtype());
 
     std::map<string, string> worker_defines;
     if (rm) {
@@ -749,19 +749,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
                 log_trace(tt::LogOp, "pages_per_buffer[{}]: {}", w, pages_per_buffer.at(w));
                 log_trace(tt::LogOp, "max_pages_per_eth_l1_sender_buffer: {}", max_pages_per_eth_l1_sender_buffer);
             }
-            TT_ASSERT(std::accumulate(pages_per_buffer.begin(), pages_per_buffer.end(), 0) == pages_per_link.at(i));
+            TT_ASSERT(std::accumulate(pages_per_buffer.begin(), pages_per_buffer.end(), 0u) == pages_per_link.at(i));
 
-            uint32_t bytes_per_chunk = 0, pages_per_chunk = 0, num_full_chunks = 0, rem_bytes = 0, rem_pages = 0;
+            uint32_t bytes_per_chunk = 0, pages_per_chunk = 0, num_full_chunks = 0, rem_pages = 0;
             uint32_t link_size_bytes = pages_per_link.at(i) * input_page_size;
             if (pages_per_link.at(i) >= max_pages_per_chunk) {
                 bytes_per_chunk = max_buffer_per_chunk;
                 pages_per_chunk = max_pages_per_chunk;
                 TT_ASSERT(max_buffer_per_chunk == max_pages_per_chunk * input_page_size);
                 num_full_chunks = link_size_bytes / bytes_per_chunk;
-                rem_bytes = link_size_bytes % bytes_per_chunk;
                 rem_pages = pages_per_link.at(i) % max_pages_per_chunk;
             } else {
-                rem_bytes = link_size_bytes;
                 rem_pages = pages_per_link.at(i);
             }
 

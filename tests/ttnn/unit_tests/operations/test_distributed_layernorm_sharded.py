@@ -194,7 +194,6 @@ def create_output_memory_config(output_core_grid, input_shape):
 
 def run_pre_allgather_layernorm(
     device,
-    use_program_cache,
     input_width,
     num_devices,
     is_rmsnorm,
@@ -292,7 +291,6 @@ def run_pre_allgather_layernorm(
 @pytest.mark.parametrize(("fuse_residual", "max_atol_ex2"), [(False, 0.04), (True, 0.09)])
 def test_pre_allgather_layernorm(
     device,
-    use_program_cache,
     input_width,
     num_devices,
     is_rmsnorm,
@@ -310,7 +308,6 @@ def test_pre_allgather_layernorm(
 ):
     run_pre_allgather_layernorm(
         device,
-        use_program_cache,
         input_width,
         num_devices,
         is_rmsnorm,
@@ -340,7 +337,6 @@ def test_pre_allgather_layernorm(
 @pytest.mark.parametrize(("min_pcc_ex2", "max_atol_ex2"), [(0.986, 0.04)])
 def test_pre_allgather_layernorm_1d_reduce(
     device,
-    use_program_cache,
     input_width,
     num_devices,
     is_rmsnorm,
@@ -356,7 +352,6 @@ def test_pre_allgather_layernorm_1d_reduce(
 ):
     run_pre_allgather_layernorm(
         device,
-        use_program_cache,
         input_width,
         num_devices,
         is_rmsnorm,
@@ -386,7 +381,6 @@ def test_pre_allgather_layernorm_1d_reduce(
 @pytest.mark.parametrize("core_grid", ((8, 2),))
 def test_post_allgather_layernorm(
     device,
-    use_program_cache,
     input_width,
     num_devices,
     is_rmsnorm,
@@ -477,7 +471,6 @@ def test_post_allgather_layernorm(
 )
 def test_simulated_distributed_layernorm(
     device,
-    use_program_cache,
     input_width,
     num_devices,
     is_rmsnorm,

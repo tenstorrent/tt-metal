@@ -17,16 +17,19 @@
 #include "stream_io_map.h"
 #include "tdma_xmov.h"
 #include "debug/dprint.h"
+#include "debug/stack_usage.h"
 #include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include <kernel_includes.hpp>
 #include <stdint.h>
 
-void kernel_launch(uint32_t kernel_base_addr) {
-    extern uint32_t __kernel_init_local_l1_base[];
-    extern uint32_t __fw_export_end_text[];
-    do_crt1((uint32_t tt_l1_ptr*)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base -
-                                  (uint32_t)__fw_export_end_text));
+extern "C" [[gnu::section(".start")]]
+uint32_t _start() {
+    // Enable GPREL optimizations.
+    asm("0: .reloc 0b, R_RISCV_NONE, __global_pointer$");
+    mark_stack_usage();
+    extern uint32_t __kernel_data_lma[];
+    do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
 
     noc_local_state_init(NOC_INDEX);
 
@@ -39,11 +42,10 @@ void kernel_launch(uint32_t kernel_base_addr) {
             WAYPOINT("NKFW");
             // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the
             // NOC interface is in a known idle state for the next kernel.
-            ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX));
-            ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX));
-            ASSERT(ncrisc_noc_nonposted_writes_flushed(NOC_INDEX));
-            ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX));
-            ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX));
+            ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX), DebugAssertNCriscNOCReadsFlushedTripped);
+            ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCNonpostedWritesSentTripped);
+            ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX), DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
+            ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
             WAYPOINT("NKFD");
         }
 
@@ -52,4 +54,5 @@ void kernel_launch(uint32_t kernel_base_addr) {
             ASSERT(erisc_info->channels[i].bytes_sent == 0);
         }
     }
+    return measure_stack_usage();
 }

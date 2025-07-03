@@ -6,13 +6,13 @@
 
 #include "command_queue_fixture.hpp"
 #include "env_lib.hpp"
-#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <gtest/gtest.h>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "impl/context/metal_context.hpp"
 #include "dispatch_test_utils.hpp"
 
 namespace tt::tt_metal {
@@ -71,8 +71,11 @@ protected:
 
     void SetUp() override {
         CommandQueueSingleCardProgramFixture::SetUp();
-        this->device_ = this->devices_[0];
-        this->initialize_seed();
+        if (!::testing::Test::IsSkipped()) {
+            // Parent may have skipped
+            this->device_ = this->devices_[0];
+            this->initialize_seed();
+        }
     }
 
     void initialize_seed() {
@@ -364,8 +367,11 @@ protected:
 
     void SetUp() override {
         CommandQueueSingleCardTraceFixture::SetUp();
-        this->device_ = this->devices_[0];
-        this->initialize_seed();
+        if (!::testing::Test::IsSkipped()) {
+            // Parent may have skipped
+            this->device_ = this->devices_[0];
+            this->initialize_seed();
+        }
     }
 
     uint32_t trace_programs() {

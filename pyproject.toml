@@ -16,17 +16,40 @@ dependencies = [
   "loguru>=0.6.0",
   "networkx>=3.1",
   "graphviz>=0.20.3",
-  "torch==2.2.1+cpu",
+  # The following dependencies are only needed when ENABLE_TRACY=ON (profiler builds)
+  # "pyyaml>=5.4",
+  # "click>=8.0",
+  # "pandas>=2.0.3",
+  # "seaborn>=0.13.2",
 ]
 requires-python = ">=3.10"
+keywords = ["metalium", "ttnn", "tt-metal", "machine learning", "tenstorrent", "libnuma", "libhwloc"]
+license = { text = "Apache-2.0" }
 description = "General compute framework for Tenstorrent devices"
-dynamic = ["version"]
+dynamic = ["version", "readme"]
+
+[project.urls]
+Homepage = "https://docs.tenstorrent.com/tt-metal/latest/ttnn"
+Documentation = "https://docs.tenstorrent.com/tt-metal/latest/ttnn"
+Repository = "https://github.com/tenstorrent/tt-metal"
+Issues = "https://github.com/tenstorrent/tt-metal/issues"
 
 [tool.black]
 line-length = 120
 include = '^.*(ttnn|tests/scripts|tests/ttnn|tests/tt_eager/python_api_testing|tt_eager/tt_lib|tests/scripts|models/demos|infra|.github)/.*\.py$'
 
+[tool.isort]
+profile = "black"
+line_length = 120
+skip_gitignore = true
+skip = ["__init__.py"]
+
 [tool.ruff]
 line-length = 120
 
 [tool.setuptools_scm]
+
+[tool.cibuildwheel]
+build = "cp310-manylinux_x86_64*"
+skip = "*-musllinux_*"
+build-verbosity = 2

@@ -6,9 +6,9 @@
 #include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <ctype.h>
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <fmt/base.h>
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
 #include <algorithm>
@@ -54,26 +54,17 @@ namespace {  // Helper functions
 // Helper function to get string rep of riscv type
 const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
     switch (type) {
-        case DebugBrisc: return "brisc";
+        case DebugBrisc: return " brisc";
         case DebugNCrisc: return "ncrisc";
         case DebugErisc: return "erisc";
         case DebugIErisc: return "ierisc";
-        case DebugSlaveIErisc: return "slave_ierisc";
+        case DebugSubordinateIErisc: return "subordinate_ierisc";
         case DebugTrisc0: return "trisc0";
         case DebugTrisc1: return "trisc1";
         case DebugTrisc2: return "trisc2";
         default: TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.str(), type);
     }
     return nullptr;
-}
-
-// Helper function to get stack size by riscv core type
-uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) {
-    auto stack_size = MetalContext::instance().hal().get_stack_size(type);
-    if (stack_size == 0xdeadbeef) {
-        TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
-    }
-    return stack_size;
 }
 
 // Helper function to determine core type from virtual coord. TODO: Remove this once we fix code types.
@@ -85,6 +76,14 @@ CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtu
     }
 
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+
+    const std::vector<tt::umd::CoreCoord>& translated_dram_cores =
+        soc_desc.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED);
+    if (std::find(translated_dram_cores.begin(), translated_dram_cores.end(), virtual_coord) !=
+        translated_dram_cores.end()) {
+        return CoreType::DRAM;
+    }
+
     CoreType core_type =
         soc_desc.translate_coord_to(virtual_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
     if (core_type == CoreType::TENSIX) {
@@ -95,6 +94,9 @@ CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtu
 
 // Helper function to convert noc coord -> virtual coord. TODO: Remove this once we fix code types.
 CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoord coord) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
+        return coord;
+    }
     auto grid_size = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).grid_size;
     if (coord.x >= grid_size.x || coord.y >= grid_size.y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
@@ -189,7 +191,7 @@ WatcherDeviceReader::WatcherDeviceReader(
         tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core :
-             tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                     device_id, eth_core, CoreType::ETH);
@@ -210,7 +212,7 @@ WatcherDeviceReader::~WatcherDeviceReader() {
         tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core :
-             tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                     device_id, eth_core, CoreType::ETH);
@@ -223,16 +225,20 @@ WatcherDeviceReader::~WatcherDeviceReader() {
             uint32_t num_events = read_data[0] - logical_core_to_eth_link_retraining_count[eth_core];
             if (num_events > 0) {
                 log_warning(
+                    tt::LogMetal,
                     "Device {} virtual ethernet core {}: Watcher detected {} link retraining events.",
                     device_id,
                     virtual_core,
                     num_events);
             }
-            fprintf(
-                f,
-                "%s\n",
-                fmt::format("\tDevice {} Ethernet Core {} retraining events: {}", device_id, virtual_core, num_events)
-                    .c_str());
+            if (f) {
+                fprintf(
+                    f,
+                    "%s\n",
+                    fmt::format(
+                        "\tDevice {} Ethernet Core {} retraining events: {}", device_id, virtual_core, num_events)
+                        .c_str());
+            }
         }
     }
 }
@@ -247,7 +253,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     TT_ASSERT(this->f != nullptr);
 
     if (f != stdout && f != stderr) {
-        log_info(LogLLRuntime, "Watcher checking device {}", device_id);
+        log_info(tt::LogMetal, "Watcher checking device {}", device_id);
     }
 
     // Clear per-dump info
@@ -278,18 +284,18 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
     // Dump eth cores
     for (const CoreCoord& eth_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
         CoreDescriptor logical_core = {eth_core, CoreType::ETH};
         DumpCore(logical_core, true);
     }
     for (const CoreCoord& eth_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreDescriptor logical_core = {eth_core, CoreType::ETH};
         DumpCore(logical_core, false);
     }
 
     for (auto k_id : used_kernel_names) {
-        fprintf(f, "k_id[%d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
+        fprintf(f, "k_id[%3d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
     }
 
     // Print stack usage report for this device/dump
@@ -298,36 +304,39 @@ void WatcherDeviceReader::Dump(FILE* file) {
         for (auto& risc_id_and_stack_info : highest_stack_usage) {
             stack_usage_info_t& info = risc_id_and_stack_info.second;
             const char* riscv_name = get_riscv_name(info.core.coord, risc_id_and_stack_info.first);
-            uint16_t stack_size = get_riscv_stack_size(info.core, risc_id_and_stack_info.first);
+            // Threshold of free space for warning.
+            constexpr uint32_t min_threshold = 64;
             fprintf(
                 f,
-                "\n\t%s highest stack usage: %d/%d, on core %s, running kernel %s",
+                "\n\t%s highest stack usage: %u bytes free, on core %s, running kernel %s",
                 riscv_name,
-                info.stack_usage,
-                stack_size,
+                info.stack_free,
                 info.core.coord.str().c_str(),
                 kernel_names[info.kernel_id].c_str());
-            if (info.stack_usage >= stack_size) {
+            if (info.stack_free == 0) {
+                // We had no free stack, this probably means we
+                // overflowed, but it could be a remarkable coincidence.
                 fprintf(f, " (OVERFLOW)");
                 log_fatal(
-                    "Watcher detected stack overflow on Device {} Core {}: {}! Kernel {} uses {}/{} of the stack.",
+                    tt::LogMetal,
+                    "Watcher detected stack overflow on Device {} Core {}: "
+                    "{}! Kernel {} uses (at least) all of the stack.",
                     device_id,
                     info.core.coord.str(),
                     riscv_name,
-                    kernel_names[info.kernel_id].c_str(),
-                    info.stack_usage,
-                    stack_size);
-            } else if (stack_size - info.stack_usage <= std::min(32, stack_size / 10)) {
+                    kernel_names[info.kernel_id].c_str());
+            } else if (info.stack_free < min_threshold) {
                 fprintf(f, " (Close to overflow)");
                 log_warning(
-                    "Watcher detected stack usage within 10\% of max on Device {} Core {}: {}! Kernel {} uses "
-                    "{}/{} of the stack.",
+                    tt::LogMetal,
+                    "Watcher detected stack had fewer than {} bytes free on Device {} Core {}: "
+                    "{}! Kernel {} leaves {} bytes unused.",
+                    min_threshold,
                     device_id,
                     info.core.coord.str(),
                     riscv_name,
                     kernel_names[info.kernel_id].c_str(),
-                    info.stack_usage,
-                    stack_size);
+                    info.stack_free);
             }
         }
         fprintf(f, "\n");
@@ -342,7 +351,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
         }
         paused_cores_str += "\n";
         fprintf(f, "%s", paused_cores_str.c_str());
-        log_info(LogLLRuntime, "{}Press ENTER to unpause core(s) and continue...", paused_cores_str);
+        log_info(tt::LogMetal, "{}Press ENTER to unpause core(s) and continue...", paused_cores_str);
         if (!tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_auto_unpause()) {
             while (std::cin.get() != '\n') {
                 ;
@@ -380,7 +389,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     virtual_core.type = logical_core.type;
 
     // Print device id, core coords (logical)
-    string core_type = is_eth_core ? (is_active_eth_core ? "active ethnet" : "idle ethnet") : "worker";
+    string core_type = is_eth_core ? (is_active_eth_core ? "acteth" : "idleth") : "worker";
     string core_coord_str = fmt::format(
         "core(x={:2},y={:2}) virtual(x={:2},y={:2})",
         logical_core.coord.x,
@@ -470,18 +479,18 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     if (is_eth_core) {
         fprintf(
             f,
-            "k_id:%d",
+            "k_id:%3d",
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]);
         if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
             fprintf(
                 f,
-                "|%d",
+                "|%3d",
                 mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]);
         }
     } else {
         fprintf(
             f,
-            "k_ids:%d|%d|%d",
+            "k_ids:%3d|%3d|%3d",
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0],
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1],
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]);
@@ -604,8 +613,8 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
 
     // If we logged an error, print to stdout and throw.
     if (!error_msg.empty()) {
-        log_warning("Watcher detected NOC error and stopped device:");
-        log_warning("{}: {}", core_str, error_msg);
+        log_warning(tt::LogMetal, "Watcher detected NOC error and stopped device:");
+        log_warning(tt::LogMetal, "{}: {}", core_str, error_msg);
         DumpWaypoints(core, mbox_data, true);
         DumpRingBuffer(core, mbox_data, true);
         LogRunningKernels(core, launch_msg);
@@ -616,32 +625,65 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
 }
 
 void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& core_str, const mailboxes_t* mbox_data) {
-    uint32_t launch_msg_read_ptr = mbox_data->launch_msg_rd_ptr;
     const launch_msg_t* launch_msg = get_valid_launch_message(mbox_data);
     const debug_assert_msg_t* assert_status = &mbox_data->watcher.assert_status;
     switch (assert_status->tripped) {
         case DebugAssertTripped: {
             // TODO: Get rid of this once #6098 is implemented.
-            std::string line_num_warning =
+            const string line_num_warning =
                 "Note that file name reporting is not yet implemented, and the reported line number for the assert may "
                 "be from a different file.";
-            string error_msg = fmt::format(
+            const string error_msg = fmt::format(
                 "{}: {} tripped an assert on line {}. Current kernel: {}. {}",
                 core_str,
                 get_riscv_name(core.coord, assert_status->which),
                 assert_status->line_num,
                 GetKernelName(core, launch_msg, assert_status->which).c_str(),
                 line_num_warning.c_str());
-            log_warning("Watcher stopped the device due to tripped assert, see watcher log for more details");
-            log_warning(error_msg.c_str());
-            DumpWaypoints(core, mbox_data, true);
-            DumpRingBuffer(core, mbox_data, true);
-            LogRunningKernels(core, launch_msg);
-            set_watcher_exception_message(error_msg);
-            TT_THROW("Watcher detected tripped assert and stopped device.");
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
             break;
         }
-        case DebugAssertOK:
+        case DebugAssertNCriscNOCReadsFlushedTripped: {
+            const string error_msg = fmt::format(
+                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
+                "NOC transactions (missing NOC reads flushed barrier). Current kernel: {}.",
+                core_str,
+                get_riscv_name(core.coord, assert_status->which),
+                GetKernelName(core, launch_msg, assert_status->which).c_str());
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
+            break;
+        }
+        case DebugAssertNCriscNOCNonpostedWritesSentTripped: {
+            const string error_msg = fmt::format(
+                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
+                "NOC transactions (missing NOC non-posted writes sent barrier). Current kernel: {}.",
+                core_str,
+                get_riscv_name(core.coord, assert_status->which),
+                GetKernelName(core, launch_msg, assert_status->which).c_str());
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
+            break;
+        }
+        case DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped: {
+            const string error_msg = fmt::format(
+                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
+                "NOC transactions (missing NOC non-posted atomics flushed barrier). Current kernel: {}.",
+                core_str,
+                get_riscv_name(core.coord, assert_status->which),
+                GetKernelName(core, launch_msg, assert_status->which).c_str());
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
+            break;
+        }
+        case DebugAssertNCriscNOCPostedWritesSentTripped: {
+            const string error_msg = fmt::format(
+                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
+                "NOC transactions (missing NOC posted writes sent barrier). Current kernel: {}.",
+                core_str,
+                get_riscv_name(core.coord, assert_status->which),
+                GetKernelName(core, launch_msg, assert_status->which).c_str());
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
+            break;
+        }
+        case DebugAssertOK: {
             if (assert_status->line_num != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
                 assert_status->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
                 TT_THROW(
@@ -651,6 +693,7 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& c
                     assert_status->line_num);
             }
             break;
+        }
         default:
             LogRunningKernels(core, launch_msg);
             TT_THROW(
@@ -658,6 +701,18 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& c
                 core.coord.str(),
                 assert_status->tripped);
     }
+}
+
+void WatcherDeviceReader::DumpAssertTrippedDetails(
+    CoreDescriptor& core, const string& error_msg, const mailboxes_t* mbox_data) {
+    log_warning(tt::LogMetal, "Watcher stopped the device due to tripped assert, see watcher log for more details");
+    log_warning(tt::LogMetal, "{}", error_msg);
+    DumpWaypoints(core, mbox_data, true);
+    DumpRingBuffer(core, mbox_data, true);
+    const launch_msg_t* launch_msg = get_valid_launch_message(mbox_data);
+    LogRunningKernels(core, launch_msg);
+    set_watcher_exception_message(error_msg);
+    TT_THROW("Watcher detected tripped assert and stopped device.");
 }
 
 void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor& core, const string& core_str, const mailboxes_t* mbox_data) {
@@ -670,8 +725,7 @@ void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor& core, const string& co
         } else if (pause > 1) {
             string error_reason = fmt::format(
                 "Watcher data corruption, pause state on core {} unknown code: {}.\n", core.coord.str(), pause);
-            log_warning(error_reason.c_str());
-            log_warning("{}: {}", core_str, error_reason);
+            log_warning(tt::LogMetal, "{}: {}", core_str, error_reason);
             DumpWaypoints(core, mbox_data, true);
             DumpRingBuffer(core, mbox_data, true);
             LogRunningKernels(core, get_valid_launch_message(mbox_data));
@@ -713,7 +767,7 @@ void WatcherDeviceReader::DumpRingBuffer(CoreDescriptor& /*core*/, const mailbox
     if (to_stdout) {
         if (!out.empty()) {
             out = string("Last ring buffer status: ") + out;
-            log_info(out.c_str());
+            log_info(tt::LogMetal, "{}", out);
         }
     } else {
         fprintf(f, "%s", out.c_str());
@@ -756,7 +810,7 @@ void WatcherDeviceReader::DumpRunState(CoreDescriptor& core, const launch_msg_t*
 void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxes_t* mbox_data) {
     bool is_eth = (core.type == CoreType::ETH);
     const launch_msg_t* launch_msg = get_valid_launch_message(mbox_data);
-    const slave_sync_msg_t* slave_sync = &mbox_data->slave_sync;
+    const subordinate_sync_msg_t* subordinate_sync = &mbox_data->subordinate_sync;
     fprintf(f, "rmsg:");
     if (launch_msg->kernel_config.mode == DISPATCH_MODE_DEV) {
         fprintf(f, "D");
@@ -828,18 +882,18 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
         }
     }
 
-    fprintf(f, " h_id:%d ", launch_msg->kernel_config.host_assigned_id);
+    fprintf(f, " h_id:%3d ", launch_msg->kernel_config.host_assigned_id);
 
     if (!is_eth) {
         fprintf(f, "smsg:");
-        DumpRunState(core, launch_msg, slave_sync->dm1);
-        DumpRunState(core, launch_msg, slave_sync->trisc0);
-        DumpRunState(core, launch_msg, slave_sync->trisc1);
-        DumpRunState(core, launch_msg, slave_sync->trisc2);
+        DumpRunState(core, launch_msg, subordinate_sync->dm1);
+        DumpRunState(core, launch_msg, subordinate_sync->trisc0);
+        DumpRunState(core, launch_msg, subordinate_sync->trisc1);
+        DumpRunState(core, launch_msg, subordinate_sync->trisc2);
         fprintf(f, " ");
     } else if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
         fprintf(f, "smsg:");
-        DumpRunState(core, launch_msg, slave_sync->dm1);
+        DumpRunState(core, launch_msg, subordinate_sync->dm1);
         fprintf(f, " ");
     }
 }
@@ -879,7 +933,7 @@ void WatcherDeviceReader::DumpWaypoints(CoreDescriptor& core, const mailboxes_t*
     // This function can either log the waypoint to the log or stdout.
     if (to_stdout) {
         out = string("Last waypoint: ") + out;
-        log_info(out.c_str());
+        log_info(tt::LogMetal, "{}", out);
     } else {
         fprintf(f, "%s ", out.c_str());
     }
@@ -910,11 +964,11 @@ void WatcherDeviceReader::DumpSyncRegs(CoreDescriptor& core) {
 void WatcherDeviceReader::DumpStackUsage(CoreDescriptor& core, const mailboxes_t* mbox_data) {
     const debug_stack_usage_t* stack_usage_mbox = &mbox_data->watcher.stack_usage;
     for (int risc_id = 0; risc_id < DebugNumUniqueRiscs; risc_id++) {
-        uint16_t stack_usage = stack_usage_mbox->max_usage[risc_id];
-        if (stack_usage != watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
-            if (stack_usage > highest_stack_usage[static_cast<riscv_id_t>(risc_id)].stack_usage) {
-                highest_stack_usage[static_cast<riscv_id_t>(risc_id)] = {
-                    core, stack_usage, stack_usage_mbox->watcher_kernel_id[risc_id]};
+        const auto &usage = stack_usage_mbox->cpu[risc_id];
+        if (usage.min_free) {
+            auto &slot = highest_stack_usage[static_cast<riscv_id_t>(risc_id)];
+            if (usage.min_free <= slot.stack_free) {
+                slot = {core, usage.min_free - 1, stack_usage_mbox->cpu[risc_id].watcher_kernel_id};
             }
         }
     }
@@ -980,14 +1034,25 @@ void WatcherDeviceReader::ValidateKernelIDs(CoreDescriptor& core, const launch_m
 }
 
 void WatcherDeviceReader::LogRunningKernels(CoreDescriptor& core, const launch_msg_t* launch_msg) {
-    log_info("While running kernels:");
+    log_info(tt::LogMetal, "While running kernels:");
     if (core.type == CoreType::ETH) {
-        log_info(" erisc : {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
-    } else {
-        log_info(" brisc : {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]]);
-        log_info(" ncrisc: {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]]);
         log_info(
-            " triscs: {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]]);
+            tt::LogMetal,
+            " erisc : {}",
+            kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
+    } else {
+        log_info(
+            tt::LogMetal,
+            " brisc : {}",
+            kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]]);
+        log_info(
+            tt::LogMetal,
+            " ncrisc: {}",
+            kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]]);
+        log_info(
+            tt::LogMetal,
+            " triscs: {}",
+            kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]]);
     }
 }
 
@@ -996,7 +1061,7 @@ string WatcherDeviceReader::GetKernelName(CoreDescriptor& core, const launch_msg
         case DebugBrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]];
         case DebugErisc:
         case DebugIErisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]];
-        case DebugSlaveIErisc:
+        case DebugSubordinateIErisc:
             return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]];
         case DebugNCrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]];
         case DebugTrisc0:

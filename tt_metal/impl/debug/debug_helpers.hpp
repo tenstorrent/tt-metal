@@ -6,7 +6,8 @@
 
 #include <set>
 
-#include <tt-metalium/dev_msgs.h>
+#include "dev_msgs.h"
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include "hostdevcommon/dprint_common.h"
 #include "impl/context/metal_context.hpp"
@@ -37,11 +38,11 @@ static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
         }
     }
     for (const auto& logical_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
     for (const auto& logical_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
 
@@ -56,7 +57,7 @@ static CoreDescriptorSet GetDispatchCores(chip_id_t device_id) {
     const auto& dispatch_core_config =
         tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-    tt::log_warning("Dispatch Core Type = {}", dispatch_core_type);
+    log_debug(tt::LogAlways, "Dispatch Core Type = {}", dispatch_core_type);
     for (auto logical_core : tt::get_logical_dispatch_cores(device_id, num_cqs, dispatch_core_config)) {
         dispatch_cores.insert({logical_core, dispatch_core_type});
     }
@@ -74,7 +75,7 @@ static tt::tt_metal::HalProgrammableCoreType get_programmable_core_type(CoreCoor
         tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
             device_id, virtual_core);
     auto active_ethernet_cores =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
     if (active_ethernet_cores.find(logical_core) != active_ethernet_cores.end()) {
         return tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     }
@@ -92,17 +93,23 @@ inline uint64_t GetDprintBufAddr(chip_id_t device_id, const CoreCoord& virtual_c
 #define DPRINT_NRISCVS 5
 #define DPRINT_NRISCVS_ETH 1
 
-inline int GetNumRiscs(const CoreDescriptor& core) {
+inline int GetNumRiscs(chip_id_t device_id, const CoreDescriptor& core) {
     if (core.type == CoreType::ETH) {
-        return (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE)
-                   ? DPRINT_NRISCVS_ETH + 1
-                   : DPRINT_NRISCVS_ETH;
+        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
+            // TODO: Update this to be `DPRINT_NRISCVS_ETH + 1` when active erisc0 is running Metal FW
+            auto logical_active_eths =
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
+            CoreCoord logical_eth(core.coord.x, core.coord.y);
+            return (logical_active_eths.find(logical_eth) != logical_active_eths.end()) ? DPRINT_NRISCVS_ETH
+                                                                                        : DPRINT_NRISCVS_ETH + 1;
+        }
+        return DPRINT_NRISCVS_ETH;
     } else {
         return DPRINT_NRISCVS;
     }
 }
 
-inline const std::string_view get_core_type_name(CoreType ct) {
+inline std::string_view get_core_type_name(CoreType ct) {
     switch (ct) {
         case CoreType::ARC: return "ARC";
         case CoreType::DRAM: return "DRAM";

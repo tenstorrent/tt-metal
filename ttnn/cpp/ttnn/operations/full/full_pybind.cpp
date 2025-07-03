@@ -9,7 +9,7 @@
 
 #include "full.hpp"
 #include "pybind11/cast.h"
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/full/device/full_device_operation.hpp"
 
 namespace ttnn::operations::full {
@@ -39,7 +39,6 @@ void bind_full_operation(py::module& module) {
         )doc",
         ttnn::moreh_full.base_name());
 
-    using FullType = decltype(ttnn::moreh_full);
     bind_registered_operation(
         module,
         ttnn::moreh_full,

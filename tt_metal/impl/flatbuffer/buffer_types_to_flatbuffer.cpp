@@ -24,7 +24,6 @@ flatbuffer::BufferType to_flatbuffer(BufferType type) {
 flatbuffer::TensorMemoryLayout to_flatbuffer(TensorMemoryLayout layout) {
     switch (layout) {
         case TensorMemoryLayout::INTERLEAVED: return flatbuffer::TensorMemoryLayout::Interleaved;
-        case TensorMemoryLayout::SINGLE_BANK: return flatbuffer::TensorMemoryLayout::SingleBank;
         case TensorMemoryLayout::HEIGHT_SHARDED: return flatbuffer::TensorMemoryLayout::HeightSharded;
         case TensorMemoryLayout::WIDTH_SHARDED: return flatbuffer::TensorMemoryLayout::WidthSharded;
         case TensorMemoryLayout::BLOCK_SHARDED: return flatbuffer::TensorMemoryLayout::BlockSharded;
@@ -35,7 +34,7 @@ flatbuffer::TensorMemoryLayout to_flatbuffer(TensorMemoryLayout layout) {
 // For page sizes, keep lambda usage consistent across types.
 static inline uint32_t to_flatbuffer(const uint32_t& value) { return value; }
 
-// Original type defined in circular_buffer_types.hpp
+// Original type defined in circular_buffer_config.hpp
 flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
     const CircularBufferConfig& config, flatbuffers::FlatBufferBuilder& builder) {
     // Convert optional arrays of various types to Flatbuffers vectors.
@@ -84,7 +83,7 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
         config.buffer_size());
 }
 
-// TODO: Opportunity to share with TTNN. This was straight up copied from tensor_types_to_flatbuffer.cpp
+// TODO: Opportunity to share with TTNN. This was straight up copied from tensor_spec_flatbuffer.cpp
 
 flatbuffer::ShardOrientation to_flatbuffer(ShardOrientation orientation) {
     switch (orientation) {

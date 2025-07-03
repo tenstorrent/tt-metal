@@ -10,7 +10,7 @@
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/small_vector.hpp>
+#include <tt_stl/small_vector.hpp>
 
 #include <umd/device/tt_core_coordinates.h>
 
@@ -45,7 +45,9 @@ struct CBFormatDescriptor {
     uint8_t buffer_index = 0;
     tt::DataFormat data_format = tt::DataFormat::Float32;
     uint32_t page_size = 0;
-    std::optional<TileDescriptor> tile;
+
+    // TODO: #21392 - Needs a program hash definition
+    // std::optional<TileDescriptor> tile;
 };
 
 struct CBDescriptor {
@@ -91,11 +93,13 @@ struct EthernetConfigDescriptor {
 };
 
 struct KernelDescriptor {
-    using CompileTimeArgs = tt::stl::SmallVector<uint32_t, 16>;
-    using Defines = tt::stl::SmallVector<std::pair<std::string, std::string>, 16>;
-    using CoreRuntimeArgs = tt::stl::SmallVector<uint32_t, 16>;
-    using RuntimeArgs = tt::stl::SmallVector<tt::stl::SmallVector<CoreRuntimeArgs, 8>, 8>;
-    using CommonRuntimeArgs = tt::stl::SmallVector<uint32_t, 16>;
+    // TODO: investigate using SmallVector here, using std::vector for now to abide size constraint
+    // in tt_stl/tt_stl/reflection.hpp:185:23
+    using CompileTimeArgs = std::vector<uint32_t>;
+    using Defines = std::vector<std::pair<std::string, std::string>>;
+    using CoreRuntimeArgs = std::vector<uint32_t>;
+    using RuntimeArgs = std::vector<std::vector<CoreRuntimeArgs>>;
+    using CommonRuntimeArgs = std::vector<uint32_t>;
     using ConfigDescriptor = std::variant<
         ReaderConfigDescriptor,
         WriterConfigDescriptor,
@@ -111,14 +115,13 @@ struct KernelDescriptor {
     CompileTimeArgs compile_time_args;
     Defines defines;
 
+    // triple-nested vectors, where runtime_args[i][j] is a vector of rt args for core(i, j)
     RuntimeArgs runtime_args;
     CommonRuntimeArgs common_runtime_args;
 
     std::optional<KernelBuildOptLevel> opt_level = std::nullopt;
 
     ConfigDescriptor config;
-
-    void reserve_runtime_args();
 };
 
 struct ProgramDescriptor {

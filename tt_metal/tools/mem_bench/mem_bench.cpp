@@ -23,7 +23,6 @@
 #include "device_utils.hpp"
 #include "host_utils.hpp"
 #include "tt-metalium/program.hpp"
-#include "system_memory_manager.hpp"
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
 #include "vector_aligned.hpp"
 #include "work_thread.hpp"
@@ -507,6 +506,7 @@ void register_full_benchmark_suite() {
             {32_KB},
             {1, 2},
             {1, 2},
+            {true},
         });
     ::benchmark::RegisterBenchmark(
         "Multiple MMIO Devices Reading (Same NUMA node)", mem_bench_multi_mmio_devices_reading_same_node)
@@ -557,7 +557,7 @@ int main(int argc, char* argv[]) {
     setenv("TT_METAL_SLOW_DISPATCH_MODE", "true", true);
     setenv("TT_METAL_CLEAR_L1", "1", true);
     // May be overridden by the user
-    setenv("TT_METAL_LOGGER_LEVEL", "FATAL", false);
+    setenv("TT_LOGGER_LEVEL", "FATAL", false);
 
     char arg0_default[] = "benchmark";
     char* args_default = arg0_default;

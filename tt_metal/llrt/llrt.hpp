@@ -14,6 +14,7 @@
 #include "core_coord.hpp"
 #include <tt_stl/span.hpp>
 // clang-format off
+#include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
 #include <umd/device/tt_xy_pair.h>
@@ -67,34 +68,26 @@ const ll_api::memory& get_risc_binary(
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 template <typename DType>
-void write_hex_vec_to_core(
-    chip_id_t chip,
-    const CoreCoord& core,
-    const std::vector<DType>& hex_vec,
-    uint64_t addr,
-    bool small_access = false) {
+void write_hex_vec_to_core(chip_id_t chip, const CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) {
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
+        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
 }
 template <typename DType>
-void write_hex_vec_to_core(
-    chip_id_t chip,
-    const CoreCoord& core,
-    tt::stl::Span<const DType> hex_vec,
-    uint64_t addr,
-    bool small_access = false) {
+void write_hex_vec_to_core(chip_id_t chip, const CoreCoord& core, tt::stl::Span<const DType> hex_vec, uint64_t addr) {
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
+        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
 }
 
 std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord& core, uint64_t addr, uint32_t size);
 
 CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord& ethernet_core);
 
+tt_metal::HalProgrammableCoreType get_core_type(chip_id_t chip_id, const CoreCoord& virtual_core);
+
+void send_reset_go_signal(chip_id_t chip, const CoreCoord& virtual_core);
+
 void write_launch_msg_to_core(
     chip_id_t chip, CoreCoord core, launch_msg_t* msg, go_msg_t* go_msg, uint64_t addr, bool send_go = true);
-
-void print_worker_cores(chip_id_t chip_id = 0);
 
 bool test_load_write_read_risc_binary(
     const ll_api::memory& mem,
@@ -112,6 +105,17 @@ namespace internal_ {
 
 void wait_until_cores_done(
     chip_id_t device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms = 0);
+
+// Send a message to the ethernet firmware mailbox, if supported
+// Possible message types can be queried from the Hal. See tt::tt_metal::FWMailboxMsg
+// Maximum number of args depends on the architecture. Args not provided will be set to zero.
+void send_msg_to_eth_mailbox(
+    chip_id_t device_id,
+    const CoreCoord& virtual_core,
+    tt_metal::FWMailboxMsg msg_type,
+    std::vector<uint32_t> args,
+    bool wait_for_ack = true,
+    int timeout_ms = 30000);
 
 }  // namespace internal_
 

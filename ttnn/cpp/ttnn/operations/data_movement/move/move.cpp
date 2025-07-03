@@ -29,7 +29,7 @@ bool can_deallocate(const Tensor& input_tensor) {
                 return false;
             }
         },
-        input_tensor.get_storage());
+        input_tensor.storage());
 }
 
 static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
@@ -52,22 +52,22 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
 
     auto output_tensor = create_device_tensor(
         TensorSpec(
-            input_tensor.get_logical_shape(),
+            input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
-                input_tensor.get_dtype(),
-                PageConfig(input_tensor.get_layout()),
+                input_tensor.dtype(),
+                PageConfig(input_tensor.layout()),
                 output_mem_config,
-                input_tensor.get_logical_shape(),
-                input_tensor.get_padded_shape())),
+                input_tensor.logical_shape(),
+                input_tensor.padded_shape())),
         input_tensor.device());
 
     // get_parallelization_strategy
-    bool move_within_same_mem_space = input_mem_config.buffer_type == output_mem_config.buffer_type;
+    bool move_within_same_mem_space = input_mem_config.buffer_type() == output_mem_config.buffer_type();
 
     // A tensor moved within L1 it is meant to reallocate at higher addresses and a tensor moved within DRAM is meant to
     // reallocate at lower addresses If the tensor is not allocated in a new address, there is no need to move the data
     if (move_within_same_mem_space and input_address == output_tensor.buffer()->address()) {
-        tt::log_debug(
+        log_debug(
             tt::LogOp,
             "WARNING: No space to move the tensor. Move op's input address and output address are equal: {}",
             input_address);
@@ -91,7 +91,7 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
         output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_l1_banks, hal::get_l1_alignment());
 
     if (move_within_same_mem_space) {
-        switch (input_mem_config.buffer_type) {
+        switch (input_mem_config.buffer_type()) {
             // If DRAM, inverse logic because memory is allocated bottom up
             case tt::tt_metal::BufferType::DRAM: {
                 non_overlap = output_tensor.buffer()->address() + size_per_bank <= input_address;
@@ -105,8 +105,8 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
 
     bool fits_in_cb =
         (output_tensor.device()->allocator()->get_base_allocator_addr(HalMemType::L1) + size_per_l1_bank) <=
-        (output_mem_config.buffer_type == tt::tt_metal::BufferType::L1 ? output_tensor.buffer()->address()
-                                                                       : output_tensor.device()->l1_size_per_core());
+        (output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 ? output_tensor.buffer()->address()
+                                                                         : output_tensor.device()->l1_size_per_core());
 
     MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE;
     if ((not non_overlap) and fits_in_cb and compute_with_storage_grid_size.x > 1 and
@@ -143,8 +143,8 @@ static inline Tensor move_sharded(
     auto shard_spec = input_tensor.shard_spec().value();
     auto shard_shape = shard_spec.shape;
     auto shard_grid = shard_spec.grid;
-    auto input_dtype = input_tensor.get_dtype();
-    auto input_layout = input_tensor.get_layout();
+    auto input_dtype = input_tensor.dtype();
+    auto input_layout = input_tensor.layout();
     // Special handling for Mesh vs single device. Needs to be consolidated after full
     // migration
 
@@ -154,20 +154,19 @@ static inline Tensor move_sharded(
         DeallocateBuffer(*input_tensor.buffer());
     }
     // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);
-    auto shard_mem_config = output_mem_config;
-    shard_mem_config.shard_spec = shard_spec;
+    auto shard_mem_config = output_mem_config.with_shard_spec(shard_spec);
     auto output_tensor = create_device_tensor(
         TensorSpec(
-            input_tensor.get_logical_shape(),
+            input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 input_dtype,
                 PageConfig(input_layout),
                 shard_mem_config,
-                input_tensor.get_logical_shape(),
-                input_tensor.get_padded_shape())),
+                input_tensor.logical_shape(),
+                input_tensor.padded_shape())),
         input_tensor.device());
     if (input_tensor.buffer()->address() == output_tensor.buffer()->address()) {
-        tt::log_debug(
+        log_debug(
             tt::LogOp,
             "WARNING: No space to move the tensor. Move op's input address and output address are equal: {}",
             input_address);

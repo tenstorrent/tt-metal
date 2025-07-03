@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpi.h"
 using namespace sfpi;
 
@@ -20,9 +20,7 @@ void rsub_init() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_rsub(uint value) {
-    Converter c_value;
-    c_value.u = value;
-    vFloat arg2 = c_value.f;
+    vFloat arg2 = Converter::as_float(value);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

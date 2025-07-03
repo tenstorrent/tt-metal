@@ -32,14 +32,14 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
@@ -122,7 +122,7 @@ uint32_t get_dram_bandwidth(tt::ARCH arch);
 
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        log_error("Test not supported w/ slow dispatch, exiting");
+        log_error(tt::LogTest, "Test not supported w/ slow dispatch, exiting");
     }
 
     bool pass = true;
@@ -343,14 +343,15 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:title:test_dram_offchip");
+    log_info(tt::LogTest, "CSV_MICROBENCHMARK:title:test_dram_offchip");
     log_info(
+        tt::LogTest,
         "CSV_INPUT:input-size:{}:access-type:{}:use-device-profiler:{}",
         input_size,
         ACCESS_TYPEToString(static_cast<ACCESS_TYPE>(access_type)),
         use_device_profiler);
-    log_info("CSV_OUTPUT:Bandwidth(GB/s):{:.3f}", avg_dram_bandwidth);
-    log_info("CSV_RESULT:pass:{}", pass);
+    log_info(tt::LogTest, "CSV_OUTPUT:Bandwidth(GB/s):{:.3f}", avg_dram_bandwidth);
+    log_info(tt::LogTest, "CSV_RESULT:pass:{}", pass);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

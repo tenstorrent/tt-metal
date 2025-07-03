@@ -20,7 +20,7 @@
 #include "debug_tools_test_utils.hpp"
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/xy_pair.h"
@@ -37,7 +37,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 void UpdateGoldenOutput(std::vector<string>& golden_output, const IDevice* device, const string& risc) {
     // Using wildcard characters in lieu of actual values for the virtual coordinates as virtual coordinates can vary
     // by machine
-    const string& device_core_risc = std::to_string(device->id()) + ":(x=*,y=*):" + risc + ": ";
+    const string& device_core_risc = std::to_string(device->id()) + ":(x=?,y=?):" + risc + ": ";
 
     const string& output_line_all_riscs = device_core_risc + "Printing on a RISC.";
     golden_output.push_back(output_line_all_riscs);
@@ -111,10 +111,6 @@ TEST_F(DPrintFixture, TensixTestPrintPrependDeviceCoreRisc) {
 }
 
 TEST_F(DPrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
-    if (this->arch_ == ARCH::BLACKHOLE) {  // TODO: Re-enable when this is supported on BH
-        log_info(tt::LogTest, "DPrint on BH active eth not yet supported");
-        GTEST_SKIP();
-    }
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
     for (IDevice* device : this->devices_) {

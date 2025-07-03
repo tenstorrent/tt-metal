@@ -15,7 +15,7 @@ namespace ttnn::operations::moreh::moreh_sum {
 MorehSumOperation::program_factory_t MorehSumOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Case for int32
-    const auto input_rank = tensor_args.input.get_padded_shape().rank();
+    const auto input_rank = tensor_args.input.padded_shape().rank();
 
     if (tensor_args.input.dtype() == DataType::INT32) {
         if (operation_attributes.dim == input_rank - 1) {
@@ -65,11 +65,11 @@ void MorehSumOperation::validate_on_program_cache_hit(
 MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return {tensor_args.output->get_tensor_spec()};
+        return {tensor_args.output->tensor_spec()};
     }
 
     const auto& input = tensor_args.input;
-    auto input_shape = input.get_logical_shape();
+    auto input_shape = input.logical_shape();
     if (input_shape.rank() < 2) {
         input_shape = input_shape.to_rank(2);
     }
@@ -109,9 +109,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
     return TensorSpec(
         output_shape,
         TensorLayout(
-            tensor_args.input.get_dtype(),
-            PageConfig(tensor_args.input.get_layout()),
-            operation_attributes.memory_config));
+            tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));
 };
 
 MorehSumOperation::tensor_return_value_t MorehSumOperation::create_output_tensors(

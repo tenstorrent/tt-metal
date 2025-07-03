@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "quantization.hpp"
-#include "ttnn/operations/copy.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 
 #include <cassert>
@@ -59,10 +60,10 @@ ttnn::DataType get_output_dtype(
 }
 
 void check_per_tensor_scale(const ttnn::Tensor& scale) {
-    const auto dtype = scale.get_dtype();
+    const auto dtype = scale.dtype();
     TT_FATAL(tt::tt_metal::is_floating_point(dtype), "Quantization only takes floating-point number scales");
     TT_FATAL(!tt::tt_metal::is_block_float(dtype), "Unsupported quantization scale data type");
-    TT_FATAL(scale.get_logical_volume() == 1u, "Per-tensor quantization only takes scalar-tensor scales");
+    TT_FATAL(scale.logical_volume() == 1u, "Per-tensor quantization only takes scalar-tensor scales");
 }
 
 // Explicitly delete variant overloads to prevent misusage
@@ -74,9 +75,9 @@ template <typename T>
 void check_per_tensor_scale(const T&) {}
 
 void check_per_tensor_zero_point(const ttnn::Tensor& zero_point) {
-    const auto dtype = zero_point.get_dtype();
+    const auto dtype = zero_point.dtype();
     TT_FATAL(dtype == ttnn::DataType::INT32, "Quantization only takes int32 zero-points for now");
-    TT_FATAL(zero_point.get_logical_volume() == 1u, "Per-tensor quantization only takes scalar-tensor zero-points");
+    TT_FATAL(zero_point.logical_volume() == 1u, "Per-tensor quantization only takes scalar-tensor zero-points");
 }
 
 template <typename... Ts>
@@ -92,27 +93,27 @@ void check_per_channel_tensor_args(
     const int32_t axis,
     const int32_t rank) {
     TT_FATAL(
-        scale_p != nullptr && scale_p->get_logical_shape().rank() == 1,
+        scale_p != nullptr && scale_p->logical_shape().rank() == 1,
         "Per-channel quantization expects 1D scale tensors");
     TT_FATAL(
-        zero_point_p != nullptr && zero_point_p->get_logical_shape().rank() == 1,
+        zero_point_p != nullptr && zero_point_p->logical_shape().rank() == 1,
         "Per-channel quantization expects 1D zero-point tensors");
     TT_FATAL(
-        scale_p->get_logical_shape() == zero_point_p->get_logical_shape(),
+        scale_p->logical_shape() == zero_point_p->logical_shape(),
         "Per-channel quantization expects scale & zero-point tensors of matching shapes");
     TT_FATAL(axis >= -rank && axis < rank, "Axis {} is outside the range [{}, {}]", axis, -rank, rank - 1);
     TT_FATAL(
-        input_tensor.get_logical_shape()[axis] == scale_p->get_logical_volume(),
+        input_tensor.logical_shape()[axis] == scale_p->logical_volume(),
         "Size of the scale tensor doesn't match the size of the input tensor along the given axis");
     TT_FATAL(
-        input_tensor.get_logical_shape()[axis] == zero_point_p->get_logical_volume(),
+        input_tensor.logical_shape()[axis] == zero_point_p->logical_volume(),
         "Size of the zero-point tensor doesn't match the size of the input tensor along the given axis");
 
-    const auto scale_dtype = scale_p->get_dtype();
+    const auto scale_dtype = scale_p->dtype();
     TT_FATAL(tt::tt_metal::is_floating_point(scale_dtype), "Quantization only takes floating-point number scales");
     TT_FATAL(!tt::tt_metal::is_block_float(scale_dtype), "Unsupported quantization scale data type");
 
-    const auto zero_point_dtype = zero_point_p->get_dtype();
+    const auto zero_point_dtype = zero_point_p->dtype();
     TT_FATAL(zero_point_dtype == ttnn::DataType::INT32, "Quantization only takes int32 zero-points for now");
 }
 
@@ -121,8 +122,8 @@ ttnn::Tensor reshape_per_channel_vector_args(
     // This function is internal use only, use asserts instead of TT_FATAL to convey intented usage
     const int32_t rank = static_cast<int32_t>(tensor_shape.rank());
     assert(axis >= -rank && axis < rank);
-    assert(vector.get_logical_shape().rank() == 1);
-    assert(vector.get_logical_volume() == tensor_shape[axis]);
+    assert(vector.logical_shape().rank() == 1);
+    assert(vector.logical_volume() == tensor_shape[axis]);
     const int32_t axis_normalized = (axis + rank) % rank;
     for (int32_t i = 0; i < rank; i++) {
         if (i != axis_normalized) {
@@ -130,9 +131,9 @@ ttnn::Tensor reshape_per_channel_vector_args(
         }
     }
     const ttnn::Tensor result = ttnn::reshape(ttnn::typecast(vector, out_dtype), tensor_shape);
-    assert(result.get_logical_shape().rank() == rank);
-    assert(result.get_logical_shape()[axis] == vector.get_logical_volume());
-    assert(result.get_logical_volume() == vector.get_logical_volume());
+    assert(result.logical_shape().rank() == rank);
+    assert(result.logical_shape()[axis] == vector.logical_volume());
+    assert(result.logical_volume() == vector.logical_volume());
     return result;
 }
 
@@ -149,11 +150,11 @@ Tensor QuantOp::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    const Tensor input_a = tt::tt_metal::is_block_float(input_tensor.get_dtype())
+    const Tensor input_a = tt::tt_metal::is_block_float(input_tensor.dtype())
                                ? ttnn::typecast(input_tensor, DataType::BFLOAT16)
                                : input_tensor;
 
-    const DataType a_dtype = input_a.get_dtype();
+    const DataType a_dtype = input_a.dtype();
     constexpr DataType c_dtype = DataType::INT32;
 
     TT_FATAL(tt::tt_metal::is_floating_point(a_dtype), "Quantize only takes floating-point number inputs");
@@ -170,7 +171,7 @@ Tensor QuantOp::invoke(
         const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point);
 
         const int32_t axis_v = axis.value();
-        const ttnn::Shape input_shape = input_a.get_logical_shape();
+        const ttnn::Shape& input_shape = input_a.logical_shape();
 
         check_per_channel_tensor_args(input_a, scale_p, zero_point_p, axis_v, input_shape.rank());
 
@@ -237,7 +238,7 @@ Tensor QuantOp::invoke(
                     ttnn::add(
                         queue_id,
                         input_scaled,
-                        zero_point.get_dtype() == a_dtype ? zero_point : ttnn::typecast(zero_point, a_dtype),
+                        zero_point.dtype() == a_dtype ? zero_point : ttnn::typecast(zero_point, a_dtype),
                         a_dtype,
                         std::nullopt,
                         std::nullopt,
@@ -253,7 +254,7 @@ Tensor QuantOp::invoke(
                 const Tensor input_scaled = ttnn::divide(
                     queue_id,
                     input_a,
-                    scale.get_dtype() == a_dtype ? scale : ttnn::typecast(scale, a_dtype),
+                    scale.dtype() == a_dtype ? scale : ttnn::typecast(scale, a_dtype),
                     a_dtype,
                     std::nullopt,
                     std::nullopt,
@@ -265,7 +266,7 @@ Tensor QuantOp::invoke(
                     ttnn::add(
                         queue_id,
                         input_scaled,
-                        zero_point.get_dtype() == a_dtype ? zero_point : ttnn::typecast(zero_point, a_dtype),
+                        zero_point.dtype() == a_dtype ? zero_point : ttnn::typecast(zero_point, a_dtype),
                         a_dtype,
                         std::nullopt,
                         std::nullopt,
@@ -290,7 +291,7 @@ Tensor RequantOp::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    const DataType a_dtype = input_tensor.get_dtype();
+    const DataType a_dtype = input_tensor.dtype();
     constexpr DataType c_dtype = DataType::INT32;
 
     TT_FATAL(a_dtype == DataType::INT32, "Requantize only supports int32 inputs for now");
@@ -309,7 +310,7 @@ Tensor RequantOp::invoke(
         const Tensor* out_zero_point_p = std::get_if<Tensor>(&out_zero_point);
 
         const int32_t axis_v = axis.value();
-        const ttnn::Shape input_shape = input_tensor.get_logical_shape();
+        const ttnn::Shape& input_shape = input_tensor.logical_shape();
 
         check_per_channel_tensor_args(input_tensor, in_scale_p, in_zero_point_p, axis_v, input_shape.rank());
         check_per_channel_tensor_args(input_tensor, out_scale_p, out_zero_point_p, axis_v, input_shape.rank());
@@ -433,7 +434,7 @@ Tensor DequantOp::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    const DataType a_dtype = input_tensor.get_dtype();
+    const DataType a_dtype = input_tensor.dtype();
     const DataType c_dtype = get_output_dtype(output_dtype, optional_output_tensor, DataType::BFLOAT16);
 
     TT_FATAL(a_dtype == DataType::INT32, "Dequantize only supports int32 inputs for now");
@@ -449,7 +450,7 @@ Tensor DequantOp::invoke(
         const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point);
 
         const int32_t axis_v = axis.value();
-        const ttnn::Shape input_shape = input_tensor.get_logical_shape();
+        const ttnn::Shape& input_shape = input_tensor.logical_shape();
 
         check_per_channel_tensor_args(input_tensor, scale_p, zero_point_p, axis_v, input_shape.rank());
 
@@ -562,7 +563,7 @@ Tensor DequantOp::invoke(
                 return ttnn::multiply(
                     queue_id,
                     input_shifted,
-                    scale.get_dtype() == c_dtype ? scale : ttnn::typecast(scale, c_dtype),
+                    scale.dtype() == c_dtype ? scale : ttnn::typecast(scale, c_dtype),
                     c_dtype,
                     memory_config,
                     optional_output_tensor,

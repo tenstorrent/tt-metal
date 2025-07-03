@@ -1,25 +1,19 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.tt_transformers.tt.common import (
-    PagedAttentionConfig,
-    get_block_size,
-    num_blocks_in_seq,
-)
-from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs, DecodersPrecision
-from models.tt_transformers.tt.generator import Generator
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer as ReferenceTransformer
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.tt_transformers.tt.common import PagedAttentionConfig, get_block_size, num_blocks_in_seq
+from models.tt_transformers.tt.generator import Generator
+from models.tt_transformers.tt.model import Transformer
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
@@ -62,7 +56,6 @@ def test_chunked_prefill_single_user(
     page_params,
     optimizations,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
     is_ci_env,

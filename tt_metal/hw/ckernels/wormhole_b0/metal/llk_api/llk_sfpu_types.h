@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,7 +50,9 @@ enum SfpuType {
     signbit,
     asin,
     acos,
+    acosh,
     atan,
+    asinh,
     erf,
     erfc,
     rsqrt,
@@ -70,8 +72,12 @@ enum SfpuType {
     requant_int32,
     dequant_int32,
     add_int32,
+    add_uint32,
     add_uint16,
     add1,
+    sub_int32,
+    sub_uint16,
+    mul_uint16,
     topk_local_sort,
     topk_merge,
     topk_rebuild,
@@ -79,6 +85,8 @@ enum SfpuType {
     unary_eq,
     unary_gt,
     unary_lt,
+    unary_ge,
+    unary_le,
     unary_max,
     unary_min,
     softplus,
@@ -89,6 +97,7 @@ enum SfpuType {
     bitwise_or,
     right_shift,
     floor,
+    trunc,
     left_shift,
     remainder,
     fmod,
@@ -97,6 +106,9 @@ enum SfpuType {
     reshuffle_rows,
     cumsum,
     fill,
+    alt_complex_rotate90,
     round,
     cpy_values,
+    gcd,
+    lcm,
 };

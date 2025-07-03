@@ -56,12 +56,12 @@ async def startup():
             trace_region_size=3211264,
             num_command_queues=2,
         )
-        ttnn.enable_program_cache(device)
+        device.enable_program_cache()
         model = YOLOv4PerformantRunner(device)
     else:
         device_id = 0
         device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
-        ttnn.enable_program_cache(device)
+        device.enable_program_cache()
         model = YOLOv4PerformantRunner(device)
 
 
@@ -186,7 +186,7 @@ async def objdetection_v2(file: UploadFile = File(...)):
     else:
         print("unknow image type")
         exit(-1)
-
+    image = image.permute(0, 3, 1, 2)
     t1 = time.time()
     response = model.run(image)
     t2 = time.time()

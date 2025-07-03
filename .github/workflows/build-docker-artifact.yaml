@@ -28,6 +28,9 @@ on:
       basic-dev-tag:
         description: "Docker tag for the basic dev Docker image for basic development"
         value: ${{ jobs.check-docker-images.outputs.basic-dev-tag }}
+      manylinux-tag:
+        description: "Docker tag for the manylinux Docker image for building TT-Metalium et al"
+        value: ${{ jobs.check-docker-images.outputs.manylinux-tag }}
   workflow_dispatch:
     inputs:
       distro:
@@ -55,6 +58,7 @@ env:
   CI_TEST_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-ci-test-${{ inputs.architecture }}
   DEV_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
   BASIC_DEV_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-basic-dev-${{ inputs.architecture }}
+  MANYLINUX_IMAGE_NAME: manylinux-${{ inputs.architecture }}
 
 jobs:
   check-docker-images:
@@ -68,6 +72,8 @@ jobs:
       dev-tag: ${{ steps.tags.outputs.dev-tag }}
       basic-dev-exists: ${{ steps.images.outputs.basic-dev-exists }}
       basic-dev-tag: ${{ steps.tags.outputs.basic-dev-tag }}
+      manylinux-exists: ${{ steps.images.outputs.manylinux-exists }}
+      manylinux-tag: ${{ steps.tags.outputs.manylinux-tag }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -79,11 +85,12 @@ jobs:
         run: |
           HASH=$(cat \
             .github/workflows/build-docker-artifact.yaml \
-            install_dependencies.sh \
             dockerfile/Dockerfile \
-            tt_metal/python_env/requirements-dev.txt \
             docs/requirements-docs.txt \
+            install_dependencies.sh \
             tests/sweep_framework/requirements-sweeps.txt \
+            tt_metal/python_env/requirements-dev.txt \
+            tt_metal/sfpi-version.sh \
             | sha1sum | cut -d' ' -f1)
           echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
@@ -91,6 +98,14 @@ jobs:
 
           BASIC_DEV_HASH=$(cat dockerfile/Dockerfile.basic-dev | sha1sum | cut -d' ' -f1)
           echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
+
+          MANYLINUX_HASH=$(cat \
+            .github/workflows/build-docker-artifact.yaml \
+            dockerfile/Dockerfile.manylinux \
+            install_dependencies.sh \
+            tt_metal/sfpi-version.sh \
+            | sha1sum | cut -d' ' -f1)
+          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
 
       # Assume if dev-tag exists, the others will exist too
       - name: Query images exist
@@ -116,12 +131,20 @@ jobs:
             echo "basic-dev-exists=false" >> $GITHUB_OUTPUT
           fi
 
+          if docker manifest inspect ${{ steps.tags.outputs.manylinux-tag }} > /dev/null 2>&1; then
+            echo "${{ steps.tags.outputs.manylinux-tag }} exists"
+            echo "manylinux-exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "${{ steps.tags.outputs.manylinux-tag }} does not exist"
+            echo "manylinux-exists=false" >> $GITHUB_OUTPUT
+          fi
+
   # Assume if dev-tag does not exist, the others will not exist either
   build-docker-image:
     name: "🐳️ Build images"
     needs: check-docker-images
-    if: needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true'
-    timeout-minutes: 45
+    if: needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true' || needs.check-docker-images.outputs.manylinux-exists != 'true'
+    timeout-minutes: 90
     runs-on: tt-beta-ubuntu-2204-large
     steps:
       - name: ⬇️ Checkout
@@ -181,6 +204,16 @@ jobs:
           build-args: UBUNTU_VERSION=${{ inputs.version }}
           cache-to: type=inline
           pull: true
+      - name: Build and push ManyLinux image
+        if: needs.check-docker-images.outputs.manylinux-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.manylinux
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.manylinux-tag }}
+          cache-to: type=inline
+          pull: true
 
   # Cannot use needs.build-docker-image to ensure this job runs sequentially after the build job because it would break when the build job is skipped
   # Instead, this setup causes the tag-latest job to lag one run behind the actual build.
@@ -189,30 +222,42 @@ jobs:
   tag-latest:
     name: "🔄 Update latest tag"
     needs: check-docker-images
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docker-images.outputs.dev-exists == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v4
+
+      - name: "Push latest CI Build tag"
+        if: needs.check-docker-images.outputs.ci-build-exists == 'true'
+        uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          registry: https://ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          docker-image-tag: ${{ needs.check-docker-images.outputs.ci-build-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Tag and push latest
-        run: |
-          IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}"
-          LATEST_TAG="${IMAGE_REPO}:latest"
-          DEV_TAG="${{ needs.check-docker-images.outputs.dev-tag }}"
-          echo "Tagging ${DEV_TAG} as ${LATEST_TAG}"
-          docker pull ${DEV_TAG}
-          docker tag ${DEV_TAG} ${LATEST_TAG}
-          docker push ${LATEST_TAG}
+      - name: "Push latest CI Test tag"
+        if: needs.check-docker-images.outputs.ci-test-exists == 'true'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ needs.check-docker-images.outputs.ci-test-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-          BASIC_DEV_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}"
-          BASIC_DEV_LATEST_TAG="${BASIC_DEV_IMAGE_REPO}:latest"
-          BASIC_DEV_TAG="${{ needs.check-docker-images.outputs.basic-dev-tag }}"
-          echo "Tagging ${BASIC_DEV_TAG} as ${BASIC_DEV_LATEST_TAG}"
-          docker pull ${BASIC_DEV_TAG}
-          docker tag ${BASIC_DEV_TAG} ${BASIC_DEV_LATEST_TAG}
-          docker push ${BASIC_DEV_LATEST_TAG}
+      - name: "Push latest Dev tag"
+        if: needs.check-docker-images.outputs.dev-exists == 'true'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ needs.check-docker-images.outputs.dev-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Push latest Basic Dev tag"
+        if: needs.check-docker-images.outputs.basic-dev-exists == 'true'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Push latest Manylinux tag"
+        if: needs.check-docker-images.outputs.manylinux-exists == 'true'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ needs.check-docker-images.outputs.manylinux-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -72,7 +72,7 @@ def main():
     st.title("Shakespeare Chat")
 
     # Specify the path to your executable
-    executable_path = "TT_METAL_LOGGER_LEVEL=FATAL"
+    executable_path = "TT_LOGGER_LEVEL=FATAL"
     executable_path += " /home/ubuntu/ML-Framework-CPP/build/sources/examples/nano_gpt/nano_gpt"
     executable_path += " -p transformer.msgpack"
     executable_path += " -s 5489 -e"

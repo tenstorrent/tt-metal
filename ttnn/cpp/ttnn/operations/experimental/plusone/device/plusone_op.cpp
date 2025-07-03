@@ -12,19 +12,18 @@ void PlusOne::validate_with_output_tensors(
     const auto& input_tensor_a = input_tensors.at(0);
 
     TT_FATAL(
-        input_tensor_a.get_dtype() == tt::tt_metal::DataType::INT32 ||
-            input_tensor_a.get_dtype() == tt::tt_metal::DataType::UINT32,
+        input_tensor_a.dtype() == tt::tt_metal::DataType::INT32 ||
+            input_tensor_a.dtype() == tt::tt_metal::DataType::UINT32,
         "Only INT32 and UINT32 is supported for inputs!");
     TT_FATAL(
-        input_tensor_a.get_layout() == tt::tt_metal::Layout::ROW_MAJOR,
-        "Only ROW_MAJOR layout is supported for inputs!");
+        input_tensor_a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for inputs!");
 
-    auto input_shape = input_tensor_a.get_padded_shape();
+    const auto& input_shape = input_tensor_a.padded_shape();
     TT_FATAL(input_shape.size() >= 1 && input_shape.size() <= 4, "must have 1 to 4 dimensions for input tensor");
 }
 
 std::vector<ttnn::TensorSpec> PlusOne::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(0).get_tensor_spec()};
+    return {input_tensors.at(0).tensor_spec()};
 }
 
 std::vector<Tensor> PlusOne::create_output_tensors(

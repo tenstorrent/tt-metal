@@ -40,13 +40,11 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
         for (const auto& buffer_addr : print_buffer_addrs) {
             std::vector<std::uint32_t> profile_buffer;
             uint32_t end_index;
-            uint32_t dropped_marker_counter;
             profile_buffer = tt::llrt::read_hex_vec_from_core(device_id, worker_core, buffer_addr, DPRINT_BUFFER_SIZE);
 
             end_index = profile_buffer[BUFFER_END_INDEX];
 
             TT_ASSERT(end_index < (DPRINT_BUFFER_SIZE / sizeof(uint32_t)));
-            dropped_marker_counter = profile_buffer[DROPPED_MARKER_COUNTER];
 
             uint32_t step = (end_index - MARKER_DATA_START) / TIMER_DATA_UINT32_SIZE;
             uint32_t timer_id = 1;

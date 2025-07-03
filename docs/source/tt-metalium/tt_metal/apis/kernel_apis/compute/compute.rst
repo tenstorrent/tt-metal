@@ -1,6 +1,8 @@
 Compute APIs
 ============
 
+This page will soon contain the summary of tt-metal concepts relevant for the usage of Compute API.
+
 .. toctree::
 
   copy_tile
@@ -32,6 +34,7 @@ Compute APIs
   erfinv_tile
   gelu_tile
   heaviside_tile
+  compute_kernel_hw_startup
   isinf_tile
   isnan_tile
   i0_tile
@@ -57,6 +60,10 @@ Compute APIs
   asin_tile
   atan_tile
   acos_tile
+
+  quant_tile
+  requant_tile
+  dequant_tile
 
   ltz_tile
   eqz_tile

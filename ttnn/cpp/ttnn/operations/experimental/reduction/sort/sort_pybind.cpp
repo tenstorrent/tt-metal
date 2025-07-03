@@ -6,7 +6,7 @@
 
 #include "sort.hpp"
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::experimental::reduction::sort::detail {
 namespace py = pybind11;
@@ -67,7 +67,7 @@ void bind_reduction_sort_operation(py::module& module) {
                const int8_t dim,
                const bool descending,
                const bool stable,
-               std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>> optional_output_tensors,
+               std::optional<std::tuple<ttnn::Tensor&, ttnn::Tensor&>> optional_output_tensors,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                QueueId queue_id) -> std::vector<ttnn::Tensor> {
                 return self(queue_id, input_tensor, dim, descending, stable, memory_config, optional_output_tensors);

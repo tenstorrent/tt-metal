@@ -10,16 +10,16 @@ namespace ttnn::operations::experimental::transformer {
 // NLP ConcatHeads op for decode
 void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     // input tensor and shape
     TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
-        input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 ||
-            input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16,
+        input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||
+            input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
         "Unsupported data format");
-    TT_FATAL(input_tensor.get_layout() == tt::tt_metal::Layout::TILE, "Error");
+    TT_FATAL(input_tensor.layout() == tt::tt_metal::Layout::TILE, "Error");
     TT_FATAL(input_shape[0] == 1, "seqlen=1 for decode");
     TT_FATAL(input_shape[1] <= 32, "currently only support less than 32 users");
     TT_FATAL(input_shape[2] == 32, "currently only support 32 padded heads");
@@ -27,10 +27,10 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
 
     // input tensor shard spec
     TT_FATAL(input_tensor.is_sharded(), "Error");
-    TT_FATAL(input_tensor.memory_config().memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+    TT_FATAL(input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     auto shard_spec = input_tensor.shard_spec().value();
-    TT_FATAL(shard_spec.shape[1] == input_tensor.get_padded_shape()[-1], "Error");
-    TT_FATAL(shard_spec.shape[0] == input_tensor.get_padded_shape()[-2], "Error");
+    TT_FATAL(shard_spec.shape[1] == input_tensor.padded_shape()[-1], "Error");
+    TT_FATAL(shard_spec.shape[0] == input_tensor.padded_shape()[-2], "Error");
     auto num_cores = shard_spec.grid.num_cores();
     TT_FATAL(num_cores == input_shape[1], "num_cores must be equal to num users");
     if (this->on_subcoregrids) {
@@ -41,7 +41,7 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
 std::vector<ttnn::TensorSpec> NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     auto num_heads = this->num_heads;
     auto sequence_length = input_shape[0];
@@ -69,12 +69,11 @@ std::vector<ttnn::TensorSpec> NLPConcatHeadsDecodeDeviceOperation::compute_outpu
     }
 
     tt::tt_metal::ShardSpec shard_spec{output_core_grid, {batch, head_dim}};
-    auto mem_config =
-        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, tt::tt_metal::BufferType::L1};
-    mem_config.shard_spec = shard_spec;
+    auto mem_config = tt::tt_metal::MemoryConfig{
+        tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
 
     return {TensorSpec(
-        output_shape, tt::tt_metal::TensorLayout(input_tensor.get_dtype(), tt::tt_metal::Layout::TILE, mem_config))};
+        output_shape, tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::Layout::TILE, mem_config))};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks NLPConcatHeadsDecodeDeviceOperation::create_program(

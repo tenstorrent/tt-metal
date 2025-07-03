@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "trace.hpp"
+
 #include <command_queue.hpp>
 #include <device.hpp>
 #include <host_api.hpp>
-#include <logger.hpp>
-#include <trace.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <cstddef>
 #include <memory>
@@ -50,8 +51,7 @@ void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffe
         cq.device()->id(),
         trace_region_size);
     // Commit trace to device DRAM
-    trace_buffer->buffer =
-        Buffer::create(cq.device(), padded_size, page_size, BufferType::TRACE, TensorMemoryLayout::INTERLEAVED);
+    trace_buffer->buffer = Buffer::create(cq.device(), padded_size, page_size, BufferType::TRACE);
     EnqueueWriteBuffer(cq, trace_buffer->buffer, trace_data, true /* blocking */);
     log_trace(
         LogMetalTrace,

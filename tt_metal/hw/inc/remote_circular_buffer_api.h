@@ -170,6 +170,21 @@ FORCE_INLINE void resize_remote_receiver_cb_interface(
             aligned_page_adjustment = (next_fifo_rd_ptr - fifo_rd_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
         }
         if (aligned_page_adjustment != 0) {
+            // wait for sender to send the credits first so ack ptr never go faster than sent ptr.
+            uint32_t pages_acked = 0;
+            uint32_t pages_sent = 0;
+            uint32_t num_pages_recv = 0;
+            volatile tt_l1_ptr uint32_t* pages_acked_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_cb_interface.aligned_pages_acked_ptr);
+            volatile tt_l1_ptr uint32_t* pages_sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                receiver_cb_interface.aligned_pages_acked_ptr - L1_ALIGNMENT);
+            do {
+                invalidate_l1_cache();
+                pages_acked = *pages_acked_ptr;
+                pages_sent = *pages_sent_ptr;
+                num_pages_recv = pages_sent - pages_acked;
+            } while (num_pages_recv < aligned_page_adjustment);
+
             if (nm == DM_DYNAMIC_NOC) {
                 detail::update_pages_acked<DM_DYNAMIC_NOC>(
                     receiver_cb_interface, aligned_page_adjustment, noc, posted, cmd_buf);
@@ -207,6 +222,7 @@ FORCE_INLINE void remote_cb_wait_front(uint32_t cb_id, uint32_t num_pages) {
     volatile tt_l1_ptr uint32_t* pages_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_acked_ptr - L1_ALIGNMENT);
     do {
+        invalidate_l1_cache();
         pages_acked = *pages_acked_ptr;
         pages_sent = *pages_sent_ptr;
         num_pages_recv = pages_sent - pages_acked;
@@ -239,8 +255,8 @@ FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
     uint32_t fifo_limit_page_aligned = remote_cb.fifo_limit_page_aligned;
     uint32_t fifo_start_addr = remote_cb.fifo_start_addr;
     uint32_t fifo_wr_ptr = remote_cb.fifo_wr_ptr;
+    uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.config_ptr)[3];
     if (fifo_wr_ptr + len_bytes >= fifo_limit_page_aligned) {
-        uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.config_ptr)[3];
         len_bytes += fifo_start_addr + fifo_size - fifo_limit_page_aligned;
     }
     uint32_t num_pages_wait = len_bytes / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
@@ -252,15 +268,15 @@ FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr + L1_ALIGNMENT);
 
     uint32_t num_receivers = remote_cb.num_receivers;
-    uint32_t fifo_aligned_num_pages =
-        (fifo_limit_page_aligned - fifo_start_addr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+    uint32_t fifo_aligned_num_pages = fifo_size / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
 
     for (uint32_t i = 0; i < num_receivers; ++i) {
         do {
+            invalidate_l1_cache();
             uint32_t pages_acked = *pages_acked_ptr;
             uint32_t pages_sent = *pages_sent_ptr;
             uint32_t sent_minus_ack = pages_sent - pages_acked;
-            free_pages = fifo_aligned_num_pages >= sent_minus_ack ? (fifo_aligned_num_pages - sent_minus_ack) : 0;
+            free_pages = fifo_aligned_num_pages - sent_minus_ack;
         } while (free_pages < num_pages_wait);
         pages_acked_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
         pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);

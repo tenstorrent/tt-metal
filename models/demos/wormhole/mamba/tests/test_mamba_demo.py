@@ -2,12 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+from difflib import SequenceMatcher
 from typing import List
 
-from models.demos.wormhole.mamba.demo.demo import run_mamba_demo
+import pytest
 
-from difflib import SequenceMatcher
+from models.demos.wormhole.mamba.demo.demo import run_mamba_demo
 
 
 @pytest.mark.timeout(1500)
@@ -40,7 +40,6 @@ def test_demo(
     expected_output: List[str],
     model_version,
     device,
-    use_program_cache,
     get_tt_cache_path,
     max_gen_len,
     prefill_chunk_size,

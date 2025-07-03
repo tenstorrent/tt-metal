@@ -55,8 +55,8 @@ void kernel_main() {
     channels_syncs_addrs->bytes_sent = 0;
     channels_syncs_addrs->receiver_ack = 0;
     // Semaphore is mapped to sender core
-    erisc::datamover::handshake::receiver_side_start(handshake_addr);
-    erisc::datamover::handshake::receiver_side_finish(handshake_addr);
+    erisc::datamover::handshake::deprecated::receiver_side_start(handshake_addr);
+    erisc::datamover::handshake::deprecated::receiver_side_finish(handshake_addr);
 
     *start_semaphore = 0;
 

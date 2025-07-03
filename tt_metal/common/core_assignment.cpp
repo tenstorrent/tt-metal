@@ -15,20 +15,6 @@
 namespace tt {
 namespace tt_metal {
 
-void reassign_dram_interface_cores_for_grayskull(
-    const std::vector<uint32_t>& non_worker_rows,
-    std::vector<CoreCoord>& dram_interface_workers,
-    uint32_t full_grid_size_y) {
-    // Reassign optimally placed DRAM Interface worker cores based on harvesting for GS
-    for (auto& coord : dram_interface_workers) {
-        // if row is harvested, move core down by 1
-        while (std::find(non_worker_rows.begin(), non_worker_rows.end(), coord.y) != non_worker_rows.end() and
-               coord.y < (full_grid_size_y - 1)) {
-            coord.y += 1;
-        }
-    }
-}
-
 std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
     const std::vector<uint32_t>& non_worker_rows,
     const std::vector<CoreCoord>& dram_interface_workers,
@@ -184,8 +170,8 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     std::vector<uint32_t> non_worker_cols;
     uint32_t max_worker_y_physical = 0;
     uint32_t min_worker_y_physical = std::numeric_limits<uint32_t>::max();
-    // For GS and WH, rows are harvested. Track them here.
-    if (arch == ARCH::GRAYSKULL or arch == ARCH::WORMHOLE_B0) {
+    // For WH, rows are harvested. Track them here.
+    if (arch == ARCH::WORMHOLE_B0) {
         for (int y_coord = 0; y_coord < full_grid_size_y; ++y_coord) {
             if (std::find(worker_phy_y.begin(), worker_phy_y.end(), y_coord) == worker_phy_y.end()) {
                 non_worker_rows.push_back(y_coord);
@@ -201,22 +187,15 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     std::vector<CoreCoord> dram_interface_workers;
     uint32_t num_dram_banks = dram_phy_coords.size();
     // Get the optimal dram -> worker configuration here.
-    // For GS, worker cores are placed below the DRAM Controller.
     // For WH, worker cores are placed to the right of the DRAM Controller.
     for (int i = 0; i < num_dram_banks; ++i) {
         auto dram_core = dram_phy_coords[i];
-        if (arch == ARCH::GRAYSKULL) {
-            dram_interface_workers.push_back(CoreCoord(dram_core.x, dram_core.y + 1));
-        } else if (arch == ARCH::WORMHOLE_B0 or arch == ARCH::BLACKHOLE) {
+        if (arch == ARCH::WORMHOLE_B0 or arch == ARCH::BLACKHOLE) {
             dram_interface_workers.push_back(CoreCoord(dram_core.x + 1, dram_core.y));
         }
     }
 
-    if (arch == ARCH::GRAYSKULL) {
-        // Reassign worker cores based on harvesting for GS.
-        reassign_dram_interface_cores_for_grayskull(non_worker_rows, dram_interface_workers, full_grid_size_y);
-        return dram_interface_workers;
-    } else if (arch == ARCH::WORMHOLE_B0) {
+    if (arch == ARCH::WORMHOLE_B0) {
         // Reassign worker cores based on harvesting for WH.
         return reassign_dram_interface_cores_for_wormhole(
             non_worker_rows, dram_interface_workers, num_dram_banks, max_worker_y_physical, min_worker_y_physical);

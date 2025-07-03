@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,8 @@ from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_
 
 
 def interleaved_to_sharded(x):
-    x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+    if x.get_layout() == ttnn.TILE_LAYOUT:
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
     nhw = x.shape[0] * x.shape[1] * x.shape[2]
     num_cores = determine_num_cores(nhw, x.shape[2])
@@ -20,7 +21,7 @@ def interleaved_to_sharded(x):
     return ttnn.reshard(x, shardspec) if x.is_sharded() else ttnn.interleaved_to_sharded(x, shardspec)
 
 
-class TtYolov10_Conv2D:
+class TtYolov10Conv2D:
     def __init__(
         self,
         conv,
@@ -37,6 +38,7 @@ class TtYolov10_Conv2D:
         config_override=None,
         auto_shard=False,
         deallocate_activation=False,
+        act_block_h_override=0,
     ):
         self.is_detect = is_detect
         self.is_dfl = is_dfl
@@ -71,11 +73,11 @@ class TtYolov10_Conv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            input_channels_alignment=32,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
             enable_subblock_padding=False,
             output_layout=ttnn.TILE_LAYOUT,
+            act_block_h_override=act_block_h_override,
         )
         if auto_shard:
             self.conv_config.shard_layout = None
@@ -86,13 +88,11 @@ class TtYolov10_Conv2D:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
         if "bias" in conv_pth:
-            bias = ttnn.from_device(conv_pth.bias)
-            self.bias = bias
+            self.bias = conv_pth.bias
         else:
             self.bias = None
 
-        weight = ttnn.from_device(conv_pth.weight)
-        self.weight = weight
+        self.weight = conv_pth.weight
 
     def __call__(self, x):
         if self.is_detect:
@@ -108,7 +108,7 @@ class TtYolov10_Conv2D:
             input_height = self.conv.input_height
             input_width = self.conv.input_width
 
-        [x, [output_height, output_width]] = ttnn.conv2d(
+        [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
@@ -125,7 +125,7 @@ class TtYolov10_Conv2D:
             groups=self.groups,
             compute_config=self.compute_config,
             return_output_dim=True,
-            return_weights_and_bias=False,
+            return_weights_and_bias=True,
         )
         return x
 
@@ -152,7 +152,7 @@ class Conv:
         self.enable_act = enable_act
         if not self.enable_identity:
             activation = "silu"
-        self.conv = TtYolov10_Conv2D(
+        self.conv = TtYolov10Conv2D(
             parameter.conv,
             conv_pt.conv,
             device=device,
@@ -169,13 +169,6 @@ class Conv:
 
     def __call__(self, x):
         x = self.conv(x)
-
-        if self.enable_act:
-            if x.is_sharded():
-                x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-            if self.enable_identity:
-                x = ttnn.identity(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-
         return x
 
 

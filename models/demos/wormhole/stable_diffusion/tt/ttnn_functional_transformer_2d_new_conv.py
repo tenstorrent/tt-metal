@@ -1,17 +1,17 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
 import os
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_basic_transformer_block import (
-    basic_transformer_block,
-)
+
+import torch
+
+import ttnn
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_basic_transformer_block import basic_transformer_block
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    pre_process_input,
-    permute_conv_parameters,
     dealloc_input,
+    permute_conv_parameters,
+    pre_process_input,
 )
 
 
@@ -243,8 +243,6 @@ class transformer_2d_model:
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            input_channels_alignment=32,
-            transpose_shards=False,
             reshard_if_not_optimal=False,
             override_sharding_config=True,
             core_grid=core_grid,
@@ -252,7 +250,8 @@ class transformer_2d_model:
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=self.compute_kernel_config.fp32_dest_acc_en,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
 
         conv_kwargs = {
@@ -327,10 +326,13 @@ class transformer_2d_model:
                     weights_dtype=ttnn.bfloat8_b,
                     activation="",
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                    input_channels_alignment=32,
-                    transpose_shards=False,
                 )
-
+                compute_config = ttnn.init_device_compute_kernel_config(
+                    self.device.arch(),
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
+                )
                 conv_kwargs_1 = {
                     "in_channels": self.proj_out_in_channels,
                     "out_channels": self.proj_out_out_channels,
@@ -373,6 +375,7 @@ class transformer_2d_model:
                     **conv_kwargs_1,
                     weight_tensor=self.proj_out_conv_weights,
                     bias_tensor=self.proj_out_conv_bias,
+                    compute_config=compute_config,
                     return_output_dim=True,
                     return_weights_and_bias=True,
                 )

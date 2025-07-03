@@ -4,10 +4,10 @@
 
 #include "all_reduce_create_qkv_heads.hpp"
 
-#include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "device/all_reduce_create_qkv_heads_op.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::experimental::ccl::transformer {
 
@@ -28,19 +28,20 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllRed
     std::optional<const uint32_t> num_kv_heads,
     const std::optional<const uint32_t> slice_size,
     const std::optional<MemoryConfig>& final_memory_config,
-    const std::optional<const DataType> dtype) {
+    const std::optional<const DataType> dtype,
+    bool use_noc1_only) {
     MemoryConfig out_memory_config = all_reduce_memory_config.value_or(input_tensor.memory_config());
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_heads);
     TT_FATAL(
-        input_tensor.get_padded_shape().size() == 4,
+        input_tensor.padded_shape().size() == 4,
         "Input Tensor dim must be 4 while given dim = {}",
-        input_tensor.get_padded_shape().size());
+        input_tensor.padded_shape().size());
     TT_FATAL(
-        input_tensor.get_padded_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0,
+        input_tensor.padded_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0,
         "Input shape {} must be divisible by num_heads + 2*num_kv_heads = {}",
-        input_tensor.get_padded_shape()[3],
+        input_tensor.padded_shape()[3],
         num_heads + 2 * num_kv_heads_val);
-    uint32_t head_dim = input_tensor.get_padded_shape()[3] / (num_heads + 2 * num_kv_heads_val);
+    uint32_t head_dim = input_tensor.padded_shape()[3] / (num_heads + 2 * num_kv_heads_val);
     return ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads(
         input_tensor,
         buffer_tensor,
@@ -53,6 +54,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllRed
         num_preferred_links,
         worker_subdevice_id_opt,
         head_dim,
+        use_noc1_only,
         num_heads,
         num_kv_heads.value_or(1),
         false,

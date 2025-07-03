@@ -2,28 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-##### Python imports #####
-import pytest
-from loguru import logger
-import os
 import itertools
+import os
 
-##### PyTorch imports #####
+import pytest
 import torch
 import torch.nn as nn
+from loguru import logger
 
-##### TTNN imports #####
 import ttnn
-from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
-from models.utility_functions import skip_for_grayskull
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.tt_transformers.tt.multimodal.llama_positional_embedding import (
-    TtLlamaPositionalEmbedding,
-)
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.multimodal.llama_positional_embedding import TtLlamaPositionalEmbedding
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 ##### Torch op #####
@@ -82,7 +73,6 @@ class PositionalEmbedding(nn.Module):
 )
 def test_positional_embedding_inference(
     mesh_device,
-    use_program_cache,
     reset_seeds,
     # Input params
     bsz,
@@ -95,7 +85,7 @@ def test_positional_embedding_inference(
     pcc_required = 0.9999
 
     model_args = ModelArgs(mesh_device)
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    state_dict = model_args.load_state_dict()
     first_layer_prefix = "vision_model.vision_encoder."
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))

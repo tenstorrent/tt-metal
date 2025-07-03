@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,11 +6,11 @@
 
 #include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <vector>
+#include <umd/device/tt_core_coordinates.h>
 
 namespace tt {
 namespace tt_metal {
@@ -18,9 +18,15 @@ class Program;
 }  // namespace tt_metal
 }  // namespace tt
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::distributed {
+class MeshDevice;
+}  // namespace tt::tt_metal::distributed
 
-tt::tt_fabric::FabricEriscDatamoverConfig get_1d_fabric_config();
+namespace tt::tt_fabric {
+class FabricNodeId;
+size_t get_tt_fabric_channel_buffer_size_bytes();
+size_t get_tt_fabric_packet_header_size_bytes();
+size_t get_tt_fabric_max_payload_size_bytes();
 
 // Used to get the run-time args for estabilishing connection with the fabric router.
 // The API appends the connection specific run-time args to the set of exisiting
@@ -37,19 +43,28 @@ tt::tt_fabric::FabricEriscDatamoverConfig get_1d_fabric_config();
 // worker_program: program handle
 // worker_core: worker core logical coordinates
 // worker_args: list of existing run-time args to which the connection args will be appended
+// core_type: core type which the worker will be running on
 //
 // Constraints:
-// 1. Currently the sender and reciever chip should be physically adjacent
+// 1. Currently the sender and reciever chip should be physically adjacent (for 1D)
 // 2. Currently the sender and reciever chip should be on the same mesh (for 1D)
 // 3. When connecting with 1D fabric routers, users are responsible for setting up the
 // connection appropriately. The API will not perform any checks to ensure that the
 // connection is indeed a 1D connection b/w all the workers.
 void append_fabric_connection_rt_args(
-    chip_id_t src_chip_id,
-    chip_id_t dst_chip_id,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
-    std::vector<uint32_t>& worker_args);
+    std::vector<uint32_t>& worker_args,
+    CoreType core_type = CoreType::WORKER);
+
+FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id);
+
+namespace experimental {
+size_t get_number_of_available_routing_planes(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t cluster_axis, size_t row_or_col);
+}
 
 }  // namespace tt::tt_fabric

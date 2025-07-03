@@ -22,10 +22,8 @@
 #include "debug/stack_usage.h"
 // clang-format on
 
-uint32_t halt_stack_ptr_save;
-
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
-volatile tt_l1_ptr uint8_t *const ncrisc_run = &mailboxes->slave_sync.dm1;
+volatile tt_l1_ptr uint8_t *const ncrisc_run = &mailboxes->subordinate_sync.dm1;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -62,7 +60,9 @@ namespace kernel_profiler {
 }
 #endif
 
-extern "C" void notify_brisc_and_halt_to_iram(uint32_t status, uint32_t first_argument);
+#ifdef ARCH_WORMHOLE
+extern "C" uint32_t wh_iram_trampoline(uint32_t status, uint32_t first_argument);
+#endif
 
 inline __attribute__((always_inline)) void notify_brisc_and_wait() {
     while (true) {
@@ -97,13 +97,7 @@ void l1_to_ncrisc_iram_copy_wait() {
 #endif
 
 int main(int argc, char *argv[]) {
-    // Workaround for tt-metal#16439, making sure gathering multiple instructions issued to Tensix is disabled
-    // Ncrisc does not issue Tensix instructions but to be consistent for all riscs around Tensix we disable it
-#ifdef ARCH_BLACKHOLE
-    disable_gathering();
-#endif
-    configure_l1_data_cache();
-    DIRTY_STACK_MEMORY();
+    configure_csr();
     WAYPOINT("I");
 
     do_crt1((uint32_t tt_l1_ptr *)MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH);
@@ -114,6 +108,8 @@ int main(int argc, char *argv[]) {
 
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+
+    signal_ncrisc_completion();
 
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
@@ -127,9 +123,10 @@ int main(int argc, char *argv[]) {
         uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM1);
         int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1);
 
+        uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
 #if defined(ARCH_WORMHOLE)
-        uint32_t ncrisc_kernel_src_address = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
-        l1_to_ncrisc_iram_copy(ncrisc_kernel_src_address >> 4, launch_msg->kernel_config.ncrisc_kernel_size16, 0);
+        static_assert(MEM_NCRISC_KERNEL_BASE == MEM_NCRISC_IRAM_BASE, "NCRISC kernel vma mismatch");
+        l1_to_ncrisc_iram_copy(kernel_lma >> 4, launch_msg->kernel_config.ncrisc_kernel_size16, 0);
 #endif
         uint32_t tt_l1_ptr* cb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
@@ -149,19 +146,19 @@ int main(int argc, char *argv[]) {
 
         WAYPOINT("R");
 
-        void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
-            (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
-#if !defined(ARCH_WORMHOLE)
+#if defined(ARCH_WORMHOLE)
+        // Jumping to IRAM causes bizarre behavior, so signal the
+        // brisc to reset the ncrisc to the IRAM address
+        uint32_t kernel_vma = MEM_NCRISC_KERNEL_BASE;
+        mailboxes->ncrisc_halt.resume_addr = kernel_vma;
+        auto stack_free = wh_iram_trampoline(RUN_SYNC_MSG_WAITING_FOR_RESET, kernel_lma - kernel_vma);
+#else
         while (*ncrisc_run != RUN_SYNC_MSG_GO) {
             invalidate_l1_cache();
         }
-        (*kernel_address)((uint32_t)kernel_address);
-#else
-        // Jumping to IRAM causes bizarre behavior, so signal the brisc to reset the ncrisc to the IRAM address.
-        mailboxes->ncrisc_halt.resume_addr = (uint32_t)kernel_init;
-        notify_brisc_and_halt_to_iram(RUN_SYNC_MSG_WAITING_FOR_RESET, (uint32_t)kernel_address);
+        auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
 #endif
-        RECORD_STACK_USAGE();
+        record_stack_usage(stack_free);
         WAYPOINT("D");
 
         signal_ncrisc_completion();

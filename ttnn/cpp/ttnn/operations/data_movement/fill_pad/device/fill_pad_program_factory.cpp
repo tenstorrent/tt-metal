@@ -29,17 +29,17 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
     tt::tt_metal::IDevice* device = input_tensor.device();
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     tt::tt_metal::Buffer* tens_buffer = input_tensor.buffer();
     TT_ASSERT(tens_buffer != nullptr, "Input buffer should be allocated on device!");
 
-    uint32_t input_element_size_bytes = data_type_to_size.at(input_tensor.get_dtype());
+    uint32_t input_element_size_bytes = data_type_to_size.at(input_tensor.dtype());
     uint32_t cb_page_size = input_element_size_bytes * tt::constants::FACE_HEIGHT + sizeof(uint16_t);
-    uint32_t height = input_tensor.get_logical_shape()[-2];
-    uint32_t width = input_tensor.get_logical_shape()[-1];
+    uint32_t height = input_tensor.logical_shape()[-2];
+    uint32_t width = input_tensor.logical_shape()[-1];
 
-    uint32_t problem_size = input_tensor.get_logical_shape()[-3];
+    uint32_t problem_size = input_tensor.logical_shape()[-3];
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -60,10 +60,12 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
 
     // pack bf16 vals
     uint32_t packed_fill_value = (std::uint32_t)fill_value;
-    if (input_tensor.get_dtype() == DataType::BFLOAT16) {
+    if (input_tensor.dtype() == DataType::BFLOAT16) {
         packed_fill_value = pack_two_bfloat16_into_uint32({bfloat16(fill_value), bfloat16(fill_value)});
-    } else if (input_tensor.get_dtype() == DataType::UINT16) {
+    } else if (input_tensor.dtype() == DataType::UINT16) {
         packed_fill_value = pack_two_uint16_into_uint32({fill_value, fill_value});
+    } else if (input_tensor.dtype() == DataType::FLOAT32) {
+        packed_fill_value = std::bit_cast<uint32_t>(fill_value);
     }
 
     uint32_t padded_height = tt::div_up(height, tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
@@ -72,7 +74,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
         padded_height / tt::constants::TILE_HEIGHT * padded_width / tt::constants::TILE_HEIGHT;
     uint32_t tiles_per_tile_row = padded_width / tt::constants::TILE_HEIGHT;
 
-    bool sharded = input_tensor.memory_config().memory_layout != TensorMemoryLayout::INTERLEAVED;
+    bool sharded = input_tensor.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
 
     // create kernel
     // reader compile time args

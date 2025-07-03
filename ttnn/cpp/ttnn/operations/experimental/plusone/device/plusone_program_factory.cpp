@@ -18,7 +18,7 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
     const Tensor& input, const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_unit_size = input.element_size();
 
     tt::tt_metal::IDevice* device = input.device();
@@ -31,7 +31,7 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
         num_cores = all_cores.num_cores();
     }
 
-    const auto& input_shape = input.get_padded_shape();
+    const auto& input_shape = input.padded_shape();
     uint32_t W = input_shape[-1];
     uint32_t H = 1;
     if (input_shape.size() > 1) {

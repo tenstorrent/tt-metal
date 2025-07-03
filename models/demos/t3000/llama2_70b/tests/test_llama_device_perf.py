@@ -3,15 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+
 import pytest
-from models.utility_functions import skip_for_grayskull
-from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check_mesh_device
-from models.demos.t3000.llama2_70b.tests.test_llama_model import run_test_LlamaModel_inference
+
+from models.demos.t3000.llama2_70b.tests.test_llama_model import (
+    DEVICE_PERF_START_SIGNPOST,
+    run_test_LlamaModel_inference,
+)
 from models.demos.t3000.llama2_70b.tests.test_llama_model_t3000 import N_LAYERS_TO_PCC
-from models.demos.t3000.llama2_70b.tests.test_llama_model import DEVICE_PERF_START_SIGNPOST
+from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
 from models.demos.t3000.mixtral8x7b.scripts.op_perf_results import main as calculate_op_perf_results
-from tt_metal.tools.profiler.process_model_log import run_device_profiler, get_latest_ops_log_filename
 from models.perf.device_perf_utils import check_device_perf
+from models.utility_functions import skip_for_grayskull
+from tt_metal.tools.profiler.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
 
 @pytest.mark.parametrize(
@@ -59,7 +63,6 @@ def test_run_device_perf_llama(
     n_layers,
     t3k_mesh_device,
     llama_version,
-    use_program_cache,
 ):
     max_batch_size = batch if seq_len == 1 else 16  # max_batch_size is 16 for prefill
     max_context_len = {16: 8192, 32: 4096}[max_batch_size]  # set max context depending on max batch

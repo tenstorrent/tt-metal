@@ -31,13 +31,13 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
@@ -164,7 +164,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
         const std::array rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc};
 
-        log_info("core: {}, vc: {}", core, vc);
+        log_info(tt::LogTest, "core: {}, vc: {}", core, vc);
 
         tt_metal::SetRuntimeArgs(program, reader_kernel, core, rt_args);
     }
@@ -265,7 +265,7 @@ void get_optimal_dram_bank_to_reader_assignment(
 
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        log_error("Test not supported w/ slow dispatch, exiting");
+        log_error(tt::LogTest, "Test not supported w/ slow dispatch, exiting");
     }
 
     bool pass = true;
@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
     uint32_t num_banks = 1;
     uint32_t bank_start_id = 1;
 
-    log_info("start DRAM benchmark");
+    log_info(tt::LogTest, "start DRAM benchmark");
 
     try {
         ////////////////////////////////////////////////////////////////////////////
@@ -392,7 +392,7 @@ int main(int argc, char** argv) {
 
         for (auto core : all_cores_list) {
             auto virtual_core = device->worker_core_from_logical_core(core);
-            log_info("logical core: {}, virtual core: {}", core, virtual_core);
+            log_info(tt::LogTest, "logical core: {}, virtual core: {}", core, virtual_core);
         }
 
         log_info(
@@ -454,7 +454,7 @@ int main(int argc, char** argv) {
             auto t_begin = std::chrono::steady_clock::now();
             EnqueueProgram(device->command_queue(), program, false);
             Finish(device->command_queue());
-            tt_metal::DumpDeviceProfileResults(device, program);
+            tt_metal::detail::DumpDeviceProfileResults(device);
             auto t_end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));

@@ -40,12 +40,13 @@ show_help() {
     echo "  --toolchain-path                 Set path to CMake toolchain file."
     echo "  --configure-only                 Only configure the project, do not build."
     echo "  --enable-coverage                Instrument the binaries for code coverage."
+    echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
 }
 
 clean() {
     echo "INFO: Removing build artifacts!"
-    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build built
+    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build built .cpmcache
     rm -rf ~/.cache/tt-metal-cache /tmp/tt-metal-cache
     if [[ ! -z $TT_METAL_CACHE ]]; then
         echo "User has TT_METAL_CACHE set, please make sure you delete it in order to delete all artifacts!"
@@ -71,7 +72,6 @@ light_metal_trace="ON"
 build_all="OFF"
 cxx_compiler_path=""
 cpm_source_cache=""
-cpm_use_local_packages="OFF"
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
@@ -84,6 +84,7 @@ fi
 
 configure_only="OFF"
 enable_coverage="OFF"
+enable_distributed="ON"
 with_python_bindings="ON"
 
 declare -a cmake_args
@@ -120,6 +121,7 @@ ttnn-shared-sub-libs
 toolchain-path:
 configure-only
 enable-coverage
+without-distributed
 without-python-bindings
 "
 
@@ -148,6 +150,8 @@ while true; do
             enable_time_trace="ON";;
         --enable-coverage)
             enable_coverage="ON";;
+        --without-distributed)
+            enable_distributed="OFF";;
 	--build-dir)
             build_dir="$2";shift;;
         -b|--build-type)
@@ -186,8 +190,6 @@ while true; do
             cxx_compiler_path="$2";shift;;
         --cpm-source-cache)
             cpm_source_cache="$2";shift;;
-        --cpm-use-local-packages)
-            cpm_use_local_packages="ON";;
         --c-compiler-path)
             c_compiler_path="$2";shift;;
         --toolchain-path)
@@ -253,6 +255,7 @@ echo "INFO: Build tests: $build_tests"
 echo "INFO: Enable Unity builds: $unity_builds"
 echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
+echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 
 # Prepare cmake arguments
@@ -275,13 +278,7 @@ if [ "$cpm_source_cache" != "" ]; then
     cmake_args+=("-DCPM_SOURCE_CACHE=$cpm_source_cache")
 fi
 
-if [ "$cpm_use_local_packages" = "ON" ]; then
-    echo "INFO: CPM_USE_LOCAL_PACKAGES: $cpm_use_local_packages"
-    cmake_args+=("-DCPM_USE_LOCAL_PACKAGES=ON")
-fi
-
 if [ "$enable_ccache" = "ON" ]; then
-    cmake_args+=("-DCMAKE_DISABLE_PRECOMPILE_HEADERS=TRUE")
     cmake_args+=("-DENABLE_CCACHE=TRUE")
 fi
 
@@ -366,6 +363,12 @@ if [ "$with_python_bindings" = "ON" ]; then
     cmake_args+=("-DWITH_PYTHON_BINDINGS=ON")
 else
     cmake_args+=("-DWITH_PYTHON_BINDINGS=OFF")
+fi
+
+if [ "$enable_distributed" = "ON" ]; then
+    cmake_args+=("-DENABLE_DISTRIBUTED=ON")
+else
+    cmake_args+=("-DENABLE_DISTRIBUTED=OFF")
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother

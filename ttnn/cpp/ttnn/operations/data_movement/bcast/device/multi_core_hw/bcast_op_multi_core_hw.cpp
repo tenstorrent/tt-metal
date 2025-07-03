@@ -4,7 +4,7 @@
 
 #include <tt-metalium/buffer.hpp>
 
-#include "cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
+#include "ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -19,8 +19,8 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks bcast_multi_core_hw(
     const Tensor& a, const Tensor& b, const Tensor& output, BcastOpMath bcast_math, bool inplace) {
-    const auto ashape = a.get_padded_shape();
-    const auto bshape = b.get_padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
@@ -53,9 +53,9 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
         shard_spec = output.shard_spec().value();
     }
 
-    tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat src1_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat src1_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
     uint32_t src1_single_tile_size = tt::tt_metal::detail::TileSize(src1_cb_data_format);
@@ -237,8 +237,8 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
 
         auto dst_buffer = output_tensor.buffer();
 
-        const auto ashape = input_tensors.at(0).get_padded_shape();
-        const auto bshape = input_tensors.at(1).get_padded_shape();
+        const auto ashape = input_tensors.at(0).padded_shape();
+        const auto bshape = input_tensors.at(1).padded_shape();
         uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
         uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
         uint32_t H = ashape[-2];

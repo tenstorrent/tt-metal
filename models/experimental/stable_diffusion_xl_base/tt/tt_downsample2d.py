@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare
 
 
 class TtDownsample2D(nn.Module):
-    def __init__(self, device, state_dict, module_path, stride, padding, dilation, groups):
+    def __init__(self, device, state_dict, module_path, stride, padding, dilation, groups, model_config):
         super().__init__()
 
         self.device = device
@@ -21,15 +21,20 @@ class TtDownsample2D(nn.Module):
         weights = state_dict[f"{module_path}.conv.weight"]
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        self.compute_config, self.conv_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
-            device, weights, bias, ttnn.bfloat8_b
+        self.conv_config = model_config.get_conv_config(conv_path=module_path)
+        self.compute_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
+            device,
+            weights,
+            bias,
+            self.conv_config.weights_dtype,
+            fp32_dest_acc_en=(self.conv_config.weights_dtype == ttnn.bfloat8_b)
+            and (self.conv_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
-        self.conv_config.deallocate_activation = False
 
     def forward(self, hidden_states, input_shape):
         B, C, H, W = input_shape
 
-        [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
+        [hidden_states, [H, W], [self.tt_weights, self.tt_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_weights,
             in_channels=self.conv_params["input_channels"],
@@ -51,13 +56,6 @@ class TtDownsample2D(nn.Module):
             return_weights_and_bias=True,
         )
         C = self.conv_params["output_channels"]
-
-        # reuse of weights produces pcc issues
-        # self.tt_weights = d_w
-        # self.tt_bias = d_b
-
-        # self.conv_config.preprocess_weights_on_device = False
-        # self.conv_config.always_preprocess_weights = False
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         return hidden_states, [C, H, W]

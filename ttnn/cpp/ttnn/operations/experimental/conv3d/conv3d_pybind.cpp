@@ -2,18 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-#include "cpp/pybind11/decorators.hpp"
-
 #include "conv3d_pybind.hpp"
-#include "conv3d.hpp"
-#include "ttnn/types.hpp"
 
-namespace py = pybind11;
+#include <optional>
+
+#include <fmt/format.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "conv3d.hpp"
+#include "ttnn-pybind/decorators.hpp"
+#include "ttnn/types.hpp"
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::experimental::conv3d::detail {
 
-void py_bind_conv3d(pybind11::module& module) {
+void py_bind_conv3d(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::experimental::conv3d,
@@ -57,46 +61,46 @@ void py_bind_conv3d(pybind11::module& module) {
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("queue_id") = 0});
 
-    py::class_<Conv3dConfig> py_conv3d_config = py::class_<Conv3dConfig>(
-                                                    module,
-                                                    "Conv3dConfig",
-                                                    R"doc(
+    auto py_conv3d_config = py::class_<Conv3dConfig>(
+                                module,
+                                "Conv3dConfig",
+                                R"doc(
                             Configuration for the Conv3D operation.
                             )doc")
-                                                    .def(py::init<>())
-                                                    .def(
-                                                        py::init<
-                                                            DataType,
-                                                            DataType,
-                                                            Layout,
-                                                            uint32_t,
-                                                            uint32_t,
-                                                            uint32_t,
-                                                            uint32_t,
-                                                            uint32_t,
-                                                            uint32_t,
-                                                            const std::array<uint32_t, 3>&,
-                                                            const std::array<uint32_t, 3>&,
-                                                            const std::array<uint32_t, 3>&,
-                                                            const std::string&,
-                                                            uint32_t,
-                                                            CoreCoord>(),
-                                                        py::kw_only(),
-                                                        py::arg("dtype") = DataType::BFLOAT16,
-                                                        py::arg("weights_dtype") = DataType::BFLOAT16,
-                                                        py::arg("output_layout") = Layout::ROW_MAJOR,
-                                                        py::arg("T_out_block") = 1,
-                                                        py::arg("W_out_block") = 1,
-                                                        py::arg("H_out_block") = 1,
-                                                        py::arg("C_out_block") = 0,
-                                                        py::arg("C_in_block") = 0,
-                                                        py::arg("output_channels"),
-                                                        py::arg("kernel_size"),
-                                                        py::arg("stride"),
-                                                        py::arg("padding"),
-                                                        py::arg("padding_mode") = "zeros",
-                                                        py::arg("groups") = 1,
-                                                        py::arg("compute_with_storage_grid_size") = CoreCoord{1, 1});
+                                .def(py::init<>())
+                                .def(
+                                    py::init<
+                                        DataType,
+                                        DataType,
+                                        Layout,
+                                        uint32_t,
+                                        uint32_t,
+                                        uint32_t,
+                                        uint32_t,
+                                        uint32_t,
+                                        uint32_t,
+                                        const std::array<uint32_t, 3>&,
+                                        const std::array<uint32_t, 3>&,
+                                        const std::array<uint32_t, 3>&,
+                                        const std::string&,
+                                        uint32_t,
+                                        CoreCoord>(),
+                                    py::kw_only(),
+                                    py::arg("dtype") = DataType::BFLOAT16,
+                                    py::arg("weights_dtype") = DataType::BFLOAT16,
+                                    py::arg("output_layout") = Layout::ROW_MAJOR,
+                                    py::arg("T_out_block") = 1,
+                                    py::arg("W_out_block") = 1,
+                                    py::arg("H_out_block") = 1,
+                                    py::arg("C_out_block") = 0,
+                                    py::arg("C_in_block") = 0,
+                                    py::arg("output_channels"),
+                                    py::arg("kernel_size"),
+                                    py::arg("stride"),
+                                    py::arg("padding"),
+                                    py::arg("padding_mode") = "zeros",
+                                    py::arg("groups") = 1,
+                                    py::arg("compute_with_storage_grid_size") = CoreCoord{1, 1});
 
     py_conv3d_config.def_readwrite("dtype", &Conv3dConfig::dtype, "");
     py_conv3d_config.def_readwrite("weights_dtype", &Conv3dConfig::weights_dtype, "");

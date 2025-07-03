@@ -10,6 +10,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 // #include "debug/dprint.h"
+#include "compute_kernel_api/untilize.h"
 
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"
@@ -18,11 +19,10 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 #define DEBUG_PRINT 0
-// #include "debug_macros.h"
 
 inline void tilize_in(
     uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
-    tilize_init_short(in_cb_id, in_block_w, out_cb_id);
+    tilize_init(in_cb_id, in_block_w, out_cb_id);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
             cb_wait_front(in_cb_id, in_block_w);
@@ -86,7 +86,7 @@ void MAIN {
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(11);          // inner row block size in tiles
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(12);          // inner column block size in tiles
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(13);  // out_subblock_h * out_subblock_w;
-    constexpr bool tilize_in0 = get_compile_time_arg_val(14);
+    constexpr bool height_sharded = get_compile_time_arg_val(14);
     constexpr bool untilize_out = get_compile_time_arg_val(15);
     constexpr uint32_t in0_cb_id = get_compile_time_arg_val(18);
     constexpr uint32_t in1_cb_id = get_compile_time_arg_val(19);
@@ -116,7 +116,7 @@ void MAIN {
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
 #endif
 
-    constexpr uint32_t mm_in0_cb_id = tilize_in0 ? tilized_in0_cb_id : in0_cb_id;
+    constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
 
 #ifdef SPLIT_READER
     constexpr uint32_t in0_num_subblocks_read_last = in0_num_subblocks / 2;
@@ -134,7 +134,7 @@ void MAIN {
     // in1 num blocks w is the outer loop. Output blocks are computed in col major order.
     for (uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
         for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
-#ifdef PRE_TILIZE
+#ifdef BLOCK_SHARDED
             reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
 
             tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
@@ -167,7 +167,7 @@ void MAIN {
                 }
 #endif
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
-                if constexpr (tilize_in0) {
+                if constexpr (height_sharded) {
 #if defined PACK_RELU and not defined FUSE_BIAS
                     if (last_out) {
                         // if last block we pack the final result with relu enabled
@@ -434,6 +434,8 @@ void MAIN {
 #ifndef FUSE_BIAS
                 reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
 #endif
+
+#ifdef PACKER_UNTILIZE
                 pack_untilize_dst_init_short<out_subblock_w, out_block_w>(out_cb_id);
                 copy_tile_to_dst_init_short(matmul_partials_cb);
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
@@ -441,6 +443,19 @@ void MAIN {
                         in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, matmul_partials_cb, out_cb_id);
                 }
                 pack_untilize_uninit(matmul_partials_cb);
+#else
+                untilize_init_short(matmul_partials_cb);
+                for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
+                    for (uint32_t out_block_h_i = 0; out_block_h_i < out_subblock_h; ++out_block_h_i) {
+                        cb_wait_front(matmul_partials_cb, out_block_w);
+                        cb_reserve_back(out_cb_id, out_block_w);
+                        untilize_block(matmul_partials_cb, out_block_w, out_cb_id);
+                        cb_push_back(out_cb_id, out_block_w);
+                        cb_pop_front(matmul_partials_cb, out_block_w);
+                    }
+                }
+                untilize_uninit(matmul_partials_cb);
+#endif
             }
             if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
 #ifdef FUSE_BIAS
@@ -449,7 +464,7 @@ void MAIN {
                 reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
 #endif
 
-                if constexpr (!tilize_in0) {
+                if constexpr (!height_sharded) {
                     mm_block_init_short(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef PACK_RELU
                     PACK((llk_pack_relu_config(ReluType::NO_RELU)));

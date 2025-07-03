@@ -198,6 +198,11 @@ project and are included in a distributed build of a Python Wheel and
 are subject to their own license terms listed as follows:
 
 - sfpi-gcc - [License available here](https://github.com/tenstorrent-metal/sfpi-rel-temp/blob/master/LICENSE) [and here](https://github.com/tenstorrent-metal/sfpi-rel-temp/blob/master/compiler/LICENSE)
+- openmpi - [License available here](https://github.com/open-mpi/ompi/blob/main/LICENSE)
+- openmpix - [License available here](https://github.com/openpmix/openpmix/blob/master/LICENSE)
+- libevent - [License available here](https://github.com/libevent/libevent?tab=License-1-ov-file#readme)
+- libnuma - [License available here](https://github.com/numactl/numactl/blob/master/LICENSE.GPL2)
+- libhwloc - [License available here](https://github.com/open-mpi/hwloc?tab=License-1-ov-file)
 
 The following dependencies are utilized by this project but are not explicitly
 distributed as part of the software:

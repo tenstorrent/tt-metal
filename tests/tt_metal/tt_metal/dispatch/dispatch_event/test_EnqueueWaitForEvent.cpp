@@ -9,7 +9,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <functional>
 #include <memory>
 #include <unordered_map>
@@ -20,11 +20,11 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
+#include "impl/dispatch/dispatch_settings.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "multi_command_queue_fixture.hpp"
-#include <tt-metalium/system_memory_manager.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "umd/device/types/arch.h"
@@ -48,7 +48,7 @@ namespace basic_tests {
 // wrap issue queue)
 TEST_F(MultiCommandQueueMultiDeviceEventFixture, TestEventsEventSynchronizeSanity) {
     for (IDevice* device : devices_) {
-        tt::log_info("Running On Device {}", device->id());
+        log_info(tt::LogTest, "Running On Device {}", device->id());
         vector<std::reference_wrapper<CommandQueue>> cqs = {device->command_queue(0), device->command_queue(1)};
         vector<uint32_t> cmds_issued_per_cq = {0, 0};
 
@@ -82,7 +82,7 @@ TEST_F(MultiCommandQueueMultiDeviceEventFixture, TestEventsEventSynchronizeSanit
 
         local_test_functions::FinishAllCqs(cqs);
         std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-        tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+        log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
     }
 }
 
@@ -122,7 +122,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEventSynchronizeSani
 
     local_test_functions::FinishAllCqs(cqs);
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Simplest test to record and wait-for-events on same CQ.
@@ -150,7 +150,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventS
     }
     local_test_functions::FinishAllCqs(cqs);
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Record event on one CQ, wait-for-that-event on another CQ. Then do the flip. Occasionally insert
@@ -228,7 +228,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventC
     }
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Simple 2CQ test to mix reads, writes, record-event, wait-for-event in a basic way. It's simple because
@@ -281,7 +281,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
 
     local_test_functions::FinishAllCqs(cqs);
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
     EXPECT_TRUE(pass);
 }
 
@@ -353,7 +353,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
 
     auto end = std::chrono::system_clock::now();
     std::chrono::duration<double> elapsed_seconds = (end - start);
-    tt::log_info(tt::LogTest, "Test Finished in {}us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {}us", elapsed_seconds.count() * 1000 * 1000);
     EXPECT_TRUE(pass);
 }
 
@@ -480,7 +480,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
 
     auto end = std::chrono::system_clock::now();
     std::chrono::duration<double> elapsed_seconds = (end - start);
-    tt::log_info(tt::LogTest, "Test Finished in {}us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {}us", elapsed_seconds.count() * 1000 * 1000);
 
     EXPECT_TRUE(pass);
 }

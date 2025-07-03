@@ -12,7 +12,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
-#include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 
 namespace ttnn::operations::dram_prefetcher {
@@ -42,7 +41,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     /* Buffers */
     const Buffer& global_cb_buffer = global_cb.cb_buffer();
     // tensors that with addresses
-    ttnn::Tensor tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
+    const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
     Buffer* tensor_addrs_buffer = tensor_addrs.buffer();
     std::vector<Buffer*> tensor_buffers;
     // tensors that with actual data
@@ -54,19 +53,19 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tensors.begin(), tensors.end(), std::back_inserter(tensor_buffers), [](const auto& t) { return t.buffer(); });
 
     /* Tiles */
-    tt::tt_metal::Tile tensor_addrs_tile = tensor_addrs.get_tensor_spec().tile();
+    tt::tt_metal::Tile tensor_addrs_tile = tensor_addrs.tensor_spec().tile();
     std::vector<tt::tt_metal::Tile> tensor_tiles;
     tensor_tiles.reserve(tensors.size());
     std::transform(tensors.begin(), tensors.end(), std::back_inserter(tensor_tiles), [](const auto& t) {
-        return t.get_tensor_spec().tile();
+        return t.tensor_spec().tile();
     });
 
     /* Dataformats */
-    tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.get_dtype());
+    tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.dtype());
     std::vector<tt::DataFormat> tensor_data_formats;
     tensor_data_formats.reserve(tensors.size());
     std::transform(tensors.begin(), tensors.end(), std::back_inserter(tensor_data_formats), [](const auto& t) {
-        return tt::tt_metal::datatype_to_dataformat_converter(t.get_dtype());
+        return tt::tt_metal::datatype_to_dataformat_converter(t.dtype());
     });
 
     Program program{};
@@ -109,7 +108,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         global_cb.size());
 
     /* Cores setup */
-    auto all_reader_core_range = global_cb.sender_cores();
+    const auto& all_reader_core_range = global_cb.sender_cores();
     auto reader_core_range_vec = corerange_to_cores(all_reader_core_range, std::nullopt, true);
     std::vector<CoreRange> active_reader_core_range_vec;
     for (uint32_t i = 0; i < num_readers; ++i) {
@@ -131,6 +130,14 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
                                                 .set_globally_allocated_address(global_cb_buffer);
 
     auto reader_cb = CreateCircularBuffer(program, reader_core_range, reader_cb_config);
+
+    uint32_t sync_cb_index = tt::CBIndex::c_3;
+    uint32_t sync_cb_page_size = hal::get_l1_alignment();
+    CircularBufferConfig sync_cb_confg =
+        CircularBufferConfig(sync_cb_page_size, {{sync_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(sync_cb_index, sync_cb_page_size);
+
+    auto sync_cb = CreateCircularBuffer(program, reader_core_range, sync_cb_confg);
 
     /* tensor addresses cb setup */
     uint32_t tensor_addrs_single_tile_size = sizeof(uint32_t);
@@ -170,6 +177,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         max_block_size_per_reader_core,
         reader_cb_index,
         tensor_addrs_cb_index,
+        sync_cb_index,
     };
 
     // Configs to enable for performance mode
@@ -182,7 +190,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = reader_ct_args});
 
     // Writer kernel
@@ -194,6 +202,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         max_block_tiles,
         reader_cb_index,
         remote_cb_index,
+        sync_cb_index,
     };
 
     // Configs to enable for performance mode
@@ -206,7 +215,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = writer_ct_args});
 
     /* Runtime args */
@@ -216,15 +225,17 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     std::vector<uint32_t> coalesced_page_sizes;
     std::vector<uint32_t> coalesced_num_pages;
 
+    uint32_t max_page_size = 8192;
+
     for (uint32_t t = 0; t < num_tensors; t++) {
         auto [page_size, num_pages] = get_max_page_size_and_num_pages(
-            max_tile_size, tensor_block_num_tiles[t], tt::tt_metal::detail::TileSize(tensor_data_formats[t]));
+            max_page_size, tensor_block_num_tiles[t], tt::tt_metal::detail::TileSize(tensor_data_formats[t]));
         page_sizes.push_back(page_size);
         block_num_pages.push_back(num_pages);
 
         uint32_t block_width_in_tiles = tensor_shapes[t][1];
         auto [coalesced_page_size, coalesced_num_page] = get_max_page_size_and_num_pages(
-            max_tile_size,
+            max_page_size,
             block_width_in_tiles / num_receivers_per_reader,
             tt::tt_metal::detail::TileSize(tensor_data_formats[t]));
         coalesced_page_sizes.push_back(coalesced_page_size);
@@ -282,7 +293,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
             const std::vector<Tensor>& output_tensors) {
             TT_ASSERT(output_tensors.size() == 1);
 
-            auto tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
+            const auto& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
             auto tensor_addrs_buffer = tensor_addrs.buffer();
             UpdateDynamicCircularBufferAddress(program, tensor_addrs_cb, *tensor_addrs_buffer);
         };

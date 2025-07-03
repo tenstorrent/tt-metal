@@ -8,7 +8,7 @@
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -48,13 +48,13 @@ void MAIN {
 
             if (!is_h_single_tile) {
                 tile_regs_acquire();
-                reduce_init_delta_with_dt<false, REDUCE_OP, REDUCE_DIM>(cb_accum_dst, cb_input, cb_scaler);
+                reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_accum_dst, cb_input, cb_scaler);
                 for (uint32_t ht = 0; ht < Ht - 1; ++ht) {
                     cb_wait_front(cb_input, onetile);
                     reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
                     cb_pop_front(cb_input, onetile);
                 }
-                reduce_revert_delta(cb_accum_dst);
+                reduce_uninit();
                 cb_reserve_back(cb_accum_dst, onetile);
                 tile_regs_commit();
 
@@ -96,9 +96,9 @@ void MAIN {
                 copy_tile(cb_accum_dst, 0, reduce_dst_idx);
             }
 
-            reduce_init_delta_with_dt<false, REDUCE_OP, REDUCE_DIM>(cb_out, cb_input, cb_scaler);
+            reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_out, cb_input, cb_scaler);
             reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
-            reduce_revert_delta(cb_out);
+            reduce_uninit();
             tile_regs_commit();
 
             cb_reserve_back(cb_out, onetile);

@@ -248,8 +248,6 @@ def test_multi_device_single_op_unary(mesh_device):
 
 def test_multi_device_single_op_unary_with_cache(mesh_device):
     """Multidevice API test: Running tensor-parallel multi-device single-op unary with cache"""
-    mesh_device.enable_program_cache()
-
     torch_input_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
     torch_output_golden = torch.nn.functional.gelu(torch_input_tensor)
     torch_golden = torch.nn.functional.gelu(torch_output_golden)
@@ -752,3 +750,10 @@ def test_heterogenous_operation_dispatch():
     assert_with_pcc(
         ttnn.to_torch(ttnn_silu, mesh_composer=ttnn.ConcatMeshToTensor(submesh_1, dim=-1)), torch_silu, pcc=0.9999
     )
+
+
+# Verify that submeshes can be created on a mesh device with fabric enabled
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_fabric_with_submeshes(t3k_mesh_device):
+    logger.info("Spawning 2 1x4 submeshes on a 2x4 mesh device with fabric enabled")
+    submeshes = t3k_mesh_device.create_submeshes(ttnn.MeshShape(1, 4))

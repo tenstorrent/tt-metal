@@ -10,7 +10,7 @@
 #include <gtest/gtest.h>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "impl/context/metal_context.hpp"
 

@@ -20,12 +20,12 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -263,6 +263,7 @@ bool single_tile_matmul(tt_metal::IDevice* device) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
     ////////////////////////////////////////////////////////////////////////////
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     auto packed_golden = packed_input0;
 
     ////////////////////////////////////////////////////////////////////////////
@@ -452,7 +453,7 @@ bool single_block_matmul(tt_metal::IDevice* device, uint32_t M, uint32_t K, uint
         [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.015f); },
         &failed_index);
     if (not pass) {
-        log_info("Failed Index={}", failed_index);
+        log_info(tt::LogTest, "Failed Index={}", failed_index);
         print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(dest_buffer_data), 32);
     }
     return pass;
@@ -621,7 +622,7 @@ bool blocked_matmul(tt_metal::IDevice* device, uint32_t M, uint32_t K, uint32_t 
         [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.015f); },
         &failed_index);
     if (not pass) {
-        log_info("Failed Index={}", failed_index);
+        log_info(tt::LogTest, "Failed Index={}", failed_index);
         print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(dest_buffer_data), 32);
     }
     return pass;

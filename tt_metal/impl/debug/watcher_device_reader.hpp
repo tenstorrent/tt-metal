@@ -6,13 +6,12 @@
 
 #include <core_coord.hpp>
 // FIXME: ARCH_NAME specific, needed for several pointer types here
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <map>
 #include <set>
-#include <string>
 #include <string>
 #include <utility>
 #include <vector>
@@ -30,7 +29,7 @@ constexpr uint8_t DEBUG_SANITIZE_NOC_SENTINEL_OK_8 = 0xda;
 // Struct containing relevant info for stack usage
 struct stack_usage_info_t {
     CoreDescriptor core;
-    uint16_t stack_usage;
+    uint16_t stack_free = uint16_t(~0);
     uint16_t kernel_id;
 };
 
@@ -51,6 +50,7 @@ private:
     void DumpNocSanitizeStatus(
         CoreDescriptor& core, const std::string& core_str, const mailboxes_t* mbox_data, int noc);
     void DumpAssertStatus(CoreDescriptor& core, const std::string& core_str, const mailboxes_t* mbox_data);
+    void DumpAssertTrippedDetails(CoreDescriptor& core, const std::string& error_msg, const mailboxes_t* mbox_data);
     void DumpPauseStatus(CoreDescriptor& core, const std::string& core_str, const mailboxes_t* mbox_data);
     void DumpRingBuffer(CoreDescriptor& core, const mailboxes_t* mbox_data, bool to_stdout);
     void DumpRunState(CoreDescriptor& core, const launch_msg_t* launch_msg, uint32_t state);

@@ -229,6 +229,15 @@ FORCE_INLINE void cq_noc_async_write_init_state(
 template <enum CQNocInlineFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum CQNocSend send = CQ_NOC_SEND>
 FORCE_INLINE void cq_noc_inline_dw_write_with_state(
     uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF, uint8_t noc = noc_index) {
+#if defined(ARCH_BLACKHOLE)
+    noc_async_writes_flushed();  // ensure inline_l1_src_addr is not overwritten
+    uint32_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
+    volatile tt_l1_ptr uint32_t* inline_l1_src_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inline_l1_src_addr);
+    *inline_l1_src_addr_ptr = val;
+    cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, NCRISC_WR_REG_CMD_BUF>(
+        inline_l1_src_addr, dst_addr, 4);
+#else
     if constexpr (wait) {
         WAYPOINT("NISW");
         while (!noc_cmd_buf_ready(noc, NCRISC_WR_REG_CMD_BUF));
@@ -261,14 +270,22 @@ FORCE_INLINE void cq_noc_inline_dw_write_with_state(
         DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc, NCRISC_WR_REG_CMD_BUF);
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     }
+#endif
 }
 
 // TODO: noc_inline_dw_write currently hardcodes most of these parameters, which we copied here
 // If needed, add templates for setting these
-// TODO: uplift for BH to not do inline write
 template <enum CQNocInlineFlags flags>
 FORCE_INLINE void cq_noc_inline_dw_write_init_state(
     uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF, uint8_t noc = noc_index) {
+#if defined(ARCH_BLACKHOLE)
+    // On Blackhole inline writes are disabled so use cq_noc_async_write_init_state with inline write cmd buf
+    // See comment in `noc_inline_dw_write` for more details
+    uint32_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
+    volatile tt_l1_ptr uint32_t* inline_l1_src_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inline_l1_src_addr);
+    cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, NCRISC_WR_REG_CMD_BUF>(0, dst_addr, 0);
+#else
     WAYPOINT("NIIW");
     uint32_t heartbeat = 0;
     while (!noc_cmd_buf_ready(noc, NCRISC_WR_REG_CMD_BUF)) {
@@ -289,6 +306,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(
     NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_CTRL, noc_cmd_field);
 
     cq_noc_inline_dw_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send>(dst_addr, val, be);
+#endif
 }
 
 template <uint32_t sem_id>
@@ -304,6 +322,22 @@ FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     do {
         invalidate_l1_cache();
     } while ((*sem_addr & 0x7fffffff) != n);  // mask off terminate bit
+    WAYPOINT("TAPD");
+}
+
+template <uint32_t sem_id>
+FORCE_INLINE void cb_wait_all_pages(uint32_t n, uint32_t& additional_count) {
+    volatile tt_l1_ptr uint32_t* sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+
+    // Downstream component sets the MSB as a terminate bit
+    // Mask that off to avoid a race between the sem count and terminate
+    n &= 0x7fffffff;
+
+    WAYPOINT("TAPW");
+    do {
+        invalidate_l1_cache();
+    } while (((additional_count + *sem_addr) & 0x7fffffff) != n);  // mask off terminate bit
     WAYPOINT("TAPD");
 }
 
@@ -325,6 +359,26 @@ void cb_acquire_pages(uint32_t n) {
     } while (wrap_gt(n, *sem_addr));
     WAYPOINT("DAPD");
     noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -n);
+}
+
+template <uint32_t noc_xy, uint32_t sem_id>
+void cb_acquire_pages(uint32_t n, uint32_t& additional_count) {
+    volatile tt_l1_ptr uint32_t* sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+
+    // Ensure last sem_inc has landed
+    noc_async_atomic_barrier();
+
+    WAYPOINT("DAPW");
+    // Use a wrapping compare here to compare distance
+    // Required for trace which steals downstream credits and may make the value negative
+    uint32_t heartbeat = 0;
+    do {
+        invalidate_l1_cache();
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+    } while (wrap_gt(n, additional_count + *sem_addr));
+    WAYPOINT("DAPD");
+    additional_count -= n;
 }
 
 template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
@@ -360,19 +414,34 @@ cb_acquire_pages(uint32_t cb_fence, uint32_t block_next_start_addr[], uint32_t r
     return usable;
 }
 
+// Do not release pages on the first call to the cb block release pages functions below
+// This is because the first call means we don't have a previous block to release
+static bool cb_block_released_prev_block = false;
+
 template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id, uint32_t cb_pages_per_block>
 FORCE_INLINE void cb_block_release_pages(uint32_t& block_noc_writes_to_clear, uint8_t noc = noc_index) {
-    // Do not release pages on the first call to this function
-    // This is because the first call means we don't have a previous block to release
-    static bool prev_block = false;
-    if (prev_block) {
+    if (cb_block_released_prev_block) {
         WAYPOINT("CBRW");
         uint32_t sem_addr = get_semaphore<fd_core_type>(sem_id);
         while (!wrap_ge(NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT), block_noc_writes_to_clear));
         noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), cb_pages_per_block, noc_idx);
         WAYPOINT("CBRD");
     } else {
-        prev_block = true;
+        cb_block_released_prev_block = true;
+    }
+    block_noc_writes_to_clear = noc_nonposted_writes_num_issued[noc];
+}
+
+template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id, uint32_t cb_pages_per_block, typename T>
+FORCE_INLINE void cb_block_release_pages_remote(
+    T& relay_client, uint32_t& block_noc_writes_to_clear, uint8_t noc = noc_index) {
+    if (cb_block_released_prev_block) {
+        WAYPOINT("CBRW");
+        while (!wrap_ge(NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT), block_noc_writes_to_clear));
+        relay_client.template release_pages<noc_idx, noc_xy, sem_id>(cb_pages_per_block);
+        WAYPOINT("CBRD");
+    } else {
+        cb_block_released_prev_block = true;
     }
     block_noc_writes_to_clear = noc_nonposted_writes_num_issued[noc];
 }
@@ -388,6 +457,20 @@ template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id, uint32_t cb_pages_p
 FORCE_INLINE void move_rd_to_next_block_and_release_pages(
     uint32_t& block_noc_writes_to_clear, uint32_t& rd_block_idx, uint8_t noc = noc_index) {
     cb_block_release_pages<noc_idx, noc_xy, sem_id, cb_pages_per_block>(block_noc_writes_to_clear, noc);
+    move_rd_to_next_block<cb_blocks>(rd_block_idx);
+}
+
+template <
+    uint8_t noc_idx,
+    uint32_t noc_xy,
+    uint32_t sem_id,
+    uint32_t cb_pages_per_block,
+    uint32_t cb_blocks,
+    typename T>
+FORCE_INLINE void move_rd_to_next_block_and_release_pages_remote(
+    T& relay_client, uint32_t& block_noc_writes_to_clear, uint32_t& rd_block_idx, uint8_t noc = noc_index) {
+    cb_block_release_pages_remote<noc_idx, noc_xy, sem_id, cb_pages_per_block>(
+        relay_client, block_noc_writes_to_clear, noc);
     move_rd_to_next_block<cb_blocks>(rd_block_idx);
 }
 
@@ -420,6 +503,47 @@ FORCE_INLINE uint32_t get_cb_page_and_release_pages(
             upstream_cb_sem,
             cb_pages_per_block,
             cb_blocks>(block_noc_writes_to_clear, rd_block_idx, noc);
+    }
+
+    // Wait for dispatcher to supply a page
+    uint32_t n_pages =
+        cb_acquire_pages<local_cb_sem, cb_log_page_size>(cb_fence, block_next_start_addr, rd_block_idx, local_count);
+    cb_fence += n_pages << cb_log_page_size;
+
+    return n_pages;
+}
+
+template <
+    uint32_t cb_base,
+    uint32_t cb_blocks,
+    uint32_t cb_log_page_size,
+    uint32_t local_cb_sem,
+    uint8_t upstream_noc_idx,
+    uint32_t upstream_noc_xy,
+    uint32_t upstream_cb_sem,
+    uint32_t cb_pages_per_block,
+    typename T>
+FORCE_INLINE uint32_t get_cb_page_and_release_pages_remote(
+    T& relay_client,
+    uint32_t& cmd_ptr,
+    uint32_t& cb_fence,
+    uint32_t& block_noc_writes_to_clear,
+    uint32_t block_next_start_addr[],
+    uint32_t& rd_block_idx,
+    uint32_t& local_count,
+    uint8_t noc = noc_index) {
+    // Strided past the data that has arrived, get the next page
+    if (cb_fence == block_next_start_addr[rd_block_idx]) {
+        if (rd_block_idx == cb_blocks - 1) {
+            cmd_ptr = cb_base;
+            cb_fence = cb_base;
+        }
+        move_rd_to_next_block_and_release_pages_remote<
+            upstream_noc_idx,
+            upstream_noc_xy,
+            upstream_cb_sem,
+            cb_pages_per_block,
+            cb_blocks>(relay_client, block_noc_writes_to_clear, rd_block_idx, noc);
     }
 
     // Wait for dispatcher to supply a page

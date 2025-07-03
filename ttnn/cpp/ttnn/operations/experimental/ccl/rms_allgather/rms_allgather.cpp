@@ -24,13 +24,13 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     float epsilon,
     const std::optional<const ttnn::Tensor>& weight,
     const std::optional<const ttnn::Tensor>& stats,
-    bool is_pre) {
-    auto arch = is_tensor_on_device_or_multidevice(input_tensor)
+    bool use_noc1_only) {
+    auto arch = is_device_tensor(input_tensor)
                     ? input_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
@@ -44,12 +44,12 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
                    kernel_config_val,
                    dtype,
                    topology,
-                   is_pre,
                    num_preferred_links.value_or(1),
                    num_devices,
                    semaphore,
                    subdevice_id,
-                   cluster_axis),
+                   cluster_axis,
+                   use_noc1_only),
                {input_tensor},
                optional_input_tensors,
                optional_output_tensors)

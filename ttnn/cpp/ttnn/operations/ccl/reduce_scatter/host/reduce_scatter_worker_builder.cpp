@@ -5,13 +5,13 @@
 #include <cstdint>
 #include <iterator>
 
-#include "cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
 #include "hostdevcommon/kernel_structs.h"
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -124,11 +124,11 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_receiver_kernel_ct
 
     auto args = std::vector<uint32_t>{
         static_cast<uint32_t>(this->op_config.is_input_sharded() ? 1 : 0),
-        static_cast<uint32_t>(local_input_tensor.memory_config().buffer_type == BufferType::DRAM ? 1 : 0),
-        static_cast<uint32_t>(local_input_tensor.memory_config().memory_layout),
+        static_cast<uint32_t>(local_input_tensor.memory_config().buffer_type() == BufferType::DRAM ? 1 : 0),
+        static_cast<uint32_t>(local_input_tensor.memory_config().memory_layout()),
 
-        static_cast<uint32_t>(local_output_tensor.memory_config().buffer_type == BufferType::DRAM ? 1 : 0),
-        static_cast<uint32_t>(local_output_tensor.memory_config().memory_layout),
+        static_cast<uint32_t>(local_output_tensor.memory_config().buffer_type() == BufferType::DRAM ? 1 : 0),
+        static_cast<uint32_t>(local_output_tensor.memory_config().memory_layout()),
 
         static_cast<uint32_t>(this->num_buffers_per_channel),
         static_cast<uint32_t>(this->topology_config.is_linear)};
@@ -279,9 +279,9 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_sender_kernel_ct_a
 
     auto args = std::vector<uint32_t>{
         static_cast<uint32_t>(
-            this->op_config.get_output_tensor(0).memory_config().buffer_type == BufferType::DRAM ? 1 : 0),
+            this->op_config.get_output_tensor(0).memory_config().buffer_type() == BufferType::DRAM ? 1 : 0),
         static_cast<uint32_t>(this->num_buffers_per_channel),
-        static_cast<uint32_t>(local_output_tensor.memory_config().memory_layout),
+        static_cast<uint32_t>(local_output_tensor.memory_config().memory_layout()),
         static_cast<uint32_t>(this->topology_config.is_linear)
     };
 
@@ -410,9 +410,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_sender_kernel_rt_a
 }
 
 
-static void convert_slices_to_ccl_commands() {
 
-}
 
 // Moved to (and updated in) ccl_worker_builder.cpp
 /*
@@ -587,8 +585,8 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
 
     // If we are on device zero, we send n-1 chunks in ascending order
     auto &input_tensor = this->op_config.get_input_tensor(0);
-    TT_ASSERT(input_tensor.get_padded_shape().size() == 4, "Only 4D tensors are supported for reduce scatter");
-    ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {input_tensor.get_padded_shape()[0], input_tensor.get_padded_shape()[1],input_tensor.get_padded_shape()[2],input_tensor.get_padded_shape()[3]};
+    TT_ASSERT(input_tensor.padded_shape().size() == 4, "Only 4D tensors are supported for reduce scatter");
+    ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {input_tensor.padded_shape()[0], input_tensor.padded_shape()[1],input_tensor.padded_shape()[2],input_tensor.padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(input_tensor.buffer()->address()),
@@ -631,7 +629,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
 std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_kernel_ct_args() const
 {
     std::vector<uint32_t> args = {
-        static_cast<uint32_t>(this->op_config.get_input_tensor(0).memory_config().memory_layout), // tensor memory layout
+        static_cast<uint32_t>(this->op_config.get_input_tensor(0).memory_config().memory_layout()), // tensor memory layout
         static_cast<uint32_t>(this->op_config.get_input_tensor(0).buffer()->buffer_type()), // buffer type
         static_cast<uint32_t>(this->op_config.get_input_tensor(0).layout()), // page layout
         static_cast<uint32_t>(this->edm_termination_mode), // (EDM) termination mode

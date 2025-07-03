@@ -18,14 +18,14 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "buffer_test_utils.hpp"
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -45,7 +45,7 @@ bool SimpleL1ReadOnly(IDevice* device, size_t local_address, size_t byte_size) {
     readL1Backdoor(device, bank0_logical_core, local_address, byte_size, outputs);
     bool pass = (inputs == outputs);
     if (not pass) {
-        tt::log_info("Mismatch at Core={}, Packet Size(in Bytes)={}", bank0_logical_core.str(), byte_size);
+        log_info(tt::LogTest, "Mismatch at Core={}, Packet Size(in Bytes)={}", bank0_logical_core.str(), byte_size);
     }
     return pass;
 }
@@ -58,7 +58,7 @@ bool SimpleL1WriteOnly(IDevice* device, size_t local_address, size_t byte_size) 
     readL1Backdoor(device, bank0_logical_core, local_address, byte_size, outputs);
     bool pass = (inputs == outputs);
     if (not pass) {
-        tt::log_info("Mismatch at Core={}, Packet Size(in Bytes)={}", bank0_logical_core.str(), byte_size);
+        log_info(tt::LogTest, "Mismatch at Core={}, Packet Size(in Bytes)={}", bank0_logical_core.str(), byte_size);
     }
     return pass;
 }
@@ -127,13 +127,17 @@ bool SimpleTiledL1WriteCBRead(
     writeL1Backdoor(device, core, input_local_address, inputs);
     tt_metal::detail::LaunchProgram(device, program);
     readL1Backdoor(device, core, input_local_address, byte_size, outputs);
-    tt::log_debug("input readback inputs[0]={} == readback[0]={}", inputs[0], outputs[0]);
+    log_debug(tt::LogTest, "input readback inputs[0]={} == readback[0]={}", inputs[0], outputs[0]);
     readL1Backdoor(device, core, output_local_address, byte_size, outputs);
-    tt::log_debug("inputs[0]={} == outputs[0]={}", inputs[0], outputs[0]);
+    log_debug(tt::LogTest, "inputs[0]={} == outputs[0]={}", inputs[0], outputs[0]);
     bool pass = (inputs == outputs);
     if (not pass) {
-        tt::log_info(
-            "Mismatch at Core={}, phys_core={}, Packet Size(in Bytes)={}", core.str(), phys_core.str(), byte_size);
+        log_info(
+            tt::LogTest,
+            "Mismatch at Core={}, phys_core={}, Packet Size(in Bytes)={}",
+            core.str(),
+            phys_core.str(),
+            byte_size);
     }
     return pass;
 }

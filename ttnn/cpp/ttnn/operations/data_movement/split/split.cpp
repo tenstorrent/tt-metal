@@ -21,7 +21,7 @@ constexpr auto TWO_CHUNKS = 2;
 constexpr auto RANK_FOUR = 4;
 
 std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    auto input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     auto padded_input_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_shape);
     ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
         .pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
@@ -30,7 +30,7 @@ std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_ten
 }
 
 std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    const auto shape = input_tensor.get_padded_shape();
+    const auto& shape = input_tensor.padded_shape();
     const bool pre_post_reshape = shape[0] > 1;
 
     if (!pre_post_reshape) {
@@ -59,11 +59,11 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
     const ttnn::SmallVector<int64_t>& split_sizes,
     const int32_t dim,
     const MemoryConfig& memory_config) {
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
 
     // torch requires split size to sum to dim size but since we are using slice we can be more permissive.
     TT_FATAL(
-        std::accumulate(split_sizes.begin(), split_sizes.end(), 0) >= input_shape[dim],
+        std::accumulate(split_sizes.begin(), split_sizes.end(), 0L) >= input_shape[dim],
         "Split sizes should sum to at least dimension size. Split sizes: {} dimension {}",
         split_sizes,
         input_shape[dim]);
@@ -97,11 +97,11 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
         std::all_of(split_sizes.begin(), split_sizes.end(), [](const auto& x) { return x > 0; }),
         "split_size should be greater than 0, instead got: {}",
         split_sizes);
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
 
     // special case to use hardcoded kernel for two chunks sometimes
     if (split_sizes.size() == detail::TWO_CHUNKS && dim == input_shape.rank() - 1 &&
-        input_tensor.get_layout() == Layout::TILE && input_shape.rank() >= 2 &&
+        input_tensor.layout() == Layout::TILE && input_shape.rank() >= 2 &&
         input_shape[-2] / tt::constants::TILE_HEIGHT >= 2 && input_shape[-1] / tt::constants::TILE_WIDTH >= 2) {
         ttnn::Tensor input_tensor_4d;
         if (input_shape.rank() > detail::RANK_FOUR) {
@@ -116,7 +116,7 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
         outputs.reserve(detail::TWO_CHUNKS);
         for (const auto& t : outputs_4d) {
             ttnn::SmallVector<uint32_t> final_shape(input_shape.cbegin(), input_shape.cend());
-            final_shape.back() = t.get_logical_shape()[-1];
+            final_shape.back() = t.logical_shape()[-1];
             outputs.emplace_back(ttnn::view(t, ttnn::Shape(final_shape)));
         }
         return outputs;
@@ -143,7 +143,7 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
     const auto num_chunks =
-        std::ceil(static_cast<float>(input_tensor.get_logical_shape()[dim]) / static_cast<float>(split_size));
+        std::ceil(static_cast<float>(input_tensor.logical_shape()[dim]) / static_cast<float>(split_size));
 
     const ttnn::SmallVector<int64_t> split_sizes(num_chunks, split_size);
     return SplitOperation::invoke(queue_id, input_tensor, split_sizes, dim, memory_config);

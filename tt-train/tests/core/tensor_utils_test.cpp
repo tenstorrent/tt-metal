@@ -187,7 +187,7 @@ TEST_F(TensorUtilsTest, TestOnes_1) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto shape = ttml::core::create_shape({1, 2, 3, 4});
     auto tensor_zeros = ttml::core::zeros(shape, device);
-    auto tensor_ones = ttml::core::ones(tensor_zeros.get_logical_shape(), device);
+    auto tensor_ones = ttml::core::ones(tensor_zeros.logical_shape(), device);
     auto tensor_vec = ttml::core::to_vector(tensor_ones);
     for (auto& val : tensor_vec) {
         EXPECT_EQ(val, 1.F);
@@ -266,4 +266,28 @@ TEST_F(TensorUtilsTest, TestUint32XTensor) {
     auto xtensor_back = ttml::core::to_xtensor<uint32_t>(tensor);
 
     EXPECT_TRUE(xt::allclose(xtensor, xtensor_back));
+}
+
+TEST_F(TensorUtilsTest, TestBytesToFromTensor) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<float> test_data = {1.F, 5.F, 10.F, 15.F};
+
+    auto shape = ttml::core::create_shape({1, 1, 1, 4});
+    auto tensor = ttml::core::from_vector(test_data, shape, device);
+
+    auto tensor2 = ttml::core::ones(shape, device);
+    auto cpu_tensor = tensor.cpu();
+    auto cpu_tensor2 = tensor2.cpu();
+    auto bytes = ttml::core::get_bytes_from_cpu_tensor(cpu_tensor);
+    auto bytes2 = ttml::core::get_bytes_from_cpu_tensor(cpu_tensor2);
+    ASSERT_EQ(bytes.size(), 1);
+    ASSERT_EQ(bytes2.size(), 1);
+    std::copy(bytes[0].begin(), bytes[0].end(), bytes2[0].begin());
+    ttnn::assign(cpu_tensor2.to_device(tensor2.device()), tensor2);
+    auto vec_back = ttml::core::to_vector(tensor2);
+
+    ASSERT_EQ(vec_back.size(), test_data.size());
+    for (size_t i = 0; i < test_data.size(); i++) {
+        EXPECT_EQ(vec_back[i], test_data[i]);
+    }
 }

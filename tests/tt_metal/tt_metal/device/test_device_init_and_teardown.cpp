@@ -18,7 +18,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "umd/device/types/arch.h"
@@ -91,7 +90,7 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
 
     ASSERT_TRUE(num_devices > 0);
     vector<chip_id_t> ids;
-    for (unsigned int id = 0; id < num_devices; id++) {
+    for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
         ids.push_back(id);
     }
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
@@ -110,7 +109,7 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
     }
     ASSERT_TRUE(num_devices > 0);
     vector<chip_id_t> ids;
-    for (unsigned int id = 0; id < num_devices; id++) {
+    for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
         ids.push_back(id);
     }
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();

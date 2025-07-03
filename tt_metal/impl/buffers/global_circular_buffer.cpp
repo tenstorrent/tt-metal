@@ -7,7 +7,7 @@
 #include <buffer_types.hpp>
 #include <core_coord.hpp>
 #include <device.hpp>
-#include <global_circular_buffer_impl.hpp>
+#include <global_circular_buffer.hpp>
 #include <host_api.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
@@ -96,67 +96,55 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
 
     // Write the config buffer to the device
     // Only block for the slow dispatch case
-    auto* device = device_;
-    device->push_work([device,
-                       cb_config_size,
-                       cb_config_page_size,
-                       num_noc_xy_words,
-                       l1_alignment,
-                       buffer_address = cb_buffer().address(),
-                       cb_config_buffer = cb_config_buffer_,
-                       size = size_,
-                       sender_receiver_core_mapping = sender_receiver_core_mapping_] {
-        auto config_buffer_address = cb_config_buffer.get_buffer()->address();
-        const auto& core_to_core_id = cb_config_buffer.get_buffer()->get_buffer_page_mapping()->core_to_core_id_;
-        std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
-        uint32_t noc_xy_address = config_buffer_address + num_config_elements * sizeof(uint32_t);
-        uint32_t pages_sent_address = tt::align(noc_xy_address + num_noc_xy_words * sizeof(uint32_t), l1_alignment);
+    auto config_buffer_address = cb_config_buffer_.get_buffer()->address();
+    const auto& core_to_core_id = cb_config_buffer_.get_buffer()->get_buffer_page_mapping()->core_to_core_id;
+    std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
+    uint32_t noc_xy_address = config_buffer_address + num_config_elements * sizeof(uint32_t);
+    uint32_t pages_sent_address = tt::align(noc_xy_address + num_noc_xy_words * sizeof(uint32_t), l1_alignment);
+    auto buffer_address = cb_buffer().address();
+    for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping_) {
+        const auto& receiver_cores_vec = corerange_to_cores(receiver_cores);
+        uint32_t sender_idx = core_to_core_id.at(sender_core) * cb_config_page_size / sizeof(uint32_t);
+        uint32_t num_receivers = receiver_cores.num_cores();
+        uint32_t pages_acked_address = pages_sent_address + num_receivers * l1_alignment;
+        cb_config_host_buffer[sender_idx++] = 1;
+        cb_config_host_buffer[sender_idx++] = receiver_cores.num_cores();
+        cb_config_host_buffer[sender_idx++] = buffer_address;
+        cb_config_host_buffer[sender_idx++] = size_;
+        cb_config_host_buffer[sender_idx++] = buffer_address;
+        cb_config_host_buffer[sender_idx++] = noc_xy_address;
+        cb_config_host_buffer[sender_idx++] = pages_sent_address;
 
-        for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping) {
-            const auto& receiver_cores_vec = corerange_to_cores(receiver_cores);
-            uint32_t sender_idx = core_to_core_id.at(sender_core) * cb_config_page_size / sizeof(uint32_t);
-            uint32_t num_receivers = receiver_cores.num_cores();
-            uint32_t pages_acked_address = pages_sent_address + num_receivers * l1_alignment;
-            cb_config_host_buffer[sender_idx++] = 1;
-            cb_config_host_buffer[sender_idx++] = receiver_cores.num_cores();
-            cb_config_host_buffer[sender_idx++] = buffer_address;
-            cb_config_host_buffer[sender_idx++] = size;
-            cb_config_host_buffer[sender_idx++] = buffer_address;
-            cb_config_host_buffer[sender_idx++] = noc_xy_address;
-            cb_config_host_buffer[sender_idx++] = pages_sent_address;
+        auto sender_physical_coord = device_->worker_core_from_logical_core(sender_core);
+        for (uint32_t i = 0; i < receiver_cores_vec.size(); i++) {
+            auto receiver_physical_coord = device_->worker_core_from_logical_core(receiver_cores_vec[i]);
+            cb_config_host_buffer[sender_idx++] = receiver_physical_coord.x;
+            cb_config_host_buffer[sender_idx++] = receiver_physical_coord.y;
 
-            auto sender_physical_coord = device->worker_core_from_logical_core(sender_core);
-            for (uint32_t i = 0; i < receiver_cores_vec.size(); i++) {
-                auto receiver_physical_coord = device->worker_core_from_logical_core(receiver_cores_vec[i]);
-                cb_config_host_buffer[sender_idx++] = receiver_physical_coord.x;
-                cb_config_host_buffer[sender_idx++] = receiver_physical_coord.y;
-
-                uint32_t receiver_idx =
-                    core_to_core_id.at(receiver_cores_vec[i]) * cb_config_page_size / sizeof(uint32_t);
-                cb_config_host_buffer[receiver_idx++] = 0;
-                cb_config_host_buffer[receiver_idx++] = num_receivers;
-                cb_config_host_buffer[receiver_idx++] = buffer_address;
-                cb_config_host_buffer[receiver_idx++] = size;
-                cb_config_host_buffer[receiver_idx++] = buffer_address;
-                cb_config_host_buffer[receiver_idx++] = noc_xy_address;
-                cb_config_host_buffer[receiver_idx++] = pages_sent_address + 2 * i * l1_alignment;
-                cb_config_host_buffer[receiver_idx++] = sender_physical_coord.x;
-                cb_config_host_buffer[receiver_idx++] = sender_physical_coord.y;
-            }
+            uint32_t receiver_idx = core_to_core_id.at(receiver_cores_vec[i]) * cb_config_page_size / sizeof(uint32_t);
+            cb_config_host_buffer[receiver_idx++] = 0;
+            cb_config_host_buffer[receiver_idx++] = num_receivers;
+            cb_config_host_buffer[receiver_idx++] = buffer_address;
+            cb_config_host_buffer[receiver_idx++] = size_;
+            cb_config_host_buffer[receiver_idx++] = buffer_address;
+            cb_config_host_buffer[receiver_idx++] = noc_xy_address;
+            cb_config_host_buffer[receiver_idx++] = pages_sent_address + 2 * i * l1_alignment;
+            cb_config_host_buffer[receiver_idx++] = sender_physical_coord.x;
+            cb_config_host_buffer[receiver_idx++] = sender_physical_coord.y;
         }
-        if (auto mesh_buffer = cb_config_buffer.get_mesh_buffer()) {
-            distributed::EnqueueWriteMeshBuffer(
-                mesh_buffer->device()->mesh_command_queue(), mesh_buffer, cb_config_host_buffer, false);
+    }
+    if (auto mesh_buffer = cb_config_buffer_.get_mesh_buffer()) {
+        distributed::EnqueueWriteMeshBuffer(
+            mesh_buffer->device()->mesh_command_queue(), mesh_buffer, cb_config_host_buffer, false);
+    } else {
+        if (device_->using_slow_dispatch()) {
+            detail::WriteToBuffer(*cb_config_buffer_.get_buffer(), cb_config_host_buffer);
+            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_->id());
         } else {
-            if (device->using_slow_dispatch()) {
-                detail::WriteToBuffer(*cb_config_buffer.get_buffer(), cb_config_host_buffer);
-                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
-            } else {
-                EnqueueWriteBuffer(
-                    device->command_queue(), *cb_config_buffer.get_buffer(), cb_config_host_buffer.data(), false);
-            }
+            EnqueueWriteBuffer(
+                device_->command_queue(), *cb_config_buffer_.get_buffer(), cb_config_host_buffer.data(), false);
         }
-    });
+    }
 }
 
 const Buffer& GlobalCircularBuffer::cb_buffer() const { return *cb_buffer_.get_buffer(); }

@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "buffer.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal {
 

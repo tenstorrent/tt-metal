@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,9 +8,9 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_pybind.hpp"
+#include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_pybind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax_pybind.hpp"
-#include "ttnn/operations/experimental/reduction/cumprod/cumprod_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/cumsum/cumsum_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_pybind.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write_pybind.hpp"
@@ -34,23 +34,30 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_pybind.hpp"
-#include "cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
-#include "cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
-#include "cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
+#include "ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
+#include "ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
+#include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_pybind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to_pybind.hpp"
-
 #include "ttnn/operations/experimental/reshape/view_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_pybind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
+#include "ttnn/operations/experimental/scatter/scatter_pybind.hpp"
+#include "ttnn/operations/experimental/scatter/tosa_scatter_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/sort/sort_pybind.hpp"
+#include "ttnn/operations/experimental/gather/gather_pybind.hpp"
+#include "ttnn/operations/experimental/gather/tosa/gather_tosa_pybind.hpp"
+#include "ttnn/operations/experimental/padded_slice/padded_slice_pybind.hpp"
+
+namespace py = pybind11;
 
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
     slice_write::bind_slice_write(module);
+    padded_slice::bind_padded_slice(module);
 
     transformer::detail::bind_concatenate_heads(module);
     transformer::detail::bind_split_qkv(module);
@@ -80,9 +87,9 @@ void py_module(py::module& module) {
     ssm::detail::bind_hc_sum_reduce(module);
 
     cnn::detail::bind_convert_to_chw(module);
+    cnn::detail::bind_convert_to_hwc(module);
 
     ttnn::operations::experimental::conv3d::detail::py_bind_conv3d(module);
-    ttnn::operations::experimental::reduction::cumprod::detail::bind_cumprod_operation(module);
 
     copy::detail::py_bind_typecast(module);
 
@@ -97,9 +104,16 @@ void py_module(py::module& module) {
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(module);
 
+    scatter::detail::bind_scatter_operation(module);
+    tosa_scatter::detail::bind_tosa_scatter_operation(module);
+
     reduction::sort::detail::bind_reduction_sort_operation(module);
 
     reduction::detail::bind_cumsum_operation(module);
+
+    gather::detail::bind_gather_operation(module);
+
+    tosa::gather::detail::bind_gather_tosa_operation(module);
 
     // CCL ops
     auto m_experimental_ccl =

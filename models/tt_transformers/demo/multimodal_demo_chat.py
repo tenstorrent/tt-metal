@@ -1,27 +1,25 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 from typing import Optional
-from loguru import logger
-
-from PIL import Image as PIL_Image
-
-import pytest
-import os
-import ttnn
 
 import llama_models.llama3.reference_impl.generation as llama_reference_generation
-from llama_models.llama3.api.tokenizer import Tokenizer
+import pytest
 from llama_models.llama3.api.chat_format import ChatFormat
 from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
-
+from llama_models.llama3.api.tokenizer import Tokenizer
+from loguru import logger
+from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
+
+import ttnn
 
 IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
-from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
+from models.tt_transformers.tt.generator import Generator
 
 
 @pytest.mark.parametrize(
@@ -60,8 +58,7 @@ def test_multimodal_demo_chat(
             model_parallel_size=model_parallel_size,
         )
     else:
-        logger.info(f"Creating TT model on {len(mesh_device.get_devices())} devices")
-        mesh_device.enable_program_cache()
+        logger.info(f"Creating TT model on {mesh_device.get_num_devices()} devices")
 
         model_args, model, _ = create_multimodal_model(
             mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len

@@ -6,6 +6,9 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
+import os
+
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 from models.demos.llama3_subdevices.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
@@ -22,6 +25,7 @@ from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.concat_fuse_test impor
 )
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from conftest import is_6u
 
 
 def run_allgather_only_with_trace(
@@ -81,7 +85,6 @@ def run_all_gather_impl(
     num_links,
     input_dtype,
     layout,
-    use_program_cache,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
@@ -162,13 +165,19 @@ def run_all_gather_impl(
     for i in range(num_iters):
         output_tensor = torch.rand(output_shape).bfloat16()
         output_tensor_goldens_list.append(output_tensor)
-        input_tensors = torch.chunk(output_tensor, num_devices, dim)
-        tt_input_tensors = []
-        for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout))
-            logger.info(f"using device {mesh_device.get_devices()[i].id()}")
-
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
+        input_tensor_mesh = ttnn.from_torch(
+            output_tensor,
+            device=mesh_device,
+            layout=layout,
+            dtype=input_dtype,
+            memory_config=input_mem_config,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                mesh_device,
+                ttnn.MeshMapperConfig(
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+                ),
+            ),
+        )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -230,6 +239,7 @@ def run_all_gather_impl(
 
 
 # Enumerate the post-commit cases explicitly
+@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
@@ -303,7 +313,6 @@ def test_all_gather_only(
     input_dtype,
     layout,
     num_iters,
-    use_program_cache,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
@@ -319,7 +328,6 @@ def test_all_gather_only(
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
         function_level_defaults,
         input_shard_shape,
         input_shard_grid,
@@ -332,6 +340,7 @@ def test_all_gather_only(
 
 
 # Enumerate the post-commit cases explicitly
+@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
@@ -355,8 +364,10 @@ def test_all_gather_only(
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("use_new_version", [True])
-@pytest.mark.parametrize("num_iters, warmup_iters", [[100, 10]])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[200, 20]])
 @pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("fused_add", [True])
+@pytest.mark.parametrize("use_noc1_only", [False])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -375,12 +386,89 @@ def test_tg_trace_rms_fuse(
     num_links,
     num_iters,
     warmup_iters,
+    function_level_defaults,
+    input_shard_grid,
+    output_shard_grid,
+    trace_mode,
+    use_noc1_only,
+    use_new_version,
+    fused_add,
+):
+    profiler = BenchmarkProfiler()
+    run_rms_trace(
+        mesh_device,
+        num_devices,
+        elements_per_batch,
+        num_links,
+        function_level_defaults,
+        input_shard_grid,
+        output_shard_grid,
+        ttnn.Topology.Linear,
+        fused_add,
+        use_noc1_only=use_noc1_only,
+        num_iters=num_iters,
+        warmup_iters=warmup_iters,
+        profiler=profiler,
+        use_new_version=use_new_version,
+        trace_mode=trace_mode,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
+    [
+        # RMS NORM ALL GATHER FUSION
+        (
+            4,
+            8192,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(x, y),
+                        ttnn.CoreCoord(x, y),
+                    )
+                    for x, y in PREFETCHER_NOC1_GRID
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("use_new_version", [True])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[200, 20]])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("fused_add", [True])
+@pytest.mark.parametrize("use_noc1_only", [False])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_6u_trace_rms_fuse(
+    mesh_device,
+    num_devices,
+    elements_per_batch,
+    num_links,
+    num_iters,
+    warmup_iters,
     use_program_cache,
     function_level_defaults,
     input_shard_grid,
     output_shard_grid,
     trace_mode,
+    use_noc1_only,
     use_new_version,
+    fused_add,
 ):
     profiler = BenchmarkProfiler()
     run_rms_trace(
@@ -392,15 +480,19 @@ def test_tg_trace_rms_fuse(
         function_level_defaults,
         input_shard_grid,
         output_shard_grid,
-        ttnn.Topology.Linear,
+        ttnn.Topology.Ring,
+        fused_add,
+        use_noc1_only=use_noc1_only,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         profiler=profiler,
         use_new_version=use_new_version,
+        trace_mode=trace_mode,
     )
 
 
 # Enumerate the post-commit cases explicitly
+@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
@@ -430,37 +522,53 @@ def test_tg_trace_rms_fuse(
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("num_iters", [20])
+@pytest.mark.parametrize("fused_add", [True, False])
+@pytest.mark.parametrize("use_noc1_only", [True, False])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("residual_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 def test_rms_fuse(
     mesh_device,
     num_devices,
     elements_per_batch,
     num_links,
     num_iters,
-    use_program_cache,
     function_level_defaults,
     input_shard_grid,
     output_shard_grid,
+    fused_add,
+    use_noc1_only,
+    input_dtype,
+    residual_dtype,
+    output_dtype,
+    topology,
 ):
     run_rms_fuse_impl(
         mesh_device,
         num_devices,
         elements_per_batch,
         num_links,
-        use_program_cache,
         function_level_defaults,
         input_shard_grid,
         output_shard_grid,
-        ttnn.Topology.Linear,
+        topology,
+        fused_add,
+        use_noc1_only=use_noc1_only,
+        output_dtype=output_dtype,
         num_iters=num_iters,
+        input_dtype=input_dtype,
+        residual_dtype=residual_dtype,
     )
 
 
+@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
@@ -543,7 +651,6 @@ def test_concat_fuse(
     layout,
     num_iters,
     warmup_iters,
-    use_program_cache,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
@@ -561,11 +668,124 @@ def test_concat_fuse(
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
         function_level_defaults,
         input_shard_shape,
         input_shard_grid,
         all_gather_topology=ttnn.Topology.Linear,
+        warmup_iters=warmup_iters,
+        num_iters=num_iters,
+        output_shard_shape=output_shard_shape,
+        output_shard_grid=output_shard_grid,
+        tensor_mem_layout=tensor_mem_layout,
+        trace_mode=trace_mode,
+        profiler=profiler,
+    )
+
+
+@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
+@pytest.mark.skipif(not is_6u(), reason="skip when not 6u")
+@pytest.mark.parametrize(
+    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
+    [
+        # Before Concat Heads
+        (
+            4,
+            [1, 32, 32, 128],
+            1,
+            ttnn.ROW_MAJOR_LAYOUT,
+            (32, 128),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                }
+            ),
+            (32, 64),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 7), ttnn.CoreCoord(6, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 1), ttnn.CoreCoord(6, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 2), ttnn.CoreCoord(6, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 4), ttnn.CoreCoord(6, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 5), ttnn.CoreCoord(5, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 6), ttnn.CoreCoord(5, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 7), ttnn.CoreCoord(5, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 9), ttnn.CoreCoord(5, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 1), ttnn.CoreCoord(5, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(5, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 4), ttnn.CoreCoord(5, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 4), ttnn.CoreCoord(1, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 9), ttnn.CoreCoord(1, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 4), ttnn.CoreCoord(2, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 9), ttnn.CoreCoord(2, 9)),
+                ]
+            ),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize("num_iters, warmup_iters", [[75, 5]])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_concat_fuse_6u(
+    mesh_device,
+    num_devices,
+    output_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    num_iters,
+    warmup_iters,
+    function_level_defaults,
+    input_shard_shape,
+    input_shard_grid,
+    output_shard_shape,
+    output_shard_grid,
+    tensor_mem_layout,
+    trace_mode,
+):
+    profiler = BenchmarkProfiler()
+    run_concat_fuse_impl(
+        mesh_device,
+        num_devices,
+        output_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        function_level_defaults,
+        input_shard_shape,
+        input_shard_grid,
+        all_gather_topology=ttnn.Topology.Ring,
         warmup_iters=warmup_iters,
         num_iters=num_iters,
         output_shard_shape=output_shard_shape,

@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
-import torch
+
 import pytest
+import torch
 from loguru import logger
 
 # Set flags for CI, if CI environment is setup
@@ -12,14 +13,9 @@ if os.getenv("CI") == "true":
     os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
-
 from models.common.rmsnorm import RMSNorm as TtRMSNorm
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-    skip_for_grayskull,
-)
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 # RMSNorm reference class
@@ -64,7 +60,7 @@ class RefModel(torch.nn.Module):
     "is_sharded",
     (True, False),
 )
-def test_rmsnorm_singledevice(device, is_sharded, use_program_cache, reset_seeds):
+def test_rmsnorm_singledevice(device, is_sharded, reset_seeds):
     dim = 4096
     dtype = ttnn.bfloat8_b
 
@@ -108,7 +104,7 @@ def test_rmsnorm_singledevice(device, is_sharded, use_program_cache, reset_seeds
     "is_sharded",
     (True, False),
 )
-def test_rmsnorm_multidevice(t3k_mesh_device, is_sharded, use_program_cache, reset_seeds):
+def test_rmsnorm_multidevice(t3k_mesh_device, is_sharded, reset_seeds):
     dim = 4096
     dtype = ttnn.bfloat8_b
 

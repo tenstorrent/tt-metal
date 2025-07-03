@@ -61,6 +61,7 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_row(size_t row) const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
     TT_FATAL(row < shape_2d_->height(), "Row index out of bounds: {}", row);
     std::vector<IDevice*> row_devices;
+    row_devices.reserve(shape_2d_->width());
     for (int col = 0; col < shape_2d_->width(); ++col) {
         row_devices.push_back(devices_.at(MeshCoordinate(row, col)));
     }
@@ -71,6 +72,7 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_column(size_t col) const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
     TT_FATAL(col < shape_2d_->width(), "Column index out of bounds: {}", col);
     std::vector<IDevice*> col_devices;
+    col_devices.reserve(shape_2d_->height());
     for (int row = 0; row < shape_2d_->height(); ++row) {
         col_devices.push_back(devices_.at(MeshCoordinate(row, col)));
     }
@@ -142,13 +144,13 @@ chip_id_t MeshDeviceView::find_device_id(const MeshCoordinate& coord) const {
 
 bool MeshDeviceView::is_mesh_2d() const { return shape_2d_.has_value(); }
 
-std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(size_t length, const Shape2D& mesh_shape) {
-    // Iterate in a zigzag pattern from top-left to bottom-right.
+std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
+    size_t length, const Shape2D& mesh_shape, const Shape2D& mesh_offset) {
+    // Iterate in a zigzag pattern from top-left to bottom-right, starting at the offset.
     std::vector<MeshCoordinate> line_coords;
     line_coords.reserve(length);
     const auto [num_rows, num_cols] = mesh_shape;
-    int row_index = 0;
-    int col_index = 0;
+    auto [row_index, col_index] = mesh_offset;
     bool left_to_right = true;
 
     for (size_t i = 0; i < length && row_index < num_rows && col_index < num_cols; ++i) {
@@ -170,14 +172,17 @@ std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(size_t length, 
 
 std::vector<MeshCoordinate> MeshDeviceView::get_ring_coordinates(const Shape2D& ring_shape, const Shape2D& mesh_shape) {
     const auto [ring_rows, ring_cols] = ring_shape;
+    TT_FATAL(ring_rows > 0 && ring_cols > 0, "Ring shape must not be empty along either dimension. Got {}", ring_shape);
+    TT_FATAL(
+        ring_rows <= mesh_shape.height() && ring_cols <= mesh_shape.width(),
+        "Subgrid {} is out of mesh bounds {}",
+        ring_shape,
+        mesh_shape);
+
     const auto end_row = ring_rows - 1;
     const auto end_col = ring_cols - 1;
 
-    // Validate the specified subgrid
     std::vector<MeshCoordinate> boundary_coords;
-    if (ring_rows > mesh_shape.height() || ring_cols > mesh_shape.width()) {
-        TT_THROW("Subgrid is out of mesh bounds.");
-    }
 
     // Traverse the top row from left to right
     for (size_t col = 0; col <= end_col; ++col) {
@@ -207,7 +212,8 @@ std::vector<MeshCoordinate> MeshDeviceView::get_ring_coordinates(const Shape2D& 
 
 std::vector<IDevice*> MeshDeviceView::get_line_devices() const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
-    auto boundary_coords = get_line_coordinates(devices_.shape().mesh_size(), *shape_2d_);
+    auto boundary_coords =
+        get_line_coordinates(devices_.shape().mesh_size(), *shape_2d_, /*mesh_offset=*/Shape2D(0, 0));
     return get_devices_from_coordinates(*this, boundary_coords);
 }
 

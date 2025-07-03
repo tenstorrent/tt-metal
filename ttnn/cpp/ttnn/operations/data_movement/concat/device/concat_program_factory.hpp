@@ -6,9 +6,8 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/util.hpp>
-#include "cpp/ttnn/operation.hpp"
-
 #include "ttnn/operation.hpp"
+
 namespace ttnn::operations::data_movement::detail {
 
 // start is inclusive, end is exclusive
@@ -32,6 +31,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups = 1);
 
 tt::tt_metal::operation::ProgramWithCallbacks concat_multi_core(
-    const std::vector<Tensor>& input_tensors, const uint32_t dim, const Tensor& output);
+    const std::vector<Tensor>& input_tensors, uint32_t dim, const Tensor& output);
 
 }  // namespace ttnn::operations::data_movement::detail

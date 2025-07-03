@@ -3,28 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+
+import evaluate
 import pytest
 import torch
 from loguru import logger
+from transformers import AutoTokenizer, DistilBertForQuestionAnswering, pipeline
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    profiler,
-)
+from models.demos.distilbert.distilbert_utils import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.distilbert.tt import ttnn_optimized_distilbert
-
-from models.demos.distilbert.distilbert_utils import (
-    squadv2_1K_samples_input,
-    squadv2_answer_decode_batch,
-)
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
-
-from transformers import DistilBertForQuestionAnswering, AutoTokenizer, pipeline
-
-import evaluate
+from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path, batch):
@@ -43,7 +33,6 @@ def load_inputs(input_path, batch):
 
 def run_distilbert_question_and_answering_inference(
     device,
-    use_program_cache,
     model_name,
     batch_size,
     sequence_size,
@@ -171,7 +160,6 @@ def run_distilbert_question_and_answering_inference(
 
 def run_distilbert_question_and_answering_inference_squad_v2(
     device,
-    use_program_cache,
     model_name,
     batch_size,
     sequence_size,
@@ -288,13 +276,11 @@ def test_demo(
     distilbert,
     model_location_generator,
     device,
-    use_program_cache,
 ):
     disable_persistent_kernel_cache()
 
     return run_distilbert_question_and_answering_inference(
         device=device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         batch_size=8,
         sequence_size=384,
@@ -316,13 +302,11 @@ def test_demo_squadv2(
     n_iterations,
     model_location_generator,
     device,
-    use_program_cache,
 ):
     disable_persistent_kernel_cache()
 
     return run_distilbert_question_and_answering_inference_squad_v2(
         device=device,
-        use_program_cache=use_program_cache,
         model_name=model_name,
         batch_size=8,
         sequence_size=384,

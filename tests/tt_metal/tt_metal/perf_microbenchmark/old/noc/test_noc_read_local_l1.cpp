@@ -24,11 +24,11 @@
 #include <vector>
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
@@ -47,19 +47,6 @@ std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
 
     std::vector<T> vec(first, last);
     return vec;
-}
-
-void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const std::string& name) {
-    std::cout << name << ": " << std::endl;
-    int index = 0;
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            std::cout << data.at(index).to_float() << " ";
-            index++;
-        }
-        std::cout << std::endl;
-    }
-    std::cout << std::endl;
 }
 
 int main(int argc, char** argv) {
@@ -138,10 +125,9 @@ int main(int argc, char** argv) {
         if (print_tensor) {
             for (int r = 0; r < num_cores_r; ++r) {
                 for (int c = 0; c < num_cores_c; ++c) {
-                    print_vec(
+                    print_vec_of_bfloat16(
                         tensors[r * num_cores_c + c].get_values(),
                         1,
-                        32,
                         std::string("input tensor " + std::to_string(r) + " " + std::to_string(c)));
                 }
             }
@@ -244,7 +230,7 @@ int main(int argc, char** argv) {
         auto bw = (total_tiles_size_bytes / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
         log_info(LogTest, "Total bytes transfered: {} Bytes", total_tiles_size_bytes);
         log_info(LogTest, "Read local to L1: {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
-        tt_metal::DumpDeviceProfileResults(device, program);
+        tt_metal::detail::DumpDeviceProfileResults(device);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -262,16 +248,13 @@ int main(int argc, char** argv) {
                         slice_vec(tensors[r * num_cores_c + c].get_values(), (Nt - cb_tiles) * 1024, Nt * 1024 - 1);
 
                     if (print_tensor) {
-                        print_vec(
+                        print_vec_of_bfloat16(
                             result_bfp16,
-                            32,
-                            32,
+                            1,
                             std::string("result_bfp16 " + std::to_string(r) + " " + std::to_string(c)));
-
-                        print_vec(
+                        print_vec_of_bfloat16(
                             sliced_tensor,
-                            32,
-                            32,
+                            1,
                             std::string("sliced_tensor " + std::to_string(r) + " " + std::to_string(c)));
                     }
 

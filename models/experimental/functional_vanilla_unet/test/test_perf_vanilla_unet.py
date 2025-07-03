@@ -228,7 +228,7 @@ def test_vanilla_unet(device, reset_seeds):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 68.5],
+        [1, 73],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

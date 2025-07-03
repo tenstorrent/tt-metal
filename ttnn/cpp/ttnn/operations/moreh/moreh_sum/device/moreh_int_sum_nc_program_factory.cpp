@@ -16,7 +16,7 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto input = tensor_args.input;
-    auto output = output_tensor;
+    const auto& output = output_tensor;
     auto dim = operation_attributes.dim;
 
     auto memory_config = operation_attributes.memory_config;
@@ -25,15 +25,14 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
     tt::tt_metal::IDevice* device{input.device()};
     tt::tt_metal::Program program{tt::tt_metal::CreateProgram()};
 
-    const auto cb_data_format{datatype_to_dataformat_converter(output.get_dtype())};
+    const auto cb_data_format{datatype_to_dataformat_converter(output.dtype())};
     const auto single_tile_size{tt::tt_metal::detail::TileSize(cb_data_format)};
 
-    const auto input_shape = input.get_padded_shape();
-    const auto input_shape_without_padding = input.get_logical_shape();
+    const auto& input_shape = input.padded_shape();
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
         extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
     const auto num_reduce_input_tile{input_shape[dim]};
-    const auto num_output_tiles{output.volume() / tt::constants::TILE_HW};
+    const auto num_output_tiles{output.physical_volume() / tt::constants::TILE_HW};
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
 

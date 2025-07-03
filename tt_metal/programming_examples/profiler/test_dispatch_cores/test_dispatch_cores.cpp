@@ -52,7 +52,7 @@ void RunCustomCycle(tt_metal::IDevice* device, int loop_count) {
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
     EnqueueProgram(device->command_queue(), program, false);
-    tt_metal::DumpDeviceProfileResults(device, program);
+    tt_metal::detail::DumpDeviceProfileResults(device);
 }
 
 int main() {
@@ -73,13 +73,13 @@ int main() {
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
-        log_error(LogTest, "{}", e.what());
+        fmt::print(stderr, "{}\n", e.what());
         // Capture system call errors that may have returned from driver/kernel
-        log_error(LogTest, "System error message: {}", std::strerror(errno));
+        fmt::print(stderr, "System error message: {}\n", std::strerror(errno));
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        fmt::print("Test Passed\n");
     } else {
         TT_THROW("Test Failed");
     }

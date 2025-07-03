@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from models.utility_functions import comp_allclose_and_pcc, is_grayskull, skip_for_blackhole
+from models.utility_functions import comp_allclose_and_pcc
 from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     compute_kernel_options,
@@ -195,7 +195,6 @@ def run_moreh_bmm_backward(
         assert passing
 
 
-@skip_for_blackhole("Fails on BH. Issue #19639")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -210,17 +209,16 @@ def test_moreh_bmm_shape(shape, device):
     PyTest wrapper for running BMM tests with multiple configurations.
     """
     torch.manual_seed(2024)
-    run_moreh_bmm(shape, True, False if is_grayskull() else True, device)
+    run_moreh_bmm(shape, True, True, device)
 
 
-@skip_for_blackhole("Fails on BH. Issue #19639")
 @pytest.mark.parametrize("optional_output", [False, True])
 def test_moreh_bmm_optional_output(optional_output, device):
     """
     PyTest wrapper for running BMM tests with multiple configurations.
     """
     torch.manual_seed(2024)
-    run_moreh_bmm([10, 191, 447, 159], optional_output, False if is_grayskull() else True, device)
+    run_moreh_bmm([10, 191, 447, 159], optional_output, True, device)
 
 
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
@@ -232,7 +230,6 @@ def test_moreh_bmm_compute_kernel_options(compute_kernel_options, device):
     run_moreh_bmm([10, 191, 447, 159], True, compute_kernel_options, device)
 
 
-@skip_for_blackhole("Fails on BH. Issue #19639")
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_moreh_bmm_ttnn_dtype(ttnn_dtype, device):
     """
@@ -242,15 +239,14 @@ def test_moreh_bmm_ttnn_dtype(ttnn_dtype, device):
     if ttnn_dtype == ttnn.bfloat8_b:
         pytest.skip(f"bfloat8_b is not supported in the kernel")
     torch.manual_seed(2024)
-    run_moreh_bmm([10, 191, 447, 159], True, False if is_grayskull() else True, device, ttnn_dtype=ttnn_dtype)
+    run_moreh_bmm([10, 191, 447, 159], True, True, device, ttnn_dtype=ttnn_dtype)
 
 
-@skip_for_blackhole("Fails on BH. Issue #19639")
 @pytest.mark.parametrize(
     "shape",
     [[10, 191, 447, 159]],
 )
-def test_moreh_bmm_callback(shape, device, use_program_cache):
+def test_moreh_bmm_callback(shape, device):
     """
     PyTest wrapper for running BMM tests with multiple configurations.
     AssertionError: If the number of program cache entries differs between runs with the same settings.
@@ -258,7 +254,7 @@ def test_moreh_bmm_callback(shape, device, use_program_cache):
     torch.manual_seed(2024)
     num_program_cache_entries_list = []
     for i in range(2):
-        run_moreh_bmm(shape, True, False if is_grayskull() else True, device)
+        run_moreh_bmm(shape, True, True, device)
         torch_dummy = torch.randn([32, 32])
         ttnn_dummy = ttnn.from_torch(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
@@ -267,7 +263,6 @@ def test_moreh_bmm_callback(shape, device, use_program_cache):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_blackhole("Fails on BH. Issue #19639")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -282,10 +277,9 @@ def test_moreh_bmm_backward_shape(shape, device):
     PyTest wrapper for running BMM backward tests with multiple configurations.
     """
     torch.manual_seed(2024)
-    run_moreh_bmm_backward(shape, [True, True], False if is_grayskull() else True, device)
+    run_moreh_bmm_backward(shape, [True, True], True, device)
 
 
-@skip_for_blackhole("Fails on BH. Issue #19639")
 @pytest.mark.parametrize(
     "requires_grad",
     [
@@ -299,7 +293,7 @@ def test_moreh_bmm_backward_requires_grad(requires_grad, device):
     PyTest wrapper for running BMM backward tests with multiple configurations.
     """
     torch.manual_seed(2024)
-    run_moreh_bmm_backward([7, 511, 313, 765], requires_grad, False if is_grayskull() else True, device)
+    run_moreh_bmm_backward([7, 511, 313, 765], requires_grad, True, device)
 
 
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
@@ -311,7 +305,6 @@ def test_moreh_bmm_backward_compute_kernel_options(compute_kernel_options, devic
     run_moreh_bmm_backward([7, 511, 313, 765], [True, True], compute_kernel_options, device)
 
 
-@skip_for_blackhole("Fails on BH. Issue #19639")
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_moreh_bmm_backward_ttnn_dtype(ttnn_dtype, device):
     """
@@ -321,12 +314,9 @@ def test_moreh_bmm_backward_ttnn_dtype(ttnn_dtype, device):
     if ttnn_dtype == ttnn.bfloat8_b:
         pytest.skip(f"bfloat8_b is not supported in the kernel")
     torch.manual_seed(2024)
-    run_moreh_bmm_backward(
-        [7, 511, 313, 765], [True, True], False if is_grayskull() else True, device, ttnn_dtype=ttnn_dtype
-    )
+    run_moreh_bmm_backward([7, 511, 313, 765], [True, True], True, device, ttnn_dtype=ttnn_dtype)
 
 
-@skip_for_blackhole("Fails on BH. Issue #19639")
 @pytest.mark.parametrize(
     "requires_grad",
     [
@@ -335,7 +325,7 @@ def test_moreh_bmm_backward_ttnn_dtype(ttnn_dtype, device):
         [True, True],
     ],
 )
-def test_moreh_bmm_backward_callback(requires_grad, device, use_program_cache):
+def test_moreh_bmm_backward_callback(requires_grad, device):
     """
     PyTest wrapper for running BMM backward tests with multiple configurations.
     AssertionError: If the number of program cache entries differs between runs with the same settings.
@@ -343,7 +333,7 @@ def test_moreh_bmm_backward_callback(requires_grad, device, use_program_cache):
     torch.manual_seed(2024)
     num_program_cache_entries_list = []
     for i in range(2):
-        run_moreh_bmm_backward([7, 511, 313, 765], requires_grad, False if is_grayskull() else True, device)
+        run_moreh_bmm_backward([7, 511, 313, 765], requires_grad, True, device)
         torch_dummy = torch.randn([32, 32])
         ttnn_dummy = ttnn.from_torch(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())

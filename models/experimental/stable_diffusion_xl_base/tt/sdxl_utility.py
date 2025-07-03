@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -52,35 +52,25 @@ def prepare_gn_beta_gamma(device, weights, bias, num_cores):
 
 
 def prepare_linear_params(device, weights, bias, dtype):
-    tt_weights = ttnn.from_torch(torch.permute(weights, (0, 1, 3, 2)), dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weights = ttnn.from_torch(weights.movedim(-1, -2), dtype, device=device, layout=ttnn.TILE_LAYOUT)
     tt_bias = ttnn.from_torch(bias, dtype, device=device, layout=ttnn.TILE_LAYOUT) if bias is not None else None
     return tt_weights, tt_bias
 
 
-def prepare_conv_params(device, weights, bias, dtype, act_dtype=ttnn.bfloat16, act_block_h_override=0):
+def prepare_conv_params(
+    device,
+    weights,
+    bias,
+    dtype,
+    fp32_dest_acc_en=False,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    packer_l1_acc=False,
+):
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
-
-    conv_config = ttnn.Conv2dConfig(
-        dtype=act_dtype,
-        weights_dtype=dtype,
-        shard_layout=None,
-        input_channels_alignment=32,
-        deallocate_activation=True,
-        reallocate_halo_output=False,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
-        reshard_if_not_optimal=True,
-        act_block_w_div=1,
-        act_block_h_override=act_block_h_override,
-        preprocess_weights_on_device=True,
-        always_preprocess_weights=True,
-        transpose_shards=True,
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=packer_l1_acc,
     )
 
     dtype = ttnn.float32 if dtype == ttnn.bfloat8_b else dtype
@@ -93,35 +83,27 @@ def prepare_conv_params(device, weights, bias, dtype, act_dtype=ttnn.bfloat16, a
         "kernel_size": (tt_weights.shape[2], tt_weights.shape[3]),
     }
 
-    return compute_config, conv_config, tt_weights, tt_bias, conv_params
+    return compute_config, tt_weights, tt_bias, conv_params
 
 
 def prepare_split_conv_params(
-    device, weights, bias, split_in, split_out, dtype, act_dtype=ttnn.bfloat16, act_block_h_override=0
+    device,
+    weights,
+    bias,
+    dtype,
+    split_in,
+    split_out,
+    fp32_dest_acc_en=False,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
 ):
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        fp32_dest_acc_en=False,
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=False,
     )
 
-    conv_config = ttnn.Conv2dConfig(
-        dtype=act_dtype,
-        weights_dtype=dtype,
-        shard_layout=None,
-        input_channels_alignment=32,
-        deallocate_activation=True,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
-        reshard_if_not_optimal=True,
-        act_block_w_div=1,
-        act_block_h_override=act_block_h_override,
-        preprocess_weights_on_device=True,
-        always_preprocess_weights=True,
-        transpose_shards=True,
-    )
+    dtype = ttnn.float32 if dtype == ttnn.bfloat8_b else dtype  # TODO: figure out why PCC drops when dtype is used
 
     Cout, Cin, _, _ = weights.shape
     Cout_split = Cout // split_out
@@ -173,7 +155,7 @@ def prepare_split_conv_params(
         ]
         for tt_w_out in tt_weights
     ]
-    return compute_config, conv_config, tt_weights, tt_bias, conv_params
+    return compute_config, tt_weights, tt_bias, conv_params
 
 
 def split_conv2d(

@@ -10,8 +10,8 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "cpp/ttnn/operations/copy.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn {
 
@@ -21,7 +21,7 @@ AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(const Tens
     }
 
     std::size_t eth_l1_capacity = tt::tt_metal::hal::get_erisc_l1_unreserved_size();
-    std::size_t tensor_size_bytes = input_tensor.volume() * input_tensor.element_size();
+    std::size_t tensor_size_bytes = input_tensor.physical_volume() * input_tensor.element_size();
     // This is currently a guestimate. We need a lot more hard data to identify where this dividing line is.
     bool perf_degradation_from_full_tensor_mode = tensor_size_bytes > (2 * eth_l1_capacity);
     if (perf_degradation_from_full_tensor_mode) {
@@ -58,11 +58,11 @@ AllGatherConfig::AllGatherConfig(
     TT_ASSERT(erisc_handshake_address >= tt::tt_metal::hal::get_erisc_l1_unreserved_base());
     TT_ASSERT(erisc_handshake_address < tt::tt_metal::hal::get_erisc_l1_unreserved_base() + 16);
     TT_ASSERT((erisc_handshake_address & (16 - 1)) == 0);
-    if (input_tensor.get_layout() == Layout::TILE && dim != 3) {
+    if (input_tensor.layout() == Layout::TILE && dim != 3) {
         // See issue #6448
         int outer_dims_size = 1;
         for (std::size_t i = 0; i < dim; i++) {
-            outer_dims_size *= input_tensor.get_padded_shape()[i];
+            outer_dims_size *= input_tensor.padded_shape()[i];
         }
         if (outer_dims_size > 1) {
             this->enable_bidirectional = false;
@@ -121,8 +121,8 @@ AllGatherConfig::AllGatherConfig(
 void AllGather::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
-    const auto& layout = input_tensors[0].get_layout();
-    const auto& dtype = input_tensors[0].get_dtype();
+    const auto& layout = input_tensors[0].layout();
+    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
@@ -137,12 +137,12 @@ void AllGather::validate(const std::vector<Tensor>& input_tensors) const {
         "Worker cores used by links are parallelizaed over rows");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
-        input_tensor.memory_config().memory_layout);
+        input_tensor.memory_config().memory_layout());
 
     // Sharding Config checks
     bool input_sharded = input_tensor.is_sharded();
@@ -152,19 +152,18 @@ void AllGather::validate(const std::vector<Tensor>& input_tensors) const {
 }
 
 std::vector<ttnn::TensorSpec> AllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    auto output_shape = input_tensors[0].get_logical_shape();
+    auto output_shape = input_tensors[0].logical_shape();
     output_shape[this->dim] *= this->ring_size;
 
     const auto& input_tensor = input_tensors[0];
     TensorSpec spec(
         output_shape,
-        tt::tt_metal::TensorLayout(
-            input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config));
+        tt::tt_metal::TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config));
     if (this->output_mem_config.is_sharded()) {
         return {TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
-                input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
+                input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config))};
     }
     return std::vector<TensorSpec>(input_tensors.size(), spec);
 }
@@ -232,7 +231,7 @@ Tensor all_gather_impl(
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
 
-    int32_t rank = input_tensor.get_logical_shape().rank();
+    int32_t rank = input_tensor.logical_shape().rank();
 
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
@@ -244,25 +243,28 @@ Tensor all_gather_impl(
         dim);
 
     ttnn::SmallVector<uint32_t> unpad_elements = {
-        input_tensor.get_logical_shape()[-4],
-        input_tensor.get_logical_shape()[-3],
-        input_tensor.get_logical_shape()[-2],
-        input_tensor.get_logical_shape()[-1]};
+        input_tensor.logical_shape()[-4],
+        input_tensor.logical_shape()[-3],
+        input_tensor.logical_shape()[-2],
+        input_tensor.logical_shape()[-1]};
 
-    const uint32_t w_pad = input_tensor.get_logical_shape()[-1] % tt::constants::TILE_WIDTH;
-    const uint32_t h_pad = input_tensor.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT;
-    bool needs_padding = input_tensor.get_layout() == Layout::TILE && (h_pad != 0 || w_pad != 0);
+    const uint32_t unpadded_w = input_tensor.logical_shape()[-1];
+    const uint32_t unpadded_h = input_tensor.logical_shape()[-2];
+
+    const uint32_t w_pad = tt::round_up(unpadded_w, tt::constants::TILE_WIDTH) - unpadded_w;
+    const uint32_t h_pad = tt::round_up(unpadded_h, tt::constants::TILE_HEIGHT) - unpadded_h;
+    bool needs_padding = input_tensor.layout() == Layout::TILE && (h_pad != 0 || w_pad != 0);
 
     Tensor input_tensor_padded = input_tensor;
     if (needs_padding) {
         ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, h_pad}, {0, w_pad}};
-        DataType original_dtype = input_tensor.get_dtype();
-        if (input_tensor.get_dtype() != DataType::BFLOAT16 && input_tensor.get_dtype() != DataType::FLOAT32) {
+        DataType original_dtype = input_tensor.dtype();
+        if (input_tensor.dtype() != DataType::BFLOAT16 && input_tensor.dtype() != DataType::FLOAT32) {
             input_tensor_padded = ttnn::typecast(input_tensor_padded, DataType::BFLOAT16);
         }
         input_tensor_padded = ttnn::pad(input_tensor_padded, padding, 0, false, std::nullopt);
 
-        if (original_dtype != input_tensor.get_dtype()) {
+        if (original_dtype != input_tensor.dtype()) {
             input_tensor_padded = ttnn::typecast(input_tensor_padded, original_dtype);
         }
     }
@@ -302,7 +304,7 @@ Tensor all_gather_impl(
     const auto mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    int32_t rank = input_tensor.get_logical_shape().rank();
+    int32_t rank = input_tensor.logical_shape().rank();
 
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
@@ -346,7 +348,7 @@ Tensor all_gather(
         user_defined_num_workers,
         user_defined_num_buffers_per_channel,
         topology,
-        input_tensor.active_physical_devices());
+        ttnn::ccl::get_active_physical_devices(input_tensor));
 }
 
 std::vector<Tensor> all_gather(

@@ -22,7 +22,7 @@ MorehAbsPowOperation::MorehAbsPowFactory::cached_program_t MorehAbsPowOperation:
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_padded_shape();
+    const auto input_shape = input.padded_shape();
     const auto input_rank = input_shape.rank();
 
     const auto H = input_shape[-2];
@@ -31,9 +31,9 @@ MorehAbsPowOperation::MorehAbsPowFactory::cached_program_t MorehAbsPowOperation:
     const auto Ht = H / tt::constants::TILE_HEIGHT;
     const auto Wt = W / tt::constants::TILE_WIDTH;
 
-    const auto num_units = input.volume() / H / W * Ht;
+    const auto num_units = input.physical_volume() / H / W * Ht;
 
-    const auto origin_w = input.get_logical_shape()[input_rank - 1];
+    const auto origin_w = input.logical_shape()[input_rank - 1];
 
     auto [floored_p, decimal, p_is_negative] = get_floored_p_and_decimal_and_p_is_negative(p);
     ////////////////////////////////////////////////////////////////////////////
@@ -57,7 +57,7 @@ MorehAbsPowOperation::MorehAbsPowFactory::cached_program_t MorehAbsPowOperation:
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
 
     const uint32_t in0_t{1};  // input

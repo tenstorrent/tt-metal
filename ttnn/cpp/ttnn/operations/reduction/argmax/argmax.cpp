@@ -21,8 +21,6 @@ namespace ttnn::operations::reduction {
 */
 static Tensor zero_volume_argmax(
     const Tensor& input_tensor, const std::optional<int> dim, const bool keepdim, const MemoryConfig& memory_config) {
-    auto input_shape = input_tensor.get_logical_shape();
-
     auto argmax_op = ArgMax{
         tt::tt_metal::DataType::UINT32,
         dim,
@@ -36,8 +34,8 @@ static Tensor zero_volume_argmax(
         ttnn::Shape(output_shape),
         NAN,
         tt::tt_metal::DataType::UINT32,
-        input_tensor.get_layout(),
-        std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*input_tensor.device()),
+        input_tensor.layout(),
+        *input_tensor.mesh_device(),
         memory_config);
 }
 
@@ -50,11 +48,11 @@ ttnn::Tensor ArgMaxOperation::invoke(
     const bool use_muticore,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.logical_shape();
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     // If the input is a zero volume tensor, return output with shape adjusted for keepdim
-    if (input_tensor.get_logical_volume() == 0) [[unlikely]] {
+    if (input_tensor.logical_volume() == 0) [[unlikely]] {
         return zero_volume_argmax(input_tensor, dim, keepdim, output_memory_config);
     }
 
@@ -65,8 +63,8 @@ ttnn::Tensor ArgMaxOperation::invoke(
             input_shape,
             /*fill_value=*/0,
             tt::tt_metal::DataType::UINT32,
-            input_tensor.get_layout(),
-            std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*input_tensor.device()),
+            input_tensor.layout(),
+            *input_tensor.mesh_device(),
             output_memory_config);
     }
 

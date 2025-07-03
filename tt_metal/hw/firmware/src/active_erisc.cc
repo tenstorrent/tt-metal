@@ -21,6 +21,7 @@
 #include "dataflow_api.h"
 #include "ethernet/dataflow_api.h"
 #include "ethernet/tunneling.h"
+#include "dev_mem_map.h"
 
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"
@@ -65,13 +66,12 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 #endif
 
 int main() {
-    configure_l1_data_cache();
-    DIRTY_STACK_MEMORY();
+    configure_csr();
     WAYPOINT("I");
-    do_crt1((uint32_t*)eth_l1_mem::address_map::MEM_ERISC_INIT_LOCAL_L1_BASE_SCRATCH);
+    do_crt1((uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
     // put this into scratch space similar to idle erisc
-    noc_bank_table_init(eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH);
+    noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
 
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     noc_index = 0;
@@ -80,7 +80,7 @@ int main() {
 
     risc_init();
 
-    mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
+    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
@@ -142,11 +142,10 @@ int main() {
                 // TODO: This currently runs on second risc on active eth cores but with newer drop of syseng FW
                 //  this will run on risc0
                 int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
-                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))(
-                    mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
-                (*kernel_address)((uint32_t)kernel_address);
-
-                RECORD_STACK_USAGE();
+                uint32_t kernel_lma =
+                    mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
+                auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+                record_stack_usage(stack_free);
                 WAYPOINT("D");
             }
 

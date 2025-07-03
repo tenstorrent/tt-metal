@@ -1,1 +1,0 @@
-../../../../../../../../models/demos/tg/llama3_70b/tests/test_llama_demo_nightly.py

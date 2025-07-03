@@ -33,13 +33,13 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
@@ -345,7 +345,11 @@ tt_metal::Program create_program_mcast_in0_in1(
             (std::uint32_t)top_left_core_physical.y);  // in1_mcast_sender_noc_y
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in3_mcast_sender_semaphore_id);
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in3_mcast_receiver_semaphore_id);
+    } else {
+        in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
+    // no fusion
+    in1_receiver_writer_compile_time_args.push_back(0);
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
@@ -898,7 +902,7 @@ tt_metal::Program create_program_mcast_in0_in1(
             }
         }
     }
-    return std::move(program);
+    return program;
 }
 
 std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
@@ -1048,14 +1052,14 @@ int main(int argc, char** argv) {
             std::chrono::system_clock::now().time_since_epoch().count());
         auto activations_tilized = tilize_swizzled(tensor.get_values(), Mt * 32, Kt * 32);
         auto activations_tile_layout =
-            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(activations_tilized));
+            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         tt_metal::detail::WriteToBuffer(in0_buffer, activations);
 
         auto identity = create_identity_matrix(Kt * 32, Nt * 32, std::min(Kt, Nt) * 32);
         auto identity_tilized = tilize_swizzled(identity, Kt * 32, Nt * 32);
         auto weights_tile_layout =
-            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(identity_tilized));
+            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::detail::WriteToBuffer(in1_buffer, weights);
 
@@ -1109,7 +1113,7 @@ int main(int argc, char** argv) {
         Finish(device->command_queue());
         auto end = std::chrono::high_resolution_clock::now();
         duration = end - start;
-        tt_metal::DumpDeviceProfileResults(device, program);
+        tt_metal::detail::DumpDeviceProfileResults(device);
 
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);
@@ -1126,7 +1130,7 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(out_buffer, result_vec);
         auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-        auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
+        auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
         auto result_untilized = untilize_swizzled(result_flat_layout, Mt * 32, Nt * 32);
 
         auto golden = select_columns(tensor.get_values(), Mt, Kt, Nt);

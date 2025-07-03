@@ -10,177 +10,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
-RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker --mode runtime
+COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
+RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
 
 #############################################################
 
 FROM base AS ci-build
 
-RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker --mode build
-
 # Install ccache from upstream; Apt's version for 20.04 predates remote_storage support
 RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-x86_64.tar.xz && \
     tar -xf /tmp/ccache.tar.xz -C /usr/local/bin --strip-components=1 && \
     rm /tmp/ccache.tar.xz
-
-ARG BOOST_VERSION=1.86.0
-RUN mkdir -p /tmp/boost \
-    && BOOST_VERSION_UNDERSCORE=$(echo ${BOOST_VERSION} | sed 's/\./_/g') \
-    && wget -O /tmp/boost/boost_${BOOST_VERSION}.tar.gz "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.gz" \
-    && tar -xzf /tmp/boost/boost_${BOOST_VERSION}.tar.gz -C /tmp/boost --strip-components=1 \
-    && cd /tmp/boost \
-    && ./bootstrap.sh \
-    && ./b2 install --prefix=/usr/local \
-    && rm -rf /tmp/boost
-
-# Problematic with packaging
-# ARG FMT_VERSION=11.1.4
-# RUN mkdir -p /tmp/fmt \
-#     && wget -O /tmp/fmt/fmt-${FMT_VERSION}.tar.gz "https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz" \
-#     && tar -xzf /tmp/fmt/fmt-${FMT_VERSION}.tar.gz -C /tmp/fmt --strip-components=1 \
-#     && cmake \
-#          -S /tmp/fmt \
-#          -B /tmp/fmt/build \
-#          -DCMAKE_BUILD_TYPE=Release \
-#          -DFMT_TEST=OFF \
-#          -DFMT_DOC=OFF \
-#          -DFMT_INSTALL=ON \
-#     && make -C /tmp/fmt/build -j$(nproc) \
-#     && make -C /tmp/fmt/build install \
-#     && rm -rf /tmp/fmt
-
-ARG PYBIND11_VERSION=2.13.6
-RUN mkdir -p /tmp/pybind11 \
-    && wget -O /tmp/pybind11/pybind11-${PYBIND11_VERSION}.tar.gz "https://github.com/pybind/pybind11/archive/refs/tags/v${PYBIND11_VERSION}.tar.gz" \
-    && tar -xzf /tmp/pybind11/pybind11-${PYBIND11_VERSION}.tar.gz -C /tmp/pybind11 --strip-components=1 \
-    && cmake \
-         -S /tmp/pybind11 \
-         -B /tmp/pybind11/build \
-         -DCMAKE_BUILD_TYPE=Release \
-         -DPYBIND11_TEST=OFF \
-         -DPYBIND11_INSTALL=ON \
-    && make -C /tmp/pybind11/build -j$(nproc) \
-    && make -C /tmp/pybind11/build install \
-    && rm -rf /tmp/pybind11
-
-ARG RANGE_V3_VERSION=0.12.0
-RUN mkdir -p /tmp/range-v3 \
-    && wget -O /tmp/range-v3/range-v3-${RANGE_V3_VERSION}.tar.gz "https://github.com/ericniebler/range-v3/archive/refs/tags/${RANGE_V3_VERSION}.tar.gz" \
-    && tar -xzf /tmp/range-v3/range-v3-${RANGE_V3_VERSION}.tar.gz -C /tmp/range-v3 --strip-components=1 \
-    && cmake \
-         -S /tmp/range-v3 \
-         -B /tmp/range-v3/build \
-         -DCMAKE_BUILD_TYPE=Release \
-         -DRANGE_V3_TESTS=OFF \
-         -DRANGE_V3_EXAMPLES=OFF \
-         -DRANGE_V3_DOCS=OFF \
-         -DCMAKE_INSTALL_PREFIX=/usr/local \
-    && make -C /tmp/range-v3/build -j$(nproc) \
-    && make -C /tmp/range-v3/build install \
-    && rm -rf /tmp/range-v3
-
-
-# libstdc++ vs libc++ issue arises
-#ARG YAML_VERSION=0.8.0
-#RUN mkdir -p /tmp/yaml \
-#    && wget -O /tmp/yaml/yaml-${YAML_VERSION}.tar.gz "https://github.com/jbeder/yaml-cpp/archive/refs/tags/${YAML_VERSION}.tar.gz" \
-#    && tar -xzf /tmp/yaml/yaml-${YAML_VERSION}.tar.gz -C /tmp/yaml --strip-components=1 \
-#    && cmake \
-#         -S /tmp/yaml \
-#         -B /tmp/yaml/build \
-#         -DCMAKE_BUILD_TYPE=Release \
-#         -DYAML_CPP_BUILD_TESTS=OFF \
-#         -DYAML_CPP_BUILD_TOOLS=OFF \
-#         -DYAML_BUILD_SHARED_LIBS=OFF \
-#    && make -C /tmp/yaml/build -j$(nproc) \
-#    && make -C /tmp/yaml/build install \
-#    && rm -rf /tmp/yaml
-
-# Problematic with packaging
-# ARG JSON_VERSION=3.11.3
-# RUN mkdir -p /tmp/json \
-#     && wget -O /tmp/json/json-${JSON_VERSION}.tar.gz "https://github.com/nlohmann/json/archive/refs/tags/v${JSON_VERSION}.tar.gz" \
-#     && tar -xzf /tmp/json/json-${JSON_VERSION}.tar.gz -C /tmp/json --strip-components=1 \
-#     && cmake \
-#          -S /tmp/json \
-#          -B /tmp/json/build \
-#          -DCMAKE_BUILD_TYPE=Release \
-#          -DJSON_BuildTests=OFF \
-#          -DJSON_Install=ON \
-#     && make -C /tmp/json/build -j$(nproc) \
-#     && make -C /tmp/json/build install \
-#     && rm -rf /tmp/json
-
-# Problematic with packaging
-# ARG MAGIC_ENUM_VERSION=0.9.7
-# RUN mkdir -p /tmp/magic_enum \
-#     && wget -O /tmp/magic_enum/magic_enum-${MAGIC_ENUM_VERSION}.tar.gz "https://github.com/Neargye/magic_enum/archive/refs/tags/v${MAGIC_ENUM_VERSION}.tar.gz" \
-#     && tar -xzf /tmp/magic_enum/magic_enum-${MAGIC_ENUM_VERSION}.tar.gz -C /tmp/magic_enum --strip-components=1 \
-#     && cmake \
-#          -S /tmp/magic_enum \
-#          -B /tmp/magic_enum/build \
-#          -DCMAKE_BUILD_TYPE=Release \
-#          -DMAGIC_ENUM_OPT_BUILD_TESTS=OFF \
-#          -DMAGIC_ENUM_OPT_BUILD_EXAMPLES=OFF \
-#          -DMAGIC_ENUM_OPT_INSTALL=ON \
-#     && make -C /tmp/magic_enum/build -j$(nproc) \
-#     && make -C /tmp/magic_enum/build install \
-#     && rm -rf /tmp/magic_enum
-
-ARG TAKSFLOW_VERSION=3.7.0
-RUN mkdir -p /tmp/taskflow \
-    && wget -O /tmp/taskflow/taskflow-${TAKSFLOW_VERSION}.tar.gz "https://github.com/taskflow/taskflow/archive/v${TAKSFLOW_VERSION}.tar.gz" \
-    && tar -xzf /tmp/taskflow/taskflow-${TAKSFLOW_VERSION}.tar.gz -C /tmp/taskflow --strip-components=1 \
-    && cmake \
-         -S /tmp/taskflow \
-         -B /tmp/taskflow/build \
-         -DCMAKE_BUILD_TYPE=Release \
-         -DTF_BUILD_TESTS=OFF \
-         -DTF_BUILD_EXAMPLES=OFF \
-         -DTF_BUILD_BENCHMARKS=OFF \
-         -DTF_BUILD_CUDA=OFF \
-         -DTF_BUILD_SYCL=OFF \
-    && make -C /tmp/taskflow/build -j$(nproc) \
-    && make -C /tmp/taskflow/build install \
-    && rm -rf /tmp/taskflow
-
-ARG XTENSOR_XTL_VERSION=0.7.7
-RUN mkdir -p /tmp/xtensor_xtl \
-    && wget -O /tmp/xtensor_xtl/xtensor_xtl-${XTENSOR_XTL_VERSION}.tar.gz "https://github.com/xtensor-stack/xtl/archive/refs/tags/${XTENSOR_XTL_VERSION}.tar.gz" \
-    && tar -xzf /tmp/xtensor_xtl/xtensor_xtl-${XTENSOR_XTL_VERSION}.tar.gz -C /tmp/xtensor_xtl --strip-components=1 \
-    && cmake \
-         -S /tmp/xtensor_xtl \
-         -B /tmp/xtensor_xtl/build \
-         -DCMAKE_BUILD_TYPE=Release \
-    && make -C /tmp/xtensor_xtl/build -j$(nproc) \
-    && make -C /tmp/xtensor_xtl/build install \
-    && rm -rf /tmp/xtensor_xtl
-
-# xtensor problematic
-#ARG XTENSOR_VERSION=0.25.0
-#RUN mkdir -p /tmp/xtensor \
-#    && wget -O /tmp/xtensor/xtensor-${XTENSOR_VERSION}.tar.gz "https://github.com/xtensor-stack/xtensor/archive/refs/tags/${XTENSOR_VERSION}.tar.gz" \
-#    && tar -xzf /tmp/xtensor/xtensor-${XTENSOR_VERSION}.tar.gz -C /tmp/xtensor --strip-components=1 \
-#    && cmake \
-#         -S /tmp/xtensor \
-#         -B /tmp/xtensor/build \
-#         -DCMAKE_BUILD_TYPE=Release \
-#    && make -C /tmp/xtensor/build -j$(nproc) \
-#    && make -C /tmp/xtensor/build install \
-#    && rm -rf /tmp/xtensor
-
-# Issue arises - No blas
-#ARG XTENSOR_BLAS_VERSION=0.21.0
-#RUN mkdir -p /tmp/xtensor_blas \
-#    && wget -O /tmp/xtensor_blas/xtensor_blas-${XTENSOR_BLAS_VERSION}.tar.gz "https://github.com/xtensor-stack/xtensor-blas/archive/refs/tags/${XTENSOR_BLAS_VERSION}.tar.gz" \
-#    && tar -xzf /tmp/xtensor_blas/xtensor_blas-${XTENSOR_BLAS_VERSION}.tar.gz -C /tmp/xtensor_blas --strip-components=1 \
-#    && cmake \
-#         -S /tmp/xtensor_blas \
-#         -B /tmp/xtensor_blas/build \
-#         -DCMAKE_BUILD_TYPE=Release \
-#    && make -C /tmp/xtensor_blas/build -j$(nproc) \
-#    && make -C /tmp/xtensor_blas/build install \
-#    && rm -rf /tmp/xtensor_blas
 
 ARG DOXYGEN_VERSION=1.9.6
 RUN mkdir -p /tmp/doxygen \
@@ -209,12 +49,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     file \
     graphviz \
     jq \
-    pandoc \
     sudo \
     uuid-runtime \
     wget \
-    libtbb-dev \
-    libcapstone-dev \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 

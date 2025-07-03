@@ -18,7 +18,7 @@ std::vector<TensorSpec> Barrier::compute_output_specs(const std::vector<Tensor>&
     std::vector<TensorSpec> result;
     result.reserve(input_tensors.size());
     for (const auto& input_tensor : input_tensors) {
-        result.push_back(input_tensor.get_tensor_spec());
+        result.push_back(input_tensor.tensor_spec());
     }
     return result;
 }
@@ -65,7 +65,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program_at(
 namespace operations::ccl {
 
 Tensor barrier_function(const Tensor& input_tensor, const ttnn::Barrier& barrier_struct) {
-    std::vector<Tensor> output_tensors = {Tensor(input_tensor.mesh_device())};
+    std::vector<Tensor> output_tensors = {input_tensor};
     return tt::tt_metal::operation::run(barrier_struct, {input_tensor}).at(0);
 }
 

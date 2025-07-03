@@ -11,8 +11,8 @@
 #include "moreh_clip_grad_norm_step1/device/moreh_clip_grad_norm_step1_device_operation.hpp"
 #include "moreh_clip_grad_norm_step2/device/moreh_clip_grad_norm_step2_device_operation.hpp"
 #include "moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_device_operation.hpp"
-#include "cpp/ttnn/operations/eltwise/binary/binary.hpp"
-#include "cpp/ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -33,7 +33,7 @@ Tensor MorehClipGradNorm::invoke(
     const std::optional<const Tensor>& total_norm,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    auto device = inputs.at(0).device();
+    auto device = inputs.at(0).mesh_device();
     const auto compute_kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
@@ -44,7 +44,7 @@ Tensor MorehClipGradNorm::invoke(
     // Store intermediate reduction of Sum[|e|^p]
     auto tmp_pow_sum = create_device_tensor(
         Shape{static_cast<uint32_t>(inputs.size()), 1, 1},
-        inputs.at(0).get_dtype(),
+        inputs.at(0).dtype(),
         Layout::TILE,
         device,
         memory_config.value_or(inputs.at(0).memory_config()));
@@ -81,7 +81,7 @@ Tensor MorehClipGradNorm::invoke(
 
     if (error_if_nonfinite) {
         const auto fp32_total_norm = tt::tt_metal::tensor_impl::cast_vec<float>(
-                                         tt::tt_metal::owned_buffer::get_as<bfloat16>(output_total_norm.cpu()))
+                                         tt::tt_metal::host_buffer::get_as<bfloat16>(output_total_norm.cpu()))
                                          .at(0);
         TT_FATAL(
             std::isfinite(fp32_total_norm),
@@ -92,11 +92,11 @@ Tensor MorehClipGradNorm::invoke(
     }
 
     // max_norm / (total_norm + 1e-6)
-    Tensor max_norm_tensor = ttnn::full(Shape({1}), max_norm, inputs.at(0).get_dtype(), Layout::TILE, *device);
+    Tensor max_norm_tensor = ttnn::full(Shape({1}), max_norm, inputs.at(0).dtype(), Layout::TILE, *device);
     Tensor added = ttnn::add(output_total_norm, 1e-6f);
     auto clip_coef = ttnn::div(max_norm_tensor, added);
     // min(clip_coef, 1.0f)
-    Tensor scalar = ttnn::full(Shape({1}), 1.0f, inputs.at(0).get_dtype(), Layout::TILE, *device);
+    Tensor scalar = ttnn::full(Shape({1}), 1.0f, inputs.at(0).dtype(), Layout::TILE, *device);
     auto clip_coef_clamped = ttnn::minimum(clip_coef, scalar);
     scalar.deallocate();
     max_norm_tensor.deallocate();

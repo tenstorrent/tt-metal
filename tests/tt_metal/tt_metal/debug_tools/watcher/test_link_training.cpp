@@ -18,7 +18,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
@@ -46,6 +46,9 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     uint32_t retrain_force_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_FORCE);
     for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device->id(), eth_core)) {
+            continue;
+        }
         // Only force a retrain on odd-numbered eth cores
         if (eth_core.y % 2) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
@@ -57,6 +60,9 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     std::this_thread::sleep_for(std::chrono::seconds(5));
     vector<string> expected_strings;
     for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device->id(), eth_core)) {
+            continue;
+        }
         CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
         expected_strings.push_back(fmt::format(
             "\tDevice {} Ethernet Core {} retraining events: {}",
@@ -65,9 +71,8 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
             (eth_core.y % 2) ? 1 : 0));
     }
 
-    // Close devices to trigger watcher check on teardown.
-    for (IDevice* device : this->devices_) {
-        tt::tt_metal::CloseDevice(device);
-    }
+    // Close devices/context to trigger watcher check on teardown.
+    DebugToolsFixture::TearDown();  // Call parent teardown so we don't disable watcher
+    MetalContext::instance().teardown();
     EXPECT_TRUE(FileContainsAllStrings(this->log_file_name, expected_strings));
 }

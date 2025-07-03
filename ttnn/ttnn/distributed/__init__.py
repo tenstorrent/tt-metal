@@ -9,6 +9,7 @@ from .distributed import (
     MeshToTensor,
     TensorToMesh,
     ReplicateTensorToMesh,
+    ReplicateTensorToMeshWrapper,
     ShardTensorToMesh,
     ShardTensor2dMesh,
     ConcatMeshToTensor,

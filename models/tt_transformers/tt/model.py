@@ -1,20 +1,20 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
 from tqdm import tqdm
-from models.tt_transformers.tt.decoder import TransformerBlock
-from models.common.rmsnorm import RMSNorm
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.tt_transformers.tt.lm_head import LMHead
+from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.common import copy_host_to_device
-from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.decoder import TransformerBlock
+from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding
+from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
+from models.tt_transformers.tt.rope import RotarySetup
 
 
 class Transformer(LightweightModule):
@@ -76,6 +76,7 @@ class Transformer(LightweightModule):
             RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
+                eps=args.norm_eps,
                 state_dict=state_dict,
                 state_dict_prefix=args.get_state_dict_prefix("", None),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
@@ -120,7 +121,13 @@ class Transformer(LightweightModule):
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
-        tt_rot_mats_prefill = [self.rope_setup.cos_matrix[:, :, :S, :], self.rope_setup.sin_matrix[:, :, :S, :]]
+        assert (
+            self.rope_setup.cos_matrix.shape[2] >= start_pos + S
+        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
+        tt_rot_mats_prefill = [
+            self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
+            self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+        ]
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(

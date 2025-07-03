@@ -7,15 +7,15 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
+namespace {
 
 template <typename ccl_operation_t>
 void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
@@ -35,6 +35,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
                const GlobalSemaphore& global_semaphore,
                const uint32_t num_heads,
                const ttnn::MemoryConfig& memory_config,
+               const bool use_noc1_only,
                const std::optional<uint32_t> num_links,
                const ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -49,6 +50,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
                     global_semaphore,
                     num_heads,
                     memory_config,
+                    use_noc1_only,
                     num_links,
                     topology,
                     subdevice_id);
@@ -62,16 +64,17 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
             py::arg("num_heads").noconvert(),
             py::arg("memory_config"),
             py::kw_only(),
+            py::arg("use_noc1_only") = false,
             py::arg("num_links") = 1,
             py::arg("topology") = ttnn::ccl::Topology::Linear,
             py::arg("subdevice_id") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_bind_all_gather_concat(pybind11::module& module) {
-    detail::bind_all_gather_concat(
+    bind_all_gather_concat(
         module,
         ttnn::experimental::all_gather_concat,
         R"doc(

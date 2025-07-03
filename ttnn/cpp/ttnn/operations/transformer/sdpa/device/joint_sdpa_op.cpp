@@ -13,7 +13,6 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::transformer {
 
 void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_tensors) const {
-    tt::log_info("Validating Joint SDPA inputs");
     TT_FATAL(input_tensors.size() == 6, "Must have 6 input tensors (Q, K, V, joint_Q, joint_K, joint_V)");
 
     const auto& input_tensor_q = input_tensors.at(0);
@@ -27,30 +26,30 @@ void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_t
     TT_FATAL(this->joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", this->joint_strategy);
 
     // Validate all tensors have the same dtype
-    const auto dtype = input_tensor_q.get_dtype();
+    const auto dtype = input_tensor_q.dtype();
     for (const auto& tensor : input_tensors) {
         TT_FATAL(
-            tensor.get_dtype() == dtype,
+            tensor.dtype() == dtype,
             "All tensors must have the same dtype. Expected {}, got {}",
             dtype,
-            tensor.get_dtype());
+            tensor.dtype());
     }
 
     // Get shapes
-    const auto q_shape = input_tensor_q.get_logical_shape();
-    const auto k_shape = input_tensor_k.get_logical_shape();
-    const auto v_shape = input_tensor_v.get_logical_shape();
-    const auto joint_q_shape = joint_tensor_q.get_logical_shape();
-    const auto joint_k_shape = joint_tensor_k.get_logical_shape();
-    const auto joint_v_shape = joint_tensor_v.get_logical_shape();
+    const auto& q_shape = input_tensor_q.logical_shape();
+    const auto& k_shape = input_tensor_k.logical_shape();
+    const auto& v_shape = input_tensor_v.logical_shape();
+    const auto& joint_q_shape = joint_tensor_q.logical_shape();
+    const auto& joint_k_shape = joint_tensor_k.logical_shape();
+    const auto& joint_v_shape = joint_tensor_v.logical_shape();
 
     // Validate storage types and buffers
     for (auto& tensor : input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
         TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
-        TT_FATAL(tensor.get_layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
+        TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
         TT_FATAL(
-            tensor.get_dtype() == DataType::BFLOAT16 || tensor.get_dtype() == DataType::BFLOAT8_B,
+            tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B,
             "Inputs to Joint SDPA must be BF16 or BF8");
         TT_FATAL(
             tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
@@ -134,8 +133,8 @@ void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_t
 
     // Validate padding: Only the sequence dimension may be padded
     auto validate_padding = [](const Tensor& tensor) {
-        auto logical_shape = tensor.get_logical_shape();
-        auto padded_shape = tensor.get_padded_shape();
+        auto logical_shape = tensor.logical_shape();
+        auto padded_shape = tensor.padded_shape();
         TT_FATAL(logical_shape[0] == padded_shape[0], "Padding is not supported on the batch dimension");
         TT_FATAL(logical_shape[1] == padded_shape[1], "Padding is not supported on the num_heads dimension");
         TT_FATAL(logical_shape[3] == padded_shape[3], "Padding is not supported on the head_dim dimension");
@@ -159,11 +158,10 @@ std::vector<TensorSpec> JointScaledDotProductAttention::compute_output_specs(
     auto& input = input_tensors.at(0);
     auto& joint_input = input_tensors.at(3);
     return {
+        TensorSpec(input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config)),
         TensorSpec(
-            input.get_logical_shape(), TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config)),
-        TensorSpec(
-            joint_input.get_logical_shape(),
-            TensorLayout(joint_input.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
+            joint_input.logical_shape(),
+            TensorLayout(joint_input.dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks JointScaledDotProductAttention::create_program(
@@ -179,7 +177,7 @@ operation::ProgramWithCallbacks JointScaledDotProductAttention::create_program(
 
     auto scale = this->scale;
     if (not scale.has_value()) {
-        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_logical_shape()[-1]));
+        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
     }
 
     std::size_t q_chunk_size = this->get_q_chunk_size();

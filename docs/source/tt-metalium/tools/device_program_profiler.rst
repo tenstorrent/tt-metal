@@ -49,7 +49,7 @@ The host code of the ``full_buffer`` example is in ``{$TT_METAL_HOME}/tt_metal/p
 On top of tt_metal's program dispatch API calls, two additional steps specific to this example are taken, which are:
 
 1. Setting ``LOOP_COUNT`` and ``LOOP_SIZE`` defines for the kernels
-2. Calling :ref:`DumpDeviceProfileResults<DumpDeviceProfileResults>` after the call to Finish to collect the device side profiling data
+2. Calling DumpDeviceProfileResults after the call to Finish to collect the device side profiling data
 
 The kernel code for full buffer is in ``{$TT_METAL_HOME}/tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp`` and demonstrated below:
 

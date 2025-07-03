@@ -2,20 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-from diffusers import (
-    AutoencoderKL,
-)
-
 import pytest
+import torch
+from diffusers import AutoencoderKL
+
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
+    MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
-    MIDBLOCK_RESNET_CONV_IN_CHANNEL_SPLIT_FACTORS,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_midblock import MidBlock
 from models.utility_functions import skip_for_blackhole
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_blackhole("Blackhole PCC bad until GN issues fixed (#20760)")
@@ -23,11 +21,11 @@ from models.utility_functions import skip_for_blackhole
 @pytest.mark.parametrize(
     "input_channels, input_height, input_width, norm_num_blocks, conv_in_channel_split_factors",
     [
-        (512, 64, 64, MIDBLOCK_RESNET_NORM_NUM_BLOCKS, MIDBLOCK_RESNET_CONV_IN_CHANNEL_SPLIT_FACTORS),
+        (512, 64, 64, MIDBLOCK_RESNET_NORM_NUM_BLOCKS, MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS),
     ],
 )
 def test_vae_midblock(
-    device, input_channels, input_height, input_width, norm_num_blocks, conv_in_channel_split_factors, use_program_cache
+    device, input_channels, input_height, input_width, norm_num_blocks, conv_in_channel_split_factors
 ):
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
 

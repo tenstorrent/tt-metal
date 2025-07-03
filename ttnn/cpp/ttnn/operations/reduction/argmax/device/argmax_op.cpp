@@ -10,7 +10,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::reduction {
 
 ttnn::SmallVector<uint32_t> ArgMax::get_output_shape(const Tensor& input_tensor) const {
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.logical_shape();
     int rank = input_shape.size();
     ttnn::SmallVector<uint32_t> output_shape;
 
@@ -51,29 +51,28 @@ void ArgMax::validate_with_output_tensors(
     const auto& input_tensor_a = input_tensors.at(0);
 
     TT_FATAL(
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only INTERLEAVED memory layout is supported for inputs!");
 
-    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Only BFLOAT16 is supported for inputs!");
-    TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for inputs!");
+    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Only BFLOAT16 is supported for inputs!");
+    TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for inputs!");
 
     TT_FATAL(this->output_dtype == DataType::UINT32, "Only UINT32 is supported for outputs!");
     TT_FATAL(
-        this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only INTERLEAVED memory layout is supported for outputs!");
 
     TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");
     const auto& optional_output_tensor = output_tensors.at(0);
     if (optional_output_tensor.has_value()) {
+        TT_FATAL(optional_output_tensor.value().dtype() == DataType::UINT32, "Only UINT32 is supported for outputs!");
         TT_FATAL(
-            optional_output_tensor.value().get_dtype() == DataType::UINT32, "Only UINT32 is supported for outputs!");
-        TT_FATAL(
-            optional_output_tensor.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            optional_output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Only INTERLEAVED memory layout is supported for outputs!");
     }
 
     if (this->dim.has_value()) {
-        const uint32_t input_rank = input_tensor_a.get_padded_shape().rank();
+        const uint32_t input_rank = input_tensor_a.padded_shape().rank();
         const uint32_t normalized_dim = dim.value() < 0 ? dim.value() + input_rank : dim.value();
 
         // TODO: Add support for normalized_dim = 0, 1, 2
@@ -91,14 +90,13 @@ void ArgMax::validate_with_output_tensors(
 std::vector<TensorSpec> ArgMax::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     if (output_tensors.at(0).has_value()) {
-        return {output_tensors.at(0)->get_tensor_spec()};
+        return {output_tensors.at(0)->tensor_spec()};
     }
 
     const auto& input_tensor = input_tensors[0];
     auto output_shape = this->get_output_shape(input_tensor);
     return {TensorSpec(
-        ttnn::Shape(output_shape),
-        TensorLayout(output_dtype, PageConfig(input_tensor.get_layout()), output_mem_config))};
+        ttnn::Shape(output_shape), TensorLayout(output_dtype, PageConfig(input_tensor.layout()), output_mem_config))};
 }
 
 std::vector<Tensor> ArgMax::create_output_tensors(
@@ -115,7 +113,7 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
     const auto normalized_dim =
-        this->dim.has_value() ? *this->dim + input_tensor.get_padded_shape().rank() * (*this->dim < 0) : this->dim;
+        this->dim.has_value() ? *this->dim + input_tensor.padded_shape().rank() * (*this->dim < 0) : this->dim;
     if (this->use_multicore) {
         return detail::argmax_multi_core(
             input_tensor, output_tensor, normalized_dim, this->keepdim, this->sub_core_grids);

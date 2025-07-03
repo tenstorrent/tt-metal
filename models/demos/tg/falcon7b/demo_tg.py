@@ -3,22 +3,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
 from models.utility_functions import is_wormhole_b0
 
 
 @pytest.mark.parametrize(
-    "perf_mode, max_seq_len, expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
+    "perf_mode, max_seq_len, has_expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
-        (True, 128, {"prefill_t/s": 21200, "decode_t/s": 7066, "decode_t/s/u": 6.90}, False, None),
-        (True, 1024, {"prefill_t/s": 19180, "decode_t/s": 6867, "decode_t/s/u": 6.70}, False, None),
-        (True, 2048, {"prefill_t/s": 14500, "decode_t/s": 7168, "decode_t/s/u": 7.00}, False, None),
-        (True, 128, None, False, None),
-        (True, 1024, None, False, None),
-        (True, 2048, None, False, None),
-        (False, 1024, None, True, "models/demos/tg/falcon7b/expected_greedy_output.json"),
-        (False, 1024, None, True, None),
-        (False, 1024, None, False, None),
+        (True, 128, True, False, None),
+        (True, 1024, True, False, None),
+        (True, 2048, True, False, None),
+        (True, 128, False, False, None),
+        (True, 1024, False, False, None),
+        (True, 2048, False, False, None),
+        (False, 1024, False, True, "models/demos/tg/falcon7b/expected_greedy_output.json"),
+        (False, 1024, False, True, None),
+        (False, 1024, False, False, None),
     ),
     ids=[
         "perf_mode_128_stochastic_verify",
@@ -41,33 +42,52 @@ from models.utility_functions import is_wormhole_b0
 def test_demo_multichip(
     perf_mode,  # Option to measure perf using max seq length (with invalid outputs) and expected perf (t/s)
     max_seq_len,
-    expected_perf_metrics,  # Expected perf (t/s) for prefill and decode in perf mode
+    has_expected_perf_metrics,  # Has expected perf (t/s) for prefill and decode in perf mode
     greedy_sampling,  # Option to use greedy decoding instead of top-k/p
     expected_greedy_output_path,  # Path for expected outputs for greedy decoding
     user_input,
     model_location_generator,
     get_tt_cache_path,
     mesh_device,
-    use_program_cache,
     is_ci_env,
     ensure_devices_tg,
+    galaxy_type,
 ):
     assert is_wormhole_b0(), "Multi-chip is only supported for Wormhole B0"
     num_devices = mesh_device.get_num_devices()
+    batch_size = 32
+    global_batch_size = batch_size * num_devices  # 1024 for 32 chips
 
     if is_ci_env:
-        if not expected_greedy_output_path and not expected_perf_metrics:
+        if not expected_greedy_output_path and not has_expected_perf_metrics:
             pytest.skip("Skipping test in CI since it provides redundant testing")
         if expected_greedy_output_path:
             pytest.skip("Skipping test in CI due to Issue #11254")
-    elif expected_greedy_output_path or expected_perf_metrics:
+    elif expected_greedy_output_path or has_expected_perf_metrics:
         assert num_devices == 32, "32 devices are expected for perf and greedy output verification"
 
-    batch_size = 32
+    if has_expected_perf_metrics:
+        assert galaxy_type in ["4U", "6U"], f"Unexpected galaxy type: {galaxy_type} for perf mode"
+        assert max_seq_len in [128, 1024, 2048], f"Unexpected max_seq_len: {max_seq_len} for perf mode"
+        expected_perf_dict = {
+            "4U": {
+                128: {"prefill_t/s": 22160, "decode_t/s/u": 7.20},
+                1024: {"prefill_t/s": 19460, "decode_t/s/u": 6.95},
+                2048: {"prefill_t/s": 18650, "decode_t/s/u": 7.00},
+            },
+            "6U": {
+                128: {"prefill_t/s": 30000, "decode_t/s/u": 12.00},
+                1024: {"prefill_t/s": 29090, "decode_t/s/u": 11.19},
+                2048: {"prefill_t/s": 27230, "decode_t/s/u": 10.90},
+            },
+        }
+        expected_perf_metrics = expected_perf_dict[galaxy_type][max_seq_len]
+        expected_perf_metrics["decode_t/s"] = global_batch_size * expected_perf_metrics["decode_t/s/u"]
+
     if perf_mode:
         json_perf_targets = {
             "prefill_t/s": {128: None, 1024: None, 2048: None}[max_seq_len],
-            "decode_t/s": 26 * batch_size * num_devices,
+            "decode_t/s": 26 * global_batch_size,
             "decode_t/s/u": 26,
         }  # performance targets that we aim for (galaxy-tg)
     else:

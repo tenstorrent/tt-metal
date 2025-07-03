@@ -59,6 +59,7 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
         link_stats_fname = PROFILER_LOGS_DIR / "eth_link_stats.csv"
         df = pd.read_csv(link_stats_fname)
 
+    results = []
     for device_id in devices_data["devices"]:
         for core, core_data in devices_data["devices"][device_id]["cores"].items():
             if core == "DEVICE":
@@ -66,12 +67,14 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
             timed_data = core_data["riscs"]["ERISC"]["timeseries"]
             sender_chip = sender_eth = receiver_chip = receiver_eth = None
 
+            is_sender_chip = False
             starts = [0] * num_iterations
             ends = [0] * num_iterations
             link_stats = [[]] * num_iterations
             for metadata, ts, ts_data in timed_data:
                 if metadata["type"] == "TS_DATA":
                     # ts_data has sender - receiver link encoding
+                    is_sender_chip = True
                     sender = (ts_data >> 32) & 0xFFFFFFFF
                     sender_chip = (sender >> 8) & 0xFF
                     sender_eth = sender & 0xFF
@@ -126,7 +129,8 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
                         else:
                             link_stats[run_host_id] = []
 
-            assert sender_chip != None
+            if not is_sender_chip:
+                continue
 
             main_loop_cycles = [end - start for end, start in zip(ends, starts)]
             if test_latency:
@@ -157,6 +161,7 @@ def write_results_to_csv(file_name, test_latency):
     if test_latency == 1:
         header = [
             "Benchmark ID",
+            "Summary Statistics",
             "Sender Device ID",
             "Sender Eth Channel",
             "Receiver Device ID",
@@ -189,6 +194,7 @@ def write_results_to_csv(file_name, test_latency):
     else:
         header = [
             "Benchmark ID",
+            "Summary Statistics",
             "Sender Device ID",
             "Sender Eth Channel",
             "Receiver Device ID",
@@ -225,6 +231,7 @@ def write_results_to_csv(file_name, test_latency):
         append_to_csv(file_name, add_newline=True)
         append_to_csv(file_name, header)
 
+    mean = 0
     for sender_info, data_to_write in results_per_sender_link.items():
         receiver_info, benchmark_type, num_packets, packet_size, measurements, link_stats = data_to_write
         assert len(measurements) == len(link_stats)
@@ -233,6 +240,7 @@ def write_results_to_csv(file_name, test_latency):
                 file_name,
                 [
                     benchmark_type,
+                    0,
                     sender_info[0],
                     sender_info[1],
                     receiver_info[0],
@@ -248,6 +256,14 @@ def write_results_to_csv(file_name, test_latency):
         mean = np.mean(measurements)
         std_dev = np.std(measurements)
         summary_stats = [""] * len(header)
+        summary_stats[0] = benchmark_type
+        summary_stats[1] = 1
+        summary_stats[2] = sender_info[0]
+        summary_stats[3] = sender_info[1]
+        summary_stats[4] = receiver_info[0]
+        summary_stats[5] = receiver_info[1]
+        summary_stats[6] = num_packets
+        summary_stats[7] = packet_size
         summary_stats[-1] = std_dev
         summary_stats[-2] = mean
         summary_stats[-3] = max_val

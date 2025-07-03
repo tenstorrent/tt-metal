@@ -42,17 +42,17 @@ set -x
 
 # skips ncrisc to reduce uncovered kernel init time on WH
 function shadow_test() {
- build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -n -s 256 -x $max_x -y $max_y -rs 40000 $trace_option $eth_dispatch_option $@
- build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -n -s 2048 -x $max_x -y $max_y -rs 40000 $trace_option $eth_dispatch_option $@
- build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -n -s 8192 -x $max_x -y $max_y -rs 40000 $trace_option $eth_dispatch_option $@
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -n -s 256 -x $max_x -y $max_y -rs 40000 $trace_option $eth_dispatch_option $@
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -n -s 2048 -x $max_x -y $max_y -rs 40000 $trace_option $eth_dispatch_option $@
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -n -s 8192 -x $max_x -y $max_y -rs 40000 $trace_option $eth_dispatch_option $@
 
- build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -n -s 256 -x $max_x -y $max_y -rs 40000 -a 1 $trace_option $eth_dispatch_option $@
- build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -n -s 2048 -x $max_x -y $max_y -rs 40000 -a 1 $trace_option $eth_dispatch_option $@
- build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -n -s 8192 -x $max_x -y $max_y -rs 40000 -a 1 $trace_option $eth_dispatch_option $@
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -n -s 256 -x $max_x -y $max_y -rs 40000 -a 1 $trace_option $eth_dispatch_option $@
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -n -s 2048 -x $max_x -y $max_y -rs 40000 -a 1 $trace_option $eth_dispatch_option $@
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -n -s 8192 -x $max_x -y $max_y -rs 40000 -a 1 $trace_option $eth_dispatch_option $@
 
- build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -n -s 256 -x $max_x -y $max_y -kg $max_x -rs 40000 -a 1 $trace_option $eth_dispatch_option $@
- build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -n -s 2048 -x $max_x -y $max_y -kg $max_x -rs 40000 -a 1 $trace_option $eth_dispatch_option $@
- build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_${ARCH_NAME} --custom -w 5000 -n -s 8192 -x $max_x -y $max_y -kg $max_x -rs 40000 -a 1 $trace_option $eth_dispatch_option $@
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -n -s 256 -x $max_x -y $max_y -kg $max_x -rs 40000 -a 1 $trace_option $eth_dispatch_option $@
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -n -s 2048 -x $max_x -y $max_y -kg $max_x -rs 40000 -a 1 $trace_option $eth_dispatch_option $@
+ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -n -s 8192 -x $max_x -y $max_y -kg $max_x -rs 40000 -a 1 $trace_option $eth_dispatch_option $@
 }
 
 # Test w/ n shadow kernels

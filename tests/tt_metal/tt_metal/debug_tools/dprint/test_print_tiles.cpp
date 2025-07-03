@@ -19,7 +19,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
@@ -275,7 +275,7 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
         string tmp = fmt::format("data[{:#03}:{:#03}]:", idx - 1, idx - 16);
         for (int i = 0; i < 16; i++)
             tmp += fmt::format(" 0x{:08x}", u32_vec[idx + 15 - i]);
-        log_info("{}", tmp);
+        log_info(tt::LogTest, "{}", tmp);
     }*/
 
     // Send input tile to dram
@@ -291,7 +291,7 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
 
     // Check against expected prints
     string expected = GenerateGoldenOutput(data_format, u32_vec);
-    // log_info("Expected output:\n{}", expected);
+    // log_info(tt::LogTest, "Expected output:\n{}", expected);
     EXPECT_TRUE(
         FilesMatchesString(
             DPrintFixture::dprint_file_name,

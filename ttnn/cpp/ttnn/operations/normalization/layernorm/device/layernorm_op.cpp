@@ -28,80 +28,74 @@ void LayerNorm::validate(
     const auto& beta = optional_input_tensors.at(2);
     const auto& stats = optional_input_tensors.at(3);
 
-    TT_FATAL(a.get_layout() == Layout::TILE, "Error");
+    TT_FATAL(a.layout() == Layout::TILE, "Error");
     TT_FATAL(
-        a.get_dtype() == DataType::FLOAT32 or a.get_dtype() == DataType::BFLOAT16 or
-            a.get_dtype() == DataType::BFLOAT8_B,
-        "Error");
+        a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B, "Error");
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 
     if (b.has_value()) {
-        TT_FATAL(b.value().get_layout() == Layout::TILE, "layot is not tile!");
-        TT_FATAL(a.get_padded_shape() == b.value().get_padded_shape(), "shape is not same!");
+        TT_FATAL(b.value().layout() == Layout::TILE, "layot is not tile!");
+        TT_FATAL(a.padded_shape() == b.value().padded_shape(), "shape is not same!");
         TT_FATAL(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == b.value().device(), "device is not same!");
     }
 
     if (gamma.has_value()) {
-        if (gamma.value().get_layout() == Layout::TILE) {
+        if (gamma.value().layout() == Layout::TILE) {
             TT_FATAL(
-                a.get_padded_shape()[-1] == gamma.value().get_padded_shape()[-1],
+                a.padded_shape()[-1] == gamma.value().padded_shape()[-1],
                 "{} != {}",
-                a.get_padded_shape()[-1],
-                gamma.value().get_padded_shape()[-1]);
+                a.padded_shape()[-1],
+                gamma.value().padded_shape()[-1]);
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Error");
-            TT_FATAL(gamma.value().get_padded_shape()[-2] == TILE_HEIGHT, "Error");
+            TT_FATAL(gamma.value().padded_shape()[-2] == TILE_HEIGHT, "Error");
         } else {
-            TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR, "Error");
+            TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR, "Error");
             TT_FATAL(
-                (gamma.value().get_padded_shape()[-1] == TILE_WIDTH &&
-                 gamma.value().volume() / TILE_WIDTH == a.get_padded_shape()[-1] / TILE_WIDTH),
+                (gamma.value().padded_shape()[-1] == TILE_WIDTH &&
+                 gamma.value().physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
                 "Error");
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Error");
             TT_FATAL(
-                gamma.value().get_dtype() == DataType::FLOAT32 or gamma.value().get_dtype() == DataType::BFLOAT16,
-                "Error");
+                gamma.value().dtype() == DataType::FLOAT32 or gamma.value().dtype() == DataType::BFLOAT16, "Error");
         }
         if (beta.has_value()) {
-            TT_FATAL(
-                gamma.value().get_layout() == beta.value().get_layout(), "Gamma and beta must have the same layout!");
+            TT_FATAL(gamma.value().layout() == beta.value().layout(), "Gamma and beta must have the same layout!");
         }
     }
 
     if (beta.has_value()) {
-        if (beta.value().get_layout() == Layout::TILE) {
-            TT_FATAL(a.get_padded_shape()[-1] == beta.value().get_padded_shape()[-1], "Error");
+        if (beta.value().layout() == Layout::TILE) {
+            TT_FATAL(a.padded_shape()[-1] == beta.value().padded_shape()[-1], "Error");
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device(), "Error");
-            TT_FATAL(beta.value().get_padded_shape()[-2] == TILE_HEIGHT, "Error");
+            TT_FATAL(beta.value().padded_shape()[-2] == TILE_HEIGHT, "Error");
         } else {
-            TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR, "Error");
+            TT_FATAL(beta.value().layout() == Layout::ROW_MAJOR, "Error");
             TT_FATAL(
-                (beta.value().get_padded_shape()[-1] == TILE_WIDTH &&
-                 beta.value().volume() / TILE_WIDTH == a.get_padded_shape()[-1] / TILE_WIDTH),
+                (beta.value().padded_shape()[-1] == TILE_WIDTH &&
+                 beta.value().physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
                 "Error");
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device(), "Error");
-            TT_FATAL(
-                beta.value().get_dtype() == DataType::FLOAT32 or beta.value().get_dtype() == DataType::BFLOAT16,
-                "Error");
+            TT_FATAL(beta.value().dtype() == DataType::FLOAT32 or beta.value().dtype() == DataType::BFLOAT16, "Error");
         }
     }
     if (a.is_sharded()) {
         // TODO: Add support for this (should be similar to interleaved)
         TT_FATAL(
-            a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED,
+            a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
             "Hight sharded inputs are not supported.");
         TT_FATAL(
             this->output_mem_config.is_sharded() &&
-                this->output_mem_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED,
+                this->output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
             "Sharded inputs require sharded outputs.");
         if (b.has_value()) {
             TT_FATAL(b.value().is_sharded(), "residual tensor b should be sharded if input a is sharded");
@@ -111,27 +105,27 @@ void LayerNorm::validate(
     }
     if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER ||
         this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
-        TT_FATAL(a.get_padded_shape()[-2] == TILE_HEIGHT, "Only activations with batch size = 32 are supported");
+        TT_FATAL(a.padded_shape()[-2] == TILE_HEIGHT, "Only activations with batch size = 32 are supported");
         if (b.has_value()) {
             TT_FATAL(
-                b.value().get_padded_shape()[-2] == TILE_HEIGHT,
+                b.value().padded_shape()[-2] == TILE_HEIGHT,
                 "Only residual tensors with batch size = 32 are supported");
         }
     }
     if (this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
         TT_FATAL(stats.has_value(), "Post all gather layernorm requires stats");
         TT_FATAL(stats.value().is_sharded(), "Stats must be sharded");
-        TT_FATAL(stats.value().get_layout() == Layout::TILE, "Only tile layout is supported for stats");
-        TT_FATAL(stats.value().get_dtype() == DataType::BFLOAT16, "Only bfloat16 is supported for stats");
+        TT_FATAL(stats.value().layout() == Layout::TILE, "Only tile layout is supported for stats");
+        TT_FATAL(stats.value().dtype() == DataType::BFLOAT16, "Only bfloat16 is supported for stats");
         TT_FATAL(stats.value().storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
         TT_FATAL(stats.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         if (this->norm_type == LayerNormType::LAYERNORM) {
             TT_FATAL(
-                stats.value().get_padded_shape()[-1] % (2 * TILE_WIDTH) == 0,
+                stats.value().padded_shape()[-1] % (2 * TILE_WIDTH) == 0,
                 "Stats is expected to have E(x) and E(x^2) for each device stacked interleaved in the last dimension");
         } else {
             TT_FATAL(
-                stats.value().get_padded_shape()[-1] % TILE_WIDTH == 0,
+                stats.value().padded_shape()[-1] % TILE_WIDTH == 0,
                 "Stats is expected to have E(x) for each device stacked in the last dimension");
         }
     }
@@ -142,12 +136,12 @@ void LayerNorm::validate(
                 if (program_config.inplace) {
                     TT_FATAL(this->output_mem_config.is_sharded(), "Error");
                 }
-                TT_FATAL(a.memory_config().buffer_type == this->output_mem_config.buffer_type, "Error");
-                TT_FATAL(a.memory_config().memory_layout == this->output_mem_config.memory_layout, "Error");
+                TT_FATAL(a.memory_config().buffer_type() == this->output_mem_config.buffer_type(), "Error");
+                TT_FATAL(a.memory_config().memory_layout() == this->output_mem_config.memory_layout(), "Error");
 
                 // tensor shape
-                const auto shape = a.get_padded_shape();
-                uint32_t M = a.volume() / shape[-1];
+                const auto& shape = a.padded_shape();
+                uint32_t M = a.physical_volume() / shape[-1];
                 uint32_t K = shape[-1];
                 uint32_t Mt = M / TILE_WIDTH;
                 uint32_t Kt = K / TILE_WIDTH;
@@ -175,7 +169,7 @@ void LayerNorm::validate(
                         tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
                         "block_w must equal to K / num_cores.");
                     TT_FATAL(Mt == program_config.block_h, "block_h must equal to M.");
-                    TT_FATAL(a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+                    TT_FATAL(a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
                 } else {
                     if (row_wise) {
                         TT_FATAL(
@@ -207,8 +201,8 @@ void LayerNorm::validate(
                     const auto stats_shard_spec = stats.value().shard_spec().value();
                     TT_FATAL(stats_shard_spec.num_cores() == 1, "Stats must be sharded with num_cores = 1");
 
-                    if (this->output_mem_config.shard_spec.has_value()) {
-                        const auto output_shard_spec = this->output_mem_config.shard_spec.value();
+                    if (this->output_mem_config.shard_spec().has_value()) {
+                        const auto output_shard_spec = this->output_mem_config.shard_spec().value();
                         TT_FATAL(
                             output_shard_spec.shape[0] == shard_spec.shape[0],
                             "Output shard spec must have the same height as input shard spec.");
@@ -220,8 +214,8 @@ void LayerNorm::validate(
 }
 std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto output_shape = input_tensor.get_logical_shape();
-    auto output_padded_shape = input_tensor.get_padded_shape();
+    auto output_shape = input_tensor.logical_shape();
+    auto output_padded_shape = input_tensor.padded_shape();
 
     if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER) {
         uint32_t num_tiles_w = this->norm_type == LayerNormType::LAYERNORM ? 2 : 1;
@@ -238,12 +232,11 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
                     CoreCoord grid_start_core = shard_spec.grid.bounding_box().start_coord;
                     CoreRangeSet output_grid({CoreRange(grid_start_core, grid_start_core)});
                     shard_spec.grid = output_grid;
-                    auto mem_config = this->output_mem_config;
-                    mem_config.shard_spec = shard_spec;
+                    auto mem_config = this->output_mem_config.with_shard_spec(shard_spec);
                     return {TensorSpec(
                         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config))};
                 } else if (this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
-                    auto output_shard_spec = this->output_mem_config.shard_spec.value();
+                    auto output_shard_spec = this->output_mem_config.shard_spec().value();
                     auto input_shard_spec = input_tensor.shard_spec().value();
                     if (output_shard_spec != input_shard_spec) {
                         output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
@@ -251,18 +244,18 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
                 }
 
                 if (program_config.inplace) {
-                    return {input_tensor.get_tensor_spec()};
+                    return {input_tensor.tensor_spec()};
                 }
 
                 auto mem_config = this->output_mem_config;
-                if (!mem_config.shard_spec.has_value()) {
-                    mem_config.shard_spec = input_tensor.shard_spec().value();
+                if (!mem_config.shard_spec().has_value()) {
+                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec().value());
                 }
 
                 return {ttnn::TensorSpec(
                     output_shape,
                     TensorLayout::fromPaddedShape(
-                        this->dtype.value_or(input_tensor.get_dtype()),
+                        this->dtype.value_or(input_tensor.dtype()),
                         PageConfig(Layout::TILE),
                         mem_config,
                         output_shape,
@@ -270,7 +263,7 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
             } else {
                 return {TensorSpec(
                     output_shape,
-                    TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), this->output_mem_config))};
+                    TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), this->output_mem_config))};
             }
         },
         this->program_config);

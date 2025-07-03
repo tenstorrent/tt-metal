@@ -24,20 +24,20 @@ void ScaledDotProductAttention::validate(
     for (auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device");
         TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device");
-        TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to SDPA must be tilized");
+        TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to SDPA must be tilized");
         TT_FATAL(
-            input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B ||
-                input_tensor.get_dtype() == DataType::BFLOAT4_B,
+            input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B ||
+                input_tensor.dtype() == DataType::BFLOAT4_B,
             "Data type of input tensor must be BFLOAT16, BFLOAT8_B, or BFLOAT4_B and is {}",
-            input_tensor.get_dtype());
+            input_tensor.dtype());
         TT_FATAL(
             input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to SDPA need to be in DRAM");
     }
 
     auto validate_padding = [&](const Tensor& tensor) {
-        auto logical_shape = tensor.get_logical_shape();
-        auto legacy_shape = tensor.get_padded_shape();
+        auto logical_shape = tensor.logical_shape();
+        auto legacy_shape = tensor.padded_shape();
         TT_FATAL(logical_shape[0] == legacy_shape[0], "Padding is not supported on the batch dimension");
         TT_FATAL(logical_shape[1] == legacy_shape[1], "Padding is not supported on the num_heads dimension");
         TT_FATAL(logical_shape[3] == legacy_shape[3], "Padding is not supported on the head_dim dimension");
@@ -52,26 +52,26 @@ void ScaledDotProductAttention::validate(
 
         const auto& mask_option = optional_input_tensors.at(0);
         if (mask_option.has_value()) {
-            auto mask = mask_option.value();
+            const auto& mask = mask_option.value();
             TT_FATAL(
                 mask.storage_type() == StorageType::DEVICE,
                 "When mask is provided to SDPA, the tensor must be on device");
             TT_FATAL(
                 input_tensors.at(0).device() == mask.device(),
                 "When mask is provided to SDPA, it must be on the same device as the input tensors");
-            TT_FATAL(mask.get_layout() == Layout::TILE, "When mask is provided to SDPA, it must be tilized");
+            TT_FATAL(mask.layout() == Layout::TILE, "When mask is provided to SDPA, it must be tilized");
             TT_FATAL(
-                mask.get_dtype() == DataType::BFLOAT16 || mask.get_dtype() == DataType::BFLOAT8_B ||
-                    mask.get_dtype() == DataType::BFLOAT4_B,
+                mask.dtype() == DataType::BFLOAT16 || mask.dtype() == DataType::BFLOAT8_B ||
+                    mask.dtype() == DataType::BFLOAT4_B,
                 "When mask is provided to SDPA, it must be in BF16, BFP8, or BFP4 dataformat");
 
             TT_FATAL(
                 mask.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
                 "When mask is provided to SDPA, it must be in DRAM");
 
-            const auto mask_shape = mask.get_logical_shape();
-            const auto q_shape = input_tensors.at(0).get_logical_shape();
-            const auto k_shape = input_tensors.at(1).get_logical_shape();
+            const auto& mask_shape = mask.logical_shape();
+            const auto q_shape = input_tensors.at(0).logical_shape();
+            const auto k_shape = input_tensors.at(1).logical_shape();
 
             TT_FATAL(mask_shape[0] == q_shape[0], "Mask batch dim must match Q batch dim");
             TT_FATAL(mask_shape[1] == 1, "Mask num_heads must be 1 to be broadcasted across all heads");
@@ -97,9 +97,9 @@ void ScaledDotProductAttention::validate(
         }
 
         // Shape checks
-        const auto q_shape = input_tensors.at(0).get_logical_shape();
-        const auto k_shape = input_tensors.at(1).get_logical_shape();
-        const auto v_shape = input_tensors.at(2).get_logical_shape();
+        const auto q_shape = input_tensors.at(0).logical_shape();
+        const auto k_shape = input_tensors.at(1).logical_shape();
+        const auto v_shape = input_tensors.at(2).logical_shape();
         const auto B = q_shape[0];
         const auto nqh = q_shape[1];
         const auto nkv = k_shape[1];
@@ -153,26 +153,26 @@ void ScaledDotProductAttention::validate(
         TT_FATAL(
             input_tensors.at(0).device() == page_table.device(),
             "Page table must be on the same device as the input tensors");
-        TT_FATAL(page_table.get_layout() == Layout::ROW_MAJOR, "Page table must be row major");
+        TT_FATAL(page_table.layout() == Layout::ROW_MAJOR, "Page table must be row major");
         // Check that page table is int32
-        TT_FATAL(page_table.get_dtype() == DataType::INT32, "Page table must be int32");
+        TT_FATAL(page_table.dtype() == DataType::INT32, "Page table must be int32");
         // Validate that first optional tensor (mask) is not provided
         TT_FATAL(
             !optional_input_tensors[0].has_value(),
             "Attention mask should not be provided in chunked mode - masking is handled internally");
 
         // Additional chunked-specific validations
-        const auto q_shape = input_tensors.at(0).get_logical_shape();
-        const auto k_shape = input_tensors.at(1).get_logical_shape();
-        const auto v_shape = input_tensors.at(2).get_logical_shape();
-        const auto page_table_shape = page_table.get_logical_shape();
+        const auto q_shape = input_tensors.at(0).logical_shape();
+        const auto k_shape = input_tensors.at(1).logical_shape();
+        const auto v_shape = input_tensors.at(2).logical_shape();
+        const auto page_table_shape = page_table.logical_shape();
         const auto B = q_shape[0];
         const auto nqh = q_shape[1];
         const auto nkv = k_shape[1];
         const auto Sq = q_shape[2];
         const auto DH = q_shape[3];
         const auto k_page_size = k_shape[2];
-        const uint32_t num_pages_per_user = page_table.get_logical_shape()[1];
+        const uint32_t num_pages_per_user = page_table.logical_shape()[1];
         // Check that k page size matches v page size
         TT_FATAL(
             k_page_size == v_shape[2], "K page size must match V page size. Got K: {}, V: {}", k_page_size, v_shape[2]);
@@ -254,8 +254,8 @@ void ScaledDotProductAttention::validate(
 std::vector<TensorSpec> ScaledDotProductAttention::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     auto& input = input_tensors.at(0);
-    return {TensorSpec(
-        input.get_logical_shape(), TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
+    return {
+        TensorSpec(input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
 
 std::uint32_t ScaledDotProductAttention::get_q_chunk_size() const {
@@ -278,7 +278,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
 
     auto scale = this->scale;
     if (not scale.has_value()) {
-        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_padded_shape()[-1]));
+        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1]));
     }
 
     std::size_t q_chunk_size = this->get_q_chunk_size();
@@ -313,7 +313,7 @@ operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_m
     auto& output_tensor = output_tensors.at(0);
 
     if (output_tensor.storage_type() != StorageType::DEVICE) {
-        tt::log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
+        log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
 
     // calculate arch specific parameters
@@ -322,14 +322,14 @@ operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_m
                     ? output_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
-        tt::log_warning(tt::LogOp, "SDPA perf model does not support tt::arch '{}'", magic_enum::enum_name(arch));
+        log_warning(tt::LogOp, "SDPA perf model does not support tt::arch '{}'", magic_enum::enum_name(arch));
         return operation::OpPerformanceModel(input_tensors, output_tensors, 0);
     }
 
     // Get main dimensions for Q*K and softmax(QK^T/sqrt) * V matmuls
-    auto q_shape = input_tensor_q.get_logical_shape();
-    auto k_shape = input_tensor_k.get_logical_shape();
-    auto v_shape = input_tensor_v.get_logical_shape();
+    auto q_shape = input_tensor_q.logical_shape();
+    auto k_shape = input_tensor_k.logical_shape();
+    auto v_shape = input_tensor_v.logical_shape();
     TT_ASSERT(q_shape.size() == 4, "ScaledDotProductAttention perf model: input tensor Q rank != 4");
     TT_ASSERT(k_shape.size() == 4, "ScaledDotProductAttention perf model: input tensor K rank != 4");
     TT_ASSERT(v_shape.size() == 4, "ScaledDotProductAttention perf model: input tensor V rank != 4");

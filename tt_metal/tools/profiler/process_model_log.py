@@ -6,6 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 import pandas as pd
+from loguru import logger
 
 from tt_metal.tools.profiler.common import PROFILER_ARTIFACTS_DIR, PROFILER_SCRIPTS_ROOT, generate_reports_folder
 
@@ -21,7 +22,7 @@ def get_latest_ops_log_filename(output_logs_subdir):
     return filename
 
 
-def post_process_ops_log(output_logs_subdir, columns, sum_vals=True, op_name="", has_signposts=False):
+def post_process_ops_log(output_logs_subdir, columns=None, sum_vals=True, op_name="", has_signposts=False):
     filename = get_latest_ops_log_filename(output_logs_subdir)
     df = pd.read_csv(filename)
 
@@ -35,18 +36,33 @@ def post_process_ops_log(output_logs_subdir, columns, sum_vals=True, op_name="",
         df = df[df["OP CODE"] == op_name]
 
     results = {}
-    for col in columns:
-        df_filtered = df[df[col] != "-"]
-        if sum_vals:
-            results[col] = df_filtered[col].astype(float).sum()
-        else:
-            results[col] = df_filtered[col].astype(float).to_numpy()
+    if columns:
+        assert (
+            type(columns) == list
+        ), f"Bad columns name type, requested columns should be of type list but {type(columns)} was provided"
+        for col in columns:
+            df_filtered = df[df[col] != "-"]
+            if sum_vals:
+                results[col] = df_filtered[col].astype(float).sum()
+            else:
+                results[col] = df_filtered[col].astype(float).to_numpy()
+    else:
+        results = df
     return results
 
 
-def run_device_profiler(command, output_logs_subdir):
+def run_device_profiler(command, output_logs_subdir, check_test_return_code=True, device_analysis_types=[]):
     output_profiler_dir = get_profiler_folder(output_logs_subdir)
-    profiler_cmd = f"python3 -m tracy -p -r -o {output_profiler_dir} -t 5000 -m {command}"
+    check_return_code = ""
+    device_analysis_opt = ""
+    if check_test_return_code:
+        check_return_code = "--check-exit-code"
+    if device_analysis_types:
+        assert type(device_analysis_types) == list
+        device_analysis_opt_list = [f" -a {analysis}" for analysis in device_analysis_types]
+        device_analysis_opt = "".join(device_analysis_opt_list)
+    profiler_cmd = f"python3 -m tracy -p -r -o {output_profiler_dir} {check_return_code} {device_analysis_opt} -t 5000 -m {command}"
+    logger.info(profiler_cmd)
     subprocess.run([profiler_cmd], shell=True, check=True)
 
 

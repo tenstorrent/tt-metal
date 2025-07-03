@@ -21,16 +21,17 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     Program program;
 
     const auto& input = tensor_args.input;
-    auto input_data_format = datatype_to_dataformat_converter(input.get_dtype());
-    auto output_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    auto input_data_format = datatype_to_dataformat_converter(input.dtype());
+    auto output_data_format = datatype_to_dataformat_converter(output.dtype());
     bool convert_dtype = input_data_format != output_data_format;
-    bool tilized = output.get_layout() == Layout::TILE;
+    bool tilized = output.layout() == Layout::TILE;
     auto compute_unit_size = [&](const auto& tensor, const auto& data_format) {
-        return tilized ? TileSize(data_format) : tensor.get_logical_shape()[-1] * tensor.element_size();
+        return tilized ? TileSize(data_format) : tensor.logical_shape()[-1] * tensor.element_size();
     };
     uint32_t input_unit_size = compute_unit_size(input, input_data_format);
     uint32_t output_unit_size = compute_unit_size(output, output_data_format);
-    uint32_t num_units = tilized ? output.volume() / TILE_HW : output.volume() / output.get_logical_shape()[-1];
+    uint32_t num_units =
+        tilized ? output.physical_volume() / TILE_HW : output.physical_volume() / output.logical_shape()[-1];
 
     auto compute_with_storage_grid_size = output.device()->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

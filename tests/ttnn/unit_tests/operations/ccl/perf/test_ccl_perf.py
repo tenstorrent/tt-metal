@@ -57,7 +57,6 @@ def test_all_gather_on_n300(
     layout,
     mem_config,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_on_n300_impl(
@@ -69,7 +68,6 @@ def test_all_gather_on_n300(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
@@ -113,7 +111,6 @@ def test_all_gather_on_t3000(
     layout,
     mem_config,
     num_iters,
-    use_program_cache,
     function_level_defaults,
 ):
     run_all_gather_on_t3000_impl_tight_loop(
@@ -125,7 +122,6 @@ def test_all_gather_on_t3000(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=topology,
         num_iters=num_iters,
@@ -176,7 +172,6 @@ def test_reduce_scatter_on_t3000(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters,
     topology,
@@ -191,7 +186,6 @@ def test_reduce_scatter_on_t3000(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         topology=topology,
@@ -241,7 +235,6 @@ def test_reduce_scatter_on_n300(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters,
 ):
@@ -255,7 +248,6 @@ def test_reduce_scatter_on_n300(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         trace_mode=True,
@@ -298,12 +290,11 @@ def test_all_gather_on_tg(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -315,7 +306,6 @@ def test_all_gather_on_tg(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
@@ -361,7 +351,6 @@ def test_reduce_scatter_on_tg(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters,
@@ -377,7 +366,6 @@ def test_reduce_scatter_on_tg(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,

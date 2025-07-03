@@ -217,7 +217,7 @@ def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, ttnn_dt
 @pytest.mark.parametrize("weight_decay", [0.3])
 @pytest.mark.parametrize("amsgrad", [True, False])
 @pytest.mark.parametrize("step", [8])
-def test_moreh_adamw_callback(shape, lr, betas, eps, weight_decay, amsgrad, step, device, use_program_cache):
+def test_moreh_adamw_callback(shape, lr, betas, eps, weight_decay, amsgrad, step, device):
     torch.manual_seed(2024)
     num_program_cache_entries_list = []
     for i in range(2):
@@ -272,7 +272,7 @@ def test_moreh_adamw_compute_kernel_options(
 @pytest.mark.parametrize("eps", [1e-08])
 @pytest.mark.parametrize("weight_decay", [0.3])
 @pytest.mark.parametrize("amsgrad", [True])
-def test_moreh_adamw_cache(shape, lr, betas, eps, weight_decay, amsgrad, device, use_program_cache):
+def test_moreh_adamw_cache(shape, lr, betas, eps, weight_decay, amsgrad, device):
     torch.manual_seed(2024)
     num_program_cache_entries_list = []
     for step in range(1, 5):

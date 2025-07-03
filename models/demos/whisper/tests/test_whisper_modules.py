@@ -2,21 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 import pytest
-from models.demos.whisper.tt import ttnn_optimized_functional_whisper
-from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
-    init_kv_cache,
-    WHISPER_L1_SMALL_SIZE,
-)
-import transformers
-from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
-from datasets import load_dataset
 import torch
-import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
-from models.utility_functions import torch_random, is_blackhole
+import transformers
+from datasets import load_dataset
+from loguru import logger
+from transformers import AutoFeatureExtractor, WhisperConfig, WhisperModel
 from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
+from models.demos.whisper.tt import ttnn_optimized_functional_whisper
+from models.demos.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
+from models.utility_functions import is_blackhole, torch_random
+from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 # MODEL_NAME = "openai/whisper-base"
 MODEL_NAME = "distil-whisper/distil-large-v3"
@@ -50,7 +48,6 @@ def test_whisper_attention(
     use_encoder_states,
     use_attn_mask,
     use_kv_cache,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
@@ -166,7 +163,7 @@ def test_whisper_attention(
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size, use_program_cache):
+def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoderLayer(config).eval()
@@ -198,7 +195,7 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_length", [3000])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_encoder(device, ttnn_model, model_name, batch_size, sequence_length, use_program_cache):
+def test_encoder(device, ttnn_model, model_name, batch_size, sequence_length):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoder(config).eval()
@@ -249,7 +246,6 @@ def test_decoder_layer(
     encoder_sequence_size,
     decoder_sequence_size,
     use_kv_cache,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
@@ -323,7 +319,6 @@ def test_decoder(
     encoder_sequence_size,
     decoder_sequence_size,
     use_kv_cache,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
@@ -391,7 +386,7 @@ def test_decoder(
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_ttnn_whisper(tmp_path, device, ttnn_model, model_name, decoder_sequence_size, use_kv_cache, use_program_cache):
+def test_ttnn_whisper(tmp_path, device, ttnn_model, model_name, decoder_sequence_size, use_kv_cache):
     torch.manual_seed(0)
     config = WhisperConfig.from_pretrained(model_name)
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)

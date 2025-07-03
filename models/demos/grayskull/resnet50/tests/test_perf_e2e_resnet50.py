@@ -5,8 +5,8 @@
 
 import pytest
 
-from models.utility_functions import run_for_grayskull
 from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
+from models.utility_functions import run_for_grayskull
 
 
 @run_for_grayskull()
@@ -18,7 +18,6 @@ from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
 )
 def test_perf(
     device,
-    use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,
@@ -45,7 +44,6 @@ def test_perf(
 )
 def test_perf_trace(
     device,
-    use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,
@@ -72,7 +70,6 @@ def test_perf_trace(
 )
 def test_perf_2cqs(
     device,
-    use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,
@@ -101,7 +98,6 @@ def test_perf_2cqs(
 )
 def test_perf_trace_2cqs(
     device,
-    use_program_cache,
     batch_size,
     expected_inference_time,
     expected_compile_time,

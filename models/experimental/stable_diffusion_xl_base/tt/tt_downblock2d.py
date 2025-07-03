@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,17 +9,26 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_downsample2d import TtDo
 
 
 class TtDownBlock2D(nn.Module):
-    def __init__(self, device, state_dict, module_path):
+    def __init__(self, device, state_dict, module_path, model_config):
         super().__init__()
 
         num_layers = 2
         self.resnets = []
 
         for i in range(num_layers):
-            self.resnets.append(TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}"))
+            self.resnets.append(
+                TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", model_config=model_config)
+            )
 
         self.downsamplers = TtDownsample2D(
-            device, state_dict, f"{module_path}.downsamplers.0", (2, 2), (1, 1), (1, 1), 1
+            device,
+            state_dict,
+            f"{module_path}.downsamplers.0",
+            (2, 2),
+            (1, 1),
+            (1, 1),
+            1,
+            model_config=model_config,
         )
 
     def forward(self, hidden_states, input_shape, temb):

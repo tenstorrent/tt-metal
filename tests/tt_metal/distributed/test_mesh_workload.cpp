@@ -27,7 +27,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -38,7 +38,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
@@ -186,7 +186,7 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
     uint32_t num_iters = 500;
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
     std::vector<std::shared_ptr<MeshWorkload>> workloads = {};
-    log_info("Create {} workloads", num_workloads);
+    log_info(tt::LogTest, "Create {} workloads", num_workloads);
     for (int i = 0; i < num_workloads; i++) {
         std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
         for (const auto& device_coord : MeshCoordinateRange(mesh_device_->shape())) {
@@ -237,7 +237,7 @@ TEST_F(MeshWorkloadTestT3000, SimultaneousMeshWorkloads) {
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
-    log_info("Create MeshWorkloads with multiple programs each");
+    log_info(tt::LogTest, "Create MeshWorkloads with multiple programs each");
 
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
@@ -321,7 +321,7 @@ TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
-    log_info("Create MeshWorkloads with multiple programs each");
+    log_info(tt::LogTest, "Create MeshWorkloads with multiple programs each");
 
     std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
 
@@ -413,7 +413,7 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
-    log_info("Create {} MeshWorkloads", num_programs);
+    log_info(tt::LogTest, "Create {} MeshWorkloads", num_programs);
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     std::mt19937 rng(seed);
@@ -521,10 +521,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     ReplicatedBufferConfig global_buffer_config{.size = dram_buffer_size};
 
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = dram_buffer_size,
-        .buffer_type = tt_metal::BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = dram_buffer_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = true};
 
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
@@ -580,7 +577,6 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     AddProgramToMeshWorkload(mesh_workload, std::move(program), devices_0);
     AddProgramToMeshWorkload(mesh_workload, std::move(*program_1), devices_1);
 
-    std::size_t buffer_idx = 0;
     std::vector<uint32_t> src_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 1);
 
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
@@ -600,7 +596,6 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
             }
         }
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
-        buffer_idx = 0;
         for (const auto& device_coord : devices_0) {
             for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
                 for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {

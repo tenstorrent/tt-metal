@@ -5,8 +5,9 @@
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -178,8 +179,7 @@ void kernel_main() {
             reduction_semaphore_send_addr,
             reduction_semaphore_recv_noc_addr,
             i == 0 ? num_mcast_cores : 0,
-            false,  // linked = false
-            true);  // multicast_path_reserve = true
+            false);  // linked = false
     }
 
     // 4. global semaphore reset

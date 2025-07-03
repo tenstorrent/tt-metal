@@ -4,17 +4,14 @@
 
 import pytest
 import torch
-
-from transformers import BertForQuestionAnswering
 from loguru import logger
-
+from transformers import BertForQuestionAnswering
+from tt_lib.utils import pad_activation
 
 import ttnn
-
-from tt_lib.utils import pad_activation
-from models.utility_functions import comp_pcc, comp_allclose
-from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
 from models.demos.metal_BERT_large_11.tt.bert_encoder import TtBertEncoder
+from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 class PytorchBertEncoder(torch.nn.Module):
@@ -144,7 +141,6 @@ def test_bert_encoder_inference(
     model_location_generator,
     request,
     device,
-    use_program_cache,
 ):
     model_config = get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)

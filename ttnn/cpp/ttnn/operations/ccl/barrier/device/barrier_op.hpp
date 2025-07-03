@@ -38,12 +38,12 @@ namespace ccl::barrier::detail {
 tt::tt_metal::operation::ProgramWithCallbacks barrier_with_workers(
     const Tensor& input_tensors,
     const Tensor& output_tensors,
-    const bool is_starting_core,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    bool is_starting_core,
+    uint32_t ring_size,
+    uint32_t ring_index,
     chip_id_t target_device_id,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
+    std::optional<chip_id_t> receiver_device_id,
+    std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology);
 
 };  // namespace ccl::barrier::detail

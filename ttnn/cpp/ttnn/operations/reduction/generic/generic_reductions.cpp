@@ -39,7 +39,7 @@ std::tuple<ttnn::SmallVector<int>, ttnn::SmallVector<int>, ttnn::SmallVector<int
 std::pair<ttnn::SmallVector<int>, ttnn::SmallVector<int>> split_height_width_dims(
     const ttnn::SmallVector<int>& dim, const Tensor& input_tensor_arg) {
     ttnn::SmallVector<int> non_height_width_dims{}, height_width_dims{};
-    auto input_shape = input_tensor_arg.get_logical_shape();
+    const auto& input_shape = input_tensor_arg.logical_shape();
     int rank = input_shape.size();
     for (int i = 0; i < dim.size(); i++) {
         if (dim[i] >= (rank - 2)) {
@@ -53,7 +53,7 @@ std::pair<ttnn::SmallVector<int>, ttnn::SmallVector<int>> split_height_width_dim
 
 ttnn::SmallVector<int> generate_reduce_dim(
     const Tensor& input_tensor_arg, const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg) {
-    auto input_shape = input_tensor_arg.get_logical_shape();
+    const auto& input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.size();
     ttnn::SmallVector<int> dim{};
     if (dim_arg.has_value()) {
@@ -130,7 +130,7 @@ static Tensor zero_volume_reduce(
     const ttnn::SmallVector<int>& dim,
     const bool keepdim,
     const MemoryConfig& memory_config) {
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.logical_shape();
 
     // min/max is unsupported when reduction dim is zero
     if constexpr (reduce_type == ReduceType::Max || reduce_type == ReduceType::Min) {
@@ -161,9 +161,9 @@ static Tensor zero_volume_reduce(
     return ttnn::full(
         ttnn::Shape(output_shape),
         fill_value,
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*input_tensor.device()),
+        input_tensor.dtype(),
+        input_tensor.layout(),
+        *input_tensor.mesh_device(),
         memory_config);
 }
 
@@ -177,7 +177,7 @@ static Tensor reduce_impl(
     float scalar,
     const ttnn::SmallVector<int>& non_height_width_dims) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
-    auto input_shape = input_tensor_arg.get_logical_shape();
+    auto input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
@@ -191,7 +191,7 @@ static Tensor reduce_impl(
     }
 
     // If the input is a zero volume tensor, return output with shape adjusted for keepdim
-    if (input_tensor_arg.get_logical_volume() == 0) {
+    if (input_tensor_arg.logical_volume() == 0) {
         return zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
     }
 
@@ -243,7 +243,7 @@ static Tensor reduce_impl(
         } else if constexpr (reduce_type == ReduceType::Mean) {
             output_tensor = reduce_nd_loop(
                 /*use_reduce_type=*/false);
-            float inv_volume = 1.0f / input_tensor_arg.get_logical_volume();
+            float inv_volume = 1.0f / input_tensor_arg.logical_volume();
             output_tensor = ttnn::mul_sfpu(inv_volume, output_tensor, memory_config);
         } else {
             TT_THROW("Unsupported reduction operation");
@@ -320,9 +320,10 @@ static Tensor std_var_impl(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    const ttnn::SmallVector<int>& non_height_width_dims) {
+    const ttnn::SmallVector<int>& non_height_width_dims,
+    bool correction) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
-    auto input_shape = input_tensor_arg.get_logical_shape();
+    auto input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
@@ -336,7 +337,7 @@ static Tensor std_var_impl(
     }
 
     // If the input is a zero volume tensor, return output with shape adjusted for keepdim
-    if (input_tensor_arg.get_logical_volume() == 0) {
+    if (input_tensor_arg.logical_volume() == 0) {
         return zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
     }
 
@@ -344,6 +345,13 @@ static Tensor std_var_impl(
     for (int axis : dim) {
         reduced_volume *= input_shape[axis];
     }
+
+    // Bessel's correction (i.e. divisor of N-1)
+    if (correction) {
+        reduced_volume -= 1;
+    }
+    TT_FATAL(reduced_volume > 0, "Reduction is performed on too few elements, yielding divisor of {}", reduced_volume);
+
     scalar /= reduced_volume;
 
     auto mean_tensor = reduce_impl<ReduceType::Sum>(
@@ -379,7 +387,7 @@ Tensor non_height_width_reduce(
     const std::optional<MemoryConfig>& memory_config_arg,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
-    auto input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         std::nullopt,
@@ -388,7 +396,7 @@ Tensor non_height_width_reduce(
         /*default_fp32_acc=*/true));
     Tensor output_tensor = ttnn::experimental::reduction::fast_reduce_nc(
         input_tensor, dims, /*output=*/std::nullopt, memory_config, config);
-    auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.get_logical_shape());
+    auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.logical_shape());
     output_tensor = ttnn::slice(output_tensor, start, end, step);
     return output_tensor;
 }
@@ -400,14 +408,15 @@ Tensor Reduce<reduce_type>::invoke(
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    float scalar) {
+    float scalar,
+    bool correction) {
     ttnn::SmallVector<int> dim = generate_reduce_dim(input_tensor_arg, dim_arg);
     float pad_value = get_pad_value(reduce_type);
-    bool is_tiled = input_tensor_arg.get_layout() == TILE_LAYOUT;
+    bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
     auto input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
     // TODO: generalize to support all types, parameters, and formats. Issue #18566
     ttnn::SmallVector<int> non_height_width_dims{}, height_width_dims{};
-    if (call_fast_nc<reduce_type>(input_tensor.get_dtype())) {
+    if (call_fast_nc<reduce_type>(input_tensor.dtype())) {
         auto dims = split_height_width_dims(dim, input_tensor);
         non_height_width_dims = dims.first;
         height_width_dims = dims.second;
@@ -418,18 +427,21 @@ Tensor Reduce<reduce_type>::invoke(
 
             if (height_width_dims.size() == 0) {
                 return adjust_shape(
-                    input_tensor,
-                    input_tensor_arg.get_logical_shape(),
-                    keepdim,
-                    height_width_dims,
-                    non_height_width_dims);
+                    input_tensor, input_tensor_arg.logical_shape(), keepdim, height_width_dims, non_height_width_dims);
             }
             dim = height_width_dims;
         }
     }
     if constexpr (reduce_type == ReduceType::Std || reduce_type == ReduceType::Var) {
         return std_var_impl<reduce_type>(
-            input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, non_height_width_dims);
+            input_tensor,
+            dim,
+            keepdim,
+            memory_config_arg,
+            compute_kernel_config,
+            scalar,
+            non_height_width_dims,
+            correction);
     }
     return reduce_impl<reduce_type>(
         input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, non_height_width_dims);

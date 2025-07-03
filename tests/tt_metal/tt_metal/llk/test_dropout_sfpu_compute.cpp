@@ -22,13 +22,13 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -72,8 +72,7 @@ bool check_dropout(
         if (resf == 0.0f) {
             zero_count++;
         } else if (!is_close(resf, srcf * scale_factor)) {
-            tt::log_error(
-                tt::LogTest, "Invalid scaling for dropout src={}, res={}, scaling={}", srcf, resf, scale_factor);
+            log_error(tt::LogTest, "Invalid scaling for dropout src={}, res={}, scaling={}", srcf, resf, scale_factor);
             pass = false;
             break;
         }
@@ -82,13 +81,13 @@ bool check_dropout(
     float dropout_rate = (float)zero_count / (float)vec_size;
     bool rate_ok = is_close(probability, dropout_rate, 0.05f, 0.05f);
     if (!rate_ok) {
-        tt::log_error(
+        log_error(
             tt::LogTest,
             "Dropout rate & probability mismatch probability={}, dropout_rate={}",
             probability,
             dropout_rate);
     } else {
-        tt::log_info(tt::LogTest, "dropout probability={}, dropout_rate={} ", probability, dropout_rate);
+        log_info(tt::LogTest, "dropout probability={}, dropout_rate={} ", probability, dropout_rate);
     }
 
     pass &= rate_ok;
@@ -224,8 +223,8 @@ bool test_dropout_standalone(
         res_vec = result_vec_bfloat16;
         pass &= check_dropout(src0_vec_bfloat16, result_vec_bfloat16, probability, scale_factor_f);
     } catch (const std::exception& e) {
-        tt::log_error(tt::LogTest, "Test failed with exception!");
-        tt::log_error(tt::LogTest, "{}", e.what());
+        log_error(tt::LogTest, "Test failed with exception!");
+        log_error(tt::LogTest, "{}", e.what());
         throw;
     }
 
@@ -244,10 +243,9 @@ void test_dropout(tt_metal::IDevice* device, const DropoutConfig& test_config) {
     pass &= test_dropout_standalone(device, probability, seed_0, fill_constant, res_1);
     bool repeatable = std::equal(res_0.begin(), res_0.end(), res_1.begin());
     if (!repeatable) {
-        tt::log_error(
-            tt::LogTest, "Same parameters gave different results probability={}, seed={}", probability, seed_0);
+        log_error(tt::LogTest, "Same parameters gave different results probability={}, seed={}", probability, seed_0);
     } else {
-        tt::log_info(tt::LogTest, "Two attempts with same parameters matched");
+        log_info(tt::LogTest, "Two attempts with same parameters matched");
     }
     pass &= repeatable;
 
@@ -255,14 +253,14 @@ void test_dropout(tt_metal::IDevice* device, const DropoutConfig& test_config) {
         pass &= test_dropout_standalone(device, probability, seed_1, fill_constant, res_2);
         bool unique = !std::equal(res_0.begin(), res_0.end(), res_2.begin());
         if (!unique) {
-            tt::log_error(
+            log_error(
                 tt::LogTest,
                 "Different seed gave same result probability={}, seed_0={}, seed_1={}",
                 probability,
                 seed_0,
                 seed_1);
         } else {
-            tt::log_info(tt::LogTest, "Different seed gave different results");
+            log_info(tt::LogTest, "Different seed gave different results");
         }
         pass &= unique;
     }

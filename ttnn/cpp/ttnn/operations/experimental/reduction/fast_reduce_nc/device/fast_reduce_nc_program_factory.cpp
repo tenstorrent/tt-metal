@@ -53,17 +53,16 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     const auto cb_1_data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
     const auto cb_1_tile_size = tt_metal::detail::TileSize(cb_1_data_format);
 
-    const auto input_shape = input.get_padded_shape();
-    const auto input_shape_without_padding = input.get_logical_shape();
+    const auto& input_shape = input.padded_shape();
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
         extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
     const auto num_reduce_input_tile = input_shape[dim];
-    const auto num_output_tiles = output.volume() / TILE_HW;
+    const auto num_output_tiles = output.physical_volume() / TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
     // choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8
@@ -122,9 +121,9 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(input.memory_config().buffer_type == BufferType::DRAM), input_granularity};
+        static_cast<uint32_t>(input.memory_config().buffer_type() == BufferType::DRAM), input_granularity};
     std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(output.memory_config().buffer_type == BufferType::DRAM), input_granularity};
+        static_cast<uint32_t>(output.memory_config().buffer_type() == BufferType::DRAM), input_granularity};
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
     const auto writer_kernel_file =

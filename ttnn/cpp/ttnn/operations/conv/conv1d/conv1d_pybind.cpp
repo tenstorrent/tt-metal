@@ -2,18 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-#include "cpp/pybind11/decorators.hpp"
-
 #include "conv1d_pybind.hpp"
+
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <variant>
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include <tt-metalium/constants.hpp>
+#include "ttnn-pybind/decorators.hpp"
+
 #include "conv1d.hpp"
 #include "ttnn/types.hpp"
 
-namespace py = pybind11;
-
-namespace ttnn {
-namespace operations::conv {
-namespace conv1d {
+namespace ttnn::operations::conv::conv1d {
 
 void py_bind_conv1d(py::module& module) {
     bind_registered_operation(
@@ -26,10 +31,10 @@ void py_bind_conv1d(py::module& module) {
         :param ttnn.Tensor weight_tensor: The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width]. The op w
         :param ttnn.Tensor, None bias_tensor:   Optional bias tensor. Default: None
         :param ttnn.IDevice device:  The device to use.
-        :param int: in_channels:  Number of input channels.
-        :param int: out_channels:  Number of output channels.
-        :param int: batch_size:  Batch size.
-        :param int: input_length:  Length of the input signal.
+        :param int in_channels:  Number of input channels.
+        :param int out_channels:  Number of output channels.
+        :param int batch_size:  Batch size.
+        :param int input_length:  Length of the input signal.
         :param int kernel_size: Size of the convolving kernel.
         :param int stride: Stride of the cross-correlation.
         :param int or tuple[int, int]) padding: Zero-padding added to both sides of the input. pad_length or [pad_left, pad_right].
@@ -174,6 +179,4 @@ void py_bind_conv1d(py::module& module) {
             py::arg("return_weights_and_bias") = false,
             py::arg("queue_id") = DefaultQueueId});
 }
-}  // namespace conv1d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv1d

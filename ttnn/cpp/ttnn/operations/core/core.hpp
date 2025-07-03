@@ -13,7 +13,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 
@@ -22,7 +22,7 @@ namespace core {
 
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor);
 
-ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank);
+ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, int rank);
 
 ttnn::Tensor to_device(
     const ttnn::Tensor& tensor,
@@ -40,17 +40,9 @@ ttnn::Tensor allocate_tensor_on_device(
     const Shape& shape,
     DataType data_type,
     Layout layout,
-    IDevice* device,
-    const std::optional<MemoryConfig>& memory_config);
-
-ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
-    DataType data_type,
-    Layout layout,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config);
 
-ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, IDevice* device);
 ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, MeshDevice* device);
 
 ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);

@@ -10,7 +10,8 @@ import torch
 import ttnn
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
+from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 
@@ -100,12 +101,14 @@ def run_matmul(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(output_tensor)
+    op_output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
     expected_pcc = 0.99
-    return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+    tensors = [input_tensor_a, input_tensor_b, op_output_tensor]
+    flop_counts = list(m_n_sizes) + [2, k_size] + list(batch_sizes)
+    return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf, flop_counts)
 
 
 @pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))

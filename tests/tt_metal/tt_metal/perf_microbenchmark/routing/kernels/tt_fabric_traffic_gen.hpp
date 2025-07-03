@@ -227,10 +227,10 @@ inline void fill_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words,
     }
 }
 
-
 inline bool check_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words, uint32_t start_val,
                               uint32_t& mismatch_addr, uint32_t& mismatch_val, uint32_t& expected_val) {
     tt_l1_ptr uint32_t* addr = start_addr + (PACKET_WORD_SIZE_BYTES/4 - 1);
+    invalidate_l1_cache();
     for (uint32_t i = 0; i < num_words; i++) {
         if (*addr != start_val) {
             mismatch_addr = reinterpret_cast<uint32_t>(addr);

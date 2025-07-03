@@ -257,7 +257,6 @@ struct WidthShardedAddressGenerator {
         std::uint32_t worker_x_offset = (!tensor_shard_spec.transposed_grid * shard_grid_inner_dim_index) + (tensor_shard_spec.transposed_grid * shard_grid_outer_dim_index);
 
         std::uint32_t page_in_shard_x = page_global_inner_dim - (global_shard_index * tensor_shard_spec.get_pages_per_shard_x());
-        std::uint32_t page_in_shard_y = page_global_outer_dim;
         std::uint32_t page_offset_in_shard = (page_global_outer_dim * tensor_shard_spec.get_pages_per_shard_x()) + page_in_shard_x;
 
         std::uint32_t worker_x_logical = tensor_shard_spec.shard_grid_start_x_logical + worker_x_offset;

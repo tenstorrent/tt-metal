@@ -5,7 +5,9 @@
 #include <yaml-cpp/node/node.h>
 
 #include <CLI/CLI.hpp>
+#include <chrono>
 #include <core/ttnn_all_includes.hpp>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mnist/mnist_reader.hpp>
@@ -67,7 +69,10 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
 void initialize_device(bool enable_tp) {
     if (enable_tp) {
         // we support only N300 for now
-        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+    } else {
+        // use single device defaults
+        ttml::autograd::ctx().open_device();
     }
 }
 
@@ -122,17 +127,17 @@ float evaluate(DataLoader &test_dataloader, Model &model, size_t num_targets) {
     for (const auto &[data, target] : test_dataloader) {
         auto output = run_model(model, data);
         ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
+        ttml::core::MeshToXTensorVariant<uint32_t> target_composer =
+            ttml::core::VectorMeshToXTensor<uint32_t>(device->shape());
         auto output_xtensor = ttml::core::to_xtensor(output->get_value(), composer)[0];
-        auto target_xtensor = ttml::core::to_xtensor(target->get_value(), composer)[0];
+        auto target_xtensor = ttml::core::to_xtensor<uint32_t>(target->get_value(), target_composer)[0];
         auto output_vec = std::vector<float>(output_xtensor.begin(), output_xtensor.end());
-        auto target_vec = std::vector<float>(target_xtensor.begin(), target_xtensor.end());
+        auto target_vec = std::vector<uint32_t>(target_xtensor.begin(), target_xtensor.end());
         for (size_t i = 0; i < output_vec.size(); i += num_targets) {
             auto predicted_class = std::distance(
                 output_vec.begin() + i,
                 std::max_element(output_vec.begin() + i, output_vec.begin() + (i + num_targets)));
-            auto target_class = std::distance(
-                target_vec.begin() + i,
-                std::max_element(target_vec.begin() + i, target_vec.begin() + (i + num_targets)));
+            auto target_class = target_vec[i / num_targets];
             num_correct += static_cast<float>(predicted_class == target_class);
             num_samples++;
         }
@@ -169,27 +174,27 @@ int main(int argc, char **argv) {
         dataset.test_images, dataset.test_labels);
 
     auto *device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [num_features, num_targets, device](std::vector<DatasetSample> &&samples) {
             const uint32_t batch_size = samples.size();
             std::vector<float> data;
-            std::vector<float> targets;
+            std::vector<uint32_t> targets;
             data.reserve(batch_size * num_features);
-            targets.reserve(batch_size * num_targets);
+            targets.reserve(batch_size);
             for (auto &[features, target] : samples) {
                 std::copy(features.begin(), features.end(), std::back_inserter(data));
-
-                std::vector<float> one_hot_target(num_targets, 0.0F);
-                one_hot_target[target] = 1.0F;
-                std::copy(one_hot_target.begin(), one_hot_target.end(), std::back_inserter(targets));
+                targets.push_back(static_cast<uint32_t>(target));
             }
 
             std::transform(data.begin(), data.end(), data.begin(), [](float pixel) { return pixel / 255.0F - 0.5F; });
 
             auto data_tensor = ttml::autograd::create_tensor(
                 ttml::core::from_vector(data, ttml::core::create_shape({batch_size, 1, 1, num_features}), device));
-            auto targets_tensor = ttml::autograd::create_tensor(
-                ttml::core::from_vector(targets, ttml::core::create_shape({batch_size, 1, 1, num_targets}), device));
+
+            auto targets_tensor =
+                ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                    targets, ttnn::Shape({batch_size, 1U}), device, ttnn::Layout::ROW_MAJOR));
             return std::make_pair(data_tensor, targets_tensor);
         };
 
@@ -250,6 +255,8 @@ int main(int argc, char **argv) {
     };
 
     for (size_t epoch = 0; epoch < config.num_epochs; ++epoch) {
+        auto start_time = std::chrono::steady_clock::now();
+        uint32_t num_steps_in_epoch = 0;
         for (const auto &[data, target] : train_dataloader) {
             optimizer.zero_grad();
             auto output = run_model(model, data);
@@ -268,7 +275,12 @@ int main(int argc, char **argv) {
             optimizer.step();
             ttml::autograd::ctx().reset_graph();
             training_step++;
+            num_steps_in_epoch++;
         }
+
+        auto end_time = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        fmt::println("per step ms: {} ms", duration.count() / num_steps_in_epoch);
 
         const float test_accuracy = evaluate(test_dataloader, model, num_targets);
         fmt::print(

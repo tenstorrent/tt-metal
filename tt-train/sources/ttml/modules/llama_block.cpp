@@ -5,16 +5,20 @@
 #include "llama_block.hpp"
 
 #include "modules/grouped_query_attention.hpp"
-#include "modules/rotary_embedding.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::modules {
-LlamaMLP::LlamaMLP(uint32_t embedding_size, float dropout_prob) {
+LlamaMLP::LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob) {
     uint32_t multiple_of = 256;
-    const uint32_t unrounded_size = static_cast<uint32_t>(static_cast<float>(4 * embedding_size) * (2.0F / 3.0F));
-    const uint32_t hidden_size = ((unrounded_size + multiple_of - 1) / multiple_of) * multiple_of;
+    uint32_t hidden_size = 0U;
+    if (intermediate_dim) {
+        hidden_size = *intermediate_dim;
+    } else {
+        const uint32_t unrounded_size = static_cast<uint32_t>(static_cast<float>(4 * embedding_size) * (2.0F / 3.0F));
+        hidden_size = ((unrounded_size + multiple_of - 1U) / multiple_of) * multiple_of;
+    }
     m_w1 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
     m_w3 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
     m_w2 = std::make_shared<LinearLayer>(hidden_size, embedding_size, /*has_bias=*/false);
@@ -41,8 +45,9 @@ LlamaBlock::LlamaBlock(
     uint32_t num_heads,
     uint32_t num_groups,
     const ops::RotaryEmbeddingParams& rope_params,
-    float dropout_prob) {
-    m_mlp = std::make_shared<LlamaMLP>(embedding_size, dropout_prob);
+    float dropout_prob,
+    std::optional<uint32_t> intermediate_dim) {
+    m_mlp = std::make_shared<LlamaMLP>(embedding_size, intermediate_dim, dropout_prob);
     m_attention_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_mlp_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_attention = std::make_shared<GroupedQueryAttention>(GQAConfig{

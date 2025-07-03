@@ -27,8 +27,8 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
     const bool output_is_dram = out_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    auto ashape = a.get_padded_shape();
-    auto num_output_blocks_total = a.get_padded_shape()[-1] / (TILE_WIDTH * TILE_WIDTH);
+    const auto& ashape = a.padded_shape();
+    auto num_output_blocks_total = a.padded_shape()[-1] / (TILE_WIDTH * TILE_WIDTH);
 
     const bool row_major = false;
     const auto
@@ -46,9 +46,9 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
         return tt::tt_metal::CreateCircularBuffer(program, cores, config);
     };
 
-    TT_ASSERT(a.get_dtype() == output.get_dtype(), "Input and output tensors must be of same type");
+    TT_ASSERT(a.dtype() == output.dtype(), "Input and output tensors must be of same type");
 
-    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     const uint32_t input_tile_size = tt::tt_metal::detail::TileSize(input_format);
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;

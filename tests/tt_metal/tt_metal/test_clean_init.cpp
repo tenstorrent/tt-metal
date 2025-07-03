@@ -24,11 +24,10 @@
 #include <tt-metalium/device.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/system_memory_manager.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -52,9 +51,9 @@ int main(int argc, char** argv) {
     // Any arg means that we shouldn't do teardown.
     bool skip_teardown = (argc > 1);
     if (skip_teardown) {
-        tt::log_info("Running loopback test with no teardown, to see if we can recover next run.");
+        log_info(tt::LogTest, "Running loopback test with no teardown, to see if we can recover next run.");
     } else {
-        tt::log_info("Running loopback test with proper teardown");
+        log_info(tt::LogTest, "Running loopback test with proper teardown");
     }
 
     bool pass = true;
@@ -139,9 +138,9 @@ int main(int argc, char** argv) {
             );
 
             EnqueueProgram(cq, program, false);
-            tt::log_info("Started program");
+            log_info(tt::LogTest, "Started program");
             Finish(cq);
-            tt::log_info("Finished program");
+            log_info(tt::LogTest, "Finished program");
 
             /*
             * Validation & Teardown
@@ -152,15 +151,15 @@ int main(int argc, char** argv) {
             pass &= input_vec == result_vec;
 
         } catch (const std::exception &e) {
-            tt::log_error(tt::LogTest, "Test failed with exception!");
-            tt::log_error(tt::LogTest, "{}", e.what());
+            log_error(tt::LogTest, "Test failed with exception!");
+            log_error(tt::LogTest, "{}", e.what());
 
             throw;
         }
     }
 
     if (pass) {
-        tt::log_info(tt::LogTest, "Test Passed");
+        log_info(tt::LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

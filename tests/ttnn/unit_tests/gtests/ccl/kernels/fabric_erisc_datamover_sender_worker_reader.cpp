@@ -5,13 +5,14 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 
 void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t num_pages_to_read_total = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t pages_per_edm_buffer = 1;
+    constexpr uint32_t _ = get_compile_time_arg_val(3);  // unused pages_per_edm_buffer
+    constexpr bool write_scatter_mode = get_compile_time_arg_val(4) == 1;
+    constexpr uint32_t pages_per_edm_buffer = (write_scatter_mode ? 2 : 1);
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -21,23 +22,27 @@ void kernel_main() {
 
     DPRINT << "swr: args " << "\n\tsrc_addr=" << src_addr << "\n\tsrc_is_dram=" << (src_is_dram ? "T" : "F")
            << "\n\tnum_pages_to_read_total=" << num_pages_to_read_total
-           << "\n\tpages_per_edm_buffer=" << pages_per_edm_buffer << "\n\tpage_size=" << page_size << "\n";
+           << "\n\tpages_per_edm_buffer=" << pages_per_edm_buffer << "\n\tpage_size=" << page_size
+           << "\n\twrite_scatter_mode=" << (write_scatter_mode ? "T" : "F") << "\n";
 
     for (uint32_t num_pages_read = 0; num_pages_read < num_pages_to_read_total;
          num_pages_read += pages_per_edm_buffer) {
         // How can I read ahead into the circular buffer so I don't have to do an async read barrier for
         // every page? I only want to block when the CB is full
         uint32_t pages_to_read = std::min<uint32_t>(pages_per_edm_buffer, num_pages_to_read_total - num_pages_read);
+
         cb_reserve_back(cb_id_in0, pages_to_read);
+
         uint32_t local_l1_read_addr = get_write_ptr(cb_id_in0);
-        local_l1_read_addr += sizeof(PACKET_HEADER_TYPE);
 
         for (uint32_t p = 0; p < pages_to_read; ++p) {
             uint64_t src_noc_addr = get_noc_addr(num_pages_read + p, source_address_generator);
             noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
             local_l1_read_addr += page_size;
         }
+
         noc_async_read_barrier();
+
         cb_push_back(cb_id_in0, pages_to_read);
     }
 }

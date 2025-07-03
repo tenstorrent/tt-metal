@@ -7,10 +7,10 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads.hpp"
 #include "ttnn/types.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
@@ -40,8 +40,8 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
                std::optional<const uint32_t> num_kv_heads,
                const std::optional<const uint32_t> slice_size,
                const std::optional<MemoryConfig>& final_memory_config,
-               const std::optional<const DataType> dtype)
-                -> std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> {
+               const std::optional<const DataType> dtype,
+               bool use_noc1_only) -> std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> {
                 return self(
                     input_tensor,
                     buffer_tensor,
@@ -57,7 +57,8 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
                     num_kv_heads,
                     slice_size,
                     final_memory_config,
-                    dtype);
+                    dtype,
+                    use_noc1_only);
             },
             py::arg("input_tensor"),
             py::arg("buffer_tensor"),
@@ -74,7 +75,8 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
             py::arg("num_kv_heads") = std::nullopt,
             py::arg("slice_size") = std::nullopt,
             py::arg("final_memory_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt});
+            py::arg("dtype") = std::nullopt,
+            py::arg("use_noc1_only") = false});
 }
 
 }  // namespace detail

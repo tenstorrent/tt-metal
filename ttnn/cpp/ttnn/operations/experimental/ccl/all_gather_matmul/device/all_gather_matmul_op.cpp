@@ -11,9 +11,8 @@
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 /* All Gather Matmul fusion includes */
-#include "cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
-#include "cpp/ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn {
 namespace experimental {
@@ -39,7 +38,7 @@ void AllGatherMatmul::validate(
     // All Gather Matmul validate
     TT_FATAL(this->all_gather_struct.dim == 3, "AllGatherMatmul requires dim=3 for the AllGather operaitons.");
     TT_FATAL(
-        input_tensor.get_padded_shape()[0] == 1 && input_tensor.get_padded_shape()[1] == 1,
+        input_tensor.padded_shape()[0] == 1 && input_tensor.padded_shape()[1] == 1,
         "AllGatherMatmul requires input tensor to have batch size of 1.");
     std::visit(
         [&](const auto& config) {
@@ -69,7 +68,7 @@ void AllGatherMatmul::validate(
 std::vector<ttnn::TensorSpec> AllGatherMatmul::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     // All Gather shape
     ttnn::TensorSpec all_gather_output_shape = this->all_gather_struct.compute_output_specs({input_tensors[0]})[0];
-    ttnn::TensorSpec datacopy_output_shape = all_gather_output_shape;
+    const ttnn::TensorSpec& datacopy_output_shape = all_gather_output_shape;
 
     // Matmul shape
     ttnn::TensorSpec matmul_output_specs =
@@ -136,7 +135,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program_at
         this->all_gather_core_grid_offset,
 
         /* Matmul Params */
-        {},  // Bias
+        optional_input_tensors[0],  // Bias
         this->matmul_struct.bcast_batch.value(),
         this->matmul_struct.compute_kernel_config.value(),
         this->matmul_struct.program_config.value(),
@@ -154,6 +153,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_impl(
     const ttnn::Tensor& weight_tensor,
     const uint32_t dim,
     const CoreCoord all_gather_core_grid_offset,
+    const std::optional<const Tensor>& bias,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config_ag,
     std::optional<size_t> user_defined_num_workers,
@@ -170,7 +170,12 @@ std::vector<ttnn::Tensor> all_gather_matmul_impl(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "AllGatherMatmul is only supported for Fast Dispatch");
 
-    std::vector<std::optional<const ttnn::Tensor>> optional_input_tensors = {std::nullopt};
+    std::vector<std::optional<const Tensor>> optional_input_tensors = {};
+    if (bias.has_value()) {
+        optional_input_tensors.push_back(bias.value());
+    } else {
+        optional_input_tensors.push_back(std::nullopt);
+    }
 
     /* AllGather setup */
     ttnn::AllGather all_gather_struct{
@@ -189,7 +194,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_impl(
     ttnn::Tensor datacopy_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
 
     /* Matmul setup */
-    bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.get_logical_shape());
+    bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -203,7 +208,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_impl(
             program_config,
             /*bcast_batch=*/std::nullopt,
             memory_config_mm.value_or(input_tensor.memory_config()),
-            dtype.value_or(input_tensor.get_dtype()),
+            dtype.value_or(input_tensor.dtype()),
             compute_kernel_config,
             /*untilize_out=*/false,
             user_core_coord,
@@ -232,6 +237,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
     const ttnn::Tensor& weight_tensor,
     const uint32_t dim,
     const CoreCoord all_gather_core_grid_offset,
+    const std::optional<const Tensor>& bias,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config_ag,
     std::optional<size_t> user_defined_num_workers,
@@ -244,12 +250,12 @@ std::vector<ttnn::Tensor> all_gather_matmul(
     const std::optional<const std::string>& activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
-    std::vector<IDevice*> devices = input_tensor.active_physical_devices();
     return all_gather_matmul_impl(
         input_tensor,
         weight_tensor,
         dim,
         all_gather_core_grid_offset,
+	bias,
         num_links,
         memory_config_ag,
         user_defined_num_workers,
@@ -262,7 +268,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
         activation,
         compute_kernel_config,
         core_grid,
-        devices);
+        ttnn::ccl::get_active_physical_devices(input_tensor));
 }
 
 std::vector<ttnn::Tensor> all_gather_matmul(
@@ -270,6 +276,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
     const std::vector<ttnn::Tensor>& weight_tensors,
     const uint32_t dim,
     const CoreCoord all_gather_core_grid_offset,
+    const std::optional<const Tensor>& bias,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config_ag,
     std::optional<size_t> user_defined_num_workers,
@@ -294,6 +301,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
             weight_tensors.at(i),
             dim,
             all_gather_core_grid_offset,
+            bias,
             num_links,
             memory_config_ag,
             user_defined_num_workers,

@@ -23,7 +23,7 @@ inline uint8_t nearest_pow_of_2_up_to_8(uint32_t x) {
     // x |= x >> 8;  // Propagate the highest set bit
     // x |= x >> 16;  // Propagate the highest set bit
 
-    uint8_t result = x + 1;  // Add 1 to get the next power of 2
+    uint32_t result = x + 1;  // Add 1 to get the next power of 2
 
     // Cap the result at max
     return (result > max) ? max : result;

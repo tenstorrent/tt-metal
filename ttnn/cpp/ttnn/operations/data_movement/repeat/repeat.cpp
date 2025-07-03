@@ -47,7 +47,7 @@ ttnn::Tensor repeat_upper_dims_rm(
 
     // figure out the shape of the input tensor for the op. dims before and after rep dim get collapsed, not including
     // page size.
-    const auto& input_shape = tensor.get_logical_shape();
+    const auto& input_shape = tensor.logical_shape();
     ttnn::SmallVector<uint32_t> collapsed_shape_vector(4);
 
     collapsed_shape_vector[UpperRepeatDims::collapsed_upper] =
@@ -76,7 +76,7 @@ ttnn::Tensor repeat_last_dim_rm(
     // collapse to 2D
     // op
     // un-collapse
-    const auto& input_shape = tensor.get_logical_shape();
+    const auto& input_shape = tensor.logical_shape();
     ttnn::SmallVector<uint32_t> collapsed_shape_vector(2);
 
     collapsed_shape_vector[0] =
@@ -101,7 +101,7 @@ ttnn::Tensor repeat_last_dim_rm(
 std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
     const ttnn::Tensor& tensor, const SmallVector<uint32_t>& repetition_vector) {
     auto working_tensor = tensor;
-    const auto& input_shape = working_tensor.get_logical_shape();
+    const auto& input_shape = working_tensor.logical_shape();
     SmallVector<uint32_t> working_repetition_vector;
 
     const auto total_reps =
@@ -124,7 +124,7 @@ std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
         working_repetition_vector = std::move(repetition_vector);
     }
 
-    TT_ASSERT(working_tensor.get_logical_volume() == tensor.get_logical_volume());
+    TT_ASSERT(working_tensor.logical_volume() == tensor.logical_volume());
     TT_ASSERT(
         std::accumulate(
             working_repetition_vector.cbegin(),
@@ -146,7 +146,7 @@ ttnn::Tensor RepeatOperation::invoke(
     auto working_output_mem_config = output_mem_config;
 
     if (std::any_of(repetition_vector.cbegin(), repetition_vector.cend(), [](auto x) { return x == 0; })) {
-        const auto& shape = working_tensor.get_logical_shape();
+        const auto& shape = working_tensor.logical_shape();
         std::transform(
             shape.cbegin(),
             shape.cend(),
@@ -156,7 +156,7 @@ ttnn::Tensor RepeatOperation::invoke(
         return tensor.reshape(ttnn::Shape(repetition_vector));
     }
 
-    TT_FATAL(working_tensor.get_logical_shape().rank() > 0, "repeat does not support rank 0 tensors");
+    TT_FATAL(working_tensor.logical_shape().rank() > 0, "repeat does not support rank 0 tensors");
 
     // nothing to do!
     if (std::all_of(repetition_vector.cbegin(), repetition_vector.cend(), [](auto x) { return x == 1; })) {
@@ -165,18 +165,17 @@ ttnn::Tensor RepeatOperation::invoke(
 
     // Sharded -> interleaved
     if (tensor.memory_config().is_sharded()) {
-        auto working_memory_config = tensor.memory_config();
-        working_memory_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
+        MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
         working_tensor = ttnn::sharded_to_interleaved(queue_id, tensor, working_memory_config, std::nullopt);
     }
     if (working_output_mem_config.is_sharded()) {
-        working_output_mem_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
+        working_output_mem_config =
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_mem_config.buffer_type()};
     }
 
     // tiled -> RM
     if (working_tensor.layout() == ttnn::TILE_LAYOUT) {
-        working_tensor =
-            ttnn::to_layout(working_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (IDevice*)nullptr);
+        working_tensor = ttnn::to_layout(working_tensor, ttnn::ROW_MAJOR_LAYOUT);
     }
 
     // loop over dims in repetition vector, backwards because repeat pages first is faster
@@ -198,8 +197,7 @@ ttnn::Tensor RepeatOperation::invoke(
 
     // RM -> OG page layout
     if (tensor.layout() == ttnn::TILE_LAYOUT) {
-        working_tensor =
-            ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, tensor.get_dtype(), std::nullopt, (IDevice*)nullptr);
+        working_tensor = ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, tensor.dtype());
     }
 
     // Interleaved to OG mem layout

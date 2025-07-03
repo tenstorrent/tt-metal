@@ -26,11 +26,11 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     auto& output = tensor_return_value;
     CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     tt_metal::IDevice* device = input_tensor.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
@@ -54,7 +54,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     uint32_t in0_w_tiles = input_shape[3] / TILE_WIDTH;
     uint32_t in1_w_tiles = 0;
     if (read_from_input_tensor_kv) {
-        in1_w_tiles = input_tensor_kv.value().get_padded_shape()[3] / TILE_WIDTH;
+        in1_w_tiles = input_tensor_kv.value().padded_shape()[3] / TILE_WIDTH;
     }
 
     // Per output tensor args
@@ -96,7 +96,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    bool tile_dtype_is_bfloat16 = input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
+    bool tile_dtype_is_bfloat16 = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool in1_is_dram = false;
     if (read_from_input_tensor_kv) {
@@ -335,11 +335,11 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     tt_metal::IDevice* device = input_tensor.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
@@ -626,11 +626,6 @@ void NlpCreateHeadsDeviceOperation::Sharded::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto src_buffer = tensor_args.input_tensor_q.buffer();
-
-    uint32_t src_kv_buffer_addr = 0;
-    if (cached_program.shared_variables.read_from_input_tensor_kv) {
-        src_kv_buffer_addr = tensor_args.input_tensor_kv.value().buffer()->address();
-    }
 
     auto dst_buffer_query = std::get<0>(tensor_return_value).buffer();
     auto dst_buffer_key = std::get<1>(tensor_return_value).buffer();

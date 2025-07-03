@@ -32,7 +32,7 @@ int main() {
     const size_t num_targets = 32;
     const float noise = 0.0F;
     const bool bias = true;
-    ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
+    ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
 
     auto training_params = ttml::datasets::MakeRegressionParams{
         .n_samples = training_samples_count,
@@ -86,7 +86,7 @@ int main() {
             optimizer.zero_grad();
             auto output = (*model)(data);
             auto loss = ttml::ops::mse_loss(output, targets);
-            fmt::print("Loss shape: {}\n", loss->get_value().get_logical_shape());
+            fmt::print("Loss shape: {}\n", loss->get_value().logical_shape());
             auto mesh_shape = device->shape();
             ttml::core::MeshToXTensorVariant<float> identity_composer =
                 ttml::core::VectorMeshToXTensor<float>(mesh_shape);

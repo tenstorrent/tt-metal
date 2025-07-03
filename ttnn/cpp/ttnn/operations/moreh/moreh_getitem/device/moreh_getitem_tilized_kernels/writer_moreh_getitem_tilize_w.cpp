@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include "dataflow_api.h"
-#include "cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
+#include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -49,7 +50,7 @@ void kernel_main() {
         uint32_t output_stick_w = i % num_alignment_width;
         uint32_t w_off = output_stick_w * num_elements_per_alignment;
         uint32_t w_start = w_off;
-        uint32_t w_end = min(w_off + num_elements_per_alignment, output_size_w_without_padding);
+        uint32_t w_end = std::min(w_off + num_elements_per_alignment, output_size_w_without_padding);
 
         uint32_t stick_y = (i / num_alignment_width);
         uint32_t stick_x = w_start / FACE_WIDTH;

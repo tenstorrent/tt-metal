@@ -16,7 +16,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto input = tensor_args.input;
-    auto output = output_tensor;
+    const auto& output = output_tensor;
 
     auto memory_config = operation_attributes.memory_config;
     const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
@@ -25,7 +25,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     tt::tt_metal::ReduceOpDim reduce_dim = tt::tt_metal::ReduceOpDim::W;
     float scaler = 1.0f;
 
-    const auto shape = input.get_padded_shape();
+    const auto& shape = input.padded_shape();
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
 
     uint32_t HW = H * W;
@@ -33,7 +33,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     uint32_t Ht = H / tt::constants::TILE_HEIGHT;
 
     // check mask for w-dim
-    const auto input_shape_without_padding = input.get_logical_shape();
+    const auto& input_shape_without_padding = input.logical_shape();
     const auto origin_W = input_shape_without_padding[-1];
     const bool do_mask_w = (origin_W % tt::constants::TILE_WIDTH) != 0;
     const auto mask_w = do_mask_w ? origin_W % tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH;
@@ -50,7 +50,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
     // Scaler datatype is hardcoded bfloat16 due to tile creation in reader
     tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
@@ -60,10 +60,10 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     tt::DataFormat intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat intermed1_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t intermed_single_tile_size = tt::tt_metal::detail::TileSize(intermed_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
 
-    uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
     tt::tt_metal::IDevice* device = input.device();
 

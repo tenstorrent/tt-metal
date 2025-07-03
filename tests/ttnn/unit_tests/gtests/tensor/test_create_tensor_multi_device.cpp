@@ -11,8 +11,8 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
-#include "ttnn/cpp/ttnn/tensor/types.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn_test_fixtures.hpp"
@@ -81,9 +81,9 @@ TEST_F(MultiDeviceTensorCreationTest, Full) {
         std::ref(*mesh_device),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
 
-    EXPECT_EQ(mesh_replicated_tensor.get_logical_shape(), ttnn::Shape({32, 32}));
-    EXPECT_EQ(mesh_replicated_tensor.get_dtype(), DataType::FLOAT32);
-    EXPECT_EQ(mesh_replicated_tensor.get_layout(), Layout::ROW_MAJOR);
+    EXPECT_EQ(mesh_replicated_tensor.logical_shape(), ttnn::Shape({32, 32}));
+    EXPECT_EQ(mesh_replicated_tensor.dtype(), DataType::FLOAT32);
+    EXPECT_EQ(mesh_replicated_tensor.layout(), Layout::ROW_MAJOR);
 
     auto device_tensors = get_device_tensors(mesh_replicated_tensor);
     EXPECT_THAT(device_tensors, SizeIs(mesh_device->num_devices()));
@@ -113,10 +113,10 @@ TEST_F(MultiDeviceTensorCreationTest, FullLike) {
         /*layout=*/std::nullopt,
         std::ref(*mesh_device));
 
-    EXPECT_EQ(mesh_replicated_tensor.get_logical_shape(), tensor.get_logical_shape());
-    EXPECT_EQ(mesh_replicated_tensor.get_padded_shape(), tensor.get_padded_shape());
-    EXPECT_EQ(mesh_replicated_tensor.get_dtype(), tensor.get_dtype());
-    EXPECT_EQ(mesh_replicated_tensor.get_layout(), tensor.get_layout());
+    EXPECT_EQ(mesh_replicated_tensor.logical_shape(), tensor.logical_shape());
+    EXPECT_EQ(mesh_replicated_tensor.padded_shape(), tensor.padded_shape());
+    EXPECT_EQ(mesh_replicated_tensor.dtype(), tensor.dtype());
+    EXPECT_EQ(mesh_replicated_tensor.layout(), tensor.layout());
 
     auto device_tensors = get_device_tensors(mesh_replicated_tensor);
     EXPECT_THAT(device_tensors, SizeIs(mesh_device->num_devices()));
@@ -157,10 +157,10 @@ TEST_F(MultiDeviceTensorCreationTest, FullLikeWithOptTensor) {
         /*memory_config=*/std::nullopt,
         opt_output);
 
-    EXPECT_EQ(mesh_replicated_tensor.get_logical_shape(), tensor.get_logical_shape());
-    EXPECT_EQ(mesh_replicated_tensor.get_padded_shape(), tensor.get_padded_shape());
-    EXPECT_EQ(mesh_replicated_tensor.get_dtype(), tensor.get_dtype());
-    EXPECT_EQ(mesh_replicated_tensor.get_layout(), tensor.get_layout());
+    EXPECT_EQ(mesh_replicated_tensor.logical_shape(), tensor.logical_shape());
+    EXPECT_EQ(mesh_replicated_tensor.padded_shape(), tensor.padded_shape());
+    EXPECT_EQ(mesh_replicated_tensor.dtype(), tensor.dtype());
+    EXPECT_EQ(mesh_replicated_tensor.layout(), tensor.layout());
     EXPECT_THAT(get_device_tensors(mesh_replicated_tensor), SizeIs(mesh_device->num_devices()));
 }
 
@@ -174,7 +174,7 @@ TEST_F(MultiDeviceTensorCreationTest, Arange) {
         ttnn::DataType::FLOAT32,
         std::ref(*mesh_device));
 
-    EXPECT_EQ(tensor.get_logical_shape(), ttnn::Shape({1024}));
+    EXPECT_EQ(tensor.logical_shape(), ttnn::Shape({1024}));
     EXPECT_THAT(get_device_tensors(tensor), SizeIs(mesh_device->num_devices()));
 
     std::vector<float> expected(1024);

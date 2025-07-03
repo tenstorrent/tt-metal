@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
 from models.utility_functions import is_wormhole_b0
 
@@ -10,9 +11,9 @@ from models.utility_functions import is_wormhole_b0
 @pytest.mark.parametrize(
     "perf_mode, max_seq_len, expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
-        (True, 128, {"prefill_t/s": 1412, "decode_t/s": 516, "decode_t/s/u": 16.11}, False, None),
-        (True, 1024, {"prefill_t/s": 2117, "decode_t/s": 440, "decode_t/s/u": 13.7}, False, None),
-        (True, 2048, {"prefill_t/s": 1967, "decode_t/s": 420, "decode_t/s/u": 13.12}, False, None),
+        (True, 128, {"prefill_t/s": 1820, "decode_t/s": 549, "decode_t/s/u": 17.16}, False, None),
+        (True, 1024, {"prefill_t/s": 2117, "decode_t/s": 487, "decode_t/s/u": 15.24}, False, None),
+        (True, 2048, {"prefill_t/s": 1967, "decode_t/s": 445, "decode_t/s/u": 13.91}, False, None),
         (True, 128, None, False, None),
         (True, 1024, None, False, None),
         (True, 2048, None, False, None),
@@ -43,7 +44,6 @@ def test_demo(
     model_location_generator,
     get_tt_cache_path,
     mesh_device,
-    use_program_cache,
     is_ci_env,
 ):
     if is_ci_env:

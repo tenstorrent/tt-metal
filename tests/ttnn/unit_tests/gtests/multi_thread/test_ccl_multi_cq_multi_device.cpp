@@ -54,11 +54,11 @@ using tt::tt_metal::distributed::MeshShape;
 class T3000MultiCQFabricMeshDeviceFixture : public T3000MultiCQMeshDeviceFixture {
 protected:
     T3000MultiCQFabricMeshDeviceFixture() {
-        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_1D);
+        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::FABRIC_1D);
     }
     void TearDown() override {
         T3000MultiCQMeshDeviceFixture::TearDown();
-        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
     }
 };
 
@@ -69,7 +69,6 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_program_cache();
 
     auto view = mesh_device->get_view();
 
@@ -124,7 +123,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
 
                 auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
-                Tensor input_tensor = Tensor(input_storage, input_shape, DataType::BFLOAT16, Layout::TILE);
+                Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{});
 
                 // Enqueue write_buffer to the read/write command queue and record the event
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), input_tensor, {host_data});
@@ -147,10 +146,12 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
 
         // Enqueue the all_gather_async operation on each device.
         // It does not support command queue ID as a parameter and internally uses command queue 0.
+        std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
+            multi_device_global_semaphore};
         const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_async(
             device_tensors,
             0,
-            multi_device_global_semaphore,
+            multi_dev_semaphore,
             1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             ttnn::ccl::Topology::Linear,
@@ -168,7 +169,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
                 }
                 auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
                 auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer};
-                Tensor dummy_tensor = Tensor(dummy_storage, input_shape, DataType::BFLOAT16, Layout::TILE);
+                Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, ReplicateTensor{});
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), dummy_tensor, {dummy_data});
                 dispatch_ops_to_device(device, dummy_tensor, ttnn::QueueId(op_cq_id));
                 promise->set_value();
@@ -187,10 +188,10 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
             auto device = devices[i];
             auto device_tensor = gathered_tensors[i];
             boost::asio::post(pool, [&, i, device, num_elems, device_tensor]() mutable {
-                auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.volume()]);
+                auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
                 ttnn::read_buffer(ttnn::QueueId(op_cq_id), device_tensor, {output_data});
 
-                for (int j = 0; j < device_tensor.volume(); j++) {
+                for (int j = 0; j < device_tensor.physical_volume(); j++) {
                     int base = j / num_elems;  // dev_idx
                     ASSERT_EQ(output_data[j].to_float(), (-1.0 * base * 32.0 + 128));
                 }
@@ -215,8 +216,6 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_program_cache();
-
     auto view = mesh_device->get_view();
 
     // build a line of devices
@@ -225,6 +224,12 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
         view.get_device(MeshCoordinate(0, 1)),
         view.get_device(MeshCoordinate(0, 2)),
         view.get_device(MeshCoordinate(0, 3))};
+
+    // https://github.com/tenstorrent/tt-metal/issues/24235
+    for (auto device : devices) {
+        device->disable_and_clear_program_cache();
+    }
+
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,
@@ -274,7 +279,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
                 auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
                 auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
-                Tensor input_tensor = Tensor(input_storage, input_shape, DataType::BFLOAT16, Layout::TILE);
+                Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{});
 
                 // Enqueue write_buffer to the operation`s command queue and record the event
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), input_tensor, {host_data});
@@ -302,10 +307,12 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
 
         // Enqueue the all_gather_async operation on each device.
         // It does not support command queue ID as a parameter and internally uses command queue 0.
+        std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
+            multi_device_global_semaphore};
         const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_async(
             device_tensors,
             0,
-            multi_device_global_semaphore,
+            multi_dev_semaphore,
             1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             ttnn::ccl::Topology::Linear,
@@ -326,7 +333,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
                 }
                 auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
                 auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer};
-                Tensor dummy_tensor = Tensor(dummy_storage, input_shape, DataType::BFLOAT16, Layout::TILE);
+                Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, ReplicateTensor{});
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), dummy_tensor, {dummy_data});
                 dispatch_ops_to_device(device, dummy_tensor, ttnn::QueueId(op_cq_id));
                 promise->set_value();
@@ -366,10 +373,10 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
             auto device_tensor = gathered_tensors[i];
 
             boost::asio::post(pool, [&, i, device, num_elems, device_tensor]() mutable {
-                auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.volume()]);
+                auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
                 ttnn::read_buffer(ttnn::QueueId(op_cq_id), device_tensor, {output_data});
 
-                for (int j = 0; j < device_tensor.volume(); j++) {
+                for (int j = 0; j < device_tensor.physical_volume(); j++) {
                     int base = j / num_elems;  // dev_idx
                     ASSERT_EQ(output_data[j].to_float(), (-1.0 * base * 32.0 + 128));
                 }

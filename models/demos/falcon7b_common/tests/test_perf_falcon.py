@@ -10,16 +10,13 @@ from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     DeviceSetup,
     run_test_FalconCausalLM_end_to_end,
 )
-from models.demos.falcon7b_common.tt.model_config import (
-    get_model_config,
-)
-
+from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.utility_functions import (
     disable_persistent_kernel_cache,
-    is_e75,
-    skip_for_grayskull,
-    is_wormhole_b0,
     is_blackhole,
+    is_e75,
+    is_wormhole_b0,
+    skip_for_grayskull,
 )
 
 
@@ -71,7 +68,6 @@ class TestParametrized:
         model_location_generator,
         get_tt_cache_path,
         device,
-        use_program_cache,
     ):
         if is_e75(device) and batch == 32:
             pytest.skip("Falcon batch 32 is not supported on E75")
@@ -201,7 +197,6 @@ class TestParametrized:
         model_location_generator,
         get_tt_cache_path,
         mesh_device,
-        use_program_cache,
     ):
         if llm_mode == "prefill":
             expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
@@ -253,7 +248,6 @@ class TestParametrized:
     @skip_for_grayskull()
     def test_perf_t3000_bare_metal(
         self,
-        use_program_cache,
         model_version,
         llm_mode,
         batch,

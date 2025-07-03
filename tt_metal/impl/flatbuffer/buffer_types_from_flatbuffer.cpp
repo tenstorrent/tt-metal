@@ -21,7 +21,6 @@ BufferType from_flatbuffer(flatbuffer::BufferType type) {
 TensorMemoryLayout from_flatbuffer(flatbuffer::TensorMemoryLayout layout) {
     switch (layout) {
         case flatbuffer::TensorMemoryLayout::Interleaved: return TensorMemoryLayout::INTERLEAVED;
-        case flatbuffer::TensorMemoryLayout::SingleBank: return TensorMemoryLayout::SINGLE_BANK;
         case flatbuffer::TensorMemoryLayout::HeightSharded: return TensorMemoryLayout::HEIGHT_SHARDED;
         case flatbuffer::TensorMemoryLayout::WidthSharded: return TensorMemoryLayout::WIDTH_SHARDED;
         case flatbuffer::TensorMemoryLayout::BlockSharded: return TensorMemoryLayout::BLOCK_SHARDED;
@@ -87,7 +86,7 @@ CircularBufferConfig from_flatbuffer(
     return config;
 }
 
-// TODO: Opportunity to share with TTNN. This was straight up copied from tensor_types_from_flatbuffer.cpp
+// TODO: Opportunity to share with TTNN. This was straight up copied from tensor_spec_flatbuffer.cpp
 
 ShardOrientation from_flatbuffer(flatbuffer::ShardOrientation orientation) {
     switch (orientation) {

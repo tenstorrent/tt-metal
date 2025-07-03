@@ -4,8 +4,10 @@
 
 #include "moreh_clip_grad_norm_pybind.hpp"
 
+#include <pybind11/pybind11.h>
+
 #include "moreh_clip_grad_norm.hpp"
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm {
 

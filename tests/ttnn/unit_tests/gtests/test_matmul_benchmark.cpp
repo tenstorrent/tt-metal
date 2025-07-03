@@ -5,7 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <tracy/Tracy.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -30,11 +30,10 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tile.hpp>
 #include "impl/context/metal_context.hpp"
-#include "ttnn/any_device.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/cpp/ttnn/operations/functions.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/trace.hpp"
@@ -148,14 +147,12 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
 
     TT_FATAL(num_measurement_iterations > 0, "Won't have data without at least one measurement iteration");
 
-    tt::tt_metal::IDevice* device = device_;
-
     const bool enable_program_cache = test_config.enable_program_cache;
     if (use_trace) {
         TT_FATAL(enable_program_cache, "Tracing requires program cache to be enabled");
     }
     if (enable_program_cache) {
-        device->enable_program_cache();
+        device_->enable_program_cache();
     }
 
     // Parse shape params
@@ -177,7 +174,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     // Validate user compute grid is feasible
     TT_FATAL(grid_size.height() > 0 && grid_size.width() > 0, "Invalid grid size");
 
-    auto compute_grid_size = device->compute_with_storage_grid_size();
+    auto compute_grid_size = device_->compute_with_storage_grid_size();
     if (compute_grid_size.y < grid_size.height() || compute_grid_size.x < grid_size.width()) {
         GTEST_SKIP() << "Skipping test as requested compute grid size " << grid_size
                      << " exceeds available compute grid " << compute_grid_size.str();
@@ -199,7 +196,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             "dtype,math_fidelity,inference_time_avg (ns),TFLOPs (avg),Utilization (vs user grid),Utilization (vs 8x8 "
             "full grid)\n";
 
-    tt::log_info("Running test with dtype: {}, math_fidelity: {}, use_trace: {}", dtype, math_fidelity, use_trace);
+    log_info(
+        tt::LogTest, "Running test with dtype: {}, math_fidelity: {}, use_trace: {}", dtype, math_fidelity, use_trace);
 
     const int in0_block_w = k / grid_size.height() / 32 / in0_block_w_div;
     const int per_core_M = m / grid_size.width() / tile_h;
@@ -208,7 +206,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     const int out_block_w = per_core_N / num_out_blocks_w;
     const Shape2D out_subblock = get_subblock_sizes(out_block_h, out_block_w, out_sharded);
 
-    tt::log_info(
+    log_info(
+        tt::LogTest,
         "M*K*N = {}*{}*{} out_subblock_h: {}, out_subblock_w: {}",
         m,
         k,
@@ -235,7 +234,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         in0_data,
         ttnn::TensorSpec(
             ttnn::Shape({m, k}), tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, in0_memory_config)),
-        device);
+        device_);
     // In1 is random data
     std::vector<float> in1_data(k * n);
     std::generate(in1_data.begin(), in1_data.end(), []() {
@@ -248,7 +247,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         ttnn::TensorSpec(
             ttnn::Shape({k, n}),
             tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
-        device);
+        device_);
 
     /*
     There are three main program configs available for matmul:
@@ -272,7 +271,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         /*fused_activation=*/std::nullopt};
 
     const ttnn::DeviceComputeKernelConfig compute_kernel_config = ttnn::init_device_compute_kernel_config(
-        device->arch(),
+        device_->arch(),
         /*device_kernel_config=*/std::nullopt,
         math_fidelity,
         /*default_approx_mode=*/true,
@@ -309,7 +308,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             input_tensor_1,
             /*bias=*/std::nullopt,
             /*parameters=*/matmul_params);
-        Synchronize(device, std::nullopt, std::vector<SubDeviceId>());
+        Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
         output_tensor.deallocate();
     }
 
@@ -319,7 +318,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
 
     // Performance measurement iterations
     if (use_trace) {
-        auto tid = ttnn::operations::trace::begin_trace_capture(device, ttnn::DefaultQueueId);
+        auto tid = ttnn::operations::trace::begin_trace_capture(device_, ttnn::DefaultQueueId);
         for (int iter = 0; iter < num_measurement_iterations; ++iter) {
             output_tensor = ttnn::operations::matmul::matmul(
                 input_tensor_0,
@@ -328,19 +327,19 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                 /*parameters=*/matmul_params);
             output_tensor.deallocate();
         }
-        ttnn::operations::trace::end_trace_capture(device, tid, ttnn::DefaultQueueId);
+        ttnn::operations::trace::end_trace_capture(device_, tid, ttnn::DefaultQueueId);
 
         auto start_time = std::chrono::high_resolution_clock::now();
         {
             ZoneScopedN("Matmul trace iterations");
-            ttnn::operations::trace::execute_trace(device, tid, ttnn::DefaultQueueId, false);
-            Synchronize(device, std::nullopt, std::vector<SubDeviceId>());
+            ttnn::operations::trace::execute_trace(device_, tid, ttnn::DefaultQueueId, false);
+            Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
         }
 
         auto end_time = std::chrono::high_resolution_clock::now();
 
         total_time += end_time - start_time;
-        ttnn::operations::trace::release_trace(device, tid);
+        ttnn::operations::trace::release_trace(device_, tid);
     } else {
         {
             ZoneScopedN("Matmul iterations");
@@ -351,7 +350,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                     input_tensor_1,
                     /*bias=*/std::nullopt,
                     /*parameters=*/matmul_params);
-                Synchronize(device, std::nullopt, std::vector<SubDeviceId>());
+                Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
                 auto end_time = std::chrono::high_resolution_clock::now();
                 total_time += end_time - start_time;
                 output_tensor.deallocate();
@@ -369,14 +368,15 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     double ideal_cycle_full_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_full_grid;
     double ideal_cycle_user_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_user_grid;
 
-    const int freq_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
+    const int freq_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_->id());
     double inference_cycle = inference_time_avg_s * freq_mhz * 1e6;
 
     double utilization_full_grid = ideal_cycle_full_grid / inference_cycle;
     double utilization_user_grid = ideal_cycle_user_grid / inference_cycle;
     std::string utilization_full_grid_percentage = std::to_string(utilization_full_grid * 100);
     std::string utilization_user_grid_percentage = std::to_string(utilization_user_grid * 100);
-    tt::log_info(
+    log_info(
+        tt::LogTest,
         "M*K*N = {}*{}*{} == inference time (avg): {}, tflops (avg): {}, utilization (vs user grid): {}%, "
         "utilization (vs 8x8 grid): {}%",
         m,

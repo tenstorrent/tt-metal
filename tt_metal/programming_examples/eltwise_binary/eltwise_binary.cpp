@@ -1,314 +1,183 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
-
 #include <tt-metalium/bfloat16.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <random>
+#include <string_view>
+#include <vector>
+#include "tt-metalium/base_types.hpp"
 
-#include <magic_enum/magic_enum.hpp>
-
-using namespace tt;
 using namespace tt::tt_metal;
-
-/*
- * 1. Host creates two vectors of data.
- * 2. Device eltwise adds them together.
- * 3. Intermediate result read back to host.
- * 4. Create another vector and send vectors to input DRAMs again.
- * 5. Device eltwise muls them together.
- * 6. Read result back and compare to golden.
- * */
-
-/*
- * We need to copy the types of the compute kernel arguments to use them host-
- * side.
- */
-
-struct BinaryOpType {
-    enum Enum { ADD = 0, SUB = 1, MUL = 2 };
-    static auto all() { return magic_enum::enum_values<Enum>(); }
-};
-
-std::map<std::string, std::string> get_defines(BinaryOpType::Enum op_type) {
-    std::map<std::string, std::string> defines;
-    // TODO(AP): remove duplication
-    std::string op_name, op_binary_type;
-    switch (op_type) {
-        case BinaryOpType::ADD:
-            op_name = "add_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWADD";
-            break;
-        case BinaryOpType::SUB:
-            op_name = "sub_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWSUB";
-            break;
-        case BinaryOpType::MUL:
-            op_name = "mul_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWMUL";
-            break;
-        default: TT_ASSERT(false && "Undefined op type");
-    }
-    defines["ELTWISE_OP"] = op_name.c_str();
-    defines["ELTWISE_OP_TYPE"] = op_binary_type.c_str();
-    return defines;
-}
-
-int main() {
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
+int main(int argc, char** argv) {
+    // Fast Dispatch = support for async operations. We need it for most applications.
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }
 
     bool pass = true;
 
+    // clang-format off
     try {
-        /*
-         * Silicon accelerator setup
-         */
+        // Initialize the device (here we use the 1st device, but you can use any device)
         constexpr int device_id = 0;
         IDevice* device = CreateDevice(device_id);
 
-        /*
-         * Setup program to execute along with its buffers and kernels to use
-         */
+        // In Metalium, submitting operations to the device is done through a command queue. This includes
+        // uploading/downloading data to/from the device, and executing programs.
         CommandQueue& cq = device->command_queue();
-
+        // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
+        // same kernel at a given time. Metalium allows you to run different kernels on different cores
+        // simultaneously.
         Program program = CreateProgram();
 
+        // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
         constexpr CoreCoord core = {0, 0};
 
-        constexpr uint32_t single_tile_size = 2 * 1024;
-        constexpr uint32_t num_tiles = 64;
-        constexpr uint32_t dram_buffer_size =
-            single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+        // Define some constants that will be used throughout the program.
+        // * Processing 64 tiles
+        // * Each tile is 32x32 elements
+        // * Each element is a bfloat16 (2 bytes)
+        constexpr uint32_t n_tiles = 64;
+        constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+        constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 
-        tt_metal::InterleavedBufferConfig dram_config{
-            .device = device,
-            .size = dram_buffer_size,
-            .page_size = dram_buffer_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
+        // Create 3 buffers on DRAM. These will hold the input and output data. src0 and src1 are the input buffers, dst is the
+        // output buffer.
+        InterleavedBufferConfig config{
+            .device = device,                       // The device to create the buffer on
+            .size = n_tiles * tile_size_bytes,      // The size of the buffer in bytes
+            .page_size = tile_size_bytes,           // The page size of the buffer in bytes. Unlike the `loopback` example, we
+                                                    // need the page size to be the same as the tile size for a large portion of
+                                                    // the NoC transfer APIs to work.
+            .buffer_type = BufferType::DRAM};       // This is a DRAM buffer.
+        auto src0_dram_buffer = CreateBuffer(config);
+        auto src1_dram_buffer = CreateBuffer(config);
+        auto dst_dram_buffer = CreateBuffer(config);
 
-        std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
-        std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
-        std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
-        // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
-        uint32_t src0_bank_id = 0;
-        uint32_t src1_bank_id = 0;
-        uint32_t dst_bank_id = 0;
-        /*
-         * Use circular buffers to set input and output buffers that the
-         * compute engine will use.
-         */
-        constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
-        constexpr uint32_t num_input_tiles = 2;
-        CircularBufferConfig cb_src0_config =
-            CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src0_cb_index, single_tile_size);
-        CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+        // Initialize the input buffers with random data. For this example, src0 is a random vector of bfloat16 values
+        std::mt19937 rng(std::random_device{}());
+        std::uniform_real_distribution<float> distribution(0.0f, 1.0f);
+        std::vector<bfloat16> a_data(elements_per_tile * n_tiles);
+        for(auto& val : a_data) {
+            val = bfloat16(distribution(rng));
+        }
 
-        constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
-        CircularBufferConfig cb_src1_config =
-            CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src1_cb_index, single_tile_size);
-        CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+        // ... and src1 is a vector of bfloat16 values initialized to -1.0f.
+        constexpr float val_to_add = -1.0f;
+        std::vector<bfloat16> b_data(elements_per_tile * n_tiles, bfloat16(val_to_add));
 
-        constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
-        constexpr uint32_t num_output_tiles = 2;
-        CircularBufferConfig cb_output_config =
-            CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(output_cb_index, single_tile_size);
-        CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        // Upload the data from host to the device.
+        EnqueueWriteBuffer(cq, src0_dram_buffer, a_data, false);
+        EnqueueWriteBuffer(cq, src1_dram_buffer, b_data, false);
 
-        /*
-         * Specify data movement kernels for reading/writing data to/from
-         * DRAM.
-         */
-        KernelHandle binary_reader_kernel_id = CreateKernel(
+        // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are used to
+        // move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute kernel to the writer
+        // kernel. Each circular buffer is made up of 2 tiles. Thus when one tile is pushed and being used by the receiving end, the
+        // sending end can get the next piece of data ready to be pushed. Overlapping the operations. Leading to better performance.
+        // However there is a trade off, The more tiles in a circular buffer, the more memory is used. And Circular buffers are
+        // backed by L1(SRAM) memory and L1 is a precious resource.
+        // The hardware supports up to 16 circular buffers and they all act the same.
+        constexpr uint32_t tiles_per_cb = 2;
+        tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
+        CBHandle cb_src0 = CreateCircularBuffer(program, core, CircularBufferConfig(
+            /*total_size=*/tiles_per_cb * tile_size_bytes,                    // The total size of the circular buffer in bytes
+            /*data_format_spec=*/{{src0_cb_index, tt::DataFormat::Float16_b}})// The circular buffer index and data format it'll hold
+            .set_page_size(src0_cb_index, tile_size_bytes));                  // Since we will be sending one tile at a time, we set
+                                                                              // the page size to the tile size (and thus
+                                                                              // total_size / page_size = tiles_per is the number of
+                                                                              // entries in the circular buffer)
+        tt::CBIndex src1_cb_index = tt::CBIndex::c_1;
+        CBHandle cb_src1 = CreateCircularBuffer(program, core, CircularBufferConfig(
+            /*total_size=*/tiles_per_cb * tile_size_bytes,
+            /*data_format_spec=*/{{src1_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src1_cb_index, tile_size_bytes));
+        tt::CBIndex dst_cb_index = tt::CBIndex::c_16;
+        CBHandle cb_dst = CreateCircularBuffer(program, core, CircularBufferConfig(
+            /*total_size=*/tiles_per_cb * tile_size_bytes,
+            /*data_format_spec=*/{{dst_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(dst_cb_index, tile_size_bytes));
+
+        // Create the reader, writer and compute kernels. The kernels do the following:
+        // * Reader: Reads data from the DRAM buffer and pushes it into the circular buffer.
+        // * Compute: Waits for data to be available in the circular buffer, pops it, adds the two inputs together and pushes the result
+        //   into the output circular buffer.
+        // * Writer: Waits for data to be available in the output circular buffer, pops it and writes it back into DRAM.
+        // These kernels work together to form a pipeline. The reader reads data from the DRAM buffer and makes them available in the
+        // compute kernel. The compute kernel does math and pushes the result into the writer kernel. The writer kernel writes the result
+        // back to DRAM.
+        auto reader = CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-
-        KernelHandle unary_writer_kernel_id = CreateKernel(
-            program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/read_tiles.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-
-        /*
-         * Set the parameters that the compute kernel will use.
-         */
-        std::vector<uint32_t> compute_kernel_args = {};
-
-        constexpr bool fp32_dest_acc_en = false;
-        constexpr bool math_approx_mode = false;
-
-        /*
-         * Use the add_tiles operation available in the eltwise_binary
-         * compute kernel.
-         */
-        KernelHandle eltwise_binary_kernel_id = CreateKernel(
+        auto writer = CreateKernel(
             program,
-            "tt_metal/kernels/compute/eltwise_binary.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/write_tile.cpp",
             core,
-            ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_kernel_args,
-                .defines = get_defines(BinaryOpType::ADD)});
-
-        /*
-         * Create source data and write to DRAM.
-         */
-        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
-            dram_buffer_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
-
-        EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
-
-        constexpr float val_to_add = -1.0f;
-        std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_add);
-
-        EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
-
-        /*
-         * Configure program and runtime kernel arguments, then execute.
-         */
-
-        SetRuntimeArgs(
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        auto compute = CreateKernel(
             program,
-            binary_reader_kernel_id,
+            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/compute/tiles_add.cpp",
             core,
-            {src0_dram_buffer->address(),
-             src0_bank_id,
-             num_tiles,
-             src1_dram_buffer->address(),
-             src1_bank_id,
-             num_tiles,
-             0});
+            ComputeConfig{.math_fidelity = MathFidelity::HiFi4});   // There's different math fidelity modes (for the tensor engine)
+                                                                // that trade off performance for accuracy. HiFi4 is the most accurate
+                                                                // mode. The other modes are HiFi3, HiFi2, HiFi1 and LoFi. The
+                                                                // difference between them is the number of bits used during computation.
 
-        SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {num_tiles, 1});
+        // Set the runtime arguments for the kernels. This also registers
+        // the kernels with the program.
+        SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles});
+        SetRuntimeArgs(program, writer, core, {dst_dram_buffer->address(), n_tiles});
+        SetRuntimeArgs(program, compute, core, {n_tiles});
 
-        SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_bank_id, num_tiles});
-
+        // We have setup the program. Now we queue the kernel for execution. The final argument is set to false. This indicates
+        // to Metalium that the operation is non-blocking. The function is allowed to return upon the kernel being queued. We must
+        // ensure that the kernel is finished before we read the output buffer. This is done by calling Finish(cq) which waits until
+        // all operations in the command queue are finished. This is equivalent to calling EnqueueProgram(cq, program, true); telling
+        // Metalium to wait until the program is finished before returning.
         EnqueueProgram(cq, program, false);
         Finish(cq);
+        // Equivalently:
+        // EnqueueProgram(cq, program, true);
 
-        /*
-         * Read in result into a host vector.
-         */
-        std::vector<uint32_t> result_vec;
+        // Read the output buffer and compare it with the expected output.
+        std::vector<bfloat16> result_vec;
         EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
 
-        /*
-         * Move src data back into DRAM src buffer 0 to do another eltwise calculation
-         */
-        Program program_mul = CreateProgram();
+        constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
+        TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");
+        for (size_t i = 0; i < result_vec.size(); ++i) {
+            const float expected = a_data[i].to_float() + val_to_add;
+            const float actual = result_vec[i].to_float();
 
-        /*
-         * Because we're using a new program, we must redeclare all the
-         * circular buffers and kernels.
-         */
-        cb_src0 = tt_metal::CreateCircularBuffer(program_mul, core, cb_src0_config);
-        cb_src1 = tt_metal::CreateCircularBuffer(program_mul, core, cb_src1_config);
-        cb_output = tt_metal::CreateCircularBuffer(program_mul, core, cb_output_config);
+            if (std::abs(expected - actual) > eps) {
+                pass = false;
+                fmt::print(stderr, "Result mismatch at index {}: expected {}, got {}\n", i, expected, actual);
+            }
+        }
 
-        binary_reader_kernel_id = CreateKernel(
-            program_mul,
-            "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-
-        unary_writer_kernel_id = CreateKernel(
-            program_mul,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-
-        /*
-         * But now let's do an eltwise mul!
-         */
-        eltwise_binary_kernel_id = CreateKernel(
-            program_mul,
-            "tt_metal/kernels/compute/eltwise_binary.cpp",
-            core,
-            ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_kernel_args,
-                .defines = get_defines(BinaryOpType::MUL)});
-
-        /*
-         * Send new input data.
-         */
-        EnqueueWriteBuffer(cq, src0_dram_buffer, result_vec, false);
-
-        constexpr float val_to_mul = 2.0f;
-        src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_mul);
-
-        EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
-
-        /*
-         * Configure program and runtime kernel arguments.
-         */
-        SetRuntimeArgs(
-            program_mul,
-            binary_reader_kernel_id,
-            core,
-            {src0_dram_buffer->address(),
-             src0_bank_id,
-             num_tiles,
-             src1_dram_buffer->address(),
-             src1_bank_id,
-             num_tiles,
-             0});
-
-        SetRuntimeArgs(program_mul, eltwise_binary_kernel_id, core, {num_tiles, 1});
-
-        SetRuntimeArgs(program_mul, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_bank_id, num_tiles});
-
-        /*
-         * Execute.
-         */
-
-        EnqueueProgram(cq, program_mul, false);
-        Finish(cq);
-
-        /*
-         * Read the result and compare to a golden result. Record pass/fail
-         * and teardown.
-         */
-        EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
-
-        auto transform_to_golden = [](const bfloat16& a) { return bfloat16((a.to_float() + val_to_add) * val_to_mul); };
-        std::vector<uint32_t> golden_vec =
-            pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_to_golden));
-
-        constexpr float abs_tolerance = 0.01f;
-        constexpr float rel_tolerance = 0.001f;
-        auto comparison_function = [](const float a, const float b) {
-            return is_close(a, b, rel_tolerance, abs_tolerance);
-        };
-
-        pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec, comparison_function);
-
+        // Finally, we close the device.
         pass &= CloseDevice(device);
-
     } catch (const std::exception& e) {
-        tt::log_error(tt::LogTest, "Test failed with exception!");
-        tt::log_error(tt::LogTest, "{}", e.what());
+        fmt::print(stderr, "Test failed with exception!\n");
+        fmt::print(stderr, "{}\n", e.what());
 
         throw;
     }
+    // clang-format on
 
     if (pass) {
-        tt::log_info(tt::LogTest, "Test Passed");
+        fmt::print("Test Passed\n");
     } else {
         TT_THROW("Test Failed");
     }

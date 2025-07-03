@@ -2,23 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
-
-from models.perf.perf_utils import prep_perf_report
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import (
-    profiler,
-    disable_persistent_kernel_cache,
-    skip_for_grayskull,
-)
-from tt_metal.tools.profiler.process_model_log import get_samples_per_s
 
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba
 from models.demos.wormhole.mamba.tt import model_config
-from models.demos.wormhole.mamba.tt.model_config import ModelMode
 from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
+from models.demos.wormhole.mamba.tt.model_config import ModelMode
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import disable_persistent_kernel_cache, profiler, skip_for_grayskull
+from tt_metal.tools.profiler.process_model_log import get_samples_per_s
 
 
 def is_nearby(actual: float, expected: float, lower_margin: float = 0.03, upper_margin: float = 0.03):
@@ -50,7 +45,6 @@ def test_mamba_perf_e2e(
     iterations,
     expected_compile_time,
     expected_inference_time,
-    use_program_cache,
     reset_seeds,
     get_tt_cache_path,
     is_ci_env,
@@ -143,11 +137,11 @@ def test_mamba_perf_e2e(
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, expected_layer_duration_ms",
-    ((32, 1.619),),
+    ((32, 1.630),),
 )
 def test_mamba_perf_device(batch, expected_layer_duration_ms):
     subdir = "ttnn_mamba"
-    margin = 0.015
+    margin = 0.020
     command = f"pytest models/demos/wormhole/mamba/tests/test_mamba_model.py::test_device_perf[1]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 

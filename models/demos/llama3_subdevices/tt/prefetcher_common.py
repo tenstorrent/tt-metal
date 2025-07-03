@@ -13,15 +13,6 @@ from models.demos.llama3_subdevices.tt.model_config import (
 global_tt_tensor_address = None
 
 
-def get_buffer_address(tensor):
-    addr = []
-    for i, ten in enumerate(ttnn.get_device_tensors(tensor)):
-        addr.append(ten.buffer_address())
-        if len(addr) > 0:
-            assert addr[i - 1] == addr[i], f"Expected {addr[i-1]} == {addr[i]}"
-    return addr[0]
-
-
 class TtLlamaPrefetcherSetup(LightweightModule):
     def __init__(
         self,
@@ -82,13 +73,11 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             mesh_device.set_sub_device_stall_group([self.worker_sub_device_id])
         else:
             ##### Set up the global circular buffer #####
-            max_tile_size = 1088
             # Global CB must be large enough to atleast double buffer weights
             # This ensures that back to back matmuls (for eg. in MLP) can run
             # without stalling on the weight prefetch
-            # calculated by fitting two largest tensor with extra room, ff2 has 391680B per global CB bank, ff1 has 207360B, plus 16320B gap (one block)
-            # TODO: Above calculation is not accurate, need to find a better lower bound
-            self.global_cb_size = 600 * 1088
+            # To fit entire MLP we'd need ~742 * 1088 but using block-wise prefetching and 732 tiles this is sufficient for now
+            self.global_cb_size = 732 * 1088
             self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
             # self.global_circular_buffer = ttnn.create_global_circular_buffer(
             #     self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
@@ -119,17 +108,9 @@ class TtLlamaPrefetcherSetup(LightweightModule):
                 self.global_cb_size,
             )
 
-    def buffer_address(self, tensor):
-        addr = []
-        for i, ten in enumerate(ttnn.get_device_tensors(tensor)):
-            addr.append(ten.buffer_address())
-            if len(addr) > 0:
-                assert addr[i - 1] == addr[i], f"Expected {addr[i-1]} == {addr[i]}"
-        return addr[0]
-
     def insert_tensor(self, tensor: ttnn.Tensor):
         self.tensors.append(tensor)
-        self.tensor_addrs.append(self.buffer_address(tensor))
+        self.tensor_addrs.append(tensor.buffer_address())
 
     def get_tensor_addrs(self):
         assert (

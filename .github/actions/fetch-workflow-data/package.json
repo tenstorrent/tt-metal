@@ -1,0 +1,10 @@
+{
+  "name": "fetch-workflow-data",
+  "version": "1.0.0",
+  "description": "Fetch and cache GitHub workflow data",
+  "main": "fetch-workflow-data.js",
+  "dependencies": {
+    "@actions/core": "1.10.0",
+    "@actions/github": "5.1.1"
+  }
+}

@@ -4,7 +4,6 @@
 #include "eth_router.hpp"
 
 #include <host_api.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <map>
 #include <string>
 #include <utility>
@@ -15,6 +14,7 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
 #include "eth_tunneler.hpp"
 #include "hal.hpp"
@@ -25,6 +25,8 @@ using namespace tt::tt_metal;
 
 void EthRouterKernel::GenerateStaticConfigs() {
     auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+    kernel_type_ = FDKernelType::ROUTING;
+
     if (as_mux_) {
         uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
             servicing_device_id_);  // TODO: can be mmio
@@ -81,7 +83,7 @@ void EthRouterKernel::GenerateStaticConfigs() {
             static_config_.output_depacketize_local_sem[idx] =
                 tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
             // Forwward VCs are the ones that don't connect to a prefetch
-            if (auto pk = dynamic_cast<PrefetchKernel*>(downstream_kernels_[idx])) {
+            if (dynamic_cast<PrefetchKernel*>(downstream_kernels_[idx]) != nullptr) {
                 static_config_.fwd_vc_count = this->static_config_.fwd_vc_count.value() - 1;
             }
         }
@@ -300,8 +302,8 @@ void EthRouterKernel::CreateKernel() {
         {"UPSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.y, 0))},
         {"DOWNSTREAM_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
         {"DOWNSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
         {"SKIP_NOC_LOGGING", "1"}};
     configure_kernel_variant(dispatch_kernel_file_names[PACKET_ROUTER_MUX], compile_args, defines, false, false, false);
 }

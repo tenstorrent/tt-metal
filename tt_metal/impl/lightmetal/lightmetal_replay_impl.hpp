@@ -40,7 +40,6 @@ struct CreateCircularBufferCommand;
 struct LightMetalCompareCommand;
 struct RuntimeArg;
 
-struct TraceDescriptor;
 struct TraceDescriptorByTraceId;
 struct LightMetalBinary;
 }  // namespace tt::tt_metal::flatbuffer
@@ -106,7 +105,7 @@ public:
     std::optional<TraceDescriptor> get_trace_by_id(uint32_t target_trace_id);
 
     // fromFlatBuffer that need class state
-    std::shared_ptr<RuntimeArgs> rt_args_from_flatbuffer(const FlatbufferRuntimeArgVector flatbuffer_args);
+    std::shared_ptr<RuntimeArgs> rt_args_from_flatbuffer(FlatbufferRuntimeArgVector flatbuffer_args);
 
     // Workload related members --------------------
     const tt::tt_metal::flatbuffer::LightMetalBinary* parse_flatbuffer_binary();

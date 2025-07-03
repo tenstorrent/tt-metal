@@ -27,7 +27,7 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -78,7 +78,7 @@ tt::tt_metal::Program initialize_program_data_movement(
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     tt::tt_metal::detail::CompileProgram(device, program);
-    return std::move(program);
+    return program;
 }
 
 tt::tt_metal::Program initialize_program_data_movement_rta(
@@ -108,7 +108,7 @@ tt::tt_metal::Program initialize_program_data_movement_rta(
             .defines = dm_defines});
 
     tt::tt_metal::detail::CompileProgram(device, program);
-    return std::move(program);
+    return program;
 }
 
 tt::tt_metal::KernelHandle initialize_program_compute(
@@ -160,6 +160,7 @@ std::pair<tt::tt_metal::Program, std::vector<tt::tt_metal::KernelHandle>> initia
     tt::tt_metal::Program program = tt_metal::CreateProgram();
     std::vector<tt::tt_metal::KernelHandle> kernel_ids;
 
+    kernel_ids.reserve(core_range_sets.size());
     for (const auto& core_range_set : core_range_sets) {
         kernel_ids.push_back(initialize_program_compute(device, program, core_range_set, num_unique_rt_args, num_common_rt_args));
     }
@@ -212,7 +213,7 @@ void verify_results(
 
         // Verify Unique RT Args (per core)
         for (const auto& logical_core : kernel->cores_with_runtime_args()) {
-            auto expected_rt_args = core_to_rt_args.at(logical_core);
+            const auto& expected_rt_args = core_to_rt_args.at(logical_core);
             auto rt_args = kernel->runtime_args(logical_core);
             EXPECT_EQ(rt_args, expected_rt_args) << "(unique rta)";
 

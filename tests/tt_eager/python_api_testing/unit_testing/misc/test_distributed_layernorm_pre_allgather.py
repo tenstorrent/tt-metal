@@ -218,9 +218,7 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
     [True, False],
     ids=["rmsnorm", "layernorm"],
 )
-def test_layernorm_part_1_with_program_cache(
-    inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, use_program_cache
-):
+def test_layernorm_part_1_with_program_cache(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device):
     run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device)
 
 
@@ -250,9 +248,7 @@ def test_layernorm_part_1_with_program_cache(
     [True, False],
     ids=["rmsnorm", "layernorm"],
 )
-def test_layernorm_part_1_with_program_cache2(
-    inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, use_program_cache
-):
+def test_layernorm_part_1_with_program_cache2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device):
     dummy_tensors = []
 
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG

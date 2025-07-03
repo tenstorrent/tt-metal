@@ -14,6 +14,8 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/lightmetal_binary.hpp>
+#include <tt-metalium/profiler_types.hpp>
+#include <tt-metalium/profiler_optional_metadata.hpp>
 
 /** @file */
 
@@ -85,12 +87,12 @@ chip_id_t GetPCIeDeviceID(chip_id_t device_id);
 // clang-format on
 IDevice* CreateDevice(
     chip_id_t device_id,
-    const uint8_t num_hw_cqs = 1,
-    const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-    const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+    uint8_t num_hw_cqs = 1,
+    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
     const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
     const std::vector<uint32_t>& l1_bank_remap = {},
-    const size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
 // clang-format off
 /**
@@ -104,9 +106,7 @@ IDevice* CreateDevice(
  * */
 // clang-format on
 IDevice* CreateDeviceMinimal(
-    chip_id_t device_id,
-    const uint8_t num_hw_cqs = 1,
-    const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
+    chip_id_t device_id, uint8_t num_hw_cqs = 1, const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
 
 // clang-format off
 /**
@@ -821,7 +821,7 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids = 
  * | cq_id           | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
 */
 // clang-format on
-uint32_t BeginTraceCapture(IDevice* device, const uint8_t cq_id);
+uint32_t BeginTraceCapture(IDevice* device, uint8_t cq_id);
 
 // clang-format off
 /**
@@ -839,7 +839,7 @@ uint32_t BeginTraceCapture(IDevice* device, const uint8_t cq_id);
  * | tid          | A unique id from BeginTraceCapture for the trace being captured        | uint32_t                      |                                    | Yes      |
  */
 // clang-format on
-void EndTraceCapture(IDevice* device, const uint8_t cq_id, const uint32_t tid);
+void EndTraceCapture(IDevice* device, uint8_t cq_id, uint32_t tid);
 
 // clang-format off
 /**
@@ -855,7 +855,7 @@ void EndTraceCapture(IDevice* device, const uint8_t cq_id, const uint32_t tid);
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
 // clang-format on
-void ReplayTrace(IDevice* device, const uint8_t cq_id, const uint32_t tid, const bool blocking);
+void ReplayTrace(IDevice* device, uint8_t cq_id, uint32_t tid, bool blocking);
 
 // clang-format off
 /**
@@ -871,7 +871,7 @@ void ReplayTrace(IDevice* device, const uint8_t cq_id, const uint32_t tid, const
  * | trace_id     | A unique id representing an existing captured trace.                   | uint32_t                      |                                    | Yes      |
  */
 // clang-format on
-void ReleaseTrace(IDevice* device, const uint32_t tid);
+void ReleaseTrace(IDevice* device, uint32_t tid);
 
 // clang-format off
 /**
@@ -928,19 +928,23 @@ void LoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, const TraceDes
 
 // clang-format off
 /**
- * Read device side profiler data and dump results into device side CSV log
+ * Read device side profiler data for all devices in the mesh device and dump results into device side CSV log
  *
  * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
  *
  * Return value: void
  *
- * | Argument      | Description                                       | Type            | Valid Range               | Required |
- * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
- * | device        | The device holding the program being profiled.    | IDevice*        |                           | True     |
- * | program       | The program being profiled.                       | const Program & |                           | True     |
+ * | Argument      | Description                                           | Type                     | Valid Range               | Required |
+ * |---------------|-------------------------------------------------------|--------------------------|---------------------------|----------|
+ * | mesh_device   | The mesh device containing the devices to be profiled | MeshDevice&              |                           | Yes      |
+ * | state         | The dump state to use for this profiler dump          | ProfilerDumpState        |                           | No       |
+ * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
  * */
 // clang-format on
-void DumpDeviceProfileResults(IDevice* device, const Program& program);
+void DumpMeshDeviceProfileResults(
+    distributed::MeshDevice& mesh_device,
+    ProfilerDumpState state = ProfilerDumpState::NORMAL,
+    const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 // clang-format off
 /**
@@ -1007,9 +1011,7 @@ bool EventQuery(const std::shared_ptr<Event>& event);
  */
 // clang-format on
 void Synchronize(
-    IDevice* device,
-    const std::optional<uint8_t> cq_id = std::nullopt,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    IDevice* device, std::optional<uint8_t> cq_id = std::nullopt, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 }  // namespace tt_metal
 

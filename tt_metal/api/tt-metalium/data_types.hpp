@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace tt::tt_metal {
 
 enum class DataMovementProcessor {

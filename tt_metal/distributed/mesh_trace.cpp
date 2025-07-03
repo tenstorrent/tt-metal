@@ -2,11 +2,11 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#include "mesh_trace.hpp"
 
 #include <boost/move/utility_core.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
-#include <mesh_trace.hpp>
 #include <stdint.h>
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
@@ -31,8 +31,8 @@
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
 #include "mesh_trace_id.hpp"
-#include "system_memory_manager.hpp"
-#include "trace_buffer.hpp"
+#include "dispatch/system_memory_manager.hpp"
+#include "trace/trace_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 
@@ -129,6 +129,7 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
     DeviceCommand command_sequence(MetalContext::instance().hal().get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
 
+    exec_buf_end.reserve(command_sequence.size_bytes() / sizeof(uint32_t));
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         exec_buf_end.push_back(((uint32_t*)command_sequence.data())[i]);
     }
@@ -170,7 +171,6 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
     DeviceLocalBufferConfig device_local_trace_buf_config = {
         .page_size = page_size,
         .buffer_type = BufferType::TRACE,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
     };
 
     ReplicatedBufferConfig global_trace_buf_config = {

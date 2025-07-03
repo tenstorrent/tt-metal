@@ -8,8 +8,16 @@ on:
           required: false
           type: string
           default: 'BH'
+      enable-ttnn-unit-tests:
+          description: 'Enable ttnn unit tests'
+          default: false
+          type: boolean
       enable-watcher:
           description: 'Enable watcher in BH Post commit'
+          default: false
+          type: boolean
+      enable-llmbox-tests:
+          description: 'Run tests on LLMBox instead of single card (must set runner-label to BH-LLMBox)'
           default: false
           type: boolean
   workflow_dispatch:
@@ -20,6 +28,7 @@ on:
           type: string
           default: 'BH'
       build-type:
+        description: 'Build type for the workflow'
         required: false
         default: Release
         type: choice
@@ -29,13 +38,17 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
+      enable-ttnn-unit-tests:
+        description: 'Enable ttnn unit tests'
+        default: false
+        type: boolean
       enable-watcher:
         description: 'Enable watcher in BH Post commit'
         default: false
         type: boolean
-      run-demo-tests:
-        description: 'Run blackhole demo tests'
-        default: true
+      enable-llmbox-tests:
+        description: 'Run tests on LLMBox instead of single card (must set runner-label to BH-LLMBox)'
+        default: false
         type: boolean
   schedule:
     - cron: "0 */4 * * *"
@@ -43,7 +56,7 @@ on:
   # push:
   #  branches: ["main"]
 
-run-name: ${{ inputs.enable-watcher == true && 'Blackhole post-commit tests (watcher enabled) ' || 'Blackhole post-commit tests' }}
+run-name: ${{ inputs.enable-llmbox-tests == true && 'Blackhole LLMBox tests' || (inputs.enable-watcher == true && 'Blackhole post-commit tests (watcher enabled) ' || 'Blackhole post-commit tests') }}
 
 permissions:
   actions: read
@@ -52,10 +65,30 @@ permissions:
   pages: write
   id-token: write
   packages: write
+  checks: write
 
 jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          if [ "${{ inputs.enable-llmbox-tests }}" = "true" ]; then
+            if [ "${{ inputs.runner-label }}" != "BH-LLMBox" ]; then
+              echo "::warning::LLMBox tests are enabled but runner-label is not set to BH-LLMBox. Current value: ${{ inputs.runner-label }}"
+            fi
+            matrix='["BH-LLMBox"]'
+          else
+            matrix='["P100", "P150"]'
+          fi
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -64,6 +97,8 @@ jobs:
       build-umd-tests: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -76,7 +111,6 @@ jobs:
     secrets: inherit
     with:
       arch: "blackhole"
-      timeout: 20
       runner-label: ${{ inputs.runner-label || 'BH' }}
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
@@ -98,7 +132,6 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
-      timeout: 15
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -128,19 +161,21 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
   models-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/models-post-commit.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     with:
       arch: blackhole
-      runner-label: ${{ inputs.runner-label || 'BH' }}
+      runner-label: ${{ matrix.test-group }}
       timeout: 20
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
   blackhole-demo-tests:
-    # Issue 20998: Due to capacity constraints, only run blackhole demo tests on workflow_dispatch events
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-demo-tests == true }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
@@ -149,17 +184,88 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-#   profiler-regression:
-#     needs: build-artifact-profiler
-#     uses: ./.github/workflows/run-profiler-regression.yaml
-#     secrets: inherit
+
+  ttnn-unit-tests:
+    needs: build-artifact
+    if: ${{ inputs.enable-ttnn-unit-tests }}
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-post-commit.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+  ttnn-stress-tests:
+    needs: [build-artifact, generate-matrix]
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    with:
+      arch: blackhole
+      runner-label: ${{ matrix.test-group }}
+      timeout: 45
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  metalium-smoke-tests:
+    needs: [build-artifact, generate-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    uses: ./.github/workflows/smoke.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
+      product: tt-metalium
+  ttnn-smoke-tests:
+    needs: [build-artifact, generate-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    uses: ./.github/workflows/smoke.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
+      product: tt-nn
+
+  # LLMBox-only demo tests
+  blackhole-llmbox-demo-tests:
+    needs: build-artifact
+    if: ${{ inputs.enable-llmbox-tests }}
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-llmbox-demo-tests-impl.yaml
+    with:
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+  # LLMBox-only fabric tests
+  blackhole-llmbox-fabric-unit-tests:
+    needs: build-artifact
+    if: ${{ inputs.enable-llmbox-tests }}
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-llmbox-unit-tests-impl.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
 #   build-and-test-wheels:
 #     uses: Check all-post-commit yaml for directions
 #     secrets: inherit
-#   build-docs:
-#     needs: build-artifact
-#     uses: ./.github/workflows/docs-latest-public.yaml
-#     secrets: inherit
+
   # We used to use this for post-commit, but we didn't have enough runners
   # to support the number of developers running this workflow
   # build-and-test-measure-perf:

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -107,10 +107,19 @@ std::string BinaryNgKernelConfig::bcast_input_str() const {
 
 std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
     constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels";
+    constexpr std::string_view root_ng = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng";
     constexpr std::string_view dataflow = "{}/dataflow/{}";
     constexpr std::string_view compute = "{}/compute/{}";
 
     switch (kernel_name) {
+        case KernelName::ReaderNoBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_no_bcast.cpp");
+        case KernelName::ReaderRowBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_row_bcast.cpp");
+        case KernelName::ReaderColBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_col_bcast.cpp");
+        case KernelName::ReaderRowBColABcastNg:
+            return fmt::format(dataflow, root_ng, "reader_interleaved_row_col_mixed_bcast.cpp");
+        case KernelName::ReaderScalarBcastNg:
+            return fmt::format(dataflow, root_ng, "reader_interleaved_scalar_bcast.cpp");
+        case KernelName::WriterNoBcastNg: return fmt::format(dataflow, root_ng, "writer_interleaved_no_bcast.cpp");
         case KernelName::ReaderNoBcast: return fmt::format(dataflow, root, "reader_interleaved_no_bcast.cpp");
         case KernelName::ReaderRowBcast: return fmt::format(dataflow, root, "reader_interleaved_row_bcast.cpp");
         case KernelName::ReaderColBcast: return fmt::format(dataflow, root, "reader_interleaved_col_bcast.cpp");
@@ -279,6 +288,20 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::GCD:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::GCD;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::LCM:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LCM;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -288,27 +311,67 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
     switch (sfpu_binary_op) {
         case ADD:
             if (dtype == DataType::INT32) {
-                return {"add_int32_tile_init();", "add_int32_tile"};
+                return {"add_int_tile_init();", "add_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"add_int_tile_init();", "add_uint32_tile"};
             } else if (dtype == DataType::UINT16) {
-                return {"add_uint16_tile_init();", "add_uint16_tile"};
+                return {"add_int_tile_init();", "add_uint16_tile"};
             } else {
                 return {"add_binary_tile_init();", "add_binary_tile"};
             }
         case SUB:
             if (dtype == DataType::INT32) {
-                return {"sub_int32_tile_init();", "sub_int32_tile"};
+                return {"sub_int_tile_init();", "sub_int32_tile"};
+            } else if (dtype == DataType::UINT16) {
+                return {"sub_int_tile_init();", "sub_uint16_tile"};
             } else {
                 return {"sub_binary_tile_init();", "sub_binary_tile"};
             }
-        case MUL: return {"mul_binary_tile_init();", "mul_binary_tile"};
+        case MUL:
+            if (dtype == DataType::UINT16) {
+                return {"mul_int_tile_init();", "mul_uint16_tile"};
+            } else {
+                return {"mul_binary_tile_init();", "mul_binary_tile"};
+            }
         case DIV: return {"div_binary_tile_init();", "div_binary_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB: return {"rsub_binary_tile_init();", "rsub_binary_tile"};
-        case LEFT_SHIFT: return {"binary_shift_tile_init();", "binary_left_shift_tile"};
-        case RIGHT_SHIFT: return {"binary_shift_tile_init();", "binary_right_shift_tile"};
-        case BITWISE_AND: return {"binary_bitwise_tile_init();", "and_binary_tile"};
-        case BITWISE_OR: return {"binary_bitwise_tile_init();", "or_binary_tile"};
-        case BITWISE_XOR: return {"binary_bitwise_tile_init();", "xor_binary_tile"};
+        case GCD: return {"gcd_tile_init();", "gcd_tile"};
+        case LCM: return {"lcm_tile_init();", "lcm_tile"};
+        case LEFT_SHIFT:
+            if (dtype == DataType::UINT32) {
+                return {"binary_shift_tile_init();", "binary_left_shift_uint32_tile"};
+            } else if (dtype == DataType::INT32) {
+                return {"binary_shift_tile_init();", "binary_left_shift_int32_tile"};
+            } else {
+                return {"binary_shift_tile_init();", "binary_left_shift_tile"};
+            }
+        case RIGHT_SHIFT:
+            if (dtype == DataType::UINT32) {
+                return {"binary_shift_tile_init();", "binary_right_shift_uint32_tile"};
+            } else if (dtype == DataType::INT32) {
+                return {"binary_shift_tile_init();", "binary_right_shift_int32_tile"};
+            } else {
+                return {"binary_shift_tile_init();", "binary_right_shift_tile"};
+            }
+        case BITWISE_AND:
+            if (dtype == DataType::UINT16) {
+                return {"binary_bitwise_tile_init();", "bitwise_and_uint16_binary_tile"};
+            } else {
+                return {"binary_bitwise_tile_init();", "bitwise_and_binary_tile"};
+            }
+        case BITWISE_OR:
+            if (dtype == DataType::UINT16) {
+                return {"binary_bitwise_tile_init();", "bitwise_or_uint16_binary_tile"};
+            } else {
+                return {"binary_bitwise_tile_init();", "bitwise_or_binary_tile"};
+            }
+        case BITWISE_XOR:
+            if (dtype == DataType::UINT16) {
+                return {"binary_bitwise_tile_init();", "bitwise_xor_uint16_binary_tile"};
+            } else {
+                return {"binary_bitwise_tile_init();", "bitwise_xor_binary_tile"};
+            }
         case MAXIMUM:
             if (dtype == DataType::INT32) {
                 return {"binary_max_tile_init();", "binary_max_int32_tile"};
@@ -365,23 +428,51 @@ void add_activation_defines(
         });
 }
 
-std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, const bool is_sfpu_op) {
+std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, const DataType b_dtype) {
     std::map<std::string, std::string> defines;
-    if (is_sfpu_op && dtype == DataType::FLOAT32) {
+    // to maintain backward compatibility, we need to support both dtype and b_dtype
+    if (dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
         defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
-    } else if (is_sfpu_op && dtype == DataType::INT32) {
+    } else if (dtype == DataType::INT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
         defines["FILL_WITH_VALUE"] = "fill_with_val<1024, int32_t>";
+    } else if (dtype == DataType::UINT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<uint32_t>";
+        defines["FILL_WITH_VALUE"] = "fill_with_val<1024, uint32_t>";
     } else {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
         defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
+    }
+
+    if (b_dtype == DataType::FLOAT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<float>";
+        defines["FILL_WITH_VALUE_FLOAT_B"] = "fill_with_val<1024, float>";
+    } else if (b_dtype == DataType::INT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<int32_t>";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, int32_t>";
+    } else if (b_dtype == DataType::UINT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<uint32_t>";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, uint32_t>";
+    } else {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfloat16";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
     }
     return defines;
 }
@@ -395,6 +486,9 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const
     }
     if (dtype == DataType::INT32) {
         return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
+    }
+    if (dtype == DataType::UINT32) {
+        return std::bit_cast<uint32_t>(scalar);
     }
     return pack_two_bfloat16_into_uint32({scalar, scalar});
 }

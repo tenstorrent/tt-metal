@@ -2,28 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
+import copy
 import os
+
 import pytest
 import torch
 import torchvision
-import copy
+from loguru import logger
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
-from models.utility_functions import (
-    is_blackhole,
-    is_wormhole_b0,
-    is_grayskull,
-    divup,
-)
-
-from tests.ttnn.utils_for_testing import check_with_pcc
 from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
-
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50 import resnet50
+from models.utility_functions import divup, is_blackhole, is_grayskull, is_wormhole_b0
+from tests.ttnn.utils_for_testing import check_with_pcc
 
 
 def load_resnet50_model(model_location_generator):
@@ -194,7 +186,7 @@ class ResNet50TestInfra:
         self.pcc_passed = False
         self.pcc_message = "Did you forget to call validate()?"
         self.device = device
-        self.num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
+        self.num_devices = device.get_num_devices()
         self.batch_size = batch_size
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype

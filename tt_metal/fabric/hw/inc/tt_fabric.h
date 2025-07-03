@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,9 +9,9 @@
 #include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
+#include "eth_chan_noc_mapping.h"
 #include <fabric_host_interface.h>
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_metal/fabric/hw/inc/eth_chan_noc_mapping.h"
 
 using namespace tt::tt_fabric;
 
@@ -128,6 +128,7 @@ struct fvc_outbound_push_state_t {
             noc_inline_dw_write_set_state<true>(
                 STREAM_REG_ADDR(
                     STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX),
+                0,
                 0xF,
                 write_at_cmd_buf,
                 1);
@@ -171,8 +172,11 @@ struct fvc_outbound_push_state_t {
             return;
         } else {
             // relay the credits to noc data sender to replenish buffer space in noc sender
-            noc_inline_dw_write_with_state<false, true, true, true>(
-                slots_cleared << REMOTE_DEST_BUF_WORDS_FREE_INC, *slots_cleared_ack_addr >> 32, write_at_cmd_buf, 1);
+            noc_inline_dw_write_with_state<false, true, true, true, true>(
+                slots_cleared << REMOTE_DEST_BUF_WORDS_FREE_INC,
+                *slots_cleared_ack_addr >> NOC_ADDR_COORD_SHIFT,
+                write_at_cmd_buf,
+                1);
             // clear the credits receied from ethernet receiver.
             *update_sender_slots_cleared = (-slots_cleared) << REMOTE_DEST_BUF_WORDS_FREE_INC;
         }
@@ -369,7 +373,7 @@ struct fvc_inbound_push_state_t {
                 // Write lower 4 Bytes of 8 Byte entry.
                 noc_inline_dw_write(router_addr, (uint32_t)update_router_space);
                 // Write upper 4 Bytes of 8 Byte entry.
-                noc_inline_dw_write(router_addr + (sizeof(uint32_t)), xy_local_addr >> 32);
+                noc_inline_dw_write(router_addr + (sizeof(uint32_t)), xy_local_addr >> NOC_ADDR_COORD_SHIFT);
             }
         } else {
             uint32_t router_direction = get_next_hop_router_direction(mesh_id, device_id);
@@ -381,7 +385,7 @@ struct fvc_inbound_push_state_t {
             router_addr += router_direction * sizeof(uint64_t);
             // stream register to receive router buffer space available updates.
             noc_inline_dw_write(router_addr, (uint32_t)update_router_space);
-            noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> 32);
+            noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> NOC_ADDR_COORD_SHIFT);
             uint32_t remote_buffer_start =
                 FABRIC_ROUTER_DATA_BUF_START + router_direction * FABRIC_ROUTER_OUTBOUND_BUF_SIZE;
             for (uint32_t i = 0; i < FABRIC_ROUTER_OUTBOUND_BUF_SLOTS; i++) {
@@ -527,11 +531,13 @@ struct fvc_inbound_push_state_t {
         uint32_t dst_mesh_id = packet_header->routing.dst_mesh_id;
         if (dst_mesh_id != routing_table->my_mesh_id) {
             uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             remote_wrptr_direction = port_direction_table[next_port];
             return eth_chan_to_noc_xy[noc_index][next_port];
         } else {
             uint32_t dst_device_id = packet_header->routing.dst_dev_id;
             uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_device_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             remote_wrptr_direction = port_direction_table[next_port];
             return eth_chan_to_noc_xy[noc_index][next_port];
         }
@@ -541,9 +547,11 @@ struct fvc_inbound_push_state_t {
     uint32_t get_next_hop_router_noc_xy(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
         if (dst_mesh_id != routing_table->my_mesh_id) {
             uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         } else {
             uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_dev_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         }
     }
@@ -553,8 +561,10 @@ struct fvc_inbound_push_state_t {
         uint32_t direction = 0;
         if (dst_mesh_id != routing_table->my_mesh_id) {
             next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
         } else {
             next_port = routing_table->intra_mesh_table.dest_entry[dst_dev_id];
+            ASSERT(next_port != INVALID_DIRECTION);
         }
 
         if (routing_table->port_direction.directions[eth_chan_directions::EAST] == next_port) {
@@ -590,7 +600,7 @@ struct fvc_inbound_push_state_t {
             advance_remote_wrptr(1, remote_wrptr_direction);
             advance_out_rdptr<fvc_mode>(1);
             uint64_t push_addr = get_noc_addr_helper(dest_addr, router_push_addr);
-            noc_inline_dw_write<false, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+            noc_inline_dw_write<true, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
 
             *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
             uint32_t words_available = packet_words_remaining;
@@ -632,7 +642,7 @@ struct fvc_inbound_push_state_t {
         noc_async_write_one_packet(get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE);
         advance_remote_wrptr(1, direction);
         uint64_t push_addr = get_noc_addr_helper(mcast_router_noc_xy[direction], router_push_addr);
-        noc_inline_dw_write<false, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        noc_inline_dw_write<true, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
         *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
     }
 
@@ -761,7 +771,7 @@ struct fvc_inbound_push_state_t {
         advance_remote_wrptr(1);
         advance_out_rdptr<fvc_mode>(1);
         uint64_t push_addr = get_noc_addr_helper(dest_addr, router_push_addr);
-        noc_inline_dw_write(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        noc_inline_dw_write<true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
 
         *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
         uint32_t words_available = packet_words_remaining;
@@ -961,6 +971,7 @@ struct fvc_outbound_pull_state_t {
         uint32_t num_words_before_wrap = words_before_buffer_wrap(fvc_out_rdptr);
         uint32_t chunk_to_forward = std::min(num_words_before_wrap, words_remaining);
         while (words_remaining) {
+            invalidate_l1_cache();
             src_addr = get_local_buffer_read_addr();
             dest_addr = src_addr - buffer_start + remote_buffer_start;
             if constexpr (barrier) {
@@ -1367,10 +1378,12 @@ struct fvc_inbound_pull_state_t {
         uint32_t dst_mesh_id = current_packet_header.routing.dst_mesh_id;
         if (dst_mesh_id != routing_table->my_mesh_id) {
             uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         } else {
             uint32_t dst_device_id = current_packet_header.routing.dst_dev_id;
             uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_device_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         }
     }
@@ -1805,6 +1818,7 @@ struct fvcc_outbound_state_t {
     inline void advance_fvcc_rdptr() {
         uint32_t rd_ptr = remote_rdptr.ptr;
         while (rd_ptr != fvcc_buf->rdptr.ptr) {
+            invalidate_l1_cache();
             uint32_t msg_index = fvcc_buf->rdptr.ptr & FVCC_SIZE_MASK;
             fvcc_buf->msg_buf[msg_index].packet_header.routing.flags = 0;
             fvcc_buf->rdptr.ptr = inc_ptr_with_wrap(fvcc_buf->rdptr.ptr);
@@ -1978,10 +1992,12 @@ struct fvcc_inbound_state_t {
         uint32_t dst_mesh_id = current_packet_header->routing.dst_mesh_id;
         if (dst_mesh_id != routing_table->my_mesh_id) {
             uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         } else {
             uint32_t dst_device_id = current_packet_header->routing.dst_dev_id;
             uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_device_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         }
     }
@@ -2011,6 +2027,7 @@ struct fvcc_inbound_state_t {
         uint32_t wrptr = fvcc_buf->wrptr.ptr;
         noc_addr = dest_addr + offsetof(ctrl_chan_msg_buf, rdptr);
         while (1) {
+            invalidate_l1_cache();
             noc_async_read_one_packet(noc_addr, (uint32_t)(&fvcc_buf->rdptr.ptr), 4);
             noc_async_read_barrier();
             if (!fvcc_buf_ptrs_full(wrptr, fvcc_buf->rdptr.ptr)) {
@@ -2048,7 +2065,7 @@ struct fvcc_inbound_state_t {
             }
         } else {
             // Control message is not meant for local chip. Forward to next router enroute to destination.
-            uint64_t dest_addr = ((uint64_t)get_next_hop_router_noc_xy() << 32) | FVCC_OUT_BUF_START;
+            uint64_t dest_addr = get_noc_addr_helper(get_next_hop_router_noc_xy(), FVCC_OUT_BUF_START);
             forward_message(dest_addr);
         }
         curr_packet_valid = false;
@@ -2249,6 +2266,7 @@ struct socket_reader_state_t {
             uint32_t dest_addr = 0;  // should be second half of fvc buffer.
             uint32_t words_remaining = total_words_to_forward;
             while (words_remaining) {
+                invalidate_l1_cache();
                 uint32_t num_words_before_local_wrap = words_before_pull_buffer_wrap(buffer_size, fvc_out_rdptr);
                 uint32_t num_words_before_remote_wrap = words_before_pull_buffer_wrap(buffer_size, fvc_out_wrptr);
                 uint32_t words_to_forward = std::min(num_words_before_local_wrap, num_words_before_remote_wrap);
@@ -2389,6 +2407,7 @@ bool wait_all_src_dest_ready(volatile router_state_t* router_state, uint32_t tim
     router_state->scratch[0] = 0xAA;
 
     while (!src_ready or !dest_ready) {
+        invalidate_l1_cache();
         if (router_state->sync_out != 0xAA) {
             internal_::eth_send_packet(0, scratch_addr, sync_in_addr, 1);
         } else {
@@ -2442,6 +2461,7 @@ template <bool blocking_mode = false>
 inline bool tt_fabric_check_pull_request_slot(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request, uint32_t wrptr) {
     uint64_t noc_addr = dest_addr + offsetof(chan_req_buf, rdptr);
     do {
+        invalidate_l1_cache();
         noc_async_read_one_packet(noc_addr, (uint32_t)(&local_pull_request->rdptr.ptr), 4);
         noc_async_read_barrier();
         if (!req_buf_ptrs_full(wrptr, local_pull_request->rdptr.ptr)) {

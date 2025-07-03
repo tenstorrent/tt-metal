@@ -57,7 +57,6 @@ def test_line_all_gather_on_t3000_nightly(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     tile_h,
     num_iters=1,
@@ -71,7 +70,6 @@ def test_line_all_gather_on_t3000_nightly(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
@@ -115,7 +113,6 @@ def test_line_all_gather_on_t3000_nightly_two_link(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -128,7 +125,6 @@ def test_line_all_gather_on_t3000_nightly_two_link(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
@@ -145,7 +141,6 @@ def run_line_all_gather_instances(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
     tile=(32, 32),
@@ -164,7 +159,7 @@ def run_line_all_gather_instances(
 
     t3k_device = []
 
-    for device in t3k_mesh_device.get_devices():
+    for device in t3k_mesh_device.get_device_ids():
         t3k_device.append(device)
     t3k_device[4:] = t3k_device[::-1][:4]
     t3000_device_rows = [
@@ -241,7 +236,6 @@ def test_line_all_gather_on_t3000_nightly_instances(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -255,7 +249,6 @@ def test_line_all_gather_on_t3000_nightly_instances(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         num_iters,
     )

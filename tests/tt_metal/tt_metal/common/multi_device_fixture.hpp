@@ -20,74 +20,51 @@
 
 namespace tt::tt_metal {
 
-class MultiDeviceFixture : public DispatchFixture {
-protected:
-    void SetUp() override { this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()); }
-};
-
-class TwoDeviceFixture : public MultiDeviceFixture {
+class TwoDeviceFixture : public DispatchFixture {
 protected:
     void SetUp() override {
-        this->slow_dispatch_ = true;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (!slow_dispatch) {
-            tt::log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
-            this->slow_dispatch_ = false;
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+        if (slow_dispatch) {
+            log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
 
-        MultiDeviceFixture::SetUp();
-
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
-        if (num_devices == 2) {
-            std::vector<chip_id_t> ids;
-            for (chip_id_t id = 0; id < num_devices; id++) {
-                ids.push_back(id);
-            }
-
-            const auto& dispatch_core_config =
-                tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-            tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
-            this->devices_ = tt::DevicePool::instance().get_all_active_devices();
-        } else {
+        if (num_devices != 2) {
             GTEST_SKIP() << "TwoDeviceFixture can only be run on machines with two devices";
         }
+
+        DispatchFixture::SetUp();
     }
 };
 
-class N300DeviceFixture : public MultiDeviceFixture {
+class N300DeviceFixture : public DispatchFixture {
 protected:
     void SetUp() override {
-        this->slow_dispatch_ = true;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (!slow_dispatch) {
-            tt::log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
-            this->slow_dispatch_ = false;
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+        if (slow_dispatch) {
+            log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
 
-        MultiDeviceFixture::SetUp();
-
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         if (this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices == 2 && num_pci_devices == 1) {
-            std::vector<chip_id_t> ids;
-            for (chip_id_t id = 0; id < num_devices; id++) {
-                ids.push_back(id);
-            }
-
-            const auto& dispatch_core_config =
-                tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-            tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
-            this->devices_ = tt::DevicePool::instance().get_all_active_devices();
+            DispatchFixture::SetUp();
         } else {
-            GTEST_SKIP();
+            GTEST_SKIP() << "This suite can only be run on N300";
         }
     }
 };
 
 class MeshDeviceFixtureBase : public ::testing::Test {
+public:
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> get_mesh_device() {
+        TT_FATAL(mesh_device_, "MeshDevice not initialized in {}", __FUNCTION__);
+        return mesh_device_;
+    }
+
 protected:
     using MeshDevice = ::tt::tt_metal::distributed::MeshDevice;
     using MeshDeviceConfig = ::tt::tt_metal::distributed::MeshDeviceConfig;
@@ -111,6 +88,7 @@ protected:
         int num_cqs = 1;
         uint32_t trace_region_size = 0;
         uint32_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
+        FabricConfig fabric_config = FabricConfig::DISABLED;
     };
 
     MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
@@ -151,6 +129,9 @@ protected:
         auto core_type =
             (config_.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
 
+        if (config_.fabric_config != FabricConfig::DISABLED) {
+            tt::tt_metal::detail::SetFabricConfig(config_.fabric_config);
+        }
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(get_mesh_shape(*mesh_device_type)),
             0,
@@ -167,6 +148,9 @@ protected:
         }
         mesh_device_->close();
         mesh_device_.reset();
+        if (config_.fabric_config != FabricConfig::DISABLED) {
+            tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        }
     }
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
@@ -256,6 +240,22 @@ class TGMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     TGMultiCQMeshDeviceFixture() :
         MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}, .num_cqs = 2}) {}
+};
+
+class T3000MeshDevice1DFabricFixture : public MeshDeviceFixtureBase {
+protected:
+    T3000MeshDevice1DFabricFixture() :
+        MeshDeviceFixtureBase(Config{
+            .mesh_device_types = {MeshDeviceType::T3000}, .num_cqs = 1, .fabric_config = FabricConfig::FABRIC_1D}) {}
+};
+
+class T3000MeshDevice2DFabricFixture : public MeshDeviceFixtureBase {
+protected:
+    T3000MeshDevice2DFabricFixture() :
+        MeshDeviceFixtureBase(Config{
+            .mesh_device_types = {MeshDeviceType::T3000},
+            .num_cqs = 1,
+            .fabric_config = FabricConfig::FABRIC_2D_DYNAMIC}) {}
 };
 
 }  // namespace tt::tt_metal

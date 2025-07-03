@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -8,23 +8,15 @@
 #include <set>
 #include <vector>
 
+#include "core_coord.hpp"
 #include "data_types.hpp"
 #include "tt-metalium/program.hpp"
-#include "system_memory_manager.hpp"
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"
-
-namespace tt {
-namespace tt_metal {
-class IDevice;
-enum DispatchWorkerType : uint32_t;
-}  // namespace tt_metal
-}  // namespace tt
 
 namespace tt::tt_metal {
 
-// Max number of upstream/downstream dispatch kernels that can be connected to a single dispatch kernel.
-constexpr uint32_t k_dispatch_max_upstream_kernels = 4;
-constexpr uint32_t k_dispatch_max_downstream_kernels = 4;
+class IDevice;
+enum DispatchWorkerType : uint32_t;
 
 // NOC ID used by dispatch kernels to communicate with downstream cores. This parameter
 // is required when setting up Command Queue objects on host.
@@ -36,9 +28,10 @@ struct DispatchKernelNode {
     chip_id_t servicing_device_id;   // Remote device that this kernel services, used for kernels on MMIO
     uint8_t cq_id;                   // CQ this kernel implements
     DispatchWorkerType kernel_type;  // Type of dispatch kernel this is
-    int upstream_ids[k_dispatch_max_upstream_kernels];      // Upstream dispatch kernels
-    int downstream_ids[k_dispatch_max_downstream_kernels];  // Downstream dispatch kernels
-    noc_selection_t noc_selection;                          // NOC selection
+    std::vector<int> upstream_ids;   // Upstream dispatch kernels
+    std::vector<int> downstream_ids;  // Downstream dispatch kernels
+    noc_selection_t noc_selection;    // NOC selection
+    int tunnel_index{-1};             // Tunnel index
 };
 
 // Create FD kernels for all given device ids. Creates all objects, but need to call create_and_compile_cq_program() use
@@ -64,5 +57,17 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_
 
 // Perform additional configuration (writing to specific L1 addresses, etc.) for fabric kernels on this device.
 void configure_fabric_cores(tt::tt_metal::IDevice* device);
+
+// Return the virtual dispatch cores running on a given device
+const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(chip_id_t dev_id);
+
+// Return the virtual cores used for dispatch routing/tunneling on a given device
+const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(chip_id_t dev_id);
+
+// Return the set of termination targets that were registered for this device
+const std::unordered_set<tt::tt_metal::TerminationInfo>& get_registered_termination_cores(chip_id_t dev_id);
+
+// Must be called at the end of the application to cleanup any static state allocated by this module.
+void reset_topology_state();
 
 }  // namespace tt::tt_metal

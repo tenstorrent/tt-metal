@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dispatch_settings.hpp>
 #include <limits.h>
-#include <tt-metalium/dev_msgs.h>
-#include <tt-metalium/dispatch_settings.hpp>
+#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -17,6 +15,7 @@
 #include "fmt/base.h"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "magic_enum/magic_enum.hpp"
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
@@ -77,6 +76,7 @@ DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, c
         .prefetch_max_cmd_size(128_KB)
         .prefetch_cmddat_q_size(256_KB)
         .prefetch_scratch_db_size(128_KB)
+        .prefetch_ringbuffer_size(1024_KB)
         .prefetch_d_buffer_size(256_KB)
 
         .dispatch_size(512_KB)
@@ -97,6 +97,7 @@ DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& /*cluster*/, 
         .prefetch_max_cmd_size(32_KB)
         .prefetch_cmddat_q_size(64_KB)
         .prefetch_scratch_db_size(19_KB)
+        .prefetch_ringbuffer_size(70_KB)
         .prefetch_d_buffer_size(128_KB)
 
         .dispatch_size(128_KB)
@@ -240,6 +241,12 @@ DispatchSettings& DispatchSettings::prefetch_cmddat_q_size(uint32_t val) {
 // Trivial setter for prefetch_scratch_db_size
 DispatchSettings& DispatchSettings::prefetch_scratch_db_size(uint32_t val) {
     this->prefetch_scratch_db_size_ = val;
+    return *this;
+}
+
+// Trivial setter for prefetch_ringbuffer_size
+DispatchSettings& DispatchSettings::prefetch_ringbuffer_size(uint32_t val) {
+    this->prefetch_ringbuffer_size_ = val;
     return *this;
 }
 

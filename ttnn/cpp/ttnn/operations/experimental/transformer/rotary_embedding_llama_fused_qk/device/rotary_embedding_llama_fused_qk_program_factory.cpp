@@ -22,33 +22,34 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
     const Tensor& trans_mat,
     Tensor& q_output,
     Tensor& k_output,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    const bool row_major_QK) {
     Program program{};
 
-    const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(q_input.get_dtype());
+    const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(q_input.dtype());
     const uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
 
-    const tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.get_dtype());
+    const tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.dtype());
     const uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
 
-    const tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.get_dtype());
+    const tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.dtype());
     const uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
 
-    const tt::DataFormat trans_mat_cb_data_format = tt_metal::datatype_to_dataformat_converter(trans_mat.get_dtype());
+    const tt::DataFormat trans_mat_cb_data_format = tt_metal::datatype_to_dataformat_converter(trans_mat.dtype());
     const uint32_t trans_mat_single_tile_size = tt_metal::detail::TileSize(trans_mat_cb_data_format);
 
-    const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(q_output.get_dtype());
+    const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(q_output.dtype());
     const uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     std::optional<ShardSpec> q_shard_spec = q_input.shard_spec();
     std::optional<ShardSpec> k_shard_spec = k_input.shard_spec();
     std::optional<ShardSpec> cos_sin_shard_spec = cos.shard_spec();
 
-    const uint32_t batch = q_input.get_padded_shape()[1];
-    const uint32_t q_n_heads_t = q_shard_spec->shape[0] / constants::TILE_HEIGHT;
-    const uint32_t k_n_heads_t = k_shard_spec->shape[0] / constants::TILE_HEIGHT;
+    const uint32_t batch = q_input.padded_shape()[1];
+    const uint32_t q_n_heads_t = row_major_QK ? 1 : q_shard_spec->shape[0] / constants::TILE_HEIGHT;
+    const uint32_t k_n_heads_t = row_major_QK ? 1 : k_shard_spec->shape[0] / constants::TILE_HEIGHT;
 
-    const uint32_t head_dim_t = q_shard_spec->shape[1] / constants::TILE_WIDTH;
+    const uint32_t head_dim_t = row_major_QK ? 1 : q_shard_spec->shape[1] / constants::TILE_WIDTH;
 
     tt_metal::IDevice* device = q_input.device();
 
@@ -181,11 +182,15 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
         cos_interm_cb_index,
         sin_interm_cb_index,
     };
-
+    const std::string compute_kernel_path = row_major_QK ? "ttnn/cpp/ttnn/operations/experimental/transformer/"
+                                                           "rotary_embedding_llama_fused_qk/device/kernels/compute/"
+                                                           "rotary_embedding_llama_sharded_row_major.cpp"
+                                                         : "ttnn/cpp/ttnn/operations/experimental/transformer/"
+                                                           "rotary_embedding_llama_fused_qk/device/kernels/compute/"
+                                                           "rotary_embedding_llama_sharded.cpp";
     auto rotary_embedding_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/compute/"
-        "rotary_embedding_llama_sharded.cpp",
+        compute_kernel_path,
         all_cores_bb,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});

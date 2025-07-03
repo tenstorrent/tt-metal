@@ -39,6 +39,8 @@ run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && 
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -47,27 +49,14 @@ jobs:
       skip-tt-train: false
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
       version: 22.04
-
-  smoke-tests:
-    needs: build-artifact
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [
-          "N150",
-          "N300",
-        ]
-    uses: ./.github/workflows/smoke.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
 
   # Slow Dispatch Unit Tests
   sd-unit-tests:
@@ -226,6 +215,8 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   build:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -235,11 +226,6 @@ jobs:
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
             build-type: "Debug"
-            publish-artifact: false
-            skip-tt-train: false
-          - version: "24.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
-            build-type: "Release"
             publish-artifact: false
             skip-tt-train: false
           - version: "22.04"
@@ -252,6 +238,21 @@ jobs:
             build-type: "Release"
             publish-artifact: false
             skip-tt-train: true
+          #- version: "22.04"
+          #  toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
+          #  build-type: "Debug"
+          #  publish-artifact: false
+          #  skip-tt-train: true
+          - version: "24.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+            skip-tt-train: false
+          - version: "24.04"
+            toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+            skip-tt-train: true # TODO: look into TT-Train with GCC 14
     with:
       version: ${{ matrix.config.version }}
       toolchain: ${{ matrix.config.toolchain }}

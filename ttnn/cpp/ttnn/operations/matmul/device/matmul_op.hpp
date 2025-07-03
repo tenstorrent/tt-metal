@@ -12,12 +12,30 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
-
 namespace ttnn {
 
 namespace operations {
 
 namespace matmul {
+
+// shared variables between override and program
+
+enum class Matmul1DType { MCAST_IN0, GATHER_IN0, MCAST_IN1 };
+
+struct matmul_mcast_1d_common_override_variables_t {
+    std::vector<tt::tt_metal::KernelHandle> kernels;
+    std::vector<tt::tt_metal::CBHandle> cbs;
+    bool extract_shard_sub_blocks;
+    CoreCoord start_core;
+    std::vector<CoreCoord> cores;
+    uint32_t num_cores_with_work;
+    Matmul1DType type;
+};
+
+// Define the buffering depth for input CBs (0 and 1) for mcast variants.
+// 2 = double buffer, 3 = triple buffer, etc.
+// Allows easily changing buffering strategy in one place for relevant factories.
+constexpr uint32_t MCAST_INPUT_BUFFERING_DEPTH = 2;
 
 using ttnn::operations::unary::UnaryWithParam;
 
@@ -47,9 +65,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
+    const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias,
-    Tensor& output_tensor,
+    const std::vector<Tensor>& output_tensors,
     bool bcast_batch,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -160,6 +178,7 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     bool gather_in0;
     CoreRangeSet hop_cores;
     std::size_t num_global_cb_receivers;
+    bool untilize_out;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
@@ -171,11 +190,8 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
 
 struct MatmulMultiCoreProgramConfig {};
 
-struct MatmulMultiCoreNonOptimizedReuseProgramConfig {};
-
 using MatmulProgramConfig = std::variant<
     MatmulMultiCoreProgramConfig,
-    MatmulMultiCoreNonOptimizedReuseProgramConfig,
     MatmulMultiCoreReuseProgramConfig,
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
@@ -225,12 +241,28 @@ Matmul create_matmul_struct(
     const struct Matmul& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt});
 
+matmul_mcast_1d_common_override_variables_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor_a,
+    const std::vector<Tensor>& input_tensors_b,
+    const std::optional<const Tensor>& bias,
+    const std::vector<Tensor>& output_tensors,
+    bool bcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    uint32_t start_cb_index,
+    std::optional<CoreRangeSet> restricted_cores);
+
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
+    const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias,
-    Tensor& output_tensor,
+    const std::vector<Tensor>& output_tensors,
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const MatmulProgramConfig& program_config,
@@ -255,7 +287,15 @@ Tensor matmul(
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias = std::nullopt,
     const struct Matmul& parameters = Matmul{},
-    const QueueId queue_id = DefaultQueueId,
+    QueueId queue_id = DefaultQueueId,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+std::vector<Tensor> matmul_batched_weights(
+    const Tensor& input_tensor_a,
+    const std::vector<Tensor>& input_tensors_b,
+    const std::optional<const Tensor>& bias = std::nullopt,
+    const struct Matmul& parameters = Matmul{},
+    QueueId queue_id = DefaultQueueId,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace matmul
@@ -267,13 +307,20 @@ Tensor matmul(
 namespace bmm_op_utils {
 
 std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
-    const uint32_t per_core_M,
-    const uint32_t per_core_N,
-    const bool per_core_M_equals_subblock_h_constraint,
-    const bool per_core_N_equals_subblock_w_constraint,
-    const bool fp32_dest_acc_en);
-
-void add_stagger_defines_if_needed(
-    const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines);
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    bool per_core_M_equals_subblock_h_constraint,
+    bool per_core_N_equals_subblock_w_constraint,
+    bool fp32_dest_acc_en);
 
 }  // namespace bmm_op_utils
+
+namespace reuse_mcast_1d_optimized_helpers {
+void override_program_parameters(
+    const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& shared_variables,
+    const void* operation,
+    tt::tt_metal::Program& program,
+    const std::vector<tt::tt_metal::Tensor>& input_tensors,
+    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+    const std::vector<tt::tt_metal::Tensor>& output_tensors);
+}  // namespace reuse_mcast_1d_optimized_helpers

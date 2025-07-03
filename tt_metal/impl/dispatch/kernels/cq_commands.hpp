@@ -50,7 +50,7 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_SET_WRITE_OFFSET = 12,  // set the offset to add to all non-host destination addresses (relocation)
     CQ_DISPATCH_CMD_TERMINATE = 13,         // quit
     CQ_DISPATCH_CMD_SEND_GO_SIGNAL = 14,
-    CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL = 15,
+    CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL = 15,
     CQ_DISPATCH_SET_NUM_WORKER_SEMS = 16,
     CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
     CQ_DISPATCH_CMD_MAX_COUNT,  // for checking legal IDs
@@ -63,7 +63,7 @@ enum GoSignalMcastSettings : uint8_t {
 
 enum DispatcherSelect : uint8_t {
     DISPATCH_MASTER = 0,
-    DISPATCH_SLAVE = 1,
+    DISPATCH_SUBORDINATE = 1,
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -142,15 +142,18 @@ constexpr uint32_t CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START = 1;
 // Will always flush writes before reading.
 struct CQPrefetchPagedToRingbufferCmd {
     uint8_t flags;
-    uint8_t pad1;
     uint8_t log2_page_size;
-    uint32_t start_page;
+    uint8_t start_page;
+    uint32_t wp_offset_update;  // set final increment ringbuffer write pointer
     uint32_t base_addr;  // Base address of the interleaved buffer to read from.
     uint32_t length;     // multiple of DRAM alignment
 } __attribute__((packed));
 
 struct CQPrefetchSetRingbufferOffsetCmd {
     uint32_t offset;
+    uint16_t pad1;
+    uint8_t pad2;
+    uint8_t update_wp;  // if set, the ringbuffer write pointer will be updated to the offset
 } __attribute__((packed));
 
 // Current implementation limit is based on size of the l1_cache which stores the sub_cmds
@@ -309,12 +312,12 @@ struct CQDispatchDelayCmd {
     uint32_t delay;
 } __attribute__((packed));
 
+// The maximum value allowed for offset_count in CQDispatchSetWriteOffsetCmd.
+constexpr uint32_t CQ_DISPATCH_MAX_WRITE_OFFSETS = 4;
+
 struct CQDispatchSetWriteOffsetCmd {
-    uint8_t pad1;
+    uint8_t offset_count;  // Number of uint32_t offsets this command sets. Offsets are stored after the CQDispatchCmd.
     uint16_t program_host_id;  // Program Host ID for upcoming commands. Used for profiling.
-    uint32_t offset0;
-    uint32_t offset1;
-    uint32_t offset2;
 } __attribute__((packed));
 
 struct CQDispatchSetUnicastOnlyCoresCmd {
@@ -332,7 +335,7 @@ struct CQDispatchGoSignalMcastCmd {
     uint32_t wait_stream;  // Index of the stream to wait on
 } __attribute__((packed));
 
-struct CQDispatchNotifySlaveGoSignalCmd {
+struct CQDispatchNotifySubordinateGoSignalCmd {
     // sends a counter update to dispatch_s when it sees this cmd
     uint8_t wait;  // if true, issue a write barrier before sending signal to dispatch_s
     uint16_t index_bitmask;
@@ -366,7 +369,7 @@ struct CQDispatchCmd {
         CQDispatchSetWriteOffsetCmd set_write_offset;
         CQDispatchGoSignalMcastCmd mcast;
         CQDispatchSetUnicastOnlyCoresCmd set_unicast_only_cores;
-        CQDispatchNotifySlaveGoSignalCmd notify_dispatch_s_go_signal;
+        CQDispatchNotifySubordinateGoSignalCmd notify_dispatch_s_go_signal;
         CQDispatchSetNumWorkerSemsCmd set_num_worker_sems;
         CQDispatchSetGoSignalNocDataCmd set_go_signal_noc_data;
     } __attribute__((packed));

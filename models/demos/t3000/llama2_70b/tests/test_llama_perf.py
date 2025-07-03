@@ -2,27 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import os
 from functools import partial
-from loguru import logger
-import torch
-import ttnn
 
-from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
-from models.demos.t3000.llama2_70b.tt.model_config import (
-    get_model_config,
-)
-from models.demos.t3000.llama2_70b.tt.llama_common import get_llama_path, MAX_SEQ_LEN, BASE_URL, load_llama_state_dict
-from models.utility_functions import (
-    tt2torch_tensor,
-    profiler,
-    skip_for_grayskull,
-)
-from models.perf.perf_utils import prep_perf_report
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
+import pytest
+import torch
+from loguru import logger
 from tqdm import tqdm
+
+import ttnn
+from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
+from models.demos.t3000.llama2_70b.tt.llama_common import BASE_URL, MAX_SEQ_LEN, get_llama_path, load_llama_state_dict
+from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
+from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import profiler, skip_for_grayskull, tt2torch_tensor
 
 
 def load_prompts_file(tokenizer, prefill_length, generation_length=128, gap=64):
@@ -305,8 +300,6 @@ def test_Llama_perf_host(
     compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
-
-    t3k_mesh_device.enable_program_cache()
 
     run_test_LlamaModel_end_to_end(
         t3k_mesh_device,

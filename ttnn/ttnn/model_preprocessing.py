@@ -12,10 +12,14 @@ from typing import Optional, Union, Callable
 from ttnn.dot_access import make_dot_access_dict
 
 from loguru import logger
-import torch
 
 import ttnn
 from ttnn.torch_tracer import trace, visualize
+
+try:
+    import torch
+except ImportError:
+    raise ImportError("Torch is not installed. Model preprocessing functions require torch to be installed.")
 
 
 def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT):

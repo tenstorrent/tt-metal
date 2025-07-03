@@ -18,7 +18,7 @@ from tests.sweep_framework.sweep_utils.sharding_utils import (
 )
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time, get_run_return
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
@@ -107,5 +107,6 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    return [pcc, e2e_perf]
+    expected_pcc = 0.999
+    tensors = [input_tensor_a, output_tensor]
+    return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)

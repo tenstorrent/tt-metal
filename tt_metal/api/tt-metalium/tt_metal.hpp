@@ -18,6 +18,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <umd/device/tt_core_coordinates.h>
@@ -27,6 +28,7 @@
 namespace tt {
 namespace tt_metal {
 enum class FabricConfig : uint32_t;
+enum class FabricReliabilityMode : uint32_t;
 }  // namespace tt_metal
 }  // namespace tt
 
@@ -39,21 +41,35 @@ namespace detail {
 
 bool DispatchStateCheck(bool isFastDispatch);
 
-bool InWorkerThread();
-inline bool InMainThread() { return not InWorkerThread(); }
-
-// Call before CreateDevices to enable fabric, which uses all free ethernet cores
-void InitializeFabricConfig(FabricConfig fabric_config);
+/**
+ * Call before CreateDevices to enable fabric, which uses the specified number of routing planes.
+ * Currently, setting num_routing_planes dictates how many routing planes the fabric should be active on
+ * for that init sequence. The number of routing planes fabric will be initialized on will be the max
+ * of all the values specified by different clients. If a client wants to initialize fabric on all the
+ * available routing planes, num_routing_planes can be left unspecifed.
+ * NOTE: This does not 'reserve' routing planes for any clients, but is rather a global setting.
+ *
+ * Return value: void
+ *
+ * | Argument           | Description                         | Data type         | Valid range | Required |
+ * |--------------------|-------------------------------------|-------------------|-------------|----------|
+ * | fabric_config      | Fabric config to set                | FabricConfig      |             | Yes      |
+ * | num_routing_planes | Number of routing planes for fabric | optional<uint8_t> |             | No       |
+ */
+void SetFabricConfig(
+    FabricConfig fabric_config,
+    FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+    std::optional<uint8_t> num_routing_planes = std::nullopt);
 
 std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool
     const std::vector<chip_id_t>& device_ids,
-    const uint8_t num_hw_cqs = 1,
-    const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-    const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+    uint8_t num_hw_cqs = 1,
+    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
     const tt_metal::DispatchCoreConfig& dispatch_core_config = tt_metal::DispatchCoreConfig{},
     const std::vector<uint32_t>& l1_bank_remap = {},
-    const size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
     bool init_profiler = true,
     bool use_max_eth_core_count_on_all_devices = false,
     bool initialize_fabric_and_dispatch_fw = true);
@@ -95,7 +111,7 @@ void WriteToBuffer(std::shared_ptr<Buffer> buffer, const std::vector<DType>& hos
     WriteToBuffer(*buffer, host_buffer);
 }
 
-void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer, bool shard_order = false);
+void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer);
 /**
  * Copies data from a buffer into a host buffer
  *
@@ -104,19 +120,18 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer, bool shard_order = fal
  * | Argument    | Description                                     | Data type               | Valid range | Required |
  * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
  * | buffer      | Buffer to read data from                        | Buffer &                | | Yes      | |
- * host_buffer | Buffer on host to copy data into                | std::vector<DType> &    | | Yes      | | shard_order
- * | For a sharded buffer we can read in shard order | bool                    | | No       |
+ * host_buffer | Buffer on host to copy data into                | std::vector<DType> &    | | Yes      | |
  */
 template <typename DType>
-void ReadFromBuffer(Buffer& buffer, std::vector<DType>& host_buffer, bool shard_order = false) {
+void ReadFromBuffer(Buffer& buffer, std::vector<DType>& host_buffer) {
     auto buffer_size = buffer.size();
     TT_FATAL(buffer_size % sizeof(DType) == 0, "Buffer size is not divisible by dtype size");
     host_buffer.resize(buffer.size() / sizeof(DType));
-    ReadFromBuffer(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()), shard_order);
+    ReadFromBuffer(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()));
 }
 template <typename DType>
-void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<DType>& host_buffer, bool shard_order = false) {
-    ReadFromBuffer(*buffer, host_buffer, shard_order);
+void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<DType>& host_buffer) {
+    ReadFromBuffer(*buffer, host_buffer);
 }
 
 void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id);

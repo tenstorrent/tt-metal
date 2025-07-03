@@ -35,7 +35,7 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
     auto output_datatype = args.output_dtype;
     if (preallocated_output_tensor.has_value()) {
         out_memory_config = preallocated_output_tensor->memory_config();
-        output_datatype = preallocated_output_tensor->get_dtype();
+        output_datatype = preallocated_output_tensor->dtype();
     }
     TT_FATAL(
         output_datatype == input_tensor.dtype(),
@@ -53,28 +53,28 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
         "Operands to dropout need to be allocated in buffers on the device. Buffer is null.");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == out_memory_config.memory_layout,
+        input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
         "Dropout operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        static_cast<int>(input_tensor.memory_config().memory_layout),
-        static_cast<int>(out_memory_config.memory_layout));
+        static_cast<int>(input_tensor.memory_config().memory_layout()),
+        static_cast<int>(out_memory_config.memory_layout()));
 
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
-            input_tensor.get_layout() == Layout::TILE,
+            input_tensor.layout() == Layout::TILE,
             "Dropout operation requires tensor to be in Tile layout when working with non-sharded input tensor. Input "
             "tensor layout: {}",
-            static_cast<int>(input_tensor.get_layout()));
+            static_cast<int>(input_tensor.layout()));
 
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Dropout operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
             "memory layout: `{}`",
-            static_cast<int>(input_tensor.memory_config().memory_layout));
+            static_cast<int>(input_tensor.memory_config().memory_layout()));
     }
 
     if (preallocated_output_tensor.has_value()) {
         const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
-        const auto preallocated_output_shape = preallocated_output_tensor.value().get_logical_shape();
+        const auto preallocated_output_shape = preallocated_output_tensor.value().logical_shape();
         TT_FATAL(
             preallocated_output_shape == computed_output_shape,
             "When preallocted output tensor is used, Dropout operation requires its shape to match the computed "
@@ -84,7 +84,7 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
 
         if (!input_tensor.is_sharded()) {
             TT_FATAL(
-                (preallocated_output_tensor.value().get_layout() == Layout::TILE),
+                (preallocated_output_tensor.value().layout() == Layout::TILE),
                 "Dropout operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
         }
     }
@@ -93,12 +93,12 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
 spec_return_value_t DropoutDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output->get_tensor_spec();
+        return tensor_args.preallocated_output->tensor_spec();
     }
 
     auto output_layout = Layout::TILE;
     if (args.output_memory_config.is_sharded()) {
-        output_layout = tensor_args.input.get_layout();
+        output_layout = tensor_args.input.layout();
     }
 
     const auto output_shape = tensor_args.input.logical_shape();
@@ -116,7 +116,7 @@ tensor_return_value_t DropoutDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t DropoutDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     auto args_without_seed = args;
     args_without_seed.seed = 0;
     auto program_factory = select_program_factory(args, tensor_args);
@@ -124,7 +124,7 @@ tt::stl::hash::hash_t DropoutDeviceOperation::compute_program_hash(
         args_without_seed,
         program_factory.index(),
         input_tensor.dtype(),
-        std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
+        input_tensor.memory_config(),
         input_shape.volume());
 
     return hash;

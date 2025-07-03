@@ -16,7 +16,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include "ttnn/common/queue_id.hpp"
@@ -115,11 +115,9 @@ int main(int argc, char** argv) {
         };
         run_operations();
 
-        device->enable_program_cache();
         run_operations();
         run_operations();
         run_operations();
-        device->disable_and_clear_program_cache();
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message

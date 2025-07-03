@@ -46,7 +46,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     origin_hw_vec.reserve(num_inputs);
 
     for (uint32_t j = 0; j < num_inputs; ++j) {
-        const auto& input_shape_without_padding = inputs.at(j).get_logical_shape();
+        const auto& input_shape_without_padding = inputs.at(j).logical_shape();
         origin_hw_vec.emplace_back(input_shape_without_padding[2], input_shape_without_padding[3]);
     }
 
@@ -86,7 +86,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     const uint32_t im4_t = 1;  // exp(log(|x|) * decimal)
     const uint32_t im5_t = 1;  // |x|^p * exp(log(|x|) * decimal)
 
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tmp_pow_sum.get_dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tmp_pow_sum.dtype());
 
     CreateCircularBuffer(
         program,
@@ -146,7 +146,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
 
         const auto& input = inputs.at(i);
         const auto input_addr = input.buffer()->address();
-        const auto num_tiles = input.volume() / tt::constants::TILE_HW;
+        const auto num_tiles = static_cast<uint32_t>(input.physical_volume()) / tt::constants::TILE_HW;
         const auto [origin_h, origin_w] = origin_hw_vec.at(i);
 
         // reader

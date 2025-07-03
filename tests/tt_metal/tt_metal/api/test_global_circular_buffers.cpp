@@ -6,7 +6,6 @@
 #include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <exception>
@@ -16,7 +15,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "dispatch_fixture.hpp"
 #include <tt-metalium/kernel_types.hpp>
@@ -96,7 +95,7 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
         auto remote_cb =
             tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
         tt::tt_metal::detail::CompileProgram(device, program);
-        program_dispatch::finalize_program_offsets(program, device);
+        program.finalize_offsets(device);
         tt::tt_metal::experimental::UpdateDynamicCircularBufferAddress(program, remote_cb, global_cb);
         EXPECT_THROW(UpdateDynamicCircularBufferAddress(program, remote_cb, dummy_global_cb), std::exception);
     }
@@ -116,7 +115,7 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
         auto remote_cb =
             tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
         tt::tt_metal::detail::CompileProgram(device, program);
-        EXPECT_THROW(program_dispatch::finalize_program_offsets(program, device), std::exception);
+        EXPECT_THROW(program.finalize_offsets(device), std::exception);
     }
 }
 

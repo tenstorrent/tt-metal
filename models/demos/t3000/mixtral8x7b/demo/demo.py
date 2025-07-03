@@ -1,27 +1,26 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 from time import time
 
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from ttnn import ConcatMeshToTensor
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
-    load_inputs,
-    preprocess_inputs,
-    prepare_inputs_ttnn,
-    get_single_rot_mat,
-    sample,
-    cache_attention,
-)
-from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
-from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
-
-
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
+    cache_attention,
+    get_single_rot_mat,
+    load_inputs,
+    prepare_inputs_ttnn,
+    preprocess_inputs,
+    sample,
+)
+from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
+from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
+from ttnn import ConcatMeshToTensor
 
 
 class Emb(torch.nn.Module):
@@ -54,9 +53,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
         input_prompts = load_inputs(user_input, batch_size)
 
     # Load model args, weights, and tokenizer
-    model_args = TtModelArgs(
-        mesh_device.get_device(0), instruct=instruct_mode, max_seq_len=max_seq_len, max_batch_size=batch_size
-    )
+    model_args = TtModelArgs(mesh_device, instruct=instruct_mode, max_seq_len=max_seq_len, max_batch_size=batch_size)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     model_args.n_layers = 32  # Full model
@@ -188,7 +185,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
         else:  # Embedding/argmax on device
             # TODO Debug (only device 0 is doing argmax, otherwise it throws an error)
             # Alternatively, send the output back to device: ttnn.Tensor.to()
-            # ttnn.SetDefaultDevice(mesh_device.get_device(0))
+            # ttnn.SetDefaultDevice(mesh_device)
 
             # TODO Update argmax to ttnn when OP becomes available
             tt_out_B11B = ttnn.argmax(tt_out_11BH, dim=-1)
@@ -267,7 +264,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
     ],
     ids=["general", "instruct"],
 )
-def test_mixtral8x7b_demo(t3k_mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env):
+def test_mixtral8x7b_demo(t3k_mesh_device, input_prompts, instruct_weights, is_ci_env):
     if is_ci_env and instruct_weights == True:
         pytest.skip("CI demo test only runs general weights to reduce CI pipeline load (both are supported)")
 

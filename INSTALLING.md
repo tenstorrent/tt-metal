@@ -20,29 +20,39 @@ Note the current compatibility matrix:
 
 | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-| Galaxy (Wormhole 4U) | Ubuntu 22.04    | 3.10     | 1.31 or above      | fw_pack-80.10.1.0                          | v3.0.12 or above      | v1.1.3 or above, `mesh` config |
-| Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | 1.31 or above      | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | v1.1.3 or above, `mesh` config |
-| Wormhole             | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | N/A                            |
-| T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | v1.1.3 or above, `mesh` config |
-| Blackhole            | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.15.0.0 (v80.15.0.0)             | v3.0.5 or above       | N/A                            |
+| Galaxy (Wormhole 4U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.10.1.0                          | v2.2.3 or lower       | v1.1.3, `mesh` config          |
+| Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.15 or above      | N/A                            |
+| Wormhole             | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | N/A                            |
+| T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | v1.2.5 or above, `mesh` config |
+| Blackhole            | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.18.0.0 (v80.18.0.0)             | v3.0.12 or above      | N/A                            |
 
 #### Install System-level Dependencies
-```
-wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/install_dependencies.sh
+For Ubuntu users. You can use the script provided in our repo to install build and runtime dependencies along with a working copy of Clang 17.
+
+```bash
+wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/{install_dependencies.sh,tt_metal/sfpi-version.sh}
 chmod a+x install_dependencies.sh
 sudo ./install_dependencies.sh
 ```
+
+For users on other Linux distributions, please consult the `install_dependencies.sh` script to see what packages need to be installed, then install the equivalent packages using your distribution's package manager. Package names may vary between distributions, and some distributions (like Gentoo and Arch) may not use suffixes like `-dev` or `-devel` for development packages.
+
+> [!IMPORTANT]
+>
+> Building with Clang 17 and GCC 12 is supported. Later versions, while not officially supported, should work. For Ubuntu 22.04 users, the default compiler is GCC 11 and Clang 14. Please install a newer compiler to ensure a successful build (the dependency installaion script will install Clang 17 for you).
+
 
 ---
 
 #### Install the Driver (TT-KMD)
 - DKMS must be installed:
 
-| OS              | Command                |
+| OS                     | Command                                            |
 |------------------------|----------------------------------------------------|
 | Ubuntu / Debian        | ```apt install dkms```                             |
 | Fedora                 | ```dnf install dkms```                             |
 | Enterprise Linux Based | ```dnf install epel-release && dnf install dkms``` |
+| Arch Linux             | ```pacman -S dkms```                               |
 
 - Install the latest TT-KMD version:
 ```
@@ -60,8 +70,6 @@ cd ..
 
 #### Update Device TT-Firmware with TT-Flash
 
-> [!CAUTION]
-> Be sure to align the FW version with the compatible version in the table above for your particular configuration.
 
 - Install TT-Flash:
 
@@ -69,22 +77,21 @@ cd ..
 pip install git+https://github.com/tenstorrent/tt-flash.git
 ```
 
-- Reboot to load changes:
-```
-sudo reboot
-```
+- Update TT-Firmware:
 
-- Check if TT-Flash is installed:
-```
-tt-flash --version
-```
+  - First, set the appropriate TT-Firmware version per device:
 
-- Download and install the TT-Firmware version according to the table above. We will use latest here as example:
-```
-file_name=$(curl -s "https://raw.githubusercontent.com/tenstorrent/tt-firmware/main/latest.fwbundle")
-curl -L -o "$file_name" "https://github.com/tenstorrent/tt-firmware/raw/main/$file_name"
-tt-flash flash --fw-tar $file_name
-```
+  | Device                        | Command                                                    |
+  |-------------------------------|------------------------------------------------------------|
+  | Blackhole                     | ```fw_tag=v80.18.0.0 fw_pack=fw_pack-80.18.0.0.fwbundle``` |
+  | Galaxy (6U) / Wormhole / T300 | ```fw_tag=v80.17.0.0 fw_pack=fw_pack-80.17.0.0.fwbundle``` |
+
+  - Then Download and install TT-Firmware:
+
+  ```
+  wget https://github.com/tenstorrent/tt-firmware/raw/refs/tags/$fw_tag/$fw_pack
+  tt-flash flash --fw-tar $fw_pack
+  ```
 
 - For more information visit Tenstorrent's [TT-Firmware GitHub Repository](https://github.com/tenstorrent/tt-firmware) and [TT-Flash Github Repository](https://github.com/tenstorrent/tt-flash).
 
@@ -125,82 +132,36 @@ Once hardware and system software are installed, verify that the system has been
 
 ### TT-NN / TT-Metalium Installation
 
-#### There are three options for installing TT-Metalium:
+#### There are four options for installing TT-Metalium:
 
-- [Option 1: From Source](#option-1-from-source)
+- [Option 1: From Binaries](#binaries)
+
+  Install pre-built binaries for quick setup and immediate access to TT-NN APIs and AI models.
+
+- [Option 2: From Docker Release Image](#docker-release-image)
+
+  Installing from Docker Release Image is a quick way to access our APIs and start running AI models.
+
+- [Option 3: From Source](#source)
 
   Installing from source gets developers closer to the metal and the source code.
 
-- [Option 2: From Docker Release Image](#option-2-from-docker-release-image)
+- [Option 4: From Anaconda](#anaconda)
 
-  Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.
-
-- [Option 3: From Wheel](#option-3-from-wheel)
-
-  Install from wheel as an alternative method to get quick access to our APIs and to running AI models.
+  Installing from Anaconda can be convienient for ML Developers who prefer that workflow.
 
 ---
 
-### Option 1: From Source
-Install from source if you are a developer who wants to be close to the metal and the source code. Recommended for running the demo models.
+### Binaries
+Install from wheel for quick access to `ttnn` Python APIs and to get an AI model running.
+All binaries support only Linux and distros with glibc 2.34 or newer.
 
-#### Step 1. Clone the Repository:
+#### Step 1. Install the Latest Wheel:
 
-```sh
-git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
-```
-
-#### Step 2. Invoke our Build Scripts:
-
-```
-./build_metal.sh
-```
-
-- (recommended) For an out-of-the-box virtual environment to use, execute:
-```
-./create_venv.sh
-source python_env/bin/activate
-```
-
-- (optional) Software dependencies for profiling use:
-  - Install dependencies:
-  ```sh
-  sudo apt install pandoc libtbb-dev libcapstone-dev pkg-config
-  ```
-
-  - Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
-
-- Continue to [You Are All Set!](#you-are-all-set)
-
----
-
-### Option 2: From Docker Release Image
-Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.
-
-Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64) page
-
-```sh
-docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
-docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc bash
-```
-
-- For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64).
-
-- Continue to [You Are All Set!](#you-are-all-set)
-
----
-
-### Option 3: From Wheel
-Install from wheel for quick access to our APIs and to get an AI model running
-
-#### Step 1. Download and Install the Latest Wheel:
-
-- Navigate to our [releases page](https://github.com/tenstorrent/tt-metal/releases/latest) and download the latest wheel file for the Tenstorrent card architecture you have installed.
-
-- Install the wheel using your Python environment manager of choice. For example, to install with `pip`:
+- Install the wheel using `pip`:
 
   ```sh
-  pip install <wheel_file.whl>
+  pip install ttnn
   ```
 
 #### Step 2. (For models users only) Set Up Environment for Models:
@@ -221,24 +182,92 @@ To try our pre-built models in `models/`, you must:
 
 ---
 
+### Docker Release Image
+
+Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64) page
+
+```sh
+docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
+docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc bash
+```
+
+- For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64).
+
+- You are all set! Try some [TT-NN Basic Examples](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) next.
+
+---
+
+### Source
+Install from source if you are a developer who wants to be close to the metal and the source code. Recommended for running the demo models.
+
+#### Step 1. Clone the Repository:
+
+```sh
+git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
+```
+
+#### Step 2. Build the Library:
+
+You have two options for building the library:
+
+**Option A: Using the Build Script (Recommended)**
+
+The build script provides the simplest way to build the library and works well with the standard build tools installed via `install_dependencies.sh`.
+
+```
+./build_metal.sh
+```
+
+**Option B: Manual Build with CMake**
+
+For users who prefer more control over build options or have custom setups, you can build manually:
+
+```bash
+mkdir build
+cd build
+cmake .. -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebugInfo -DCMAKE_CXX_COMPILER=<your compiler>
+ninja
+ninja install # Installs to build directory by default, required for Python environment
+```
+
+#### Step 3. Crate a virtual environment and (optional) documentation.
+
+- (recommended) For an out-of-the-box virtual environment to use, execute:
+```
+./create_venv.sh
+source python_env/bin/activate
+```
+
+- (optional) Software dependencies for profiling use:
+  - Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
+
+- Continue to [You Are All Set!](#you-are-all-set)
+
+---
+
+### Anaconda
+Anaconda is another virtual environment manager. There is a community driven recipe [here](https://github.com/conda-forge/tt-metalium-feedstock). There is support for Python 3.10, 3.11, and 3.12.
+All binaries support only Linux and distros with glibc 2.34 or newer.
+
+#### Step 1. Install the Latest Package:
+
+- Install the package using `conda`:
+
+  ```sh
+  conda create -n metalium python=3.10 tt-metalium -c conda-forge
+  ```
+
+---
+
 ### You are All Set!
 
-#### To verify your installation, try executing a programming example:
+#### To verify your installation (for source or wheel installation only), try executing a programming example:
 
 - First, set the following environment variables:
 
-  - Run the appropriate command for the Tenstorrent card you have installed:
-
-  | Card             | Command                              |
-  |------------------|--------------------------------------|
-  | Grayskull        | ```export ARCH_NAME=grayskull```     |
-  | Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
-  | Blackhole        | ```export ARCH_NAME=blackhole```     |
-
-  - Run:
   ```
-  export TT_METAL_HOME=$(pwd)
-  export PYTHONPATH=$(pwd)
+  export TT_METAL_HOME=</path/to/your/tt-metal>
+  export PYTHONPATH="${TT_METAL_HOME}" # Same path
   ```
 
 - Then, try running a programming example:

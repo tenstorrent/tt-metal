@@ -4,17 +4,17 @@
 
 #pragma once
 #include <tt-metalium/buffer_types.hpp>
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
-#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_device.hpp"
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_device.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 
-#include "cpp/ttnn/tensor/enum_types.hpp"
+#include "api/ttnn/tensor/enum_types.hpp"
 
 #include "dataflow_api.h"  // for interleaved addrgen
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/algorithms.hpp"
+#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/operations/ccl/common/interpreter_backends/kernel_common/algorithms.hpp"
 
 using shape_t = ttnn::ccl::Shape4D<uint32_t>;
 using address_t = uint32_t;

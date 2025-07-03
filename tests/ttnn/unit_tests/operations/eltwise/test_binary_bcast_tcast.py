@@ -19,6 +19,7 @@ from models.utility_functions import torch_random
         (torch.Size([5, 1, 64, 1]), torch.Size([1, 3, 1, 128])),
         (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1])),
         (torch.Size([5, 1, 1]), torch.Size([1, 32, 128])),
+        (torch.Size([5, 32, 32]), torch.Size([5, 32, 32])),
     ),
 )
 @pytest.mark.parametrize(

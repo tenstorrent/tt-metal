@@ -17,13 +17,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
     const Tensor& input_tensor, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     const uint32_t head_dim = input_shape[-1];
     const uint32_t batch = input_shape[1];
 
     tt_metal::IDevice* device = input_tensor.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
@@ -154,21 +154,21 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
     const Tensor& input_tensor, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     const uint32_t head_dim = input_shape[-1];
     const uint32_t batch = input_shape[1];
 
     tt_metal::IDevice* device = input_tensor.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     const uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
-    auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
+    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     auto tile_h = tile_shape[0];
     auto tile_w = tile_shape[1];
     auto tile_hw = tile_h * tile_w;
 
-    auto face_shape = input_tensor.get_tensor_spec().tile().get_face_shape();
+    auto face_shape = input_tensor.tensor_spec().tile().get_face_shape();
     auto face_h = face_shape[0];
     auto face_w = face_shape[1];
     auto face_hw = face_h * face_w;

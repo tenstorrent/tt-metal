@@ -20,31 +20,36 @@ namespace utils {
     bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
     switch (val) {
         case BinaryOpType::ADD:
-            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16));
+            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
+                || (a == DataType::UINT32 && b == DataType::UINT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::SUB:
-            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32));
+            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
+                || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::MUL:
+            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::DIV:
         case BinaryOpType::RSUB:
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
         case BinaryOpType::LDEXP:
         case BinaryOpType::SQUARED_DIFFERENCE:
-        case BinaryOpType::LOGICAL_OR:
-        case BinaryOpType::LOGICAL_XOR:
         case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::BIAS_GELU: return (a == DataType::FLOAT32 && b == DataType::FLOAT32);
+        case BinaryOpType::LOGICAL_OR:
+        case BinaryOpType::LOGICAL_XOR:
         case BinaryOpType::GT:
         case BinaryOpType::LT:
         case BinaryOpType::GTE:
         case BinaryOpType::LTE:
         case BinaryOpType::EQ:
         case BinaryOpType::NE: return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32));
+        case BinaryOpType::GCD:
+        case BinaryOpType::LCM:
         case BinaryOpType::LEFT_SHIFT:
-        case BinaryOpType::RIGHT_SHIFT:
+        case BinaryOpType::RIGHT_SHIFT: return (a == DataType::INT32 && b == DataType::INT32);
         case BinaryOpType::BITWISE_XOR:
-        case BinaryOpType::BITWISE_AND:
-        case BinaryOpType::BITWISE_OR: return (a == DataType::INT32 && b == DataType::INT32);
+        case BinaryOpType::BITWISE_OR:
+        case BinaryOpType::BITWISE_AND: return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:
         case BinaryOpType::POWER: return true;
@@ -57,13 +62,13 @@ namespace utils {
 BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     ZoneScopedN("BinaryDeviceOperation::select_program_factory");
-    const auto input_shape_a = tensor_args.input_tensor_a.get_logical_shape();
+    const auto input_shape_a = tensor_args.input_tensor_a.logical_shape();
 
     if (operation_attributes.scalar.has_value()) {
         return BroadcastHeightAndWidthMultiCore{};
     }
 
-    const auto input_shape_b = tensor_args.input_tensor_b->get_logical_shape();
+    const auto input_shape_b = tensor_args.input_tensor_b->logical_shape();
 
     auto height_a = input_shape_a[-2];
     auto width_a = input_shape_a[-1];
@@ -72,12 +77,11 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
     auto width_b = input_shape_b[-1];
 
     if (height_a == height_b and width_a == width_b) {
-        bool device_check = tensor_args.input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
         BinaryOpType op = operation_attributes.binary_op_type;
-        DataType dtype1 = tensor_args.input_tensor_a.get_dtype();
-        DataType dtype2 = tensor_args.input_tensor_b->get_dtype();
+        DataType dtype1 = tensor_args.input_tensor_a.dtype();
+        DataType dtype2 = tensor_args.input_tensor_b->dtype();
         bool sfpu_op_check = utils::is_binary_sfpu_op(op, dtype1, dtype2);
-        if(device_check && sfpu_op_check){
+        if(sfpu_op_check){
             return ElementWiseMultiCoreSfpu{};
         } else {
             return ElementWiseMultiCore{};
@@ -117,7 +121,7 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
 
     BinaryDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
-    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Input to eltwise binary must be tilized");
+    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Input to eltwise binary must be tilized");
 
     bool tensor_b_sharded = false;
 
@@ -128,34 +132,34 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
                 input_tensor_a.device() == input_tensor_b->device(),
                 "Operands to eltwise binary need to be on the same device!");
         }
-        TT_FATAL(input_tensor_b->get_layout() == Layout::TILE, "Inputs to eltwise binary must be tilized");
+        TT_FATAL(input_tensor_b->layout() == Layout::TILE, "Inputs to eltwise binary must be tilized");
     }
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (tensor_b_sharded) {
             TT_FATAL(
-                input_tensor_a.memory_config().memory_layout == input_tensor_b->memory_config().memory_layout, "Error");
+                input_tensor_a.memory_config().memory_layout() == input_tensor_b->memory_config().memory_layout(), "Error");
             TT_FATAL(input_tensor_a.shard_spec().value() == input_tensor_b->shard_spec().value(), "Error");
         }
         if (attributes.memory_config.is_sharded()) {
-            TT_FATAL(input_tensor_a.memory_config().memory_layout == attributes.memory_config.memory_layout, "Error");
+            TT_FATAL(input_tensor_a.memory_config().memory_layout() == attributes.memory_config.memory_layout(), "Error");
         } else {
-            TT_FATAL(attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+            TT_FATAL(attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
         }
     } else if (tensor_b_sharded) {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
         if (attributes.memory_config.is_sharded()) {
-            TT_FATAL(input_tensor_b->memory_config().memory_layout == attributes.memory_config.memory_layout, "Error");
+            TT_FATAL(input_tensor_b->memory_config().memory_layout() == attributes.memory_config.memory_layout(), "Error");
         } else {
-            TT_FATAL(attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+            TT_FATAL(attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
         }
     } else {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
         if (input_tensor_b.has_value()) {
-            TT_FATAL((input_tensor_b->memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED), "Error");
+            TT_FATAL((input_tensor_b->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED), "Error");
         }
         if (!attributes.memory_config.is_sharded()) {
-            TT_FATAL(attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+            TT_FATAL(attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
         }
     }
 
@@ -174,7 +178,7 @@ void BinaryDeviceOperation::validate_on_program_cache_hit(
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& output_tensor = tensor_args.output_tensor;
 
-    const auto& input_shape_a = input_tensor_a.get_logical_shape();
+    const auto& input_shape_a = input_tensor_a.logical_shape();
 
     auto batch_size_0_a = input_shape_a.rank() >= 4 ? input_shape_a[-4] : 1;
     auto batch_size_1_a = input_shape_a.rank() >= 3 ? input_shape_a[-3] : 1;
@@ -182,7 +186,7 @@ void BinaryDeviceOperation::validate_on_program_cache_hit(
     auto width_a = input_shape_a[-1];
 
     const auto input_shape_b =
-        tensor_args.input_tensor_b.has_value() ? tensor_args.input_tensor_b->get_logical_shape() : ttnn::Shape{1, 1};
+        tensor_args.input_tensor_b.has_value() ? tensor_args.input_tensor_b->logical_shape() : ttnn::Shape{1, 1};
     auto batch_size_0_b = input_shape_b.rank() >= 4 ? input_shape_b[-4] : 1;
     auto batch_size_1_b = input_shape_b.rank() >= 3 ? input_shape_b[-3] : 1;
     auto height_b = input_shape_b[-2];
@@ -208,7 +212,7 @@ BinaryDeviceOperation::spec_return_value_t BinaryDeviceOperation::compute_output
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output_tensor = tensor_args.output_tensor;
     if (output_tensor.has_value()) {
-        return output_tensor->get_tensor_spec();
+        return output_tensor->tensor_spec();
     }
 
     const auto& input_tensor_a = tensor_args.input_tensor_a;
@@ -253,10 +257,9 @@ BinaryDeviceOperation::spec_return_value_t BinaryDeviceOperation::compute_output
             } else if (input_tensor_b.memory_config().is_sharded()) {
                 shard_spec = input_tensor_b.shard_spec().value();
             } else {
-                shard_spec = operation_attributes.memory_config.shard_spec.value();
+                shard_spec = operation_attributes.memory_config.shard_spec().value();
             }
-            auto memory_config = operation_attributes.memory_config;
-            memory_config.shard_spec = shard_spec;
+            auto memory_config = operation_attributes.memory_config.with_shard_spec(shard_spec);
             return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), memory_config));
         }
     } else {
@@ -266,8 +269,7 @@ BinaryDeviceOperation::spec_return_value_t BinaryDeviceOperation::compute_output
                 // Derive output shard_spec based on input
                 shard_spec = input_tensor_a.shard_spec().value();
             }
-            auto memory_config = operation_attributes.memory_config;
-            memory_config.shard_spec = shard_spec;
+            auto memory_config = operation_attributes.memory_config.with_shard_spec(shard_spec);
             return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), memory_config));
         }
     }
@@ -289,9 +291,9 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
 
     auto program_factory = select_program_factory(attributes, tensor_args);
     TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_a.get_storage()),
+        std::holds_alternative<DeviceStorage>(input_tensor_a.storage()),
         "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_a.get_storage()));
+        tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
 
     if (input_tensor_b.has_value()) {
         TT_ASSERT(
@@ -303,19 +305,19 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
             attributes,
             program_factory.index(),
             input_tensor_a.dtype(),
-            std::get<DeviceStorage>(input_tensor_a.storage()).memory_config(),
+            input_tensor_a.memory_config(),
             input_tensor_b->dtype(),
-            std::get<DeviceStorage>(input_tensor_b->storage()).memory_config());
+            input_tensor_b->memory_config());
     }
 
     return operation::hash_operation<BinaryDeviceOperation>(
         attributes,
         program_factory.index(),
         input_tensor_a.dtype(),
-        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config());
+        input_tensor_a.memory_config());
 }
 
-operation::OpPerformanceModel BinaryDeviceOperation::create_op_performance_model(
+operation::OpPerformanceModelGeneral<BinaryDeviceOperation::tensor_return_value_t> BinaryDeviceOperation::create_op_performance_model(
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -329,19 +331,19 @@ operation::OpPerformanceModel BinaryDeviceOperation::create_op_performance_model
 
     uint32_t total_bytes = 0;
     std::vector<Tensor> input_tensors = {input_tensor_a};
-    total_bytes += input_tensor_a.volume() * input_tensor_a.element_size();
+    total_bytes += input_tensor_a.physical_volume() * input_tensor_a.element_size();
     if (input_tensor_b.has_value()) {
         input_tensors.push_back(*input_tensor_b);
-        total_bytes += input_tensor_b->volume() * input_tensor_b->element_size();
+        total_bytes += input_tensor_b->physical_volume() * input_tensor_b->element_size();
     }
     uint32_t ideal_eltwise_cycles = total_bytes / 80 / num_cores;
 
     // TODO: update OpPerformanceModel to work on variadic arguments
-    operation::OpPerformanceModel result(input_tensors, {output_tensor}, ideal_eltwise_cycles);
+    operation::OpPerformanceModelGeneral<tensor_return_value_t> result(input_tensors, output_tensor, ideal_eltwise_cycles);
 #if 0
-        tt::log_info(tt::LogOp, "BinaryDeviceOperation PerfModel:");
-        tt::log_info(tt::LogOp, "\t Data (Bytes): {}", total_bytes);
-        tt::log_info(tt::LogOp, "\t ideal_eltwise_cycles: {}", ideal_eltwise_cycles);
+        log_info(tt::LogOp, "BinaryDeviceOperation PerfModel:");
+        log_info(tt::LogOp, "\t Data (Bytes): {}", total_bytes);
+        log_info(tt::LogOp, "\t ideal_eltwise_cycles: {}", ideal_eltwise_cycles);
 #endif
     return result;
 }
@@ -365,7 +367,7 @@ BinaryDeviceOperation::invoke(
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
     if (output_dtype.has_value() && optional_output_tensor.has_value()) {
         TT_FATAL(
-            output_dtype.value() == optional_output_tensor.value().get_dtype(),
+            output_dtype.value() == optional_output_tensor.value().dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
     CoreRangeSet worker_grid;
@@ -415,7 +417,7 @@ BinaryDeviceOperation::invoke(
             std::move(input_tensor_a_activation),
             std::nullopt,
             memory_config.value_or(optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : input_tensor_a_arg.memory_config()),
-            output_dtype.value_or(input_tensor_a_arg.get_dtype()),
+            output_dtype.value_or(input_tensor_a_arg.dtype()),
             std::move(worker_grid),
             std::nullopt},
         tensor_args_t{input_tensor_a_arg, input_tensor_b_arg, optional_output_tensor}};
@@ -433,7 +435,7 @@ BinaryDeviceOperation::invoke(
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
     if (output_dtype.has_value() && optional_output_tensor.has_value()) {
         TT_FATAL(
-            output_dtype.value() == optional_output_tensor.value().get_dtype(),
+            output_dtype.value() == optional_output_tensor.value().dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
 
@@ -446,7 +448,7 @@ BinaryDeviceOperation::invoke(
             std::move(input_tensor_a_activation),
             scalar,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
-            output_dtype.value_or(input_tensor_a_arg.get_dtype()),
+            output_dtype.value_or(input_tensor_a_arg.dtype()),
             std::move(worker_grid),
             std::nullopt},
         tensor_args_t{input_tensor_a_arg, std::nullopt, optional_output_tensor}};

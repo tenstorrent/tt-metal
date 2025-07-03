@@ -8,19 +8,21 @@ namespace ttnn::operations::reduction::detail {
 
 tt::tt_metal::operation::ProgramWithCallbacks topk_single_core_interleaved(
     const Tensor& input_tensor,
-    const uint32_t k,
-    const int8_t dim,
-    const bool largest,
-    const bool sorted,
+    uint32_t k,
+    int8_t dim,
+    bool largest,
+    bool sorted,
+    const CoreRangeSet& sub_core_grids,
     Tensor& value_tensor,
     Tensor& index_tensor);
 
 tt::tt_metal::operation::ProgramWithCallbacks topk_multicore_interleaved(
     const Tensor& input_tensor,
-    const uint32_t k,
-    const int8_t dim,
-    const bool largest,
-    const bool sorted,
+    uint32_t k,
+    int8_t dim,
+    bool largest,
+    bool sorted,
+    const CoreRangeSet& sub_core_grids,
     Tensor& value_tensor,
     Tensor& index_tensor);
 }  // namespace ttnn::operations::reduction::detail

@@ -17,7 +17,7 @@ struct QuantOp {
         const Tensor& input_tensor,
         const std::variant<Tensor, float>& scale,
         const std::variant<Tensor, int32_t>& zero_point,
-        const std::optional<int32_t> axis,
+        std::optional<int32_t> axis,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
@@ -31,7 +31,7 @@ struct RequantOp {
         const std::variant<Tensor, int32_t>& in_zero_point,
         const std::variant<Tensor, float>& out_scale,
         const std::variant<Tensor, int32_t>& out_zero_point,
-        const std::optional<int32_t> axis,
+        std::optional<int32_t> axis,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
@@ -43,7 +43,7 @@ struct DequantOp {
         const Tensor& input_tensor,
         const std::variant<Tensor, float>& scale,
         const std::variant<Tensor, int32_t>& zero_point,
-        const std::optional<int32_t> axis,
+        std::optional<int32_t> axis,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);

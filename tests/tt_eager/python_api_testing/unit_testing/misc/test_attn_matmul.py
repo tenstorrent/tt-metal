@@ -7,8 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import comp_pcc
-from models.utility_functions import is_grayskull
+from models.utility_functions import comp_pcc, skip_for_blackhole
 import ttnn
 
 
@@ -30,6 +29,7 @@ def generate_input_shapes():
     yield [q_len, q_heads, batch_size, K], [batch_size, kv_heads, K, seq_len]
 
 
+@skip_for_blackhole("Bad pcc on BH. Issue #21875")
 @pytest.mark.parametrize("in0_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -64,7 +64,6 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
             assert allclose, f"FAILED: {output}"
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("num_loops", [20])
 def test_attn_matmul_fp32(num_loops, in_dtype, device):
@@ -103,11 +102,12 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
             assert allclose, f"FAILED: {output}"
 
 
+@skip_for_blackhole("Bad pcc on BH. Issue #21875")
 @pytest.mark.parametrize("in0_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("num_loops", [20])
-def test_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, out_dtype, device, use_program_cache):
+def test_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, out_dtype, device):
     torch.manual_seed(0)
     for input_shape_a, input_shape_b in generate_input_shapes():
         for _ in range(num_loops):
@@ -252,9 +252,7 @@ def test_group_attn_matmul(
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("in0_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("num_loops", [5])
-def test_group_attn_matmul_with_program_cache(
-    num_loops, in0_dtype, in1_dtype, output_dtype, sharded, device, use_program_cache
-):
+def test_group_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, output_dtype, sharded, device):
     torch.manual_seed(0)
 
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -334,7 +332,6 @@ def test_group_attn_matmul_with_program_cache(
     assert num_cache_entries == 1
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize(
     "shard_orientation",

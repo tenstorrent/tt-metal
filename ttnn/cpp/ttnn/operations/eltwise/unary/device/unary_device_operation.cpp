@@ -18,35 +18,10 @@ namespace {
 void validate_supported_arch_dtype(
     tt::ARCH arch, DataType input_datatype, DataType output_datatype, UnaryOpType op_type) {
     switch (op_type) {
-        case UnaryOpType::REMAINDER:
-        case UnaryOpType::FLOOR:
-        case UnaryOpType::CEIL:
-        case UnaryOpType::ROUND:
-        case UnaryOpType::LEFT_SHIFT:
-        case UnaryOpType::RIGHT_SHIFT:
-        case UnaryOpType::MAXIMUM:
-        case UnaryOpType::MINIMUM:
-        case UnaryOpType::LOG1P:
-            TT_FATAL(
-                arch != tt::ARCH::GRAYSKULL,
-                "UnaryOpType '{}' is not supported on Grayskull architecture.",
-                static_cast<int>(op_type));
-            break;
-        case UnaryOpType::FILL:
-           if(arch == tt::ARCH::GRAYSKULL){
-                TT_FATAL(
-                    (input_datatype == DataType::BFLOAT16 || input_datatype == DataType::BFLOAT8_B),
-                    "Unsupported dtype {}. On Grayskull only BFLOAT16/BFLOAT8_B are supported", input_datatype);
-                }
-            break;
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::BITWISE_NOT:
         case UnaryOpType::BITWISE_AND:
         case UnaryOpType::BITWISE_OR:
-            TT_FATAL(
-                arch != tt::ARCH::GRAYSKULL,
-                "UnaryOpType '{}' is not supported on Grayskull architecture (Bitwise operation).",
-                static_cast<int>(op_type));
             TT_FATAL(
                 input_datatype == DataType::INT32,
                 "Unsupported input data type '{}' for UnaryOpType '{}' (Bitwise operation).",
@@ -60,25 +35,14 @@ void validate_supported_arch_dtype(
             break;
         case UnaryOpType::FMOD:
             TT_FATAL(
-                arch != tt::ARCH::GRAYSKULL,
-                "UnaryOpType '{}' (FMOD operation) is not supported on Grayskull architecture.",
-                static_cast<int>(op_type));
-            TT_FATAL(
-                input_datatype == DataType::BFLOAT16,
+                (input_datatype == DataType::BFLOAT16 || input_datatype == DataType::FLOAT32),
                 "Unsupported input data type '{}' for UnaryOpType '{}' (FMOD operation).",
                 static_cast<int>(input_datatype),
                 static_cast<int>(op_type));
             TT_FATAL(
-                output_datatype == DataType::BFLOAT16,
+                (output_datatype == DataType::BFLOAT16 || output_datatype == DataType::FLOAT32),
                 "Unsupported output data type '{}' for UnaryOpType '{}' (FMOD operation).",
                 static_cast<int>(output_datatype),
-                static_cast<int>(op_type));
-            break;
-        case UnaryOpType::ABS:
-        case UnaryOpType::ABS_INT32:
-            TT_FATAL(
-                !(arch == tt::ARCH::GRAYSKULL && input_datatype == DataType::INT32),
-                "UnaryOpType '{}' (ABS int32 operation) is not supported on Grayskull architecture.",
                 static_cast<int>(op_type));
             break;
         default: return;
@@ -109,11 +73,11 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     auto output_datatype = args.output_dtype;
     if (preallocated_output_tensor.has_value()) {
         out_memory_config = preallocated_output_tensor->memory_config();
-        output_datatype = preallocated_output_tensor->get_dtype();
+        output_datatype = preallocated_output_tensor->dtype();
     }
 
     auto arch = input_tensor.device()->arch();
-    auto input_datatype = input_tensor.get_dtype();
+    auto input_datatype = input_tensor.dtype();
     for (const auto& unary_op : args.op_chain) {
         validate_supported_arch_dtype(arch, input_datatype, output_datatype, unary_op.op_type);
     }
@@ -128,28 +92,28 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         "Operands to eltwise unary need to be allocated in buffers on the device. Buffer is null.");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == out_memory_config.memory_layout,
+        input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
         "Unary operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        static_cast<int>(input_tensor.memory_config().memory_layout),
-        static_cast<int>(out_memory_config.memory_layout));
+        static_cast<int>(input_tensor.memory_config().memory_layout()),
+        static_cast<int>(out_memory_config.memory_layout()));
 
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
-            input_tensor.get_layout() == Layout::TILE,
+            input_tensor.layout() == Layout::TILE,
             "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor. Input "
             "tensor layout: {}",
-            static_cast<int>(input_tensor.get_layout()));
+            static_cast<int>(input_tensor.layout()));
 
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Unary operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
             "memory layout: `{}`",
-            static_cast<int>(input_tensor.memory_config().memory_layout));
+            static_cast<int>(input_tensor.memory_config().memory_layout()));
     }
 
     if (preallocated_output_tensor.has_value()) {
         const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
-        const auto preallocated_output_shape = preallocated_output_tensor.value().get_logical_shape();
+        const auto preallocated_output_shape = preallocated_output_tensor.value().logical_shape();
         TT_FATAL(
             preallocated_output_shape == computed_output_shape,
             "When preallocted output tensor is used, Unary operation requires its shape to match the computed "
@@ -159,7 +123,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
 
         if(!input_tensor.is_sharded()){
             TT_FATAL(
-                (preallocated_output_tensor.value().get_layout() == Layout::TILE),
+                (preallocated_output_tensor.value().layout() == Layout::TILE),
                 "Unary operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
         }
     }
@@ -168,12 +132,12 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
 spec_return_value_t UnaryDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output->get_tensor_spec();
+        return tensor_args.preallocated_output->tensor_spec();
     }
 
     auto output_layout = Layout::TILE;
     if (args.output_memory_config.is_sharded()) {
-        output_layout = tensor_args.input.get_layout();
+        output_layout = tensor_args.input.layout();
     }
 
     const auto output_shape = tensor_args.input.logical_shape();
@@ -191,14 +155,14 @@ tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<UnaryDeviceOperation>(
         args,
         program_factory.index(),
         input_tensor.dtype(),
-        std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
+        input_tensor.memory_config(),
         input_shape.volume());
 
     return hash;

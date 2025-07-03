@@ -72,12 +72,11 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
     input_dtype,
     layout,
     use_persistent_output,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     if input_dtype == ttnn.bfloat16 and per_chip_output_shape == (1, 1, 32, 1024 * 4):
         pytest.skip("Skipped due to hang Issue #16699")
@@ -96,7 +95,6 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
         input_dtype,
         layout,
         ttnn.BufferType.L1,
-        use_program_cache,
         function_level_defaults,
         input_shard_spec=input_shard_spec,
         num_iters=num_iters,
@@ -210,12 +208,11 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
     input_dtype,
     layout,
     use_persistent_output,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     if input_dtype == ttnn.bfloat16 and input_shape == (1, 1, 256, 2048):
         pytest.skip("Skipped due to hang Issue #16699")
@@ -235,7 +232,6 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
         input_dtype,
         layout,
         ttnn.BufferType.L1,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         input_shard_spec=input_shard_spec,
@@ -292,12 +288,11 @@ def test_line_all_gather_on_TG_cols_nightly(
     layout,
     use_persistent_output,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -309,7 +304,6 @@ def test_line_all_gather_on_TG_cols_nightly(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,

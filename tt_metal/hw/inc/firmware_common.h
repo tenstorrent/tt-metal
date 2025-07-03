@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 #include "compile_time_args.h"
 #include "dev_mem_map.h"
 #include "hostdevcommon/kernel_structs.h"
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "debug/dprint.h"
 #include "risc_common.h"
@@ -25,8 +25,6 @@ extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
 extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
 extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 
-extern void kernel_init(uint32_t kernel_init);
-extern void kernel_launch(uint32_t kernel_base_addr);
 void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, int32_t len);
 
 inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
@@ -124,15 +122,17 @@ bool is_message_go() {
 }
 
 #define EARLY_RETURN_FOR_DEBUG \
-    if (is_message_go()) {     \
-        return;                \
-    }
+    if (is_message_go()) { goto early_debug_exit; }
+#define EARLY_RETURN_FOR_DEBUG_EXIT early_debug_exit:
 #else
 #define EARLY_RETURN_FOR_DEBUG
+#define EARLY_RETURN_FOR_DEBUG_EXIT
 #endif
 
-inline __attribute__((always_inline)) void disable_gathering() {
-#if defined(ARCH_BLACKHOLE)
+inline __attribute__((always_inline)) void configure_gathering() {
+#if defined(ARCH_BLACKHOLE) && !defined(ENABLE_GATHERING)
+    // Workaround for tt-metal#16439, making sure gathering multiple instructions issued to Tensix is disabled
+    // Brisc does not issue Tensix instructions but to be consistent for all riscs around Tensix we disable it
     // Disable gathering: set bit 18
     asm(R"ASM(
         .option push
@@ -154,7 +154,7 @@ inline __attribute__((always_inline)) void disable_gathering() {
 inline __attribute__((always_inline)) void configure_l1_data_cache() {
 #if defined(ARCH_BLACKHOLE)
 #if defined(DISABLE_L1_DATA_CACHE)
-    // Disables Blackhole's L1 cache. Grayskull and Wormhole do not have L1 cache
+    // Disables Blackhole's L1 cache by setting bit 3. Grayskull and Wormhole do not have L1 cache
     // L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
     // export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR*,ER*>
     asm(R"ASM(
@@ -163,13 +163,32 @@ inline __attribute__((always_inline)) void configure_l1_data_cache() {
              )ASM" ::
             : "t1");
 #elif !defined(ENABLE_HW_CACHE_INVALIDATION)
-    // Disable gathering to stop HW from invalidating the data cache after 128 transactions
+    // Disable gathering to stop HW from invalidating the data cache after 128 transactions by setting bit 24
     // This is default enabled
     asm(R"ASM(
-            lui  t1, 0x40
+            li   t1, 0x1
+            slli t1, t1, 24
+            fence
             csrrs zero, 0x7c0, t1
              )ASM" ::
             : "t1");
 #endif
 #endif
+}
+
+inline __attribute__((always_inline)) void disable_relaxed_memory_ordering() {
+#if defined(ARCH_BLACKHOLE) && defined(DISABLE_RELAXED_MEMORY_ORDERING)
+    // Disable relaxed ordering which allows loads to bypass stores when going to separate addresses (bit 0)
+    asm(R"ASM(
+        li t1, 0x1
+        csrrs zero, 0x7c0, t1
+            )ASM" ::
+            : "t1");
+#endif
+}
+
+inline __attribute__((always_inline)) void configure_csr() {
+    configure_gathering();
+    configure_l1_data_cache();
+    disable_relaxed_memory_ordering();
 }

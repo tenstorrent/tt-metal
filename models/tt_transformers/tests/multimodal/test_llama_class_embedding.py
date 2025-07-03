@@ -2,30 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-##### Python imports #####
-import pytest
-from loguru import logger
 import os
 
-##### PyTorch imports #####
+import pytest
 import torch
 import torch.nn as nn
+from loguru import logger
 
-##### TTNN imports #####
 import ttnn
-from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
-from models.utility_functions import skip_for_grayskull
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import (
-    nearest_32,
-)
-from models.tt_transformers.tt.multimodal.llama_class_embedding import (
-    TtLlamaClassEmbedding,
-)
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.multimodal.llama_class_embedding import TtLlamaClassEmbedding
+from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 ##### Torch op #####
@@ -72,7 +60,6 @@ class ClassEmbedding(nn.Module):
 )
 def test_class_embedding_inference(
     mesh_device,
-    use_program_cache,
     reset_seeds,
     # Input params
     bsz,
@@ -85,18 +72,18 @@ def test_class_embedding_inference(
     pcc_required = 0.9999
 
     model_args = ModelArgs(mesh_device)
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    state_dict = model_args.load_state_dict()
     first_layer_prefix = "vision_model.vision_encoder."
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    ntok = nearest_32(model_args.vision_chunk_ntok)
+    ntok = nearest_32(model_args.vision_chunk_ntok - 1)
     dim = model_args.vision_dim
 
     ##### Prepare inputs #####
     input_tensor = torch.randn(bsz * num_concurrent_media * num_chunks, ntok, dim)
-    logger.info(f"Input tensor shape: {input_tensor.shape}")
+    logger.info(f"Input tensor shape: {input_tensor.shape}, dtype: {input_tensor.dtype}")
 
     tt_input_tensor = ttnn.as_tensor(
         input_tensor.view(1, bsz * num_concurrent_media * num_chunks, ntok, dim),
@@ -106,7 +93,7 @@ def test_class_embedding_inference(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
-    logger.info(f"TT Input tensor shape: {tt_input_tensor.shape}")
+    logger.info(f"TT Input tensor shape: {tt_input_tensor.shape}, dtype: {tt_input_tensor.dtype}")
 
     ##### Perform the torch ops #####
     reference_model = ClassEmbedding(

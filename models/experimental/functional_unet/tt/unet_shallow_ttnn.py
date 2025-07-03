@@ -7,12 +7,14 @@ import torch
 
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, ParameterDict
 
+from ttnn.device import is_wormhole_b0
+
 
 def nearest_16(x):
     return math.ceil(x / 16) * 16
 
 
-def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
+def determine_num_cores_for_upsample(nhw: int, width: int, max_cores: int) -> int:
     gcd_nhw_width = math.gcd(nhw, width)
     cores = nhw // gcd_nhw_width
     if cores > max_cores:
@@ -23,7 +25,7 @@ def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
     return cores
 
 
-def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: int = 8):
+def get_core_grid_from_num_cores(num_cores: int, grid_rows: int, grid_cols: int):
     rows = num_cores // grid_cols
     assert rows <= grid_rows, "Not enough cores for specified core grid"
     ranges = []
@@ -47,32 +49,39 @@ def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: 
 
 
 def is_valid_device_for_unet(device):
-    """Check that each device is an 8x8 grid."""
-    if isinstance(device, ttnn.MeshDevice):
-        return all([is_valid_device_for_unet(d) for d in device.get_devices()])
-    else:
-        return device.core_grid.x == 8 and device.core_grid.y == 8
+    """Check that each device is an 8x8/11x10/13x10 grid."""
+    return (
+        device.core_grid.x == 8 and device.core_grid.y == 8
+        if is_wormhole_b0(device)
+        else (
+            (device.core_grid.x == 13 and device.core_grid.y == 10)
+            or (device.core_grid.x == 11 and device.core_grid.y == 10)
+        )
+    )
 
 
-def preprocess_unet_input_tensor(input_tensor, min_channels=16):
+def preprocess_unet_input_tensor(input_tensor, output_shard_height=2688):
     """
     Pad (if needed) and reshape to [1,1,N*H*W,C] for downstream convolution
     """
-    N, C, H, W = input_tensor.shape
-    if C < min_channels:
-        channel_padding_needed = min_channels - C
-        nchw = ttnn.pad(input_tensor, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
-        ttnn.deallocate(input_tensor)
-    else:
-        nchw = input_tensor
+    assert len(input_tensor.shape), "Expected input tensor to be rank 4 (was {len(input_tensor.shape)})"
 
-    nhwc = ttnn.permute(nchw, (0, 2, 3, 1))  # NCHW -> NHWC
-    ttnn.deallocate(nchw)
+    _, _, C, HW = input_tensor.shape
+    output_core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
+        }
+    )
+    output_shard_shape = (output_shard_height, C)
+    output_shard_spec = ttnn.ShardSpec(output_core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
+    )
+    return ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_memory_config, dtype=ttnn.bfloat16)
 
-    return ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
 
-
-def concatenate(activation, residual, dim=-1, groups=4, final_block=False):
+def concatenate(activation, residual, dim=-1, groups=1, final_block=False):
     """
     Concatenate along the final dimension. The `final_block` flag is used for
     the final upblock where L1 memory pressure is highest.
@@ -134,7 +143,7 @@ class UNetConv2D:
         override_core_grid=None,
         mesh_mapper=None,
     ):
-        assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
+        assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on WH or 10x13/10x11 on BH"
 
         self.device = device
         self.batch_size = conv.batch_size
@@ -171,13 +180,17 @@ class UNetConv2D:
             enable_subblock_padding=False,
             activation=activation,
             output_layout=output_layout,
-            input_channels_alignment=conv.input_channels_alignment if "input_channels_alignment" in conv else 32,
             reshard_if_not_optimal=reshard_if_not_optimal,
             reallocate_halo_output=reallocate_halo_output,
+            enable_weights_double_buffer=True,
         )
 
         if override_core_grid is not None:
-            self.conv_config.core_grid = get_core_grid_from_num_cores(override_core_grid)
+            self.conv_config.core_grid = get_core_grid_from_num_cores(
+                override_core_grid,
+                grid_rows=8 if is_wormhole_b0(self.device) else 13,
+                grid_cols=8 if is_wormhole_b0(self.device) else 10,
+            )
             self.conv_config.override_sharding_config = True
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -211,7 +224,7 @@ class UNetConv2D:
             "stride": self.stride,
             "padding": self.padding,
             "dilation": [1, 1],
-            "groups": 4,
+            "groups": self.groups,
             "device": self.device,
             "conv_config": self.conv_config,
         }
@@ -328,8 +341,14 @@ class UNetUpblock:
         # Need to reshape into (B, H, W, C) to get correct output from ttnn.upsample
         x = ttnn.reshape(x, (self.batch_size, self.input_height // 2, self.input_width // 2, x.shape[-1]))
         nhw = x.shape[0] * x.shape[1] * x.shape[2]
-        num_cores = determine_num_cores_for_upsample(nhw, x.shape[2])
-        core_grid = get_core_grid_from_num_cores(num_cores)
+        num_cores = determine_num_cores_for_upsample(
+            nhw, x.shape[2], max_cores=64 if is_wormhole_b0(self.device) else 130
+        )
+        core_grid = get_core_grid_from_num_cores(
+            num_cores,
+            grid_rows=8 if is_wormhole_b0(self.device) else 13,
+            grid_cols=8 if is_wormhole_b0(self.device) else 10,
+        )
         shardspec = ttnn.create_sharded_memory_config_(
             x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
         )
@@ -337,7 +356,7 @@ class UNetUpblock:
         if not x.is_sharded():
             x = ttnn.interleaved_to_sharded(x, shardspec)
 
-        upsampled = ttnn.upsample(x, (2, 2), memory_config=x.memory_config())
+        upsampled = ttnn.upsample(x, (2, 2))  # , memory_config=x.memory_config())
         ttnn.deallocate(x)
         return ttnn.reshape(
             upsampled,
@@ -354,7 +373,11 @@ class UNetUpblock:
         ttnn.deallocate(x_rm)
 
         if not residual_rm.is_sharded():
-            core_grid = get_core_grid_from_num_cores(x_upsampled.memory_config().shard_spec.num_cores())
+            core_grid = get_core_grid_from_num_cores(
+                x_upsampled.memory_config().shard_spec.num_cores(),
+                grid_rows=8 if is_wormhole_b0(self.device) else 13,
+                grid_cols=8 if is_wormhole_b0(self.device) else 10,
+            )
             mem_cfg = ttnn.create_sharded_memory_config_(
                 residual_rm.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
             )
@@ -362,7 +385,7 @@ class UNetUpblock:
             ttnn.deallocate(residual_rm)
             residual_rm = new_resid
 
-        y = concatenate(x_upsampled, residual_rm, dim=-1, final_block=self.final_block)
+        y = concatenate(x_upsampled, residual_rm, dim=-1, groups=self.conv1.groups, final_block=self.final_block)
         ttnn.deallocate(x_upsampled)
         ttnn.deallocate(residual_rm)
 
@@ -387,8 +410,8 @@ class UNet:
             parameters.b1_2,
             parameters.p1,
             device,
-            override_core_grid=63,
-            reshard_if_not_optimal=False,
+            override_core_grid=63 if is_wormhole_b0(self.device) else None,
+            reshard_if_not_optimal=not is_wormhole_b0(self.device),
             mesh_mapper=mesh_mapper,
         )
         self.downblock2 = UNetDownblock(
@@ -464,8 +487,8 @@ class UNet:
             parameters.c7_3,
             parameters.b7_3,
             device,
-            override_core_grid=63,
-            reshard_if_not_optimal=False,
+            override_core_grid=63 if is_wormhole_b0(self.device) else None,
+            reshard_if_not_optimal=not is_wormhole_b0(self.device),
             final_block=False,
             mesh_mapper=mesh_mapper,
         )
@@ -490,20 +513,28 @@ class UNet:
             activation_dtype=ttnn.bfloat16,
         )
 
-        INPUT_TENSOR_SHAPE = [1, 16, 1056, 160]
-        self.input_sharded_memory_config = ttnn.create_sharded_memory_config(
-            INPUT_TENSOR_SHAPE,
-            ttnn.CoreGrid(x=8, y=6),
-            ttnn.ShardStrategy.HEIGHT,
-        )
+    input_core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
+        }
+    )
+    input_shard_shape = (16, 2688)
+    input_shard_spec = ttnn.ShardSpec(input_core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_sharded_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec
+    )
 
     def bottleneck(self, x):
         x = self.bnc(x)
         x = self.bnc2(x)
         return x
 
-    def preprocess_input_tensor(self, x):
-        return preprocess_unet_input_tensor(x, min_channels=16)
+    def preprocess_input_tensor(self, x, deallocate_input_activation):
+        out = preprocess_unet_input_tensor(x)
+        if deallocate_input_activation:
+            ttnn.deallocate(x)  # Some use-cases have a persistent input tensor that we don't want to delete
+        return out
 
     def postprocess_output_tensor(self, x):
         # Convert the output tensor (in TILE layout) to RM to prevent transferring padding back to host.
@@ -520,13 +551,25 @@ class UNet:
         )
         return ttnn.experimental.convert_to_chw(x, memory_config=output_memory_config, dtype=ttnn.bfloat16)
 
-    def __call__(self, x, move_input_tensor_to_device=True):
+    def __call__(self, x, move_input_tensor_to_device=True, deallocate_input_activation=True):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"
 
         if move_input_tensor_to_device:
+            assert (
+                x.storage_type() == ttnn.StorageType.HOST
+            ), "Expected UNet input tensor to be on host if move_input_tensor_to_device=True"
+            B, C, H, W = x.shape
+            x = ttnn.reshape(x, [1, 1, C, H * W])  # Reshape so we can width-shard along inner-dim
             x = ttnn.to_device(x, device=self.device, memory_config=self.input_sharded_memory_config)
+        else:
+            assert (
+                x.storage_type() == ttnn.StorageType.DEVICE
+            ), "Expected UNet input tensor to be on device if move_input_tensor_to_device=False"
 
-        x = self.preprocess_input_tensor(x)
+        x = self.preprocess_input_tensor(
+            x, deallocate_input_activation=deallocate_input_activation or move_input_tensor_to_device
+        )
+
         x, c1_res = self.downblock1(x)
         x, c2_res = self.downblock2(x)
         x, c3_res = self.downblock3(x)

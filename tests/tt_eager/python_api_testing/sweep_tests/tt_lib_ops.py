@@ -368,7 +368,6 @@ def mean_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.mean(t0, [2, 3], memory_config=output_mem_config)
     output = tt2torch_tensor(t1)
-    output = output[:, :, 0, 0]
 
     return output
 
@@ -1254,7 +1253,6 @@ def arange(
 def prod(
     x,
     *args,
-    all_dimensions,
     dim,
     keepdim,
     device,
@@ -1264,15 +1262,12 @@ def prod(
     output_mem_config,
     **kwargs,
 ):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.prod(t0, all_dimensions, dim, keepdim=keepdim, memory_config=output_mem_config)
+    t0 = ttnn.from_torch(x, device=device, layout=layout[0], memory_config=input_mem_config[0], dtype=dtype[0])
+    t1 = ttnn.prod(t0, dim, keepdim=keepdim, memory_config=output_mem_config)
     output_tensor = ttnn.from_device(t1)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
-    if all_dimensions:
-        return output_tensor[:1, :1, :1, :1]
-    else:
-        return output_tensor
+    return output_tensor
 
 
 @setup_host_and_device
@@ -1549,8 +1544,7 @@ def reduce_sum_h(x, *args, device, dtype, layout, input_mem_config, output_mem_c
     t1 = ttnn.sum(t0, 2, memory_config=output_mem_config)
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1, :]
+    return output
 
 
 @setup_host_and_device
@@ -1560,8 +1554,7 @@ def reduce_sum_w(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :, :1]
+    return output
 
 
 @setup_host_and_device
@@ -1571,8 +1564,7 @@ def reduce_sum_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1, :1]
+    return output
 
 
 @setup_host_and_device
@@ -1582,8 +1574,7 @@ def reduce_max_h(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1, :]
+    return output
 
 
 @setup_host_and_device
@@ -1593,8 +1584,7 @@ def reduce_max_w(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1]
+    return output
 
 
 @setup_host_and_device
@@ -1604,8 +1594,7 @@ def reduce_max_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1, :1]
+    return output
 
 
 @setup_host_and_device
@@ -1615,8 +1604,7 @@ def reduce_min_h(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1, :]
+    return output
 
 
 @setup_host_and_device
@@ -1626,8 +1614,7 @@ def reduce_min_w(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1]
+    return output
 
 
 @setup_host_and_device
@@ -1637,8 +1624,7 @@ def reduce_min_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1, :1]
+    return output
 
 
 @setup_host_and_device
@@ -1649,10 +1635,6 @@ def sum(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_confi
 
     output = tt2torch_tensor(t1)
 
-    if dim == 2:
-        output = output[:, :, :1, :]
-    elif dim == 3:
-        output = output[:, :, :, :1]
     return output
 
 

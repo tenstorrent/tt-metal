@@ -16,6 +16,10 @@ from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
 
 def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
+    if gamma is None:
+        gamma = torch.ones(x.shape[-1])
+    if beta is None:
+        beta = torch.zeros(x.shape[-1])
     if is_rmsnorm:
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + epsilon) * gamma
     else:
@@ -47,7 +51,15 @@ def tt_distributed_layernorm(inp, gamma, beta, epsilon, is_rmsnorm, compute_kern
 
 
 def run_distributed_layernorm(
-    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, mesh_device, fp32_enabled=False, iterations=1
+    inp_shape,
+    n_devices,
+    is_rmsnorm,
+    dtype,
+    stats_dtype,
+    mesh_device,
+    has_weights=True,
+    fp32_enabled=False,
+    iterations=1,
 ):
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
@@ -66,9 +78,6 @@ def run_distributed_layernorm(
     inp_chunked = canon_inp.chunk(n_devices, dim=-1)
     epsilon = 1e-5
 
-    # reference impl
-    out_torch = reference_layernorm(canon_inp, gamma, beta, epsilon, is_rmsnorm)
-
     tt_inp = ttnn.as_tensor(
         canon_inp,
         dtype=dtype,
@@ -77,7 +86,6 @@ def run_distributed_layernorm(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ShardTensorToMesh(mesh_device, dim=-1),
     )
-
     tt_gamma = ttnn.as_tensor(
         gamma.reshape(n_devices, 1, -1, 32),
         dtype=ttnn.bfloat16,
@@ -95,11 +103,20 @@ def run_distributed_layernorm(
         mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
     )
 
+    if not has_weights:
+        gamma = None
+        beta = None
+        tt_gamma = None
+        tt_beta = None
+
     for i in range(iterations):
         tt_out = tt_distributed_layernorm(
             tt_inp, tt_gamma, tt_beta, epsilon, is_rmsnorm, compute_kernel_config, stats_dtype
         )
         tt_output_host = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
+
+    # reference impl
+    out_torch = reference_layernorm(canon_inp, gamma, beta, epsilon, is_rmsnorm)
 
     passing, output_str = comp_allclose(tt_output_host, out_torch, rtol=1e-1, atol=1e-01)
     logger.debug(f"torch vs tt distributed layernorm = {output_str}")
@@ -125,12 +142,21 @@ rms_norm_parametrization_ids = ["rmsnorm", "layernorm"]
 
 
 def run_test_distributed_layernorm_with_program_cache_and_checks(
-    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, mesh_device, use_program_cache, iterations
+    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, mesh_device, iterations, has_weights=True
 ):
     if mesh_device.get_num_devices() < n_devices:
         pytest.skip("Not T3000!")
 
-    run_distributed_layernorm(inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, mesh_device, iterations=iterations)
+    run_distributed_layernorm(
+        inp_shape,
+        n_devices,
+        is_rmsnorm,
+        dtype,
+        stats_dtype,
+        mesh_device,
+        has_weights=has_weights,
+        iterations=iterations,
+    )
 
     assert mesh_device.num_program_cache_entries() == 3, "Program cache should have only 3 entries, but has " + str(
         mesh_device.num_program_cache_entries()
@@ -145,10 +171,10 @@ def run_test_distributed_layernorm_with_program_cache_and_checks(
 @pytest.mark.parametrize("n_devices", [8])
 @pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
 def test_distributed_layernorm_with_program_cache(
-    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, t3k_mesh_device, use_program_cache
+    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, t3k_mesh_device
 ):
     run_test_distributed_layernorm_with_program_cache_and_checks(
-        inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, t3k_mesh_device, use_program_cache, iterations=iterations
+        inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, t3k_mesh_device, iterations=iterations
     )
 
 
@@ -159,9 +185,19 @@ def test_distributed_layernorm_with_program_cache(
 @pytest.mark.parametrize("inp_shape", inp_shapes, ids=inp_shape_ids)
 @pytest.mark.parametrize("n_devices", [4])
 @pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
+@pytest.mark.parametrize("has_weights", [True, False], ids=["has_weights", "no_weights"])
 def test_distributed_layernorm_with_program_cache_4chip(
-    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, pcie_mesh_device, use_program_cache
+    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, pcie_mesh_device, has_weights
 ):
+    if not has_weights and is_rmsnorm:
+        pytest.skip("RMSNorm does not support no weights")
     run_test_distributed_layernorm_with_program_cache_and_checks(
-        inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, pcie_mesh_device, use_program_cache, iterations=iterations
+        inp_shape,
+        n_devices,
+        is_rmsnorm,
+        dtype,
+        stats_dtype,
+        pcie_mesh_device,
+        iterations=iterations,
+        has_weights=has_weights,
     )

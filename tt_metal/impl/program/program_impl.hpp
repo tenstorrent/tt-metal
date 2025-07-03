@@ -2,19 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "program_command_sequence.hpp"
 
 #include "tt-metalium/buffer.hpp"
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_constants.h"
-#include "tt-metalium/circular_buffer_types.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
+#include "dev_msgs.h"                          // DISPATCH_CLASS_MAX
 #include "tt-metalium/hal_types.hpp"           // HalProgrammableCoreType
 #include "tt-metalium/kernel.hpp"              // Kernel
 #include "tt-metalium/kernel_types.hpp"        // KernelHandle
 #include "tt-metalium/program.hpp"             // KernelGroup
-#include "tt-metalium/program_device_map.hpp"  // ProgramTransferInfo
+#include "program_device_map.hpp"              // ProgramTransferInfo
 #include "tt-metalium/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 
@@ -32,6 +35,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <tt_stl/span.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -44,9 +48,90 @@ namespace experimental {
 class GlobalCircularBuffer;
 }
 
+namespace program_dispatch {
+
+void assemble_device_commands(
+    ProgramCommandSequence& program_command_sequence,
+    detail::ProgramImpl& program,
+    IDevice* device,
+    SubDeviceId sub_device_id,
+    bool use_prefetcher_cache);
+}
+
+using kernel_id_array_t = std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX>;
+
+struct KernelGroup {
+    uint32_t programmable_core_type_index;
+    CoreRangeSet core_ranges;
+    kernel_id_array_t kernel_ids;
+    uint32_t rta_sizes[DISPATCH_CLASS_MAX];
+    uint32_t total_rta_size;
+    uint32_t kernel_text_offsets[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint32_t kernel_bin_sizes[NUM_PROCESSORS_PER_CORE_TYPE];
+    launch_msg_t launch_msg;
+    go_msg_t go_msg;
+
+    KernelGroup();
+    KernelGroup(
+        const detail::ProgramImpl& program,
+        uint32_t programmable_core_type_index,
+        kernel_id_array_t kernel_ids,
+        bool erisc_is_idle,
+        uint32_t max_local_cb_end_index,
+        uint32_t min_remote_cb_start_index,
+        const CoreRangeSet& new_ranges);
+
+    uint32_t get_programmable_core_type_index() const;
+
+    CoreType get_core_type() const;
+};
+
+// Contains the program's worker memory map
+struct ProgramConfig {
+    uint32_t rta_offset;
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
+    uint32_t sem_offset;
+    uint32_t sem_size;
+    uint32_t cb_offset;
+    uint32_t cb_size;
+    uint32_t local_cb_size;
+    uint32_t kernel_text_offset;  // offset of first kernel bin
+    uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
+};
+
 namespace detail {
 
-class ProgramImpl {
+struct ProgramOffsetsState {
+    // Base offset for Program Configs across all core types, wrt kernel config slot start address
+    uint32_t config_base_offset = 0;
+    // Incremental offset. Will correspond to the size of the program config per core, once the
+    // program is finalized.
+    uint32_t offset = 0;
+    // Unique RTA offset.
+    uint32_t rta_offset = 0;
+    // Common RTA offsets and sizes.
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
+    // Semaphore offsets and sizes.
+    uint32_t sem_offset = 0;
+    uint32_t sem_size = 0;
+    // CB offsets and sizes.
+    uint32_t cb_offset = 0;
+    uint32_t cb_size = 0;
+    uint32_t local_cb_size = 0;
+    // Kernel binary offsets and sizes.
+    uint32_t kernel_text_offset = 0;
+    uint32_t kernel_text_size = 0;
+};
+
+// Callable types for dependency injection
+using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
+using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
+using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
+
+// The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
+class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {
 public:
     ProgramImpl();
 
@@ -56,7 +141,7 @@ public:
     ProgramImpl(ProgramImpl&& other) = default;
     ProgramImpl& operator=(ProgramImpl&& other) = default;
 
-    ~ProgramImpl() noexcept = default;
+    ~ProgramImpl() noexcept;
 
     void set_runtime_id(uint64_t id);
     uint64_t get_runtime_id() const;
@@ -95,12 +180,14 @@ public:
     }
     void set_cached(uint64_t device_hash) { this->cached_device_hash_ = device_hash; }
     const std::optional<uint64_t>& get_cached() const { return this->cached_device_hash_; }
-    void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) {
-        this->binaries_on_device_[device_id] = status;
-    }
+    void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
+    const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
     const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
+
+    void generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
+    std::unordered_map<uint64_t, ProgramCommandSequence>& get_trace_cached_program_command_sequences() noexcept;
 
     // debug/test
     uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
@@ -108,6 +195,20 @@ public:
     void set_last_used_command_queue_for_testing(CommandQueue* queue);
     CommandQueue* get_last_used_command_queue() const;
     void populate_dispatch_data(IDevice* device);
+
+    void finalize_offsets(IDevice* device);
+
+    // Helper function to finalize program offsets with custom getters. Returns the maximum kernel binaries size among
+    // all the programs, to determine whether the mesh workload can fit in the prefetcher cache all of the programs in
+    // it.
+    static uint32_t finalize_program_offsets(
+        IDevice* device,
+        const KernelsGetter& kernels_getter,
+        const KernelGroupsGetter& kernel_groups_getter,
+        const SemaphoresGetter& semaphores_getter,
+        tt::stl::Span<ProgramImpl*> programs);
+
+    std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
@@ -152,7 +253,7 @@ private:
         // Reset when circular buffer allocation is invalidated
         void reset_available_addresses() { this->l1_regions.clear(); }
     };
-
+    uint32_t programmable_core_count_;
     uint64_t id;  // Need to make non-const due to move constructor
     uint64_t runtime_id;
     static std::atomic<uint64_t> program_counter;
@@ -183,14 +284,17 @@ private:
     // Counts how much space is needed for each core + each launch buffer msg queue.
     std::vector<uint32_t> program_config_sizes_;
 
+    uint32_t kernel_bins_sizeB = 0;
+
     // The rta_updates from one cached command sequence may reference data in another cached command sequence.
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
+    std::unordered_map<uint64_t, ProgramCommandSequence> trace_cached_program_command_sequences_;
 
     friend std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program& program, CBHandle id);
     friend void ValidateCircularBufferRegion(const Program& program, const IDevice* device);
 
     friend KernelHandle AddKernel(
-        Program& program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type);
+        Program& program, const std::shared_ptr<Kernel>& kernel, HalProgrammableCoreType core_type);
 
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
 
@@ -222,10 +326,25 @@ private:
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
     bool kernel_binary_always_stored_in_ringbuffer();
+    void set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state);
+    void set_program_attrs_across_core_types(IDevice* device);
 
+    const ProgramTransferInfo& get_program_transfer_info() const noexcept;
+    std::shared_ptr<Buffer> get_kernels_buffer(IDevice* device) const noexcept;
+
+    friend void program_dispatch::assemble_device_commands(
+        ProgramCommandSequence& program_command_sequence,
+        ProgramImpl& program,
+        IDevice* device,
+        SubDeviceId sub_device_id,
+        bool use_prefetcher_cache);
+
+    friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend Program;
     friend Internal_;
+    friend distributed::MeshWorkload;
+    friend distributed::MeshWorkloadImpl;
 };
 
 }  // namespace detail

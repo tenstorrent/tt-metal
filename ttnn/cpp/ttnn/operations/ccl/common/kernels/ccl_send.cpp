@@ -4,16 +4,16 @@
 
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
-#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include <tt-metalium/buffer_types.hpp>
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_device.hpp"
-#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
-#include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
+#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_device.hpp"
+#include "ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
+#include "ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 #include "debug/dprint.h"
-#include "cpp/ttnn/tensor/enum_types.hpp"
+#include "api/ttnn/tensor/enum_types.hpp"
 #include <cstdint>
 
 using ttnn::ccl::coord_t;

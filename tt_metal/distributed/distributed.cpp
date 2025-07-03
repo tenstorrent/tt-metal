@@ -8,8 +8,9 @@
 #include "device.hpp"
 #include "mesh_device.hpp"
 #include "mesh_trace.hpp"
+#include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
-#include "system_memory_manager.hpp"
+#include "dispatch/system_memory_manager.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -21,9 +22,9 @@ void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, co
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
     if (mesh_cq.device()->using_fast_dispatch()) {
-        mesh_workload.compile(mesh_cq.device());
-        mesh_workload.load_binaries(mesh_cq);
-        mesh_workload.generate_dispatch_commands(mesh_cq);
+        mesh_workload.impl().compile(mesh_cq.device());
+        mesh_workload.impl().load_binaries(mesh_cq);
+        mesh_workload.impl().generate_dispatch_commands(mesh_cq);
     }
     mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
 }
@@ -52,6 +53,14 @@ void EventSynchronize(const MeshEvent& event) {
         auto physical_device = event.device()->get_device(coord);
         while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id());
     }
+}
+
+bool EventQuery(const MeshEvent& event) {
+    const auto& mesh_device = event.device();
+    const auto& device_range = event.device_range();
+    auto& sysmem_manager = mesh_device->get_device(*(device_range.begin()))->sysmem_manager();
+    bool event_completed = sysmem_manager.get_last_completed_event(event.mesh_cq_id()) >= event.id();
+    return event_completed;
 }
 
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {

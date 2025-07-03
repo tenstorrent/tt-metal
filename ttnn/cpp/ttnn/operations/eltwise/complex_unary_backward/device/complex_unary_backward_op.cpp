@@ -42,8 +42,7 @@ std::vector<ComplexTensor> _polar_bw(
         output_mem_config);
     sgn_result.deallocate();
     ComplexTensor flip_tensor = ComplexTensor(
-        {ttnn::zeros_like(
-             input.real(), input.real().get_dtype(), input.real().get_layout(), std::nullopt, output_mem_config),
+        {ttnn::zeros_like(input.real(), input.real().dtype(), input.real().layout(), std::nullopt, output_mem_config),
          ttnn::ones_like(input.imag())});
     Tensor grad_angle = ttnn::real(
         ttnn::operations::complex_binary::_mul(
@@ -66,8 +65,7 @@ std::vector<ComplexTensor> _imag_bw(
     const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
     Tensor real_input = ttnn::real(input, output_mem_config);
-    Tensor r =
-        ttnn::zeros_like(real_input, real_input.get_dtype(), real_input.get_layout(), std::nullopt, output_mem_config);
+    Tensor r = ttnn::zeros_like(real_input, real_input.dtype(), real_input.layout(), std::nullopt, output_mem_config);
     ComplexTensor grad_result = ComplexTensor({r, grad});
     r.deallocate();
     grad_tensor.emplace_back(grad_result);
@@ -80,8 +78,7 @@ std::vector<ComplexTensor> _real_bw(
     const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
     Tensor real_input = ttnn::real(input, output_mem_config);
-    Tensor i =
-        ttnn::zeros_like(real_input, real_input.get_dtype(), real_input.get_layout(), std::nullopt, output_mem_config);
+    Tensor i = ttnn::zeros_like(real_input, real_input.dtype(), real_input.layout(), std::nullopt, output_mem_config);
     ComplexTensor grad_result = ComplexTensor({grad, i});
     i.deallocate();
     grad_tensor.emplace_back(grad_result);

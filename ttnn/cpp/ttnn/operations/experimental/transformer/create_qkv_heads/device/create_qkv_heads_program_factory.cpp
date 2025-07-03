@@ -25,13 +25,13 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
     TT_FATAL(heads_per_group.size() == output.size() && output.size() == 3, "Error");
 
     const uint32_t total_heads_per_group =
-        std::accumulate(heads_per_group.begin(), heads_per_group.end(), 0);  // num q heads + 2 * num_kv_heads
+        std::accumulate(heads_per_group.begin(), heads_per_group.end(), 0u);  // num q heads + 2 * num_kv_heads
     const uint32_t elements_per_group =
         head_dim * total_heads_per_group;  // head_dim * (num q heads + 2 * num kv heads)
     const uint32_t tiles_per_group =
         elements_per_group / TILE_WIDTH;  // head_dim % TILE_WIDTH == 0 so guaranteed to fit evenly
 
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     TT_FATAL(
         input_shape[3] % elements_per_group == 0,
@@ -90,7 +90,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
     uint32_t per_core_tiles = block_ht * block_wt;
 
     const uint32_t l1_size = input_tensor.device()->l1_size_per_core();
-    auto data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    auto data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tile_size(data_format);
     TT_FATAL(
         l1_size >= 2 * per_core_tiles * single_tile_size,

@@ -17,15 +17,13 @@ namespace tt_metal {
 // Once it knows the architecture it can self initialize architecture specific memory maps
 Hal::Hal(tt::ARCH arch, bool is_base_routing_fw_enabled) : arch_(arch) {
     switch (this->arch_) {
-        case tt::ARCH::GRAYSKULL: /*TT_THROW("Unsupported arch for HAL")*/; break;
-
         case tt::ARCH::WORMHOLE_B0: initialize_wh(is_base_routing_fw_enabled); break;
 
         case tt::ARCH::BLACKHOLE: initialize_bh(); break;
 
         case tt::ARCH::QUASAR: TT_THROW("HAL doesn't support Quasar"); break;
 
-        case tt::ARCH::Invalid: /*TT_THROW("Unsupported arch for HAL")*/; break;
+        default: /*TT_THROW("Unsupported arch for HAL")*/; break;
     }
 }
 
@@ -41,13 +39,10 @@ uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programma
     }
 }
 
-uint32_t Hal::get_num_risc_processors() const {
+uint32_t Hal::get_total_num_risc_processors() const {
     uint32_t num_riscs = 0;
     for (uint32_t core_idx = 0; core_idx < core_info_.size(); core_idx++) {
-        uint32_t num_processor_classes = core_info_[core_idx].get_processor_classes_count();
-        for (uint32_t processor_class_idx = 0; processor_class_idx < num_processor_classes; processor_class_idx++) {
-            num_riscs += core_info_[core_idx].get_processor_types_count(processor_class_idx);
-        }
+        num_riscs += this->get_num_risc_processors(this->core_info_[core_idx].programmable_core_type_);
     }
     return num_riscs;
 }
@@ -58,6 +53,7 @@ HalCoreInfoType::HalCoreInfoType(
     const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
     const std::vector<DeviceAddr>& mem_map_bases,
     const std::vector<uint32_t>& mem_map_sizes,
+    const std::vector<uint32_t>& eth_fw_mailbox_msgs,
     bool supports_cbs,
     bool supports_receiving_multicast_cmds) :
     programmable_core_type_(programmable_core_type),
@@ -65,6 +61,7 @@ HalCoreInfoType::HalCoreInfoType(
     processor_classes_(processor_classes),
     mem_map_bases_(mem_map_bases),
     mem_map_sizes_(mem_map_sizes),
+    eth_fw_mailbox_msgs_{eth_fw_mailbox_msgs},
     supports_cbs_(supports_cbs),
     supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds) {}
 

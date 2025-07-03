@@ -21,7 +21,7 @@ from models.utility_functions import is_wormhole_b0, is_blackhole
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
-def test_bert_for_question_answering(device, use_program_cache, model_name, batch_size, sequence_size):
+def test_bert_for_question_answering(device, model_name, batch_size, sequence_size):
     torch.manual_seed(1234)
 
     config = transformers.BertConfig.from_pretrained(model_name)

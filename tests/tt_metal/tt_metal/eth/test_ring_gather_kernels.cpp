@@ -29,10 +29,9 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
@@ -131,6 +130,10 @@ std::vector<std::tuple<tt_metal::IDevice*, tt_metal::IDevice*, CoreCoord, CoreCo
         const auto& second_device = device_ring[1];
         uint32_t i = 0;
         for (const auto& first_eth_core : first_device->get_active_ethernet_cores(true)) {
+            if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                    first_device->id(), first_eth_core)) {
+                continue;
+            }
             auto [device_id, second_eth_core] = first_device->get_connected_ethernet_core(first_eth_core);
             if (second_device->id() == device_id) {
                 tt_metal::IDevice *sender_device, *receiver_device;
@@ -161,6 +164,10 @@ std::vector<std::tuple<tt_metal::IDevice*, tt_metal::IDevice*, CoreCoord, CoreCo
             const auto& sender_device = device_ring[i];
             const auto& receiver_device = device_ring[i + 1];
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+                if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                        sender_device->id(), sender_eth_core)) {
+                    continue;
+                }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() == device_id) {
                     sender_receivers.push_back({sender_device, receiver_device, sender_eth_core, receiver_eth_core});

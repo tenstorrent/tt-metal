@@ -12,11 +12,11 @@
 #include <cstddef>
 
 #include "assert.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "shape_base.hpp"
-#include "small_vector.hpp"
+#include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 #include "tt_metal/distributed/coordinate_translation.hpp"
 
@@ -30,9 +30,11 @@ public:
     Impl();
 
     const MeshShape& get_shape() const;
+    MeshCoordinate get_global_device_coordinate(int physical_device_id) const;
     std::vector<chip_id_t> get_mapped_physical_device_ids(
         const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
     chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;
+    uint32_t get_physical_mesh_id(const MeshCoordinate& coord) const;
 };
 
 // Implementation of public methods
@@ -51,21 +53,20 @@ SystemMesh::Impl::Impl() : physical_coordinates_(get_system_mesh_coordinate_tran
 const MeshShape& SystemMesh::Impl::get_shape() const { return physical_coordinates_.shape(); }
 
 chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) const {
-    const MeshShape& system_shape = this->get_shape();
-    TT_FATAL(
-        coord.dims() == system_shape.dims(),
-        "Coordinate dimensions mismatch: {} != {}",
-        coord.dims(),
-        system_shape.dims());
-    for (size_t i = 0; i < coord.dims(); ++i) {
-        TT_FATAL(
-            coord[i] < system_shape[i],
-            "Coordinate at index {} out of bounds; mesh shape {}, coordinate {}",
-            i,
-            system_shape,
-            coord);
-    }
     return physical_coordinates_.at(coord).chip_id();
+}
+
+uint32_t SystemMesh::Impl::get_physical_mesh_id(const MeshCoordinate& coord) const {
+    return *physical_coordinates_.at(coord).mesh_id();
+}
+
+MeshCoordinate SystemMesh::Impl::get_global_device_coordinate(int physical_device_id) const {
+    for (const auto& [logical_coordinate, physical_mesh_coordinate] : physical_coordinates_) {
+        if (physical_mesh_coordinate.chip_id() == physical_device_id) {
+            return logical_coordinate;
+        }
+    }
+    TT_THROW("Physical device ID {} not found in the system mesh", physical_device_id);
 }
 
 std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
@@ -95,16 +96,19 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
     }();
 
     if (is_line_topology(shape)) {
-        TT_FATAL(
-            std::all_of(system_offset.coords().begin(), system_offset.coords().end(), [](int dim) { return dim == 0; }),
-            "Offsets are unsupported for a line mesh");
-
         // TODO: consider if we can do this in 3D.
         TT_FATAL(system_shape.dims() == 2, "Line topology is only supported for 2D meshes");
-        Shape2D shape_2d(system_shape[0], system_shape[1]);
+        TT_FATAL(
+            system_shape[0] > system_offset[0] && system_shape[1] > system_offset[1],
+            "The specifed offset {} is out of bounds for the system mesh shape {}",
+            system_offset,
+            system_shape);
+        Shape2D system_mesh_2d(system_shape[0], system_shape[1]);
+        Shape2D system_offset_2d(system_offset[0], system_offset[1]);
 
         auto line_length = shape.mesh_size();
-        for (const auto& logical_coordinate : MeshDeviceView::get_line_coordinates(line_length, shape_2d)) {
+        for (const auto& logical_coordinate :
+             MeshDeviceView::get_line_coordinates(line_length, system_mesh_2d, system_offset_2d)) {
             auto physical_device_id = get_physical_device_id(logical_coordinate);
             physical_device_ids.push_back(physical_device_id);
 
@@ -186,7 +190,15 @@ chip_id_t SystemMesh::get_physical_device_id(const MeshCoordinate& coord) const 
     return pimpl_->get_physical_device_id(coord);
 }
 
+uint32_t SystemMesh::get_physical_mesh_id(const MeshCoordinate& coord) const {
+    return pimpl_->get_physical_mesh_id(coord);
+}
+
 const MeshShape& SystemMesh::get_shape() const { return pimpl_->get_shape(); }
+
+MeshCoordinate SystemMesh::get_global_device_coordinate(int physical_device_id) const {
+    return pimpl_->get_global_device_coordinate(physical_device_id);
+}
 
 std::vector<chip_id_t> SystemMesh::get_mapped_physical_device_ids(
     const MeshShape& shape, const std::optional<MeshCoordinate>& offset) const {

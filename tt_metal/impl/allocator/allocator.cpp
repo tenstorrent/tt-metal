@@ -12,7 +12,7 @@
 #include "assert.hpp"
 #include "buffer_types.hpp"
 #include "impl/allocator/bank_manager.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/xy_pair.h>
 
 namespace tt {
@@ -95,6 +95,7 @@ void Allocator::verify_safe_allocation() const {
     thread_local static bool warning_generated = false;
     if (allocations_unsafe_ and not warning_generated) {
         log_warning(
+            tt::LogMetal,
             "Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be "
             "corrupted once a trace is executed.");
         warning_generated = true;
@@ -107,26 +108,26 @@ DeviceAddr Allocator::allocate_buffer(Buffer* buffer) {
     auto page_size = buffer->aligned_page_size();
     auto buffer_type = buffer->buffer_type();
     auto bottom_up = buffer->bottom_up();
-    auto num_shards = buffer->num_cores();
+    auto num_cores = buffer->num_cores();
     this->verify_safe_allocation();
     if (config_.disable_interleaved) {
-        TT_FATAL(num_shards.has_value(), "Interleaved allocation is disabled, see validate_num_banks");
+        TT_FATAL(num_cores.has_value(), "Interleaved allocation is disabled, see validate_num_banks");
     }
     switch (buffer_type) {
         case BufferType::DRAM:
-            address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_shards);
+            address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_cores);
             break;
         case BufferType::L1:
-            address = l1_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_shards);
+            address = l1_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_cores);
             break;
         case BufferType::L1_SMALL: {
-            TT_FATAL(num_shards.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");
-            address = l1_small_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_shards);
+            TT_FATAL(num_cores.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");
+            address = l1_small_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_cores);
             break;
         }
         case BufferType::TRACE:
             address =
-                trace_buffer_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_shards);
+                trace_buffer_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_cores);
             break;
         default: {
             TT_THROW("Unsupported buffer type!");

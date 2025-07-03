@@ -2,29 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+import hashlib
 import json
-from time import time
-from datetime import datetime
-from loguru import logger
-import os
-import ttnn
 import math
+import os
+from datetime import datetime
+from pathlib import Path
+from time import time
+
 import pytest
 import requests
-from pathlib import Path
-import hashlib
-
-from models.demos.qwen.tt.qwen_common import (
-    get_single_rot_mat,
-    get_rot_transformation_mat,
-    HostEmbedding,
-)
-from models.demos.qwen.tt.qwen_model import TtTransformer
-from models.demos.qwen.tt.qwen_embedding import TtQwenEmbedding
-
-from models.perf.benchmarking_utils import BenchmarkProfiler
+import torch
+from loguru import logger
 from transformers import AutoTokenizer
+
+import ttnn
+from models.demos.qwen.tt.qwen_common import HostEmbedding, get_rot_transformation_mat, get_single_rot_mat
+from models.demos.qwen.tt.qwen_embedding import TtQwenEmbedding
+from models.demos.qwen.tt.qwen_model import TtTransformer
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 def load_and_cache_context(context_url, cache_dir):
@@ -691,9 +687,7 @@ def run_qwen_demo(
     ],
     indirect=True,
 )
-def test_qwen_demo(
-    mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches, single_layer, reset_seeds
-):
+def test_qwen_demo(mesh_device, input_prompts, instruct_weights, is_ci_env, num_batches, single_layer, reset_seeds):
     if is_ci_env and (instruct_weights == False or "long" in input_prompts or single_layer == True):
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
 

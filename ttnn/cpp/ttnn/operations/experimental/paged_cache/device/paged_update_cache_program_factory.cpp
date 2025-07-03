@@ -40,10 +40,10 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
 
     tt_metal::IDevice* device = input_tensor.device();
 
-    tt::DataFormat cache_cb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor.get_dtype());
+    tt::DataFormat cache_cb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor.dtype());
     uint32_t cache_single_tile_size = tt_metal::detail::TileSize(cache_cb_data_format);
 
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
 
     bool fp32_dest_acc_en = enable_fp32_dest(device, compute_kernel_config, input_cb_data_format);
@@ -61,7 +61,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
     bool index_is_dram = true;
     if (use_index_tensor) {
         index_buffer_addr = use_index_tensor ? update_idxs_tensor.value().buffer()->address() : 0;
-        index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().get_dtype());
+        index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().dtype());
         index_tensor_tile_size = tt_metal::detail::TileSize(index_data_format);
         index_is_dram = update_idxs_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM;
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
@@ -69,7 +69,6 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
 
     // Pagetable-specific parameters
     bool is_paged_cache = page_table.has_value();
-    uint32_t batch_size = 0;
     uint32_t block_size = 0;
     uint32_t block_size_t = 0;
     uint32_t max_blocks_per_seq = 0;
@@ -80,37 +79,36 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
     if (is_paged_cache) {
         const auto& page_table_tensor = page_table.value();
 
-        batch_size = page_table_tensor.get_padded_shape()[0];
-        block_size = cache_tensor.get_padded_shape()[2];
+        block_size = cache_tensor.padded_shape()[2];
         block_size_t = block_size / TILE_HEIGHT;
-        max_blocks_per_seq = page_table_tensor.get_padded_shape()[1];
-        page_table_stick_size = page_table_tensor.get_padded_shape()[-1] * page_table_tensor.element_size();
+        max_blocks_per_seq = page_table_tensor.padded_shape()[1];
+        page_table_stick_size = page_table_tensor.padded_shape()[-1] * page_table_tensor.element_size();
 
-        page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.get_dtype());
+        page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
 
         page_table_is_dram = page_table_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     }
 
-    uint32_t Wt = cache_tensor.get_padded_shape()[-1] / TILE_WIDTH;
-    uint32_t St = cache_tensor.get_padded_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor.get_padded_shape()[-1] * sizeof(float)
-                                       : cache_tensor.get_padded_shape()[-1] * 2;  // 2 bytes for bfloat16
-    uint32_t cache_total_num_tiles = cache_tensor.volume() / TILE_HW;
+    uint32_t Wt = cache_tensor.padded_shape()[-1] / TILE_WIDTH;
+    uint32_t St = cache_tensor.padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor.padded_shape()[-1] * sizeof(float)
+                                       : cache_tensor.padded_shape()[-1] * 2;  // 2 bytes for bfloat16
+    uint32_t cache_total_num_tiles = cache_tensor.physical_volume() / TILE_HW;
     uint32_t cache_batch_num_tiles =
         share_cache ? 0
                     : cache_total_num_tiles /
-                          cache_tensor.get_padded_shape()[0];  // if share cache, we can set cache batch num tiles to 0
-                                                               // so batch offset would be 0 in future calculations
-    uint32_t num_tiles = input_tensor.volume() / TILE_HW;
-    uint32_t B = input_tensor.get_padded_shape()[1];
-    uint32_t num_heads = cache_tensor.get_padded_shape()[1];
+                          cache_tensor.padded_shape()[0];  // if share cache, we can set cache batch num tiles to 0
+                                                           // so batch offset would be 0 in future calculations
+    uint32_t num_tiles = input_tensor.physical_volume() / TILE_HW;
+    uint32_t B = input_tensor.padded_shape()[1];
+    uint32_t num_heads = cache_tensor.padded_shape()[1];
 
-    log_debug("cache_cb_data_format: {}", cache_cb_data_format);
-    log_debug("input_cb_data_format: {}", input_cb_data_format);
-    log_debug("interm_cb_data_format: {}", interm_cb_data_format);
-    log_debug("Wbytes: {}", Wbytes);
-    log_debug("Wt: {}", Wt);
-    log_debug("St: {}", St);
+    log_debug(tt::LogOp, "cache_cb_data_format: {}", cache_cb_data_format);
+    log_debug(tt::LogOp, "input_cb_data_format: {}", input_cb_data_format);
+    log_debug(tt::LogOp, "interm_cb_data_format: {}", interm_cb_data_format);
+    log_debug(tt::LogOp, "Wbytes: {}", Wbytes);
+    log_debug(tt::LogOp, "Wt: {}", Wt);
+    log_debug(tt::LogOp, "St: {}", St);
 
     std::optional<ShardSpec> shard_spec = input_tensor.shard_spec();
     bool row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;

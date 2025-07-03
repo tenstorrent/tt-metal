@@ -1,4 +1,4 @@
-# Falcon40B Demo 
+# Falcon40B Demo
 
 Falcon40b prefill uses 8x8 core grid size, so the following environment variable needs to be set on a T3000 setup:
 
@@ -11,16 +11,16 @@ export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 - To run the model for a single prompt, you can use the command line input:
 
 ```sh
-pytest --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/t3000/falcon40b/demo/demo.py`
+pytest --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/t3000/falcon40b/demo/demo.py
 ```
 
 ## Inputs
 
-- A sample of input prompts for 32 users is provided in `models/demos/t3000/falcon40b/demo/input_data.json`. 
-- If you wish to run the model using a different set of input prompts you can provide a different path `--input-path`. 
+- A sample of input prompts for 32 users is provided in `models/demos/t3000/falcon40b/demo/input_data.json`.
+- If you wish to run the model using a different set of input prompts you can provide a different path `--input-path`.
 
 ```sh
-pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/t3000/falcon40b/demo/input_data.json' models/demos/t3000/falcon40b/demo/demo.py`
+pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/t3000/falcon40b/demo/input_data.json' models/demos/t3000/falcon40b/demo/demo.py
 ```
 
 ## Details

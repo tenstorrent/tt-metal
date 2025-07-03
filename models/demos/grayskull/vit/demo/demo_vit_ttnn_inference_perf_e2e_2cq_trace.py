@@ -3,23 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 import torch
 from loguru import logger
 
 import ttnn
-
-from models.utility_functions import is_wormhole_b0, is_blackhole
-
-from models.utility_functions import (
-    is_wormhole_b0,
-    disable_persistent_kernel_cache,
-    profiler,
-)
-
-from models.demos.grayskull.vit.demo.vit_test_infra import create_test_infra
-
+from models.demos.vit.tests.vit_test_infra import create_test_infra
 from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import disable_persistent_kernel_cache, is_blackhole, is_wormhole_b0, profiler
 
 try:
     from tracy import signpost
@@ -130,7 +120,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1824800}], indirect=True
 )
-def test_vit(device, use_program_cache):
+def test_vit(device):
     torch.manual_seed(0)
 
     profiler.clear()

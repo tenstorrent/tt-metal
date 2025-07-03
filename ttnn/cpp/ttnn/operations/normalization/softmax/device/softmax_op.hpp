@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -49,7 +49,8 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     std::optional<float> scale,
     bool causal_mask,
     DeviceComputeKernelConfig compute_kernel_config,
-    bool numeric_stable);
+    bool numeric_stable,
+    bool inplace);
 
 // hw_dims_only_causal_mask - represents if the causal mask is of shape [1, 1, h, w]
 // valid only if causal_mask == true, and is interleaved
@@ -72,13 +73,13 @@ Tensor softmax(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const bool numeric_stable = false);
+    bool numeric_stable = false);
 // const ref prevents in-place
 Tensor softmax_in_place(
     Tensor& input_tensor,
     const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{},
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const bool numeric_stable = false);
+    bool numeric_stable = false);
 
 // computes
 // tmp1 = bcast_hw_mul(scale, x)  ; shape of scale is [1,1,32,32]
@@ -90,9 +91,9 @@ Tensor scale_mask_softmax_in_place(
     std::optional<float> scale = std::nullopt,
     const std::optional<const Tensor>& mask = std::nullopt,
     const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{},
-    const bool is_causal_mask = false,
+    bool is_causal_mask = false,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const bool numeric_stable = false);
+    bool numeric_stable = false);
 
 // Experimental feature. Does the same same as above, with the following assumptions:
 // 1. Input must be sharded
@@ -105,15 +106,15 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     const std::optional<const Tensor>& mask,
     const SoftmaxProgramConfig& program_config = SoftmaxShardedMultiCoreProgramConfig{},
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const bool numeric_stable = false);
+    bool numeric_stable = false);
 
 Tensor scale_mask_softmax(
     const Tensor& input_tensor,
     std::optional<float> scale,
     const std::optional<const Tensor>& mask,
     const tt::tt_metal::MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const bool is_causal_mask = false,
+    bool is_causal_mask = false,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const bool numeric_stable = false);
+    bool numeric_stable = false);
 
 }  // namespace ttnn::operations::normalization

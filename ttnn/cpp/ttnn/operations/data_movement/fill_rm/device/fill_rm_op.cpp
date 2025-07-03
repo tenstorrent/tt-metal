@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     CoreRange core({0, 0}, {0, 0});
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(any.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(any.dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
@@ -93,20 +93,19 @@ void FillRM::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL((this->N > 0 && this->C > 0 && this->H > 0 && this->W > 0), "Error");
     TT_FATAL((this->hFill <= this->H && this->wFill <= this->W), "Error");
-    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Error");
+    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Error");
     TT_FATAL(
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "FillRM does not currently support sharding");
     TT_FATAL(
-        this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "FillRM does not currently support sharding");
 }
 
 std::vector<ttnn::TensorSpec> FillRM::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     ttnn::Shape shape({this->N, this->C, this->H, this->W});
     const auto& input_tensor = input_tensors.at(0);
-    return {
-        TensorSpec(shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::ROW_MAJOR), output_mem_config))};
+    return {TensorSpec(shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::ROW_MAJOR), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks FillRM::create_program(

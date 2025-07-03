@@ -59,12 +59,15 @@ struct Context {
         int writers_,
         bool enable_host_copy_with_kernels_,
         int iterations_) {
-        auto l1_alignment = hal::get_l1_alignment();
-        auto l1_base = devices_.begin()->second->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-        device_address.cycles = l1_base;
-        device_address.rd_bytes = align(device_address.cycles + sizeof(uint32_t), l1_alignment);
-        device_address.wr_bytes = align(device_address.rd_bytes + sizeof(uint32_t), l1_alignment);
-        device_address.unreserved = align(device_address.wr_bytes + sizeof(uint32_t), l1_alignment);
+        // Devices can be empty if it's a host only test
+        if (!devices_.empty()) {
+            auto l1_alignment = hal::get_l1_alignment();
+            auto l1_base = devices_.begin()->second->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+            device_address.cycles = l1_base;
+            device_address.rd_bytes = align(device_address.cycles + sizeof(uint32_t), l1_alignment);
+            device_address.wr_bytes = align(device_address.rd_bytes + sizeof(uint32_t), l1_alignment);
+            device_address.unreserved = align(device_address.wr_bytes + sizeof(uint32_t), l1_alignment);
+        }
         devices = devices_;
         total_size = total_size_;
         page_size = page_size_;

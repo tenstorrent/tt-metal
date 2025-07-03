@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 
 #endif
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/sharding_common.hpp"
+#include "ttnn/operations/ccl/common/types/sharding_common.hpp"
 
 using mapping_table_t = uint32_t;
 
@@ -57,7 +57,9 @@ struct ShardCoordInfo get_width_sharded_coordinates(uint32_t page_num) {
     uint32_t w_offset = page_col - w_core_id * columns_per_shard;
     coord_info.core_num = w_core_id;
     coord_info.page_num = page_row * columns_per_shard + w_offset;
-    if constexpr (contiguity != shard_addr_gen_consts::ContiguityType::PADDING_BETWEEN_PAGES) {
+    if constexpr (
+        contiguity != shard_addr_gen_consts::ContiguityType::L1_PADDING_BETWEEN_PAGES &&
+        contiguity != shard_addr_gen_consts::ContiguityType::DRAM_PADDING_BETWEEN_PAGES) {
         uint32_t space_left_in_shard = columns_per_shard - w_offset;
         uint32_t space_left_in_tensor = total_pages_last_dim - page_col;
         coord_info.num_contiguous_pages =
@@ -75,9 +77,13 @@ struct ShardCoordInfo get_height_sharded_coordinates(uint32_t page_num) {
     constexpr uint32_t num_pages_per_core = total_pages_last_dim * rows_per_shard;
     coord_info.core_num = page_num / num_pages_per_core;
     coord_info.page_num = page_num - coord_info.core_num * num_pages_per_core;
-    if constexpr (contiguity == shard_addr_gen_consts::ContiguityType::PADDING_BETWEEN_PAGES) {
+    if constexpr (
+        contiguity == shard_addr_gen_consts::ContiguityType::L1_PADDING_BETWEEN_PAGES ||
+        contiguity == shard_addr_gen_consts::ContiguityType::DRAM_PADDING_BETWEEN_PAGES) {
         coord_info.num_contiguous_pages = 1;
-    } else if constexpr (contiguity == shard_addr_gen_consts::ContiguityType::PADDING_IN_RIGHTMOST_SHARD) {
+    } else if constexpr (
+        contiguity == shard_addr_gen_consts::ContiguityType::L1_PADDING_IN_RIGHTMOST_SHARD ||
+        contiguity == shard_addr_gen_consts::ContiguityType::DRAM_PADDING_IN_RIGHTMOST_SHARD) {
         coord_info.num_contiguous_pages = total_pages_last_dim - page_num % total_pages_last_dim;
     } else {
         coord_info.num_contiguous_pages = num_pages_per_core - coord_info.page_num;
@@ -107,7 +113,9 @@ experimental::shard_addr_gen_utils::ShardCoordInfo get_block_sharded_coordinates
     // Find the coord_info
     coord_info.core_num = w_core_id + h_core_id * cores_per_block_row;
     coord_info.page_num = w_offset + h_offset * columns_per_shard;
-    if constexpr (contiguity != shard_addr_gen_consts::ContiguityType::PADDING_BETWEEN_PAGES) {
+    if constexpr (
+        contiguity != shard_addr_gen_consts::ContiguityType::L1_PADDING_BETWEEN_PAGES &&
+        contiguity != shard_addr_gen_consts::ContiguityType::DRAM_PADDING_BETWEEN_PAGES) {
         uint32_t space_left_in_shard = columns_per_shard - w_offset;
         uint32_t space_left_in_tensor = total_pages_last_dim - page_col;
         coord_info.num_contiguous_pages =
@@ -186,11 +194,24 @@ struct ShardedAddrGen {
     FORCE_INLINE
     std::uint64_t get_sharded_addr(
         const uint32_t l1_addr, const uint32_t sharding_coordinates, const uint32_t noc = noc_index) const {
-        // Extracts the X and Y value and using the l1 address gets the noc address
-        return NOC_XY_ADDR(
-            DYNAMIC_NOC_X(noc, ((sharding_coordinates >> 8) & 0xFF)),
-            DYNAMIC_NOC_Y(noc, (sharding_coordinates & 0xFF)),
-            l1_addr);
+        constexpr uint32_t SHIFT_BITS = 8;
+        constexpr uint32_t MASK = 0xFF;
+        constexpr shard_addr_gen_consts::ContiguityType contiguity = CONSTANT_ARGS.contiguity;
+        constexpr bool is_dram = contiguity == shard_addr_gen_consts::ContiguityType::DRAM_PADDING_BETWEEN_PAGES ||
+                                 contiguity == shard_addr_gen_consts::ContiguityType::DRAM_PADDING_IN_RIGHTMOST_SHARD ||
+                                 contiguity == shard_addr_gen_consts::ContiguityType::DRAM_NO_SHARD_PADDING;
+        if constexpr (is_dram) {
+            uint32_t bank_id = (sharding_coordinates >> SHIFT_BITS) & MASK;
+            uint32_t src_addr = l1_addr + bank_to_dram_offset[bank_id];
+            uint32_t src_noc_xy = dram_bank_to_noc_xy[noc][bank_id];
+            return ((uint64_t)(src_noc_xy) << NOC_ADDR_COORD_SHIFT) | src_addr;
+        } else {
+            // Extracts the X and Y value and using the l1 address gets the noc address
+            return NOC_XY_ADDR(
+                DYNAMIC_NOC_X(noc, ((sharding_coordinates >> SHIFT_BITS) & MASK)),
+                DYNAMIC_NOC_Y(noc, (sharding_coordinates & MASK)),
+                l1_addr);
+        }
     }
 
     std::uint32_t get_sharded_l1_addr(const uint32_t core_page, const uint32_t offset = 0) const {
@@ -245,7 +266,7 @@ struct ShardedAddrGen {
     FORCE_INLINE
     void noc_async_read_page(
         const uint32_t id, const uint32_t dest_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        noc_async_read(this->get_noc_addr(id, offset), dest_addr, CONSTANT_ARGS.page_size_jump, noc);
+        noc_async_read(this->get_noc_addr(id, offset, noc), dest_addr, CONSTANT_ARGS.page_size_jump, noc);
     }
 };
 }  // namespace experimental

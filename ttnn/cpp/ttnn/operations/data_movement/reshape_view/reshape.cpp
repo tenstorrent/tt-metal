@@ -8,7 +8,7 @@
 
 #include "ttnn/common/queue_id.hpp"
 
-#include "ttnn/operations/copy.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
@@ -42,18 +42,15 @@ ttnn::Tensor convert_tile_to_rm(
     // Convert the 3D->3D reshaping to row major and back to tile
     TT_FATAL(
         !(((logical_shape[-1] % tile_first_dim != 0) || (logical_shape[-2] % tile_second_dim != 0) ||
-           (tensor.get_logical_shape()[-1] % tile_first_dim != 0) ||
-           (tensor.get_logical_shape()[-2] % tile_second_dim != 0)) &&
-          (tensor.get_dtype() == DataType::BFLOAT8_B)),
+           (tensor.logical_shape()[-1] % tile_first_dim != 0) || (tensor.logical_shape()[-2] % tile_second_dim != 0)) &&
+          (tensor.dtype() == DataType::BFLOAT8_B)),
         "illegal dimensions for a bfloat8 tensor");
-    auto new_tensor = (tensor.get_dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(tensor, DataType::BFLOAT16) : tensor;
-    new_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (IDevice*)nullptr);
+    auto new_tensor = (tensor.dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(tensor, DataType::BFLOAT16) : tensor;
+    new_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT);
     new_tensor =
         ReshapeViewOperation::invoke(queue_id, new_tensor, logical_shape, padded_shape, memory_config, pad_value);
-    new_tensor =
-        ttnn::to_layout(new_tensor, ttnn::TILE_LAYOUT, new_tensor.get_dtype(), memory_config, (IDevice*)nullptr);
-    new_tensor =
-        (tensor.get_dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(new_tensor, tensor.get_dtype()) : new_tensor;
+    new_tensor = ttnn::to_layout(new_tensor, ttnn::TILE_LAYOUT, new_tensor.dtype(), memory_config);
+    new_tensor = (tensor.dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(new_tensor, tensor.dtype()) : new_tensor;
     return new_tensor;
 }
 
@@ -64,15 +61,14 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     const MemoryConfig& memory_config,
     const QueueId queue_id) {
     auto temp_tensor = tensor;
-    auto intermediate_mem_config = tensor.memory_config();
     auto intermediate_out_memory_config = memory_config;
     if (tensor.memory_config().is_sharded()) {
-        auto temp_memory_config = tensor.memory_config();
-        temp_memory_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
+        MemoryConfig temp_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
         temp_tensor = ttnn::sharded_to_interleaved(queue_id, tensor, temp_memory_config, std::nullopt);
     }
     if (memory_config.is_sharded()) {
-        intermediate_out_memory_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
+        intermediate_out_memory_config =
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, intermediate_out_memory_config.buffer_type()};
     }
     // Guaranteed to be interleaved
     // We are guaranteed to be working 2D->2D in this function
@@ -129,9 +125,9 @@ ttnn::Tensor reshape_rm(
     const QueueId queue_id,
     const PadValue& pad_value) {
     // This function turns ND -> MD into 2D->MD for row major and 3D->MD for tiled using a 0 cost view
-    const auto& tensor_shape = tensor.get_logical_shape();
+    const auto& tensor_shape = tensor.logical_shape();
     TT_FATAL((tensor_shape.rank() != 0), "Can't do reshape from rank 0 tensor");
-    TT_FATAL(tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT, "Wrong layout in `reshape_rm` `");
+    TT_FATAL(tensor.layout() == ttnn::ROW_MAJOR_LAYOUT, "Wrong layout in `reshape_rm` `");
 
     // Collapse into the second last dimension
     uint32_t second_dim = 1;
@@ -161,13 +157,13 @@ ttnn::Tensor PerformView(
     const ttnn::Shape& padded_shape,
     const uint32_t tile_first_dim = tt::constants::TILE_HEIGHT,
     const uint32_t tile_second_dim = tt::constants::TILE_WIDTH) {
-    if (tensor.get_logical_shape() == logical_shape && tensor.get_padded_shape() == padded_shape) {
+    if (tensor.logical_shape() == logical_shape && tensor.padded_shape() == padded_shape) {
         return tensor;
     }
     if (logical_shape.rank() == 1) {
         return ttnn::experimental::view(tensor, logical_shape);
     } else if (
-        tensor.get_layout() == ttnn::TILE_LAYOUT &&
+        tensor.layout() == ttnn::TILE_LAYOUT &&
         (logical_shape[-1] % tile_first_dim != 0 || logical_shape[-2] % tile_second_dim != 0)) {
         return ttnn::experimental::view(tensor, logical_shape, compute_padded_shape(logical_shape));
     }
@@ -178,7 +174,7 @@ ttnn::Tensor PerformView(
 std::pair<ttnn::Shape, ttnn::Shape> shape_corrector(
     const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
     //Correct the shape to account for inferred dimensions
-    uint32_t input_volume = tensor.get_logical_volume();
+    uint32_t input_volume = tensor.logical_volume();
     uint32_t output_volume = 1;
     uint32_t inferred_dim = -1;
     for (uint32_t i = 0; i < logical_shape.rank(); i++) {
@@ -220,7 +216,7 @@ ttnn::Tensor reshape_tiled(
         }
     };
 
-    const auto input_tensor_shape_3d = transform_to_3d(tensor.get_logical_shape());
+    const auto input_tensor_shape_3d = transform_to_3d(tensor.logical_shape());
     const auto requested_shape_3d = transform_to_3d(logical_shape);
 
     const auto requested_padded_shape_3d = compute_padded_shape(requested_shape_3d);
@@ -228,18 +224,18 @@ ttnn::Tensor reshape_tiled(
     auto tensor3d = PerformView(tensor, input_tensor_shape_3d, input_padded_shape_3d);
 
     if (tensor.memory_config().is_sharded()) {
-        auto working_input_memory_config = tensor.memory_config();
-        working_input_memory_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
+        MemoryConfig working_input_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
         tensor3d = ttnn::sharded_to_interleaved(queue_id, tensor, working_input_memory_config, std::nullopt);
     }
 
-    if (tensor.get_dtype() == DataType::BFLOAT8_B) {
+    if (tensor.dtype() == DataType::BFLOAT8_B) {
         tensor3d = ttnn::typecast(tensor3d, DataType::BFLOAT16);
     }
 
     MemoryConfig working_output_memory_config = memory_config;
     if (memory_config.is_sharded()) {
-        working_output_memory_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
+        working_output_memory_config =
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_memory_config.buffer_type()};
     }
 
     auto output_tensor_3d =
@@ -255,8 +251,8 @@ ttnn::Tensor reshape_tiled(
         output_tensor_3d = ttnn::interleaved_to_sharded(queue_id, output_tensor_3d, memory_config, std::nullopt);
     }
 
-    if (tensor.get_dtype() == DataType::BFLOAT8_B) {
-        output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.get_dtype());
+    if (tensor.dtype() == DataType::BFLOAT8_B) {
+        output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.dtype());
     }
 
     return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
@@ -270,17 +266,17 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
-    auto layout = tensor.get_layout();
-    auto tensor_shape = tensor.get_logical_shape();
+    auto layout = tensor.layout();
+    auto tensor_shape = tensor.logical_shape();
 
     const auto [logical_shape, padded_shape] = shape_corrector(tensor, logical_input_shape, padded_input_shape);
     // First Case, No reshape Required
-    if (tensor.get_logical_shape() == logical_shape && tensor.get_padded_shape() == padded_shape) {
+    if (tensor.logical_shape() == logical_shape && tensor.padded_shape() == padded_shape) {
         return tensor;
     }
     PadValue default_pad_value;
-    if (tensor.get_dtype() == DataType::BFLOAT8_B or tensor.get_dtype() == DataType::BFLOAT16 or
-        tensor.get_dtype() == DataType::FLOAT32) {
+    if (tensor.dtype() == DataType::BFLOAT8_B or tensor.dtype() == DataType::BFLOAT16 or
+        tensor.dtype() == DataType::FLOAT32) {
         default_pad_value = 0.0f;
     } else {
         default_pad_value = (uint32_t)0;
@@ -298,18 +294,13 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
 
     // Just edit shape if shape has a 0 dimension
-    if (tensor.get_logical_volume() == 0) {
+    if (tensor.logical_volume() == 0) {
         TT_FATAL(logical_shape.volume() == 0, "Tensor volume is 0, but shape's volume is not");
-        auto mesh_device = tensor.mesh_device();
-        TT_FATAL(
-            ((mesh_device == nullptr || mesh_device->num_devices() == 1) &&
-             tensor.storage_type() != StorageType::MULTI_DEVICE_HOST),
-            "Reshaping a multi-device tensor with 0 volume is not supported");
         return ttnn::experimental::view(tensor, logical_shape, padded_shape);
     }
     TT_FATAL(logical_shape.volume() != 0, "Tensor volume is not 0, but shape volume is 0");
 
-    if (!is_tensor_on_device_or_multidevice(tensor)) {
+    if (!is_device_tensor(tensor)) {
         // This case has been allowed in the past though it means introducing padding values to the data
         return ttnn::experimental::view(tensor, logical_shape, padded_shape);
     }
@@ -317,7 +308,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     bool this_is_view =
         (tensor_shape_last_dim == shape_last_dim) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
         (mem_config.is_l1() == tensor.memory_config().is_l1()) &&
-        ((tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) ||          // Its row major
+        ((tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) ||              // Its row major
          (tensor_shape_second_last_dim == shape_second_last_dim) ||  // Second last dimension is the same
          (shape_second_last_dim % tile_second_dim == 0 &&
           tensor_shape_second_last_dim % tile_first_dim == 0));  // There is no padding on the second last dimension
@@ -325,12 +316,12 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     if (this_is_view) {
         return PerformView(tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
     }
-    if (logical_shape.volume() != tensor.get_logical_volume()) {
+    if (logical_shape.volume() != tensor.logical_volume()) {
         // This is completely incorrect but it is due to issue 15137 or issue 15558
         const auto& tile = tensor.tensor_spec().tile();
         bool tile_tensor_view_reshape_possible =
             (layout == ttnn::Layout::TILE and padded_shape.rank() >= 2 and padded_shape[-2] % tile.get_height() == 0 and
-             padded_shape[-1] % tile.get_width() == 0 and tensor.get_padded_shape()[-1] == padded_shape[-1]);
+             padded_shape[-1] % tile.get_width() == 0 and tensor.padded_shape()[-1] == padded_shape[-1]);
 
         if (tile_tensor_view_reshape_possible) {
             // This case has been allowed in the past though it means introducing padding values to the data
@@ -340,7 +331,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
         TT_FATAL(false, "Attempting to reshape between two shapes with different volumes");
     }
     // Do the reshape in row-major
-    if (tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) {
+    if (tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
         return detail::reshape_rm(
             tensor,
             logical_shape,

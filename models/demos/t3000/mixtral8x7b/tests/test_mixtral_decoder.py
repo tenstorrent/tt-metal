@@ -1,16 +1,16 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, get_single_rot_mat
-from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 from models.demos.t3000.mixtral8x7b.reference.model import TransformerBlock, precompute_freqs_cis
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import get_single_rot_mat, prepare_inputs_ttnn
+from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
-from models.utility_functions import comp_pcc, comp_allclose
+from models.utility_functions import comp_allclose, comp_pcc
 from ttnn import ConcatMeshToTensor
 
 
@@ -21,7 +21,7 @@ from ttnn import ConcatMeshToTensor
         16,
     ),
 )
-def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_seeds, batch):
+def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
     """
     b: batch
     s: sequence length
@@ -40,7 +40,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_see
     else:
         raise ValueError(f"Batch size {batch} not supported")
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0), max_seq_len=max_seq_len, max_batch_size=batch)
+    model_args = TtModelArgs(t3k_mesh_device, max_seq_len=max_seq_len, max_batch_size=batch)
     state_dict = model_args.load_state_dict()
     partial_state_dict = {k[9:]: v for k, v in state_dict.items() if (k.startswith("layers.0."))}
     reference_model = TransformerBlock(args=model_args)

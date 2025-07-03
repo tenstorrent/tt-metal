@@ -279,7 +279,7 @@ def extract_dispatch_op_id(dispatchOps):
 
 
 # Append device data to device ops and return the list of mapped device op ref list
-def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
+def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_analysis_types):
     traceReplayCounts = {}
     for deviceID in traceReplays:
         traceReplayCounts[deviceID] = {}
@@ -291,6 +291,14 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
     traceOps = {}
     if os.path.isfile(deviceTimesLog):
         setup = device_post_proc_config.default_setup()
+        if device_analysis_types:
+            allAnalysis = setup.timerAnalysis
+            pickedAnalysis = {}
+            for analysis in device_analysis_types:
+                assert analysis in allAnalysis.keys(), f" {analysis} is not calculated in device analysis"
+                pickedAnalysis[analysis] = allAnalysis[analysis]
+
+            setup.timerAnalysis = pickedAnalysis
         setup.deviceInputLog = deviceTimesLog
         deviceData = import_log_run_stats(setup)
         freq = deviceData["deviceInfo"]["freq"]
@@ -434,7 +442,7 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
 
 
 def get_device_data_generate_report(
-    logFolder, outputFolder, date, nameAppend, export_csv=True, cleanup_device_log=False
+    logFolder, outputFolder, date, nameAppend, export_csv=True, cleanup_device_log=False, device_analysis_types=[]
 ):
     deviceTimesLog = os.path.join(logFolder, PROFILER_DEVICE_SIDE_LOG)
     devicePreOpTime = {}
@@ -475,6 +483,14 @@ def get_device_data_generate_report(
     if os.path.isfile(deviceTimesLog):
         logger.info(f"Getting device only ops data")
         setup = device_post_proc_config.default_setup()
+        if device_analysis_types:
+            allAnalysis = setup.timerAnalysis
+            pickedAnalysis = {}
+            for analysis in device_analysis_types:
+                assert analysis in allAnalysis.keys(), f" {analysis} is not calculated in device analysis"
+                pickedAnalysis[analysis] = allAnalysis[analysis]
+
+            setup.timerAnalysis = pickedAnalysis
         setup.deviceInputLog = deviceTimesLog
         deviceData = import_log_run_stats(setup)
         logger.info(f"Generating device op report ...")
@@ -864,7 +880,7 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                                 * float(rowDict["PM COMPUTE [ns]"])
                                 / float(rowDict["DEVICE KERNEL DURATION [ns]"])
                             )
-                            rowDict["PM FPU UTIL (%)"] = round(fpu_util, 1)
+                            rowDict["PM FPU UTIL (%)"] = round(fpu_util, 3)
                         except ZeroDivisionError:
                             rowDict["PM FPU UTIL (%)"] = 0.0
 
@@ -904,7 +920,9 @@ def analyzeNoCTraces(logFolder):
         return None
 
 
-def process_ops(output_folder, name_append, date, device_only=False, analyze_noc_traces=False):
+def process_ops(
+    output_folder, name_append, date, device_only=False, analyze_noc_traces=False, device_analysis_types=[]
+):
     if not output_folder:
         output_folder = PROFILER_ARTIFACTS_DIR
     logFolder = generate_logs_folder(output_folder)
@@ -913,10 +931,14 @@ def process_ops(output_folder, name_append, date, device_only=False, analyze_noc
     ops, signposts, traceReplays = import_tracy_op_logs(logFolder)
 
     if ops and not device_only:
-        deviceOps, traceOps = append_device_data(ops, traceReplays, logFolder, analyze_noc_traces)
+        deviceOps, traceOps = append_device_data(
+            ops, traceReplays, logFolder, analyze_noc_traces, device_analysis_types
+        )
         generate_reports(ops, deviceOps, traceOps, signposts, logFolder, reportFolder, date, name_append)
     else:
-        deviceOps = get_device_data_generate_report(logFolder, reportFolder, date, name_append)
+        deviceOps = get_device_data_generate_report(
+            logFolder, reportFolder, date, name_append, device_analysis_types=device_analysis_types
+        )
 
 
 @click.command()
@@ -927,10 +949,11 @@ def process_ops(output_folder, name_append, date, device_only=False, analyze_noc
 @click.option(
     "--analyze-noc-traces", is_flag=True, help="Use tt-npe to analyze profiler noc event trace files (if available)"
 )
-def main(output_folder, name_append, date, device_only, analyze_noc_traces):
+@click.option("-a", "--device-analysis-types", multiple=True, help="Subset of analysis types to be performed on device")
+def main(output_folder, name_append, date, device_only, analyze_noc_traces, device_analysis_types):
     if output_folder:
         output_folder = Path(output_folder)
-    process_ops(output_folder, name_append, date, device_only, analyze_noc_traces)
+    process_ops(output_folder, name_append, date, device_only, analyze_noc_traces, device_analysis_types)
 
 
 if __name__ == "__main__":

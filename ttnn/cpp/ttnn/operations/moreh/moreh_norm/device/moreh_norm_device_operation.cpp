@@ -20,7 +20,7 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
 }
 
 inline void validate_input_tensor_with_dim(const Tensor& input, int64_t dim) {
-    const auto input_rank = input.get_padded_shape().rank();
+    const auto input_rank = input.padded_shape().rank();
     TT_FATAL(
         (dim >= 0 && dim <= tt::tt_metal::MAX_NUM_DIMENSIONS),
         "dim must be between 0 and {}.",
@@ -29,12 +29,12 @@ inline void validate_input_tensor_with_dim(const Tensor& input, int64_t dim) {
 }
 
 inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tensor& output, int64_t dim, bool keepdim) {
-    const auto input_shape = input.get_padded_shape();
-    const auto input_shape_wo_padding = input.get_logical_shape();
+    const auto& input_shape = input.padded_shape();
+    const auto& input_shape_wo_padding = input.logical_shape();
     const auto input_rank = input_shape.rank();
 
-    const auto output_shape = output.get_padded_shape();
-    const auto output_shape_wo_padding = output.get_logical_shape();
+    const auto& output_shape = output.padded_shape();
+    const auto& output_shape_wo_padding = output.logical_shape();
     const auto output_rank = output_shape.rank();
 
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
@@ -110,7 +110,7 @@ void MorehNormOperation::validate_inputs(
 MorehNormOperation::program_factory_t MorehNormOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto dim = operation_attributes.dim;
-    const auto input_rank = tensor_args.input.get_padded_shape().rank();
+    const auto input_rank = tensor_args.input.padded_shape().rank();
     auto INF = std::numeric_limits<float>::infinity();
     if (dim == input_rank - 1) {
         return ProgramFactoryWOther{};
@@ -134,10 +134,10 @@ void MorehNormOperation::validate_on_program_cache_hit(
 MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return tensor_args.output->get_tensor_spec();
+        return tensor_args.output->tensor_spec();
     }
 
-    const auto& input_shape = tensor_args.input.get_logical_shape();
+    const auto& input_shape = tensor_args.input.logical_shape();
     const auto input_rank = input_shape.rank();
     const auto dim = operation_attributes.dim;
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
@@ -147,7 +147,7 @@ MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs
         shape[dim] = 1;
         return TensorSpec(
             shape,
-            TensorLayout(tensor_args.input.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
+            TensorLayout(tensor_args.input.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
     }
 
     ttnn::SmallVector<uint32_t> shape;
@@ -160,7 +160,7 @@ MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs
     }
     return TensorSpec(
         ttnn::Shape(shape),
-        TensorLayout(tensor_args.input.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
+        TensorLayout(tensor_args.input.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
 
 MorehNormOperation::tensor_return_value_t MorehNormOperation::create_output_tensors(

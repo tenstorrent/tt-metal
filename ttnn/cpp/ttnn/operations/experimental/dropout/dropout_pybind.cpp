@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 #include "ttnn/operations/experimental/dropout/dropout.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"

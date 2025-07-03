@@ -11,7 +11,7 @@ import torch
 import ttnn
 import math
 import itertools
-from typing import Optional, List
+from typing import Optional, List, Callable
 import copy
 from functools import partial
 
@@ -285,12 +285,15 @@ def get_device_grid_size():
     return y, x
 
 
-def gen_pytest_parametrize_args(parameters: dict) -> dict:
+def gen_pytest_parametrize_args(parameters: dict, invalidate_function: Callable | None = None) -> dict:
     """Generate pytest parametrize arguments from a dictionary of parameters."
     Args:
         parameters: A dictionary of parameters. The keys are the config names and the values are dictionaries of parameter values.
                     The keys of the inner dictionaries are the function argument names.
                     The values of the inner dictionaries are lists of parameter values to be used for sweep.
+        invalidate_function (optional): A function that takes a dictionary of parameter values and returns a boolean indicating
+                    whether to skip the test. The function should return (should_skip, reason) where should_skip is a boolean and
+                    reason is a string. If should_skip is True, the specific test case is skipped.
     Returns:
         A dictionary of pytest parametrize arguments.
     Example:
@@ -315,6 +318,11 @@ def gen_pytest_parametrize_args(parameters: dict) -> dict:
         all_arg_combs = itertools.product(*[values_dict[arg_name] for arg_name in test_argnames])
 
         for arg_vals in all_arg_combs:
+            if invalidate_function is not None:
+                test_vector = {name: val for name, val in zip(test_argnames, arg_vals)}
+                should_skip, _reason = invalidate_function(test_vector)
+                if should_skip:
+                    continue
             id_str = (
                 str(param_name)
                 + "-"

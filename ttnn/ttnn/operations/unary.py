@@ -3,23 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import os
 
 
 def register_ttnn_cpp_unary_function(unary_function):
-    import torch
-
-    def torch_cbrt(x, *args, **kwargs):
-        return torch.sgn(x) * torch.pow(torch.abs(x), 1.0 / 3)
-
-    def torch_multigammaln(x, *args, **kwargs):
-        result = torch.lgamma(x)
-        result += torch.lgamma(x - 0.5)
-        result += torch.lgamma(x - 1.0)
-        result += torch.lgamma(x - 1.5)
-        result += 3.434189657547
-        return result
-
     def _golden_function(input_tensor: ttnn.Tensor, **_):
+        import torch
+
+        def torch_cbrt(x, *args, **kwargs):
+            return torch.sgn(x) * torch.pow(torch.abs(x), 1.0 / 3)
+
+        def torch_multigammaln(x, *args, **kwargs):
+            result = torch.lgamma(x)
+            result += torch.lgamma(x - 0.5)
+            result += torch.lgamma(x - 1.0)
+            result += torch.lgamma(x - 1.5)
+            result += 3.434189657547
+            return result
+
         name_to_golden_function = {
             "abs": torch.abs,
             "atan": torch.atan,
@@ -197,12 +198,11 @@ def _golden_function_acos(input_tensor_a, *args, device, **kwargs):
 ttnn.attach_golden_function(ttnn.acos, golden_function=_golden_function_acos)
 
 
-def _golden_function_acosh(input_tensor_a, *args, device, **kwargs):
+def _golden_function_acosh(input_tensor_a, *args, **kwargs):
     import torch
 
-    return torch.nan_to_num(
-        torch.acosh(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
-    )
+    result = torch.acosh(input_tensor_a)
+    return result.masked_fill_(input_tensor_a < 1, float("inf")) if input_tensor_a.dtype == torch.bfloat16 else result
 
 
 ttnn.attach_golden_function(ttnn.acosh, golden_function=_golden_function_acosh)
@@ -318,10 +318,13 @@ def _golden_function_clip(input_tensor_a, min=None, max=None, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.clip, golden_function=_golden_function_clip)
 
 
-def _golden_function_round(input_tensor_a, decimal, *args, **kwargs):
+def _golden_function_round(input_tensor_a, decimals=None, *args, **kwargs):
     import torch
 
-    return torch.round(input=input_tensor_a, decimals=decimal)
+    if decimals is None:
+        return torch.round(input=input_tensor_a)
+    else:
+        return torch.round(input=input_tensor_a, decimals=decimals)
 
 
 ttnn.attach_golden_function(ttnn.round, golden_function=_golden_function_round)
@@ -731,4 +734,16 @@ def _golden_function_rdiv(input_tensor_a, value, *args, round_mode=None, **kwarg
 
 
 ttnn.attach_golden_function(ttnn.rdiv, golden_function=_golden_function_rdiv)
+
+
+def _golden_function_alt_complex_rotate90(input_tensor_a, *args, **kwargs):
+    import torch
+
+    x = input_tensor_a.reshape(*input_tensor_a.shape[:-1], -1, 2)
+    x_real, x_imag = x.chunk(2, dim=-1)
+    return torch.cat([-x_imag, x_real], dim=-1).flatten(-2)
+
+
+ttnn.attach_golden_function(ttnn.alt_complex_rotate90, golden_function=_golden_function_alt_complex_rotate90)
+
 __all__ = []

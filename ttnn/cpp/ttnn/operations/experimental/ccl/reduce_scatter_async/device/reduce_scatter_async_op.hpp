@@ -8,7 +8,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/distributed/types.hpp"
 namespace ttnn {
 struct ReduceScatterAsync {
@@ -95,11 +95,11 @@ tt::tt_metal::operation::ProgramWithCallbacks build_reduce_scatter_async_program
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     ttnn::operations::binary::BinaryOpType reduce_op,
-    const uint32_t dim,
-    const uint32_t line_size,
-    const uint32_t line_index,
+    uint32_t dim,
+    uint32_t line_size,
+    uint32_t line_index,
     ttnn::ccl::Topology topology,
-    std::optional<size_t> num_links_preferred,
+    size_t num_links,
     const GlobalSemaphore& from_remote_sem,
     const GlobalSemaphore& to_remote_sem,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
@@ -111,28 +111,28 @@ namespace experimental {
 namespace ccl {
 Tensor reduce_scatter(
     const Tensor& input_tensor,
-    const int32_t dim,
+    int32_t dim,
     const GlobalSemaphore& from_remote_multi_device_global_semaphore,
     const GlobalSemaphore& to_remote_multi_device_global_semaphore,
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt);  // TODO make reference
 std::vector<Tensor> reduce_scatter(
     const std::vector<Tensor>& input_tensors,
-    const int32_t dim,
+    int32_t dim,
     const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
     const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt);  // TODO make reference
 Tensor reduce_scatter(
     const Tensor& input_tensor,
-    const int32_t dim,
-    const uint32_t cluster_axis,
+    int32_t dim,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const GlobalSemaphore& from_remote_multi_device_global_semaphore,
     const GlobalSemaphore& to_remote_multi_device_global_semaphore,
@@ -140,12 +140,12 @@ Tensor reduce_scatter(
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt);  // TODO make reference
 std::vector<Tensor> reduce_scatter(
     const std::vector<Tensor>& input_tensors,
-    const int32_t dim,
-    const uint32_t cluster_axis,
+    int32_t dim,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
     const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
@@ -153,7 +153,7 @@ std::vector<Tensor> reduce_scatter(
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt);  // TODO make reference
 
 }  // namespace ccl

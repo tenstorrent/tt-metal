@@ -6,7 +6,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -15,11 +15,11 @@ namespace ttnn {
 
 void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    const auto& layout = input_tensors[0].get_layout();
-    const auto& dtype = input_tensors[0].get_dtype();
+    const auto& layout = input_tensors[0].layout();
+    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     const auto input_core_ranges = input_tensor.buffer()->shard_spec().grid().ranges();
-    const auto padded_input_shape = input_tensor.get_padded_shape();
+    const auto& padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
@@ -30,9 +30,9 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
         "Worker cores used by links are parallelizaed over rows");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
-        input_tensor.memory_config().memory_layout);
+        input_tensor.memory_config().memory_layout());
 
     TT_FATAL(
         input_core_ranges[0].start_coord.x == 1 && input_core_ranges[0].end_coord.x == 3 &&
@@ -49,7 +49,7 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto input_shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
+    auto input_shape = input_tensor.padded_shape();  // TODO: Replace with logical_shape()
     auto num_heads = this->num_heads;
     auto sequence_length = input_shape[0];
     auto batch = input_shape[1];
@@ -64,7 +64,7 @@ std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::v
     Shape output_shape({sequence_length, 1, batch, hidden_dim});
     return {TensorSpec(
         output_shape,
-        tt::tt_metal::TensorLayout(input_tensor.get_dtype(), tt::tt_metal::Layout::TILE, this->output_mem_config))};
+        tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::Layout::TILE, this->output_mem_config))};
 }
 
 tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherConcat::create_mesh_workload(
@@ -81,7 +81,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
     const ttnn::MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
+    log_debug(tt::LogOp, "DEBUG: create_program is called");
 
     const auto& input_tensor = input_tensors[0];
     auto mesh_device = input_tensor.mesh_device();
@@ -100,9 +100,13 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
             device_index = i;
             if (i != 0) {
                 backward_device = devices.at(i - 1);
+            } else if (this->topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(this->ring_size - 1);
             }
             if (i != this->ring_size - 1) {
                 forward_device = devices.at(i + 1);
+            } else if (this->topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
             }
         }
     }
@@ -123,14 +127,15 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
         this->topology,
         this->semaphore,
         this->sub_device_id,
-        this->num_heads);
+        this->num_heads,
+        this->use_noc1_only);
 }
 
 tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
-    auto input_shape = input_tensors[0].get_padded_shape();
-    auto input_memory_layout = input_tensors[0].get_layout();
-    auto input_dtype = input_tensors[0].get_dtype();
+    auto input_shape = input_tensors[0].padded_shape();
+    auto input_memory_layout = input_tensors[0].layout();
+    auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
 
     return tt::tt_metal::operation::hash_operation<AllGatherConcat>(
@@ -144,7 +149,8 @@ tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(const std::v
         input_memory_layout,
         input_dtype,
         input_memory_config,
-        this->num_heads);
+        this->num_heads,
+        this->use_noc1_only);
 }
 
 namespace operations {
@@ -159,17 +165,15 @@ Tensor all_gather_concat(
     const MeshDevice& mesh_device,
     const GlobalSemaphore& global_semaphore,
     const uint32_t num_heads,
+    bool use_noc1_only,
     const MemoryConfig& memory_config,
     const std::optional<uint32_t> num_links,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    TT_FATAL(
-        topology == ttnn::ccl::Topology::Linear,
-        "This all_gather API with cluster_axis is currently supported only for the Linear topology");
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     uint32_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    int32_t rank = input_tensor.get_logical_shape().rank();
+    int32_t rank = input_tensor.logical_shape().rank();
 
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
     TT_FATAL(
@@ -189,6 +193,7 @@ Tensor all_gather_concat(
                    global_semaphore,
                    sub_device_id,
                    num_heads,
+                   use_noc1_only,
                    cluster_axis},
                {input_tensor, buffer_tensor})
         .at(0);

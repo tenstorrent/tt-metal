@@ -11,7 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
@@ -43,12 +43,11 @@ void set_or_update_runtime_arguments(
     const auto& input = tensor_args.input;
 
     const auto input_shape = input.padded_shape();
-    const auto output_shape = output.padded_shape();
 
     const auto [iN, iC, iHt, iWt] = extract_shape_dims(input);
     const auto [oN, oC, oHt, oWt] = extract_shape_dims(output);
 
-    uint32_t num_output_tiles = output.volume() / output.tensor_spec().tile().get_tile_hw();
+    uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
 
     constexpr bool row_major = true;
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -140,16 +139,15 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto input = tensor_args.input;
-    auto input_shape = input.logical_shape();
     uint32_t data_size = input.element_size();
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
 
     auto output_shape = output.logical_shape();
-    auto output_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    auto output_data_format = datatype_to_dataformat_converter(output.dtype());
 
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_data_format);
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
-    uint32_t num_output_tiles = output.volume() / output.tensor_spec().tile().get_tile_hw();
+    uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
 
     // Device Setup
     auto* device = input.device();

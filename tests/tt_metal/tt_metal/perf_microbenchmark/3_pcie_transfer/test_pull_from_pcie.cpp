@@ -27,7 +27,7 @@
 #include <vector>
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/command_queue_common.hpp>
+#include "impl/dispatch/command_queue_common.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -35,9 +35,8 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
@@ -68,7 +67,7 @@ void* align(void* ptr, std::size_t max_alignment) {
     // ex. if the current ptr here is 16, but we specified an alignment of 8,
     // then this is both 8 and 16 byte aligned, so we offset again by our
     // specified alignment to make the max alignment what was specified
-    aligned = aligned & (max_alignment << 1 - 1) ? aligned : aligned + max_alignment;
+    aligned = aligned & ((max_alignment << 1) - 1) ? aligned : aligned + max_alignment;
 
     return reinterpret_cast<void*>(aligned);
 }
@@ -433,9 +432,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    log_info("test_pull_from_pcie");
-    log_info("Bandwidth(GB/s): {:.3f}", avg_h2d_bandwidth);
-    log_info("pass:{}", pass);
+    log_info(tt::LogTest, "test_pull_from_pcie");
+    log_info(tt::LogTest, "Bandwidth(GB/s): {:.3f}", avg_h2d_bandwidth);
+    log_info(tt::LogTest, "pass:{}", pass);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

@@ -3,22 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
-import torch
+from typing import Optional
+
 import pytest
+import torch
 from loguru import logger
 from transformers import AutoTokenizer
-from typing import Optional
+
 import ttnn
+from models.demos.wormhole.mamba.reference.args import ModelMode
 from models.demos.wormhole.mamba.reference.decode_model import MambaPretrainedModelName
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba
-from models.demos.wormhole.mamba.reference.args import ModelMode
-from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
 from models.demos.wormhole.mamba.tt import model_config
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
+from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
 from models.utility_functions import skip_for_grayskull
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 class MambaPytorch(torch.nn.Module):
@@ -45,7 +44,6 @@ class MambaPytorch(torch.nn.Module):
 
 def run_inference(
     device: ttnn.Device,
-    use_program_cache,
     model_version: MambaPretrainedModelName,
     mode: ModelMode,
     batch: int,
@@ -150,7 +148,6 @@ buildings, agriculture and land use are among the main sectors causing greenhous
 )
 def test_inference(
     device: ttnn.Device,
-    use_program_cache,
     get_tt_cache_path,
     model_version: MambaPretrainedModelName,
     mode: ModelMode,
@@ -162,7 +159,6 @@ def test_inference(
 ):
     run_inference(
         device,
-        use_program_cache,
         model_version,
         mode,
         batch,
@@ -181,7 +177,6 @@ def test_inference(
 )
 def test_device_perf(
     device: ttnn.Device,
-    use_program_cache,
     get_tt_cache_path,
     iterations,
     model_version="state-spaces/mamba-2.8b",
@@ -191,7 +186,6 @@ def test_device_perf(
 ):
     run_inference(
         device,
-        use_program_cache,
         model_version,
         ModelMode.DECODE,
         batch,

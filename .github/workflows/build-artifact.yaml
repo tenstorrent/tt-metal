@@ -1,5 +1,8 @@
 name: "Build tt-metal artifacts"
 
+permissions:
+  packages: write
+
 on:
   workflow_call:
     inputs:
@@ -12,6 +15,11 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
+      distributed:
+        required: false
+        type: boolean
+        default: true
+        description: "Build with distributed enabled (Adds OpenMPI dependency)"
       build-wheel:
         required: false
         type: boolean
@@ -78,7 +86,7 @@ on:
         value: ${{ jobs.build-artifact.outputs.build_artifact_name }}
       wheel-artifact-name:
         description: "Name of the published wheel artifact"
-        value: ${{ jobs.build-artifact.outputs.wheel_artifact_name }}
+        value: ${{ jobs.build-wheel.outputs.wheel_artifact_name }}
 
   workflow_dispatch:
     inputs:
@@ -91,6 +99,11 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
+      distributed:
+        required: false
+        type: boolean
+        default: true
+        description: "Build with distributed enabled (Adds OpenMPI dependency)"
       build-wheel:
         required: false
         type: boolean
@@ -137,15 +150,14 @@ jobs:
   build-artifact:
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
     needs: build-docker-image
-    timeout-minutes: 30
+    timeout-minutes: 45
     runs-on: tt-beta-ubuntu-2204-large
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
-      wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
     container:
-      image: ${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
+      image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!' }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
@@ -188,7 +200,7 @@ jobs:
         run: |
           TOOLCHAIN="${{ inputs.toolchain }}"
           TOOLCHAIN_CLEANED=$(echo "$TOOLCHAIN" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}"
+          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}"
 
           echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
@@ -217,10 +229,14 @@ jobs:
 
           args_fixme=$([ "${{ inputs.skip-tt-train }}" = "true" ] && echo "--build-metal-tests --build-ttnn-tests --build-programming-examples" || echo "--build-all")
           echo "Args: ${args_fixme}"
-          build_command="./build_metal.sh --build-dir build --build-type ${{ inputs.build-type }} --toolchain-path ${{ inputs.toolchain }} ${args_fixme} --enable-ccache --configure-only --cpm-use-local-packages"
+          build_command="./build_metal.sh --build-dir build --build-type ${{ inputs.build-type }} --toolchain-path ${{ inputs.toolchain }} ${args_fixme} --enable-ccache --configure-only"
           echo "Build tracy: ${{ inputs.tracy }}"
           if [ "${{ inputs.tracy }}" = "true" ]; then
             build_command="$build_command --enable-profiler"
+          fi
+          echo "Build distributed: ${{ inputs.distributed }}"
+          if [ "${{ inputs.distributed }}" = "false" ]; then
+            build_command="$build_command --without-distributed"
           fi
           if [ "${{ inputs.profile }}" = "true" ]; then
             build_command="$build_command --enable-time-trace --disable-unity-builds"
@@ -229,7 +245,7 @@ jobs:
             build_command="$build_command --build-umd-tests"
           fi
 
-          nice -n 19 $build_command
+          $build_command
 
       - name: 🛠️ Compile
         run: |
@@ -240,18 +256,13 @@ jobs:
         if: ${{ inputs.profile }}
         run: |
           echo "maxNameLength = 300" > ClangBuildAnalyzer.ini
-          nice -n 19 ClangBuildAnalyzer --all build capture.bin
-          nice -n 19 ClangBuildAnalyzer --analyze capture.bin
+          ClangBuildAnalyzer --all build capture.bin
+          ClangBuildAnalyzer --analyze capture.bin
 
       - name: 📦 Package
         run: |
-          nice -n 19 cmake --build build --target package
+          cmake --build build --target package
           ls -1sh build/*.deb build/*.ddeb || true
-
-      - name: 🐍 Build wheel
-        if: ${{ inputs.build-wheel }}
-        run: |
-          nice -n 19 python3 -m build --wheel
 
       - name: Publish ccache summary
         run: |
@@ -271,22 +282,6 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
-      - name: Set wheel artifact name
-        id: set_wheel_artifact_name
-        run: |
-          WHEEL_ARTIFACT_NAME="eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}"
-          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_ENV"
-          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
-
-      - name: ☁️ Upload wheel
-        if: ${{ inputs.build-wheel }}
-        uses: actions/upload-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ env.wheel_artifact_name }}
-          path: /work/dist/
-          if-no-files-found: error
-
       - name: 'Tar files'
         if: ${{ inputs.publish-artifact }}
         run: |
@@ -299,7 +294,7 @@ jobs:
       - name: Set build artifact name
         id: set_build_artifact_name
         run: |
-          BUILD_ARTIFACT_NAME="TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}"
+          BUILD_ARTIFACT_NAME="TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
@@ -310,4 +305,86 @@ jobs:
         with:
           name: ${{ env.build_artifact_name }}
           path: /work/ttm_any.tar
+          if-no-files-found: error
+
+  build-wheel:
+    if: ${{ inputs.build-wheel }}
+    name: 🐍 Build wheel
+    needs: build-docker-image
+    timeout-minutes: 30
+    runs-on: tt-beta-ubuntu-2204-large
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    outputs:
+      wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check Redis credentials
+        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
+        # Forks will never have secrets; don't fail the job for them, they'll just run slower
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 500 # Need enough history for `git describe`
+          fetch-tags: true # Need tags for `git describe`
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Determine Tracy build setting
+        run: |
+          if [ "${{ inputs.tracy }}" = "true" ]; then
+            echo "ENABLE_TRACY_BUILD=ON" >> $GITHUB_ENV
+            echo "CIBW_TEST_CMD=echo 'Skipping import test for profiler build'" >> $GITHUB_ENV
+            echo "Building with Tracy profiler enabled"
+          else
+            echo "ENABLE_TRACY_BUILD=OFF" >> $GITHUB_ENV
+            echo "CIBW_TEST_CMD=python -c \"import ttnn\"" >> $GITHUB_ENV
+            echo "Building without Tracy profiler"
+          fi
+
+      - name: 🐍 Build wheel
+        uses: pypa/cibuildwheel@v2.23.2
+        env:
+          CIBW_BUILD_FRONTEND: build
+          CIBW_ENVIRONMENT: >-
+            CCACHE_REMOTE_ONLY=true
+            CCACHE_TEMPDIR=/tmp/ccache
+            CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
+            CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
+          CIBW_BEFORE_BUILD: mkdir -p /tmp/ccache && ccache -z && ccache -p
+          CIBW_BEFORE_TEST: ccache -s
+          CIBW_TEST_COMMAND: ${{ env.CIBW_TEST_CMD }}
+          CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
+
+      - name: Set wheel artifact name
+        id: set_wheel_artifact_name
+        run: |
+          WHEEL_ARTIFACT_NAME="eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}"
+          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_ENV"
+          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: ☁️ Upload wheel
+        if: ${{ inputs.build-wheel }}
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ env.wheel_artifact_name }}
+          path: wheelhouse
           if-no-files-found: error

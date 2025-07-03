@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include <umd/device/types/cluster_descriptor_types.h>
 #include "gtest/gtest.h"
+#include <map>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "hostdevcommon/common_values.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/command_queue.hpp>
@@ -18,6 +21,9 @@ namespace tt::tt_metal {
 
 // A dispatch-agnostic test fixture
 class DispatchFixture : public ::testing::Test {
+private:
+    std::map<chip_id_t, tt::tt_metal::IDevice*> id_to_device_;
+
 public:
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, const bool skip_finish = false) {
@@ -74,54 +80,37 @@ protected:
 
     void SetUp() override {
         this->DetectDispatchMode();
-        // Set up all available devices
+        // Must set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> ids;
-        for (unsigned int id = 0; id < num_devices; id++) {
-            if (SkipTest(id)) {
-                continue;
-            }
+        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
             ids.push_back(id);
         }
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        tt::DevicePool::initialize(
+        id_to_device_ = tt::tt_metal::detail::CreateDevices(
             ids,
             tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs(),
             l1_small_size_,
             DEFAULT_TRACE_REGION_SIZE,
             dispatch_core_config);
-        devices_ = tt::DevicePool::instance().get_all_active_devices();
+        devices_.clear();
+        for (auto [device_id, device] : id_to_device_) {
+            devices_.push_back(device);
+        }
     }
 
     void TearDown() override {
-        tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
-        // Close all opened devices
-        for (unsigned int id = 0; id < devices_.size(); id++) {
-            // The test may ahve closed the device already, so only close if active.
-            if (devices_.at(id)->is_initialized()) {
-                tt::tt_metal::CloseDevice(devices_.at(id));
-            }
+        // Checking if devices are empty because DPrintFixture.TensixTestPrintFinish already
+        // closed all devices
+        if (!id_to_device_.empty()) {
+            tt::tt_metal::detail::CloseDevices(id_to_device_);
+            id_to_device_.clear();
+            devices_.clear();
         }
-    }
-
-    bool SkipTest(unsigned int device_id) {
-        // Also skip all devices after device 0 for grayskull. This to match all other tests
-        // targetting device 0 by default (and to not cause issues with BMs that have E300s).
-        // TODO: when we can detect only supported devices, this check can be removed.
-        if (this->arch_ == tt::ARCH::GRAYSKULL && device_id > 0) {
-            log_info(tt::LogTest, "Skipping test on device {} due to unsupported E300", device_id);
-            return true;
-        }
-
-        return false;
     }
 
     void RunTestOnDevice(const std::function<void()>& run_function, tt::tt_metal::IDevice* device) {
-        if (SkipTest(device->id())) {
-            return;
-        }
         log_info(tt::LogTest, "Running test on device {}.", device->id());
         run_function();
         log_info(tt::LogTest, "Finished running test on device {}.", device->id());
@@ -130,10 +119,10 @@ protected:
     void DetectDispatchMode() {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            tt::log_info(tt::LogTest, "Running test using Slow Dispatch");
+            log_info(tt::LogTest, "Running test using Slow Dispatch");
             this->slow_dispatch_ = true;
         } else {
-            tt::log_info(tt::LogTest, "Running test using Fast Dispatch");
+            log_info(tt::LogTest, "Running test using Fast Dispatch");
             this->slow_dispatch_ = false;
         }
     }

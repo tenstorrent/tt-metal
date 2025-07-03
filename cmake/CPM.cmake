@@ -5,8 +5,12 @@
 set(CPM_DOWNLOAD_VERSION 0.40.2)
 set(CPM_HASH_SUM "c8cdc32c03816538ce22781ed72964dc864b2a34a310d3b7104812a5ca2d835d")
 
-# Always Require the CMake option, but provide default
-set(CPM_SOURCE_CACHE "${CMAKE_SOURCE_DIR}/.cpmcache" CACHE STRING "Path to CPM source cache")
+# Always Require the CMake option, but provide default, respecting env var
+if(DEFINED ENV{CPM_SOURCE_CACHE} AND NOT DEFINED CPM_SOURCE_CACHE)
+    set(CPM_SOURCE_CACHE $ENV{CPM_SOURCE_CACHE} CACHE STRING "Path to CPM source cache")
+else()
+    set(CPM_SOURCE_CACHE "${CMAKE_SOURCE_DIR}/.cpmcache" CACHE STRING "Path to CPM source cache")
+endif()
 
 set(CPM_DOWNLOAD_LOCATION "${CPM_SOURCE_CACHE}/cpm/CPM_${CPM_DOWNLOAD_VERSION}.cmake")
 

@@ -12,10 +12,6 @@
 
 #include "topk_common_funcs.hpp"
 
-// topk llk needs a global variable atm
-// this can only be removed once that's fixed
-int32_t topk_replay_init = 0;
-
 namespace NAMESPACE {
 
 void MAIN {
@@ -50,6 +46,7 @@ void MAIN {
 
     ckernel::topk_tile_init();
     transpose_wh_init(input_cb_index, input_transposed_cb_index);
+    transpose_wh_init(index_cb_index, index_transposed_cb_index);
 
     bool switch_dir = (K == 64);
     int seq_per_2tiles = std::max((2 * 32) / K, (uint32_t)2);

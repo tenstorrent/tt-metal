@@ -3,18 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import pytest
 import torch
 from loguru import logger
 from transformers import AutoImageProcessor
-import pytest
+
 import ttnn
-
-from models.utility_functions import (
-    profiler,
-)
-
-from models.demos.ttnn_resnet.tests.demo_utils import get_data, get_data_loader, get_batch
+from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data, get_data_loader
 from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
+from models.utility_functions import profiler
 
 resnet_model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
@@ -129,7 +126,7 @@ def run_resnet_inference(
 
     # load inputs
     images = get_data(input_loc)
-    batch_size = batch_size_per_device * (1 if isinstance(device, ttnn.Device) else device.get_num_devices())
+    batch_size = batch_size_per_device * device.get_num_devices()
 
     profiler.start(f"processing_inputs")
     inputs = None
@@ -255,5 +252,5 @@ def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_locati
     "batch_size, input_loc",
     ((16, "models/demos/ttnn_resnet/demo/images/"),),
 )
-def test_demo_sample(device, use_program_cache, batch_size, input_loc, imagenet_label_dict, model_location_generator):
+def test_demo_sample(device, batch_size, input_loc, imagenet_label_dict, model_location_generator):
     run_resnet_inference(batch_size, input_loc, imagenet_label_dict, device, model_location_generator)

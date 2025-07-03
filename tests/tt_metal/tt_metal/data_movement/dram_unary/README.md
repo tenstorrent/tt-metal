@@ -29,3 +29,4 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 1. DRAM Interleaved Packet Sizes: Tests different number of transactions and transaction sizes by varying the num_of_transactions and transaction_size_pages parameters.
 2. DRAM Interleaved Core Locations: Tests different cores on device (core grid dependent on architecture) by varying the cores parameter.
 3. DRAM Sharded: Tests Sharded DRAM buffer configuration by varying tensor_shape_in_pages and num_dram_banks parameters.
+4. DRAM Directed Ideal: Tests the most optimal transaction between two cores that maximizes the transaction size and performs enough transactions to amortize initialization overhead.

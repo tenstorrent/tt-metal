@@ -22,7 +22,7 @@ from ttnn import ConcatMeshToTensor
 
 
 @pytest.mark.timeout(500 * 8)
-def test_grok_decoder_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+def test_grok_decoder_inference(t3k_mesh_device, reset_seeds):
     """
     b: batch
     s: sequence length
@@ -31,7 +31,7 @@ def test_grok_decoder_inference(t3k_mesh_device, use_program_cache, reset_seeds)
 
     pcc = 0.98
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=os.getenv("CI") == "true")
+    model_args = TtModelArgs(t3k_mesh_device, dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
     key_start = "model.layers.0."

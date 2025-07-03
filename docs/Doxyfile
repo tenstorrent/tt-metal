@@ -924,6 +924,7 @@ WARN_LOGFILE           =
 
 INPUT                  = tt_metal/hw/inc/compile_time_args.h \
                          tt_metal/hw/inc/dataflow_api.h \
+                         tt_metal/hw/inc/dataflow_api_addrgen.h \
                          tt_metal/hw/inc/ethernet/dataflow_api.h \
                          tt_metal/api/tt-metalium/host_api.hpp \
                          tt_metal/include/compute_kernel_api/eltwise_unary/erf_erfc.h \
@@ -941,9 +942,11 @@ INPUT                  = tt_metal/hw/inc/compile_time_args.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/trigonometry.h \
                          tt_metal/include/compute_kernel_api/bcast.h \
                          tt_metal/include/compute_kernel_api/cb_api.h \
+                         tt_metal/include/compute_kernel_api/compute_kernel_hw_startup.h \
                          tt_metal/include/compute_kernel_api/eltwise_binary.h \
                          tt_metal/include/compute_kernel_api/matmul.h \
                          tt_metal/include/compute_kernel_api/pack.h \
+                         tt_metal/include/compute_kernel_api/quantization.h \
                          tt_metal/include/compute_kernel_api/reconfig_data_format.h \
                          tt_metal/include/compute_kernel_api/reduce.h \
                          tt_metal/include/compute_kernel_api/reg_api.h \

@@ -4,9 +4,9 @@
 
 #pragma once
 
+#include <core/ttnn_all_includes.hpp>
 #include <memory>
 #include <random>
-#include <tt_stl/indestructible.hpp>
 
 #include "core/mesh_device.hpp"
 #include "graph.hpp"
@@ -14,6 +14,8 @@
 namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
+
+using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
 
 class AutoContext {
 public:
@@ -44,12 +46,17 @@ public:
 
     ttnn::distributed::MeshDevice& get_device();
 
-    void set_mesh_shape(tt::tt_metal::distributed::MeshShape shape);
     [[nodiscard]] tt::tt_metal::distributed::MeshShape get_mesh_shape() const;
 
-    void open_device();
+    void open_device(
+        const tt::tt_metal::distributed::MeshShape& mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1),
+        const std::vector<int>& device_ids = std::vector<int>{});
 
     void close_device();
+
+    void initialize_distributed_context(int argc, char** argv);
+
+    [[nodiscard]] DistributedContext& get_distributed_context() const;
 
 private:
     AutoContext();
@@ -62,7 +69,9 @@ private:
     tt::tt_metal::distributed::MeshShape m_mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1);
     std::unique_ptr<core::MeshDevice> m_device;
 
-    friend class tt::stl::Indestructible<AutoContext>;
+    std::shared_ptr<DistributedContext> m_distributed_context;
+
+    friend class ttsl::Indestructible<AutoContext>;
 };
 
 inline auto& ctx() {

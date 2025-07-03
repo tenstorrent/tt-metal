@@ -10,10 +10,6 @@ import ttnn
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import (
-    is_grayskull,
-    is_wormhole_b0,
-)
 
 
 @pytest.mark.parametrize("repeats", [1, 2, 3, 58])
@@ -21,8 +17,6 @@ from models.utility_functions import (
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint16])
 def test_repeat_interleave(device, repeats, dim, dtype):
     if dtype == ttnn.uint16:
-        if is_grayskull:
-            pytest.skip("Grayskull does not support uint16")
         torch_dtype = torch.int16
         torch_input_tensor = torch.randint(0, 100, (1, 1, 32, 32), dtype=torch_dtype)
     else:

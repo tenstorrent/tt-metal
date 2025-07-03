@@ -5,20 +5,20 @@
 #include "tt_metal/impl/event/dispatch.hpp"
 
 #include <boost/core/span.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <tt_align.hpp>
 #include <utility>
 #include <vector>
 
 #include "assert.hpp"
-#include "command_queue_common.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch/command_queue_common.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -185,7 +185,7 @@ void read_events_from_completion_queue(
         channel);
     uint32_t event_completed = dispatch_cmd_and_event[sizeof(CQDispatchCmd) / sizeof(uint32_t)];
 
-    TT_ASSERT(
+    TT_FATAL(
         event_completed == event_descriptor.event_id,
         "Event Order Issue: expected to read back completion signal for event {} but got {}!",
         event_descriptor.event_id,

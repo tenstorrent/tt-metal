@@ -46,7 +46,7 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     const bool is_ring_start = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
-    erisc::datamover::handshake::sender_side_start(handshake_addr);
+    erisc::datamover::handshake::deprecated::sender_side_start(handshake_addr);
     uint32_t channels_addrs = get_arg_val<uint32_t>(arg_idx++);
     volatile uint32_t* sem_addr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     const uint32_t host_noc_x = get_arg_val<uint32_t>(arg_idx++);
@@ -60,7 +60,7 @@ void kernel_main() {
     channels_syncs_addrs->bytes_sent = 0;
     channels_syncs_addrs->receiver_ack = 0;
     *sem_addr = 0;
-    erisc::datamover::handshake::sender_side_finish(handshake_addr);
+    erisc::datamover::handshake::deprecated::sender_side_finish(handshake_addr);
     noc_semaphore_inc(host_semaphore_addr, 1);
 
     // Ensure every core has completed their previous tasks

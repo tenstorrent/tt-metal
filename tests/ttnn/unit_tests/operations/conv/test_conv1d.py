@@ -25,7 +25,6 @@ def run_conv(
     padding,
     use_1d_systolic_array,
     config_override,
-    use_shallow_conv_variant=False,
     transpose_mcast=True,
     enable_auto_formatting=False,
     padded_input_channels=None,
@@ -78,7 +77,6 @@ def run_conv(
         dtype=output_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,
-        input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -137,11 +135,11 @@ def run_conv(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant",
+    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, use_1d_systolic_array, config_override",
     (
-        (1, 5120, 5120, 32, 4, 1, 3, 5120, True, None, False),
-        (1, 5120, 5120, 1024, 4, 1, 3, 5120, True, None, False),
-        (1, 2560, 2560, 1027, 4, 1, 0, 2560, True, None, False),
+        (1, 5120, 5120, 32, 4, 1, 3, 5120, True, None),
+        (1, 5120, 5120, 1024, 4, 1, 3, 5120, True, None),
+        (1, 2560, 2560, 1027, 4, 1, 0, 2560, True, None),
     ),
 )
 @pytest.mark.parametrize(
@@ -178,7 +176,6 @@ def test_conv1d_mamba(
     groups,
     use_1d_systolic_array,
     config_override,
-    use_shallow_conv_variant,
     output_layout,
 ):
     if activations_dtype == ttnn.bfloat8_b:
@@ -203,7 +200,6 @@ def test_conv1d_mamba(
         padding,
         use_1d_systolic_array,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         padded_input_channels=None,
         output_layout=output_layout,
@@ -214,12 +210,12 @@ def test_conv1d_mamba(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant",
+    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, use_1d_systolic_array, config_override",
     (
-        (1, 32, 3, 32, 3, 1, 1, 1, True, None, False),
-        (1, 128, 32, 1024, 5, 1, 2, 1, True, None, False),
-        (1, 512, 32, 5120, 3, 1, 1, 1, True, None, False),
-        (1, 64, 64, 2560, 3, 1, 1, 32, True, None, False),
+        (1, 32, 3, 32, 3, 1, 1, 1, True, None),
+        (1, 128, 32, 1024, 5, 1, 2, 1, True, None),
+        (1, 512, 32, 5120, 3, 1, 1, 1, True, None),
+        (1, 64, 64, 2560, 3, 1, 1, 32, True, None),
     ),
 )
 @pytest.mark.parametrize(
@@ -252,7 +248,6 @@ def test_conv1d(
     groups,
     use_1d_systolic_array,
     config_override,
-    use_shallow_conv_variant,
     output_layout,
 ):
     if activations_dtype == ttnn.bfloat8_b:
@@ -277,7 +272,6 @@ def test_conv1d(
         padding,
         use_1d_systolic_array,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         padded_input_channels=None,
         output_layout=output_layout,
@@ -287,11 +281,11 @@ def test_conv1d(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, shard_layout, config_override, use_shallow_conv_variant",
+    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, shard_layout, config_override",
     (
         # (8, 768, 768, 384, 1, 1, 0, 4, True, None, False), #Pass
-        (8, 768, 3072, 384, 1, 1, 0, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED, {"act_block_h": 1536}, False),
-        (8, 3072, 768, 384, 1, 1, 0, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
+        (8, 768, 3072, 384, 1, 1, 0, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED, {"act_block_h": 1536}),
+        (8, 3072, 768, 384, 1, 1, 0, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None),
     ),
 )
 @pytest.mark.parametrize(
@@ -326,7 +320,6 @@ def test_squeezebert_conv1d(
     groups,
     shard_layout,
     config_override,
-    use_shallow_conv_variant,
     output_layout,
 ):
     if activations_dtype == ttnn.bfloat8_b:
@@ -351,7 +344,6 @@ def test_squeezebert_conv1d(
         padding,
         False,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
         shard_layout=shard_layout,
         padded_input_channels=None,
         output_layout=output_layout,
@@ -428,7 +420,6 @@ def test_with_prepare_weights(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         shard_layout=None,
-        input_channels_alignment=16,
         deallocate_activation=False,
         preprocess_weights_on_device=preprocess_weights_on_device,
     )

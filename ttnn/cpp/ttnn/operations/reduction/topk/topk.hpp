@@ -5,7 +5,8 @@
 #pragma once
 
 #include <optional>
-#include <functional>
+#include <tuple>
+#include <vector>
 
 #include "ttnn/decorators.hpp"
 
@@ -16,11 +17,12 @@ struct ExecuteTopK {
     static std::vector<Tensor> invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const uint32_t k,
-        const int8_t dim,
-        const bool largest,
-        const bool sorted,
+        uint32_t k,
+        int8_t dim,
+        bool largest,
+        bool sorted,
         const std::optional<MemoryConfig>& memory_config,
+        const std::optional<CoreRangeSet>& sub_core_grids,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors = std::nullopt);
 };
 

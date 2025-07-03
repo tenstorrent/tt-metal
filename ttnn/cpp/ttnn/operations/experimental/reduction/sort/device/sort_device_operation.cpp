@@ -8,9 +8,18 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::reduction::sort {
 
+constexpr uint32_t WT_THRESHOLD = 64;
+
 SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    return sort::program::SortProgramFactory{};
+    const auto input_tensor_shape = tensor_args.input_tensor.padded_shape();
+    const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const uint32_t Wt = input_tensor_shape[3] / tile_width;
+    if (Wt > WT_THRESHOLD) {
+        // Multi-core implementation
+        return sort::program::SortProgramFactorySingleRowMultiCore{};
+    }
+    return sort::program::SortProgramFactorySingleRowSingleCore{};
 }
 
 void SortDeviceOperation::validate_on_program_cache_hit(
@@ -21,7 +30,20 @@ void SortDeviceOperation::validate_on_program_cache_hit(
 void SortDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Validate shapes of input and output tensors
-    const auto input_tensor_shape = tensor_args.input_tensor.get_padded_shape();
+    const auto input_tensor_shape = tensor_args.input_tensor.padded_shape();
+    const uint32_t Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+
+    const auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
+    const auto input_data_format_size_bytes = tt::datum_size(input_data_format);
+
+    const uint32_t input_tensor_tile_size = tt::constants::TILE_HW * input_data_format_size_bytes;
+    const uint32_t value_tensor_tile_size = tt::constants::TILE_HW * input_data_format_size_bytes;
+    const uint32_t index_tensor_tile_size = tt::constants::TILE_HW * sizeof(uint16_t);
+    const uint32_t row_memory_size_bytes =
+        (input_tensor_tile_size + value_tensor_tile_size + index_tensor_tile_size) * Wt;
+
+    const auto device = tensor_args.input_tensor.device();
+    const auto l1_mem_size_bytes = device->l1_size_per_core();
 
     TT_FATAL(
         tensor_args.input_tensor.buffer() != nullptr,
@@ -44,18 +66,18 @@ void SortDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(attributes.output_mem_config.is_sharded() == false, "Sharded implementation not supported yet");
 
-    TT_FATAL(tensor_args.input_tensor.get_layout() == Layout::TILE, "The input must be in tiled format");
+    TT_FATAL(tensor_args.input_tensor.layout() == Layout::TILE, "The input must be in tiled format");
 
     if (tensor_args.output_tensors.size() == 2) {
         if (tensor_args.output_tensors.at(0).has_value() && tensor_args.output_tensors.at(1).has_value()) {
-            const auto output_tensor_shape = tensor_args.output_tensors.at(0)->get_padded_shape();
+            const auto output_tensor_shape = tensor_args.output_tensors.at(0)->padded_shape();
             TT_FATAL(
                 output_tensor_shape == input_tensor_shape,
                 "Output tensor shape must be the same as input tensor shape. Got output tensor shape: {} and input "
                 "tensor shape: {}",
                 output_tensor_shape,
                 input_tensor_shape);
-            const auto output_indices_shape = tensor_args.output_tensors.at(1)->get_padded_shape();
+            const auto output_indices_shape = tensor_args.output_tensors.at(1)->padded_shape();
             TT_FATAL(
                 output_indices_shape == input_tensor_shape,
                 "Output tensor indices shape must be the same as input tensor shape. Got output indices tensor shape: "
@@ -71,14 +93,14 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output_tensors.size() == 2) {
         if (tensor_args.output_tensors.at(0).has_value() && tensor_args.output_tensors.at(1).has_value()) {
-            return {tensor_args.output_tensors[0]->get_tensor_spec(), tensor_args.output_tensors[1]->get_tensor_spec()};
+            return {tensor_args.output_tensors[0]->tensor_spec(), tensor_args.output_tensors[1]->tensor_spec()};
         }
     }
     // Create output tensors specs
-    auto output_shape = tensor_args.input_tensor.get_logical_shape();
+    auto output_shape = tensor_args.input_tensor.logical_shape();
     auto values_spec = TensorSpec(
         output_shape,
-        TensorLayout(tensor_args.input_tensor.get_dtype(), PageConfig(Layout::TILE), attributes.output_mem_config));
+        TensorLayout(tensor_args.input_tensor.dtype(), PageConfig(Layout::TILE), attributes.output_mem_config));
     auto index_spec = TensorSpec(
         output_shape, TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), attributes.output_mem_config));
 

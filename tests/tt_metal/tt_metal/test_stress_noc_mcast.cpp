@@ -28,7 +28,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
@@ -103,12 +103,12 @@ void init(int argc, char** argv) {
     srand(seed);
 
     if (mcast_from_eth_g && ucast_only) {
-        log_fatal("Cannot request both mcast from eth and ucast only");
+        log_fatal(tt::LogTest, "Cannot request both mcast from eth and ucast only");
     }
 
     if (!ucast_only && !mcast_from_eth_g && mcast_x_g >= tlx_g && mcast_x_g <= tlx_g + width_g - 1 &&
         mcast_y_g >= tly_g && mcast_y_g <= tly_g + height_g - 1) {
-        log_fatal("Mcast core can't be within mcast grid");
+        log_fatal(tt::LogTest, "Mcast core can't be within mcast grid");
         exit(-1);
     }
 }
@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
             }
         }
         if (!found) {
-            log_fatal("{} not found in the list of idle eth cores", mcast_from_n_eth_g);
+            log_fatal(tt::LogTest, "{} not found in the list of idle eth cores", mcast_from_n_eth_g);
             tt_metal::CloseDevice(device);
             exit(-1);
         }
@@ -227,6 +227,7 @@ int main(int argc, char** argv) {
         }
 
         std::vector<uint32_t> runtime_args;
+        runtime_args.reserve(128);
         for (int i = 0; i < 128; i++) {
             runtime_args.push_back(rand());
         }
@@ -261,15 +262,15 @@ int main(int argc, char** argv) {
     log_info(LogTest, "Unicast grid: {}, writing {} bytes per xfer", workers_logical.str(), ucast_size_g);
 
     if (rnd_coord_g) {
-        log_info("Randomizing ucast noc write destinations");
+        log_info(tt::LogTest, "Randomizing ucast noc write destinations");
     } else {
-        log_info("Non-random ucast noc write destinations TBD");
+        log_info(tt::LogTest, "Non-random ucast noc write destinations TBD");
     }
 
-    log_info("Using NOC {}", (noc_g == tt_metal::NOC::NOC_0) ? 0 : 1);
+    log_info(tt::LogTest, "Using NOC {}", (noc_g == tt_metal::NOC::NOC_0) ? 0 : 1);
 
     if (rnd_delay_g) {
-        log_info("Randomizing delay");
+        log_info(tt::LogTest, "Randomizing delay");
     }
     log_info(LogTest, "Running for {} seconds", time_secs_g);
 

@@ -27,7 +27,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     First implementation just performs vol2col on a single core.
     */
 
-    auto input_tensor_shape = input_tensor.get_logical_shape();
+    auto input_tensor_shape = input_tensor.logical_shape();
     uint32_t N = input_tensor_shape[0];
     uint32_t T_in = input_tensor_shape[1];
     uint32_t H_in = input_tensor_shape[2];
@@ -36,7 +36,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     auto [T_out, H_out, W_out] = detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.kernel_size);
     uint32_t C_out = config.output_channels;
 
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto dtype_bytes = input_tensor.element_size();
     auto tile_size = tt::tt_metal::detail::TileSize(data_format);
 
@@ -85,30 +85,32 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     uint32_t C_out_block_bytes = C_out_block * dtype_bytes;  // bytes per output channel row
     uint32_t C_in_block_bytes = C_in_block * dtype_bytes;    // bytes per input channel row
 
-    tt::log_debug("Block sizes:");
-    tt::log_debug("  T_out_block: {}", config.T_out_block);
-    tt::log_debug("  H_out_block: {}", config.H_out_block);
-    tt::log_debug("  W_out_block: {}", config.W_out_block);
-    tt::log_debug("  C_out_block: {}", C_out_block);
-    tt::log_debug("  C_out_num_blocks: {}", C_out_num_blocks);
-    tt::log_debug("Patch size: {}", patch_size);
-    tt::log_debug("Num patches: {}", num_patches);
-    tt::log_debug("Patch size bytes: {}", patch_size_bytes);
-    tt::log_debug("C_out block bytes: {}", C_out_block_bytes);
-    tt::log_debug("Num patches tile padded: {}", num_patches_tile_padded);
-    tt::log_debug("Matmul M_t: {}", matmul_M_t);
-    tt::log_debug("Matmul K_t: {}", matmul_K_t);
-    tt::log_debug("Matmul N_t: {}", matmul_N_t);
+    log_debug(tt::LogOp, "Block sizes:");
+    log_debug(tt::LogOp, "  T_out_block: {}", config.T_out_block);
+    log_debug(tt::LogOp, "  H_out_block: {}", config.H_out_block);
+    log_debug(tt::LogOp, "  W_out_block: {}", config.W_out_block);
+    log_debug(tt::LogOp, "  C_out_block: {}", C_out_block);
+    log_debug(tt::LogOp, "  C_out_num_blocks: {}", C_out_num_blocks);
+    log_debug(tt::LogOp, "Patch size: {}", patch_size);
+    log_debug(tt::LogOp, "Num patches: {}", num_patches);
+    log_debug(tt::LogOp, "Patch size bytes: {}", patch_size_bytes);
+    log_debug(tt::LogOp, "C_out block bytes: {}", C_out_block_bytes);
+    log_debug(tt::LogOp, "Num patches tile padded: {}", num_patches_tile_padded);
+    log_debug(tt::LogOp, "Matmul M_t: {}", matmul_M_t);
+    log_debug(tt::LogOp, "Matmul K_t: {}", matmul_K_t);
+    log_debug(tt::LogOp, "Matmul N_t: {}", matmul_N_t);
     // Log CB sizes
-    tt::log_debug("CB vol2col_rm: page_size={} bytes, num_pages={}", patch_size_bytes, num_patches);
+    log_debug(tt::LogOp, "CB vol2col_rm: page_size={} bytes, num_pages={}", patch_size_bytes, num_patches);
 
-    tt::log_debug("CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_K_t);
+    log_debug(tt::LogOp, "CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_K_t);
 
-    tt::log_debug("CB weight_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_K_t * matmul_N_t);
+    log_debug(tt::LogOp, "CB weight_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_K_t * matmul_N_t);
 
-    tt::log_debug("CB matmul_interm_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
+    log_debug(
+        tt::LogOp, "CB matmul_interm_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
 
-    tt::log_debug("CB matmul_result_rm: page_size={} bytes, num_pages={}", C_out_block_bytes, num_patches_tile_padded);
+    log_debug(
+        tt::LogOp, "CB matmul_result_rm: page_size={} bytes, num_pages={}", C_out_block_bytes, num_patches_tile_padded);
 
     // Create circular buffers for vol2col, weights, bias and matmul intermediates
     uint32_t next_cb_index = tt::CBIndex::c_0;
@@ -163,16 +165,16 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     uint32_t in_row_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t out_row_size_bytes = output_tensor.buffer()->aligned_page_size();
 
-    tt::log_debug("Input tensor shape: N={}, T={}, H={}, W={}, C={}", N, T_in, H_in, W_in, C_in);
-    tt::log_debug("Output tensor shape: T={}, H={}, W={}, C={}", T_out, H_out, W_out, C_out);
-    tt::log_debug("Kernel size: {}x{}x{}", config.kernel_size[0], config.kernel_size[1], config.kernel_size[2]);
-    tt::log_debug("Stride: {}x{}x{}", config.stride[0], config.stride[1], config.stride[2]);
-    tt::log_debug("Padding: {}x{}x{}", config.padding[0], config.padding[1], config.padding[2]);
-    tt::log_debug("Groups: {}", config.groups);
-    tt::log_debug("Patch size: {}", patch_size);
-    tt::log_debug("Input row size (bytes): {}", in_row_size_bytes);
-    tt::log_debug("Output row size (bytes): {}", out_row_size_bytes);
-    tt::log_debug("Data format: {}", data_format);
+    log_debug(tt::LogOp, "Input tensor shape: N={}, T={}, H={}, W={}, C={}", N, T_in, H_in, W_in, C_in);
+    log_debug(tt::LogOp, "Output tensor shape: T={}, H={}, W={}, C={}", T_out, H_out, W_out, C_out);
+    log_debug(tt::LogOp, "Kernel size: {}x{}x{}", config.kernel_size[0], config.kernel_size[1], config.kernel_size[2]);
+    log_debug(tt::LogOp, "Stride: {}x{}x{}", config.stride[0], config.stride[1], config.stride[2]);
+    log_debug(tt::LogOp, "Padding: {}x{}x{}", config.padding[0], config.padding[1], config.padding[2]);
+    log_debug(tt::LogOp, "Groups: {}", config.groups);
+    log_debug(tt::LogOp, "Patch size: {}", patch_size);
+    log_debug(tt::LogOp, "Input row size (bytes): {}", in_row_size_bytes);
+    log_debug(tt::LogOp, "Output row size (bytes): {}", out_row_size_bytes);
+    log_debug(tt::LogOp, "Data format: {}", data_format);
 
     // Set up semaphore for synchronization. It is dual-purpose.
     // On the reducer core, it tracks the number of workers that are done with an output block.
@@ -231,16 +233,16 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     const uint32_t in0_num_subblocks = matmul_M_t / out_subblock_h;
     const uint32_t in1_num_subblocks = matmul_N_t / out_subblock_w;
 
-    tt::log_debug("Matmul parameters:");
-    tt::log_debug("  matmul_M_t: {}", matmul_M_t);
-    tt::log_debug("  matmul_K_t: {}", matmul_K_t);
-    tt::log_debug("  matmul_N_t: {}", matmul_N_t);
-    tt::log_debug("  dst_size: {}", dst_size);
-    tt::log_debug("  in0_block_w: {}", in0_block_w);
-    tt::log_debug("  out_subblock_w: {}", out_subblock_w);
-    tt::log_debug("  out_subblock_h: {}", out_subblock_h);
-    tt::log_debug("  in0_num_subblocks: {}", in0_num_subblocks);
-    tt::log_debug("  in1_num_subblocks: {}", in1_num_subblocks);
+    log_debug(tt::LogOp, "Matmul parameters:");
+    log_debug(tt::LogOp, "  matmul_M_t: {}", matmul_M_t);
+    log_debug(tt::LogOp, "  matmul_K_t: {}", matmul_K_t);
+    log_debug(tt::LogOp, "  matmul_N_t: {}", matmul_N_t);
+    log_debug(tt::LogOp, "  dst_size: {}", dst_size);
+    log_debug(tt::LogOp, "  in0_block_w: {}", in0_block_w);
+    log_debug(tt::LogOp, "  out_subblock_w: {}", out_subblock_w);
+    log_debug(tt::LogOp, "  out_subblock_h: {}", out_subblock_h);
+    log_debug(tt::LogOp, "  in0_num_subblocks: {}", in0_num_subblocks);
+    log_debug(tt::LogOp, "  in1_num_subblocks: {}", in1_num_subblocks);
 
     std::vector<uint32_t> compute_compile_time_args = {
         cb_vol2col_rm_id,
@@ -357,13 +359,13 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         c_in_parallel_factor * total_output_parallel,
         num_cores);
 
-    tt::log_debug("Parallelization scheme:");
-    tt::log_debug("C_in_num_blocks: {}, C_in_parallel_factor: {}", C_in_num_blocks, c_in_parallel_factor);
-    tt::log_debug("C_out_parallel_factor: {}", c_out_parallel_factor);
-    tt::log_debug("T_out_parallel_factor: {}", t_out_parallel_factor);
-    tt::log_debug("H_out_parallel_factor: {}", h_out_parallel_factor);
-    tt::log_debug("W_out_parallel_factor: {}", w_out_parallel_factor);
-    tt::log_debug("Total output parallel blocks: {}", total_output_parallel);
+    log_debug(tt::LogOp, "Parallelization scheme:");
+    log_debug(tt::LogOp, "C_in_num_blocks: {}, C_in_parallel_factor: {}", C_in_num_blocks, c_in_parallel_factor);
+    log_debug(tt::LogOp, "C_out_parallel_factor: {}", c_out_parallel_factor);
+    log_debug(tt::LogOp, "T_out_parallel_factor: {}", t_out_parallel_factor);
+    log_debug(tt::LogOp, "H_out_parallel_factor: {}", h_out_parallel_factor);
+    log_debug(tt::LogOp, "W_out_parallel_factor: {}", w_out_parallel_factor);
+    log_debug(tt::LogOp, "Total output parallel blocks: {}", total_output_parallel);
 
     // Calculate blocks per core using ceiling division
     const uint32_t c_in_per_core = tt::div_up(C_in_num_blocks, c_in_parallel_factor);
@@ -463,7 +465,8 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
             }
         }
 
-        tt::log_debug(
+        log_debug(
+            tt::LogOp,
             "Core {},{}: C_in=[{},{}), C_out=[{},{}), T_out=[{},{}), H_out=[{},{}), W_out=[{},{}), "
             "ReductionGroup={}, C_in_idx={}, HasWork={}, IsReducer={}",
             core.x,
@@ -544,7 +547,8 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
             CoreCoord reducer_core = {
                 reducer_core_ids[group_id] % grid_size.x, reducer_core_ids[group_id] / grid_size.x};
 
-            tt::log_debug(
+            log_debug(
+                tt::LogOp,
                 "Reduction Group {}: {} cores [{}], Reducer: ({},{})",
                 group_id,
                 group.size(),
@@ -597,7 +601,8 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
             worker_cores_str += "(" + std::to_string(worker_core_physical_xs[reduction_group_id][i]) + "," +
                                 std::to_string(worker_core_physical_ys[reduction_group_id][i]) + ")";
         }
-        tt::log_debug(
+        log_debug(
+            tt::LogOp,
             "Core ({},{}): IsReducer={}, ReductionGroup={}, ReducerCore=({},{}), Workers=[{}]",
             core.x,
             core.y,

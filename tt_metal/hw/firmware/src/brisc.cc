@@ -249,7 +249,7 @@ void device_setup() {
 
 inline void deassert_ncrisc_trisc() {
     // Below sets ncrisc to go so we can wait until it is cleared on first iteration
-    mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
+    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_INIT;
 
     // Bring ncrisc/triscs out of reset
     deassert_all_reset();
@@ -257,14 +257,14 @@ inline void deassert_ncrisc_trisc() {
 
 inline void run_triscs(dispatch_core_processor_masks enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
-    while (mailboxes->slave_sync.trisc0 != RUN_SYNC_MSG_DONE) {
+    while (mailboxes->subordinate_sync.trisc0 != RUN_SYNC_MSG_DONE) {
         invalidate_l1_cache();
     }
 
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
-        mailboxes->slave_sync.trisc0 = RUN_SYNC_MSG_GO;
-        mailboxes->slave_sync.trisc1 = RUN_SYNC_MSG_GO;
-        mailboxes->slave_sync.trisc2 = RUN_SYNC_MSG_GO;
+        mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_GO;
+        mailboxes->subordinate_sync.trisc1 = RUN_SYNC_MSG_GO;
+        mailboxes->subordinate_sync.trisc2 = RUN_SYNC_MSG_GO;
     }
 }
 
@@ -272,20 +272,20 @@ inline void start_ncrisc_kernel_run_early(dispatch_core_processor_masks enables)
     // On Wormhole, start_ncrisc_kernel_run will reset NCRISC to start the
     // kernel running. We delay it until later to give the NCRISC time to load
     // CBs before we wait on it.
-#if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
+#if !defined(ARCH_WORMHOLE)
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
-        mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
+        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
     }
 #endif
 }
 
 inline void start_ncrisc_kernel_run(dispatch_core_processor_masks enables) {
-#ifdef NCRISC_FIRMWARE_KERNEL_SPLIT
+#if defined(ARCH_WORMHOLE)
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
         // The NCRISC behaves badly if it jumps from L1 to IRAM, so instead halt it and then reset it to the IRAM
         // address it provides.
-        while (mailboxes->slave_sync.dm1 != RUN_SYNC_MSG_WAITING_FOR_RESET);
-        mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
+        while (mailboxes->subordinate_sync.dm1 != RUN_SYNC_MSG_WAITING_FOR_RESET);
+        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
         volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
         cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
         assert_just_ncrisc_reset();
@@ -300,7 +300,7 @@ inline void start_ncrisc_kernel_run(dispatch_core_processor_masks enables) {
 
 inline void wait_ncrisc_trisc() {
     WAYPOINT("NTW");
-    while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
+    while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
 #if defined(ARCH_WORMHOLE)
         // Avoid hammering L1 while other cores are trying to work. Seems not to
         // be needed on Blackhole, probably because invalidate_l1_cache takes
@@ -312,7 +312,7 @@ inline void wait_ncrisc_trisc() {
     WAYPOINT("NTD");
 }
 
-inline void trigger_sync_register_init() { mailboxes->slave_sync.trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
+inline void trigger_sync_register_init() { mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
 inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t end_cb_index) {
 #if defined(ARCH_BLACKHOLE)
@@ -324,13 +324,7 @@ inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t end_cb
 }
 
 int main() {
-    // Workaround for tt-metal#16439, making sure gathering multiple instructions issued to Tensix is disabled
-    // Brisc does not issue Tensix instructions but to be consistent for all riscs around Tensix we disable it
-#ifdef ARCH_BLACKHOLE
-    disable_gathering();
-#endif
-    configure_l1_data_cache();
-    DIRTY_STACK_MEMORY();
+    configure_csr();
     WAYPOINT("I");
 
     do_crt1((uint32_t*)MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH);
@@ -347,9 +341,10 @@ int main() {
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
     mailboxes->ncrisc_halt.resume_addr = 0;
-    mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
     deassert_ncrisc_trisc();
 
+    // Wait for all cores to be finished initializing before reporting initialization done.
+    wait_ncrisc_trisc();
     mailboxes->go_message.signal = RUN_MSG_DONE;
 
     // Initialize the NoCs to a safe state
@@ -375,17 +370,21 @@ int main() {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
-            if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+            if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
+                (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST)) {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
-                // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently guaranteed
-                // to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid value.
-                // For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn is not issued.
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
-                mailboxes->go_message.signal = RUN_MSG_DONE;
-                // Notify dispatcher that this has been done
-                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                notify_dispatch_core_done(dispatch_addr, noc_index);
+                if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+                    // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
+                    // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
+                    // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn
+                    // is not issued.
+                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+                    mailboxes->go_message.signal = RUN_MSG_DONE;
+                    // Notify dispatcher that this has been done
+                    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                    notify_dispatch_core_done(dispatch_addr, noc_index);
+                }
             }
         }
 
@@ -403,7 +402,7 @@ int main() {
                 (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
             // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
-                mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_LOAD;
+                mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_LOAD;
             }
             // Copies from L1 to IRAM on chips where NCRISC has IRAM
             uint32_t kernel_config_base =
@@ -456,10 +455,10 @@ int main() {
                 barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                 start_ncrisc_kernel_run(enables);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
-                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
-                    (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
-                (*kernel_address)((uint32_t)kernel_address);
-                RECORD_STACK_USAGE();
+                uint32_t kernel_lma = (kernel_config_base +
+                                       launch_msg_address->kernel_config.kernel_text_offset[index]);
+                auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+                record_stack_usage(stack_free);
             } else {
 #if defined(PROFILE_KERNEL)
                 // This was not initialized in the kernel

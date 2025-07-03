@@ -3,26 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-
-
-def get_default_conv_config():
-    return ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat8_b,
-        weights_dtype=ttnn.bfloat8_b,
-        activation="",
-        deallocate_activation=True,
-    )
-
-
-def get_default_compute_config(device):
-    return ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_mode=True,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
 
 
 def prepare_split_conv_weights_bias(
@@ -155,7 +137,10 @@ def split_conv_and_run(
                     out_channel_slice_output = in_channel_slice_output
             else:
                 out_channel_slice_output = ttnn.add(
-                    out_channel_slice_output, in_channel_slice_output, output_tensor=out_channel_slice_output
+                    out_channel_slice_output,
+                    in_channel_slice_output,
+                    output_tensor=out_channel_slice_output,
+                    use_legacy=True,  # until fix for https://github.com/tenstorrent/tt-metal/issues/22307
                 )
                 in_channel_slice_output.deallocate(True)
 
@@ -184,7 +169,7 @@ def prepare_group_norm(device, in_channels, core_grid, torch_weights, torch_bias
     torch_input_mask = ttnn.create_group_norm_input_mask(in_channels, num_groups, num_cores_across_channel)
     input_mask = ttnn.from_torch(
         torch_input_mask,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,

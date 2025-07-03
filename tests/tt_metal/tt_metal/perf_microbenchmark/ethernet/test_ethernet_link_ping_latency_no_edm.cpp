@@ -29,10 +29,9 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "df/float32.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "umd/device/tt_xy_pair.h"
@@ -224,30 +223,25 @@ int main(int argc, char** argv) {
     std::cout << "done setting up test fixture" << std::endl;
 
     const auto& device_0 = test_fixture.devices_.at(0);
-    std::cout << "1" << std::endl;
-    auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
-    std::cout << "2" << std::endl;
+    const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
     auto eth_sender_core_iter_end = active_eth_cores.end();
     chip_id_t device_id = std::numeric_limits<chip_id_t>::max();
-    std::cout << "3" << std::endl;
     tt_xy_pair eth_receiver_core;
     bool initialized = false;
     tt_xy_pair eth_sender_core;
-    std::cout << "4" << std::endl;
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     do {
         TT_ASSERT(eth_sender_core_iter != eth_sender_core_iter_end);
-        std::cout << "4a" << std::endl;
-        std::tie(device_id, eth_receiver_core) = device_0->get_connected_ethernet_core(*eth_sender_core_iter);
-        std::cout << "4b" << std::endl;
-        eth_sender_core = *eth_sender_core_iter;
+        if (cluster.is_ethernet_link_up(device_0->id(), *eth_sender_core_iter)) {
+            std::tie(device_id, eth_receiver_core) = device_0->get_connected_ethernet_core(*eth_sender_core_iter);
+            eth_sender_core = *eth_sender_core_iter;
+        }
         eth_sender_core_iter++;
     } while (device_id != 1);
-    std::cout << "5" << std::endl;
     TT_ASSERT(device_id == 1);
-    std::cout << "6" << std::endl;
     const auto& device_1 = test_fixture.devices_.at(device_id);
-    std::cout << "7" << std::endl;
+
     // Add more configurations here until proper argc parsing added
     bool success = false;
     success = true;

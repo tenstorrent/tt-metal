@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/operations/data_movement/common/common.hpp"
-#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -29,7 +29,7 @@ ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& shape) { return squeeze_shape
 
 
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
-    auto shape = tensor.get_logical_shape();
+    auto shape = tensor.logical_shape();
     auto rank = shape.rank();
     TT_FATAL(shape.rank() >= 4, "Tensor has to be of rank larger than 4! Instead is {}", shape.rank());
     if (rank == 4) {
@@ -41,7 +41,7 @@ ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
         auto squeezed = tensor;
         while (rank > 4 && shape[i] == 1) {
             squeezed = ttnn::squeeze(squeezed, 0);
-            rank = squeezed.get_logical_shape().rank();
+            rank = squeezed.logical_shape().rank();
             i++;
         }
         if (rank <= 4) {
@@ -110,8 +110,8 @@ ttnn::Tensor pad_to_tile_vol(
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config) {
-    auto logical_shape = tensor.get_logical_shape();
-    auto padded_shape = tensor.get_padded_shape();
+    const auto& logical_shape = tensor.logical_shape();
+    auto padded_shape = tensor.padded_shape();
     auto rank = logical_shape.rank();
     if (padded_shape[-1] % tt::constants::TILE_WIDTH != 0 || padded_shape[-2] % tt::constants::TILE_HEIGHT != 0) {
         TT_ASSERT(rank >= 2, "rank of tensor to pad to tile must be at least 2.");
@@ -127,8 +127,8 @@ ttnn::Tensor pad_to_tile_vol(
         constexpr bool pad_use_multicore = true;
         auto padded_output = ttnn::pad(queue_id, tensor, padding_vec, value, use_multicore, memory_config);
         TT_FATAL(
-            padded_output.get_padded_shape()[-1] % tt::constants::TILE_WIDTH == 0 &&
-                padded_output.get_padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0,
+            padded_output.padded_shape()[-1] % tt::constants::TILE_WIDTH == 0 &&
+                padded_output.padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0,
             "pad_to_tile_vol: output tensor must be divisible by tile size");
         return padded_output;
     }
@@ -203,7 +203,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
     auto rank = logical_shape.rank();
     TT_FATAL(rank >= 2, "rank of tensor to shard must be at least 2.");
 
-    ttnn::TensorMemoryLayout tensor_memory_layout;
+    ttnn::TensorMemoryLayout tensor_memory_layout{};
     if (strategy == ShardStrategy::BLOCK) {
         tensor_memory_layout = ttnn::TensorMemoryLayout::BLOCK_SHARDED;
     } else if (strategy == ShardStrategy::WIDTH) {

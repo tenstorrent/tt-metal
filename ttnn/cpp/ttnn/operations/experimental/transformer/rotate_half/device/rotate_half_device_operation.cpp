@@ -17,26 +17,26 @@ void RotateHalf::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to rotate half need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to rotate half need to be allocated in buffers on device!");
-    TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to rotate half must be tilized");
-    TT_FATAL(input_tensor.get_padded_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
+    TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to rotate half must be tilized");
+    TT_FATAL(input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "RotateHalf does not currently support sharding");
     TT_FATAL(
-        this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "RotateHalf does not currently support sharding");
 }
 
 std::vector<ttnn::TensorSpec> RotateHalf::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return {TensorSpec(
-        input_tensor.get_logical_shape(),
+        input_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
-            input_tensor.get_dtype(),
+            input_tensor.dtype(),
             PageConfig(Layout::TILE),
             output_mem_config,
-            input_tensor.get_logical_shape(),
-            input_tensor.get_padded_shape()))};
+            input_tensor.logical_shape(),
+            input_tensor.padded_shape()))};
 }
 
 operation::ProgramWithCallbacks RotateHalf::create_program(

@@ -15,13 +15,16 @@ on:
       per-test-timeout:
         required: false
         type: string
-        default: 5.5
+        default: 10
+      product:
+        required: true
+        type: string # tt-metalium or tt-nn
 
 jobs:
   metalium-basic:
     runs-on: ${{ format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner) }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
@@ -43,7 +46,8 @@ jobs:
 
       - name: Install packages
         run: |
-          apt install ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-validation_*.deb
+          # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
 
       - name: Run a test
         id: test
@@ -54,8 +58,9 @@ jobs:
           TT_METAL_HOME: /usr/libexec/tt-metalium # TODO: Need to get away from env vars!
           TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
+          LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
         run: |
-          /usr/libexec/tt-metalium/validation/tt-metalium-validation-basic
+          /usr/bin/${{ inputs.product }}-validation-basic
 
       - name: workaround
         run: |
@@ -68,7 +73,7 @@ jobs:
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
         with:
-          name: Metalium ${{ matrix.platform }} basic tests
+          name: ${{ inputs.product }} ${{ inputs.runner }} basic tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
           path: /work/test-reports/*.xml
           reporter: jest-junit
           working-directory: /work

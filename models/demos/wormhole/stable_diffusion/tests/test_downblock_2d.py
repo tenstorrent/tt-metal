@@ -2,26 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 from diffusers import StableDiffusionPipeline
-import ttnn
-import pytest
-
-from models.utility_functions import torch_random
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import (
-    skip_for_grayskull,
-)
-
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_downblock_2d_new_conv import downblock2d
-from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_downblock_2d_new_conv import downblock2d
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     get_default_compute_config,
-    preprocess_and_push_input_to_device,
     post_process_output_and_move_to_host,
+    preprocess_and_push_input_to_device,
 )
-from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
+from models.utility_functions import skip_for_grayskull, torch_random
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_grayskull()
@@ -30,9 +26,7 @@ from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_
     "hidden_states, shard_layout, shard_end_core, shard_shape", (DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO,)
 )
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
-def test_downblock_512x512(
-    reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, temb, use_program_cache
-):
+def test_downblock_512x512(reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, temb):
     # Initialize PyTorch component
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet

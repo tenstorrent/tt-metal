@@ -7,7 +7,7 @@
 #include <source_location>
 #include <string_view>
 
-namespace tt::stl {
+namespace ttsl {
 
 namespace detail {
 
@@ -38,7 +38,6 @@ constexpr std::size_t suffix_type_name_size = long_double_raw_string.size() - en
 template <typename T>
 constexpr std::string_view long_name() {
     std::string_view raw_name = type_to_string_raw<T>();
-    auto size = raw_name.size();
     raw_name.remove_prefix(begin_type_name);
     raw_name.remove_suffix(suffix_type_name_size);
     std::string_view struct_name("struct ");
@@ -91,4 +90,10 @@ inline constexpr std::string_view short_type_name = detail::short_name<T>();
 template <typename T>
 inline constexpr std::string_view long_type_name = detail::long_name<T>();
 
-}  // namespace tt::stl
+}  // namespace ttsl
+
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt

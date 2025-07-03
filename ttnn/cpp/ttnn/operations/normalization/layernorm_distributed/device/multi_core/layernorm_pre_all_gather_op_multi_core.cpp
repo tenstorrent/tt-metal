@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_op.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
@@ -20,15 +20,17 @@ namespace ttnn::operations::normalization {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
-inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
-    return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
+inline bool is_dram(const Tensor& input_tensor) {
+    return input_tensor.memory_config().buffer_type() == BufferType::DRAM;
 }
-inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
-    TT_ASSERT(sizeof float_num == sizeof uint32_data);
+    TT_FATAL(
+        sizeof float_num == sizeof uint32_data,
+        "Float size ({}) must equal uint32 size ({})",
+        sizeof float_num,
+        sizeof uint32_data);
 
     uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
     // just move upper 16 to lower 16 (truncate)
@@ -52,13 +54,13 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
-    const auto shape = a.get_padded_shape();
+    const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
-    const uint32_t NC = a.volume() / HW;
+    const uint32_t NC = a.physical_volume() / HW;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
-    const auto& a_dtype = a.get_dtype();
+    const auto& a_dtype = a.dtype();
 
     const uint32_t Wt = W / TILE_WIDTH;
     const uint32_t Ht = H / TILE_HEIGHT;
@@ -66,12 +68,12 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
 
     uint32_t num_tile_rows = NC * Ht;
 
-    tt::log_debug("is_rmsnorm: {}", is_rmsnorm);
-    tt::log_debug("W: {}", W);
-    tt::log_debug("H: {}", H);
-    tt::log_debug("num_tile_rows: {}", num_tile_rows);
-    tt::log_debug("Wt: {}", Wt);
-    tt::log_debug("Ht: {}", Ht);
+    log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
+    log_debug(tt::LogOp, "W: {}", W);
+    log_debug(tt::LogOp, "H: {}", H);
+    log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
+    log_debug(tt::LogOp, "Wt: {}", Wt);
+    log_debug(tt::LogOp, "Ht: {}", Ht);
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -87,16 +89,16 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     uint32_t block_size = 1;  // find_max_divisor(Wt, 8);
     uint32_t writer_block_size = 1;
 
-    tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
     uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
     uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
-    tt::log_debug("in_data_format: {}", in_data_format);
-    tt::log_debug("out_data_format: {}", out_data_format);
+    log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
+    log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
 
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
     uint32_t inb_single_tile_size = 0;
@@ -104,7 +106,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     auto a_addr = a.buffer()->address();
     auto dst_addr = output.buffer()->address();
 
-    uint32_t num_tiles = a.volume() / TILE_HW;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -131,15 +133,22 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
         out0_tiles = 2;
     }
 
-    TT_ASSERT(
-        W <= TILE_WIDTH * in0_tiles &&
-        "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
-    TT_ASSERT(
-        in0_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        intermed0_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_FATAL(
+        W <= TILE_WIDTH * in0_tiles,
+        "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now).",
+        W,
+        TILE_WIDTH,
+        in0_tiles);
+    TT_FATAL(
+        in0_tiles % block_size == 0,
+        "Size of buffer ({}) must be divisible by the size of block ({}) used by the reader and compute kernel.",
+        in0_tiles,
+        block_size);
+    TT_FATAL(
+        intermed0_tiles % block_size == 0,
+        "Size of buffer ({}) must be divisible by the size of block ({}) used by the reader and compute kernel.",
+        intermed0_tiles,
+        block_size);
 
     auto grid_size = device->compute_with_storage_grid_size();
     auto
@@ -150,12 +159,12 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
-    tt::log_debug("num_cores: {}", num_cores);
-    tt::log_debug("grid_size: {}", grid_size);
-    tt::log_debug("core_group_1: {}", core_group_1.str());
-    tt::log_debug("num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
-    tt::log_debug("core_group_2: {}", core_group_2.str());
-    tt::log_debug("num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
+    log_debug(tt::LogOp, "num_cores: {}", num_cores);
+    log_debug(tt::LogOp, "grid_size: {}", grid_size);
+    log_debug(tt::LogOp, "core_group_1: {}", core_group_1.str());
+    log_debug(tt::LogOp, "num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
+    log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
+    log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -172,7 +181,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
                                                       (std::uint32_t)is_dram(output),
                                                       (std::uint32_t)writer_block_size};
 
-    bool tile_dtype_is_bfloat16 = a.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
+    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     std::map<string, string> compute_defines;
 
     if (is_rmsnorm) {
@@ -231,14 +240,14 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_out0_config);
 
-    // Log all circular buffers with program.circular_buffers_on_corerange(all_cores), which returns
+    // Log all circular buffers with program.circular_buffers(), which returns
     // std::vector<std::shared_ptr<CircularBuffer>>
-    for (const auto& cb : program.circular_buffers_on_corerange(*all_cores.ranges().begin())) {
+    for (const auto& cb : program.circular_buffers()) {
         for (const auto index : cb->buffer_indices()) {
-            tt::log_debug("cb_id {}", index);
-            tt::log_debug("page_size: {}", cb->page_size(index));
-            tt::log_debug("num_pages: {}", cb->num_pages(index));
-            tt::log_debug("data_format: {}", cb->data_format(index));
+            log_debug(tt::LogOp, "cb_id {}", index);
+            log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
+            log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));
+            log_debug(tt::LogOp, "data_format: {}", cb->data_format(index));
         }
     }
 
@@ -255,7 +264,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
         } else if (core_group_2.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         uint32_t in_tile_offset = curr_row * Wt;

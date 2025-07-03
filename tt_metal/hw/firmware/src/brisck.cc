@@ -17,12 +17,17 @@
 #include "firmware_common.h"
 #include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "debug/stack_usage.h"
 #include <kernel_includes.hpp>
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "remote_circular_buffer_api.h"
 #endif
 
-void kernel_launch(uint32_t kernel_base_addr) {
+extern "C" [[gnu::section(".start")]]
+uint32_t _start() {
+    // Enable GPREL optimizations.
+    asm("0: .reloc 0b, R_RISCV_NONE, __global_pointer$");
+    mark_stack_usage();
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     wait_for_go_message();
 #ifdef KERNEL_RUN_TIME
@@ -30,10 +35,8 @@ void kernel_launch(uint32_t kernel_base_addr) {
     while (c_tensix_core::read_wall_clock() < end_time);
 #endif
 #else
-    extern uint32_t __kernel_init_local_l1_base[];
-    extern uint32_t __fw_export_end_text[];
-    do_crt1((uint32_t tt_l1_ptr
-                 *)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base - (uint32_t)__fw_export_end_text));
+    extern uint32_t __kernel_data_lma[];
+    do_crt1((uint32_t tt_l1_ptr *)__kernel_data_lma);
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         noc_local_state_init(NOC_INDEX);
@@ -53,13 +56,14 @@ void kernel_launch(uint32_t kernel_base_addr) {
             // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the
             // NOC interface is in a known idle state for the next kernel. Dispatch kernels don't increment noc counters
             // so we only include this for non-dispatch kernels
-            ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX));
-            ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX));
-            ASSERT(ncrisc_noc_nonposted_writes_flushed(NOC_INDEX));
-            ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX));
-            ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX));
+            ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX), DebugAssertNCriscNOCReadsFlushedTripped);
+            ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCNonpostedWritesSentTripped);
+            ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX), DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
+            ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
             WAYPOINT("NKFD");
         }
     }
+    EARLY_RETURN_FOR_DEBUG_EXIT;
 #endif
+    return measure_stack_usage();
 }

@@ -7,7 +7,6 @@
 #include <command_queue.hpp>
 #include <device.hpp>
 #include <sub_device.hpp>
-#include <sub_device_manager_tracker.hpp>
 #include <sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
@@ -30,6 +29,7 @@
 #include "mesh_device.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "sub_device/sub_device_manager_tracker.hpp"
 
 namespace tt::tt_metal {
 
@@ -56,18 +56,6 @@ SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
     auto sub_device_manager_id = sub_device_manager->id();
     sub_device_managers_.insert_or_assign(sub_device_manager_id, std::move(sub_device_manager));
     return sub_device_manager_id;
-}
-
-std::tuple<SubDeviceManagerId, SubDeviceId> SubDeviceManagerTracker::create_sub_device_manager_with_fabric(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    auto fabric_sub_device = SubDevice(std::array{
-        CoreRangeSet(),
-        default_sub_device_manager_->sub_device(SubDeviceId{0}).cores(HalProgrammableCoreType::ACTIVE_ETH)});
-    auto new_sub_devices = std::vector<SubDevice>(sub_devices.begin(), sub_devices.end());
-    new_sub_devices.push_back(fabric_sub_device);
-    auto fabric_sub_device_id = SubDeviceId{static_cast<uint32_t>(new_sub_devices.size() - 1)};
-    auto sub_device_manager_id = this->create_sub_device_manager(new_sub_devices, local_l1_size);
-    return {sub_device_manager_id, fabric_sub_device_id};
 }
 
 void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager) {

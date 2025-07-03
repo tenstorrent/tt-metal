@@ -19,7 +19,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/tile.hpp>
@@ -42,10 +42,10 @@ using Parameters = std::map<std::string, ttnn::Tensor>;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-ttnn::MemoryConfig l1_memory_config = ttnn::MemoryConfig{
-    .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::L1};
-ttnn::MemoryConfig dram_memory_config = ttnn::MemoryConfig{
-    .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::DRAM};
+ttnn::MemoryConfig l1_memory_config =
+    ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
+ttnn::MemoryConfig dram_memory_config =
+    ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
 ttnn::Tensor encoder(
     ttnn::Tensor&& hidden_states,
@@ -53,7 +53,7 @@ ttnn::Tensor encoder(
     const Parameters& parameters,
     std::size_t encoder_index,
     const std::uint32_t head_size) {
-    auto batch_size = hidden_states.get_padded_shape()[0];
+    auto batch_size = hidden_states.padded_shape()[0];
 
     auto fused_qkv_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {12, batch_size},
@@ -236,7 +236,7 @@ void test_bert() {
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
 
     if (compute_grid_size.x * compute_grid_size.y == 88) {
-        tt::log_info(tt::LogTest, "Skipping test_bert for E75");
+        log_info(tt::LogTest, "Skipping test_bert for E75");
         return;
     }
 
@@ -331,7 +331,7 @@ void test_bert() {
             ttnn::Shape({1, 1, 1, TILE_WIDTH})));
 
     auto run_bert = [&]() {
-        tt::log_debug(tt::LogTest, "run_bert started");
+        log_debug(tt::LogTest, "run_bert started");
         auto begin = std::chrono::steady_clock::now();
         auto hidden_states =
             ttnn::random::uniform(
@@ -343,7 +343,7 @@ void test_bert() {
         auto output = qa_head(std::move(hidden_states), parameters).cpu();
         auto end = std::chrono::steady_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
-        tt::log_info(tt::LogTest, "run_bert finished in {} microseconds", duration);
+        log_info(tt::LogTest, "run_bert finished in {} microseconds", duration);
         return duration;
     };
 
@@ -354,14 +354,13 @@ void test_bert() {
         }
         auto average_duration = total_duration / num_iterations;
         auto num_samples_per_second = 1e6 / average_duration * batch_size;
-        tt::log_info(tt::LogTest, "total duration: {} microseconds", total_duration);
-        tt::log_info(tt::LogTest, "average duration: {} average_duration", total_duration);
-        tt::log_info(tt::LogTest, "samples per second: {}", num_samples_per_second);
+        log_info(tt::LogTest, "total duration: {} microseconds", total_duration);
+        log_info(tt::LogTest, "average duration: {} average_duration", total_duration);
+        log_info(tt::LogTest, "samples per second: {}", num_samples_per_second);
     };
-    device->enable_program_cache();
+
     run_bert();
     run_loop();
-    device->disable_and_clear_program_cache();
 }
 
 int main(int argc, char** argv) {

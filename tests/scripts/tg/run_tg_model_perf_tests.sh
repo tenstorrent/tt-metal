@@ -1,19 +1,5 @@
 #!/bin/bash
 
-run_tg_llm_tests() {
-
-  echo "LOG_METAL: Running run_t3000_llama2_70b_tests"
-  pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py -m "model_perf_t3000" --timeout=600 ; fail+=$?
-
-  # Merge all the generated reports
-  env python3 models/perf/merge_perf_results.py; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    echo "LOG_METAL: run_tg_model_perf_tests failed"
-    exit 1
-  fi
-}
-
 run_tg_cnn_tests() {
 
   echo "LOG_METAL: Running run_tg_resnet50_tests"
@@ -30,19 +16,16 @@ run_tg_cnn_tests() {
 
 run_tg_llama_70b_model_perf_tests() {
 
-  # Llama3.1-70B
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+  # Llama3.3-70B
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
 
   echo "LOG_METAL: Running run_tg_llama_70b_model_perf_tests"
 
-  # Run kernel and op to op latency test
-  TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=$llama70b pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device ; fail+=$?
-
   # Run non-overlapped dispatch perf test
-  TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=$llama70b pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch ; fail+=$?
+  TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=$llama70b pytest -n auto models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch --timeout=600 ; fail+=$?
 
-  # # Merge all the generated reports
-  # env python3 models/perf/merge_perf_results.py; fail+=$?
+  # Run kernel and op to op latency test
+  TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=$llama70b pytest -n auto models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device --timeout=600 ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_llama_70b_model_perf_tests failed"
@@ -85,14 +68,12 @@ main() {
   cd $TT_METAL_HOME
   export PYTHONPATH=$TT_METAL_HOME
 
-  if [[ "$pipeline_type" == "llm_model_perf_tg_device" ]]; then
-    run_tg_llm_tests
-  elif [[ "$pipeline_type" == "cnn_model_perf_tg_device" ]]; then
+  if [[ "$pipeline_type" == "cnn_model_perf_tg_device" ]]; then
     run_tg_cnn_tests
   elif [[ "$pipeline_type" == "tg_llama_model_perf_tg_device" ]]; then
-     run_tg_llama_70b_model_perf_tests
+    run_tg_llama_70b_model_perf_tests
   else
-    echo "$pipeline_type is invalid (supported: [cnn_model_perf_tg_device, cnn_model_perf_tg_device, tg_llama_model_perf_tg_device])" 2>&1
+    echo "$pipeline_type is invalid (supported: [cnn_model_perf_tg_device, tg_llama_model_perf_tg_device])" 2>&1
     exit 1
   fi
 }

@@ -4,8 +4,8 @@
 
 import pytest
 
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_blackhole
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.utility_functions import is_blackhole, is_wormhole_b0, skip_for_grayskull
 
 
 def run_bert_perf(batch_size, test, expected_perf):
@@ -49,8 +49,8 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [7, "BERT_LARGE-batch_8-BFLOAT8_B-SHARDED", 280],
-        [8, "BERT_LARGE-batch_8-BFLOAT8_B-SHARDED", 360],
+        [7, "BERT_LARGE-batch_8-BFLOAT8_B-SHARDED", 322],
+        [8, "BERT_LARGE-batch_8-BFLOAT8_B-SHARDED", 371],
     ],
 )
 def test_perf_device_bare_metal_wh(batch_size, test, expected_perf):

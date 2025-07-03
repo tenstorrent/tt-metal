@@ -6,7 +6,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "cpp/ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include <tt-metalium/constants.hpp>
 #include "tools/profiler/op_profiler.hpp"
@@ -100,7 +100,7 @@ std::vector<OptionalTensor> WhereBackwardOperation::invoke(
     } else {
         result.emplace_back(std::nullopt);
     }
-    return std::move(result);
+    return result;
 }
 
 // lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight

@@ -33,12 +33,11 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
@@ -309,8 +308,12 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Test cannot run on specified device.");
         }
 
-        auto [dev_l_mesh_id, dev_l_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(test_device_id_l);
-        auto [dev_r_mesh_id, dev_r_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(test_device_id_r);
+        auto dev_l_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(test_device_id_l);
+        auto dev_r_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(test_device_id_r);
+        auto dev_l_mesh_id = dev_l_fabric_node_id.mesh_id;
+        auto dev_l_chip_id = dev_l_fabric_node_id.chip_id;
+        auto dev_r_mesh_id = dev_r_fabric_node_id.mesh_id;
+        auto dev_r_chip_id = dev_r_fabric_node_id.chip_id;
 
         log_info(
             LogTest,
@@ -483,7 +486,7 @@ int main(int argc, char** argv) {
                 0x410,                                                                  // 2: dest_noc_offset
                 router_phys_core.x,                                                     // 3: router_x
                 router_phys_core.y,                                                     // 4: router_y
-                (dev_r_mesh_id << 16 | dev_r_chip_id),                                  // 5: mesh and chip id
+                (*dev_r_mesh_id << 16 | dev_r_chip_id),                                  // 5: mesh and chip id
                 0xd0000,                                                                // 6: space in rx's L1
                 gk_interface_addr,                                                      // 7: gk_message_addr_l
                 tx_gk_noc_offset,                                                       // 8: gk_message_addr_h
@@ -603,11 +606,9 @@ int main(int argc, char** argv) {
 
         if (pass) {
             double total_tx_bw = 0.0;
-            uint64_t total_tx_words_sent = 0;
             uint64_t total_rx_words_checked = 0;
             for (uint32_t i = 0; i < num_src_endpoints; i++) {
                 uint64_t tx_words_sent = get_64b_result(tx_results[i], TT_FABRIC_WORD_CNT_INDEX);
-                total_tx_words_sent += tx_words_sent;
                 uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], TT_FABRIC_CYCLES_INDEX);
                 double tx_bw = ((double)tx_words_sent) * PACKET_WORD_SIZE_BYTES / tx_elapsed_cycles;
                 total_tx_bw += tx_bw;
@@ -645,7 +646,7 @@ int main(int argc, char** argv) {
 
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);

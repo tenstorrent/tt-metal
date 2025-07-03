@@ -22,7 +22,6 @@ from models.utility_functions import run_for_wormhole_b0
 )
 def test_perf(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     expected_inference_time,
     expected_compile_time,
@@ -54,7 +53,6 @@ def test_perf(
 )
 def test_perf_trace(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     expected_inference_time,
     expected_compile_time,
@@ -86,7 +84,6 @@ def test_perf_trace(
 )
 def test_perf_2cqs(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     expected_inference_time,
     expected_compile_time,
@@ -120,7 +117,6 @@ def test_perf_2cqs(
 )
 def test_perf_trace_2cqs(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     expected_inference_time,
     expected_compile_time,

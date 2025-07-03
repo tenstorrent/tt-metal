@@ -4,7 +4,6 @@
 import torch
 
 import ttnn
-
 from models.utility_functions import torch2tt_tensor
 
 DMODEL = 8 * 1024

@@ -9,7 +9,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
@@ -31,7 +31,6 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "umd/device/tt_core_coordinates.h"
@@ -368,9 +367,13 @@ std::vector<tt::tt_metal::hop_eth_sockets> build_eth_sockets_list(const std::vec
         std::size_t link = 0;
         std::unordered_map<uint64_t, int> edge_link_idx;
         auto const& active_eth_cores = curr_device->get_active_ethernet_cores(true);
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         auto eth_sender_core_iter = active_eth_cores.begin();
         bool found = false;
         for (; !found && eth_sender_core_iter != active_eth_cores.end(); eth_sender_core_iter++) {
+            if (!cluster.is_ethernet_link_up(curr_device->id(), *eth_sender_core_iter)) {
+                continue;
+            }
             auto [device_id, receiver_core] = curr_device->get_connected_ethernet_core(*eth_sender_core_iter);
             if (device_id == next_device->id()) {
                 uint64_t pair_edge =

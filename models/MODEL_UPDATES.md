@@ -4,6 +4,29 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## June 9, 2025
+
+### [Qwen 3](tt_transformers)
+- Added support for dense Qwen3 models (0.6B, 1.7B, 4B, 8B, 14B, 32B) on Wormhole devices.
+
+### [Llama 3.1-70B - Galaxy](demos/llama3_subdevices)
+- Integrated Llama 3.1-70B on Galaxy into the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
+- Added initial support for sampling tokens on device with batch size 32.
+
+## May 26, 2025
+
+### [Llama 3.1-8B](tt_transformers)
+- Added support for Llama 3.1 8B on Blackhole P100, P150, 2xP150.
+
+### [Mistral 7B](tt_transformers)
+- Added support for Mistral 7B in [models/tt_transformers](tt_transformers).
+- Integrated Mistral 7B into the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
+
+## May 5, 2025
+
+### [Llama 3.2-90B-Vision](tt_transformers)
+- Added support for Llama 3.2 90B Vision on QuietBox in [models/tt_transformers](tt_transformers).
+
 ## April 22, 2025
 
 ### [TT-Transformers](tt_transformers)

@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "convert_to_chw.hpp"
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::experimental::cnn::detail {
 
@@ -17,7 +17,11 @@ namespace py = pybind11;
 void bind_convert_to_chw(py::module& module) {
     using OperationType = decltype(ttnn::experimental::convert_to_chw);
 
-    const auto doc = R"doc(TODO!)doc";
+    const auto doc = R"doc(
+    Convert a tensor from HWC channel ordering to CHW channel ordering.
+
+    The input tensor is expected to be tiled and height-sharded in L1. The output is a row-major width-sharded tensor.
+    )doc";
 
     ttnn::bind_registered_operation(
         module,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -8,8 +8,10 @@
 
 #include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "fd_kernel.hpp"
-#include "system_memory_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
+
+namespace tt {
+namespace tt_metal {
 
 struct eth_tunneler_static_config_t {
     std::optional<uint32_t> endpoint_id_start_index;
@@ -56,7 +58,7 @@ public:
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
-    CoreType GetCoreType() override {
+    CoreType GetCoreType() const override {
         // Tunneler kernel is the exception in that it's always on ethernet core even if dispatch is on tensix.
         return CoreType::ETH;
     }
@@ -71,3 +73,6 @@ private:
     eth_tunneler_dependent_config_t dependent_config_;
     bool is_remote_;
 };
+
+}  // namespace tt_metal
+}  // namespace tt

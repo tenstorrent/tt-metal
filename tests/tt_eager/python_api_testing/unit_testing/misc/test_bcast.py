@@ -49,7 +49,6 @@ from tt_lib.utils import (
 )
 def test_bcast(
     device,
-    use_program_cache,
     orientation,
     in0_batch_size,
     in1_batch_size,

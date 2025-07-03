@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
 from torch import nn
+
+import ttnn
+from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 from models.utility_functions import is_grayskull
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
-from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 
 
 def transpose_for_scores(config, x, device, permute_tensor: bool):
@@ -55,7 +56,6 @@ def ttnn_conv1d(
     deallocate_activation=False,
     act_block_h=None,
     height_sharding=True,
-    use_shallow_conv_variant=False,
     fp32_accum=False,
     packer_l1_acc=False,
     groups=4,
@@ -71,7 +71,6 @@ def ttnn_conv1d(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         activation=activation,
-        input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
         reallocate_halo_output=reallocate_halo,
         act_block_h_override=32,

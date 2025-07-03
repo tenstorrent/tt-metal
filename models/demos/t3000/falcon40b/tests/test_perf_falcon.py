@@ -2,29 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
-from ttnn import ConcatMeshToTensor
-
-from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
-    FalconForCausalLM,
-)
+from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
-
-from models.demos.t3000.falcon40b.tt.model_config import (
-    get_model_config,
-)
-
+from models.demos.t3000.falcon40b.tt.model_config import get_model_config
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
-    profiler,
-    enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    profiler,
     skip_for_grayskull,
 )
-from models.perf.perf_utils import prep_perf_report
+from ttnn import ConcatMeshToTensor
 
 
 # TODO: Replace this with actual Falcon application-level tests
@@ -50,7 +43,6 @@ def run_test_FalconCausalLM_end_to_end(
 
     # Clear global profiler state before starting measurements
     profiler.clear()
-    devices = mesh_device.get_devices()
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     profiler.start("hugging_face_model_setup")
@@ -184,8 +176,7 @@ def run_test_FalconCausalLM_end_to_end(
         signpost("WARMUP_RUNS")
 
     for _ in range(warmup_iterations):
-        for device in devices:
-            ttnn.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(mesh_device)
         if llm_mode == "prefill":
             model_inputs = torch.split(model_input, 1)
             tt_inputs, tt_attention_mask = zip(
@@ -229,8 +220,7 @@ def run_test_FalconCausalLM_end_to_end(
     ttnn.synchronize_device(mesh_device)
 
     # Run for perf iteration - profiler enabled
-    for device in devices:
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
     profiler.enable()
     enable_persistent_kernel_cache()
     logger.info(f"Enable profiler and enable binary and compile cache")
@@ -360,7 +350,6 @@ def test_perf_bare_metal(
     model_location_generator,
     get_tt_cache_path,
     t3k_mesh_device,
-    use_program_cache,
     is_ci_env,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
@@ -432,7 +421,6 @@ def test_device_perf_bare_metal(
     model_location_generator,
     get_tt_cache_path,
     t3k_mesh_device,
-    use_program_cache,
     is_ci_env,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
@@ -442,8 +430,7 @@ def test_device_perf_bare_metal(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    devices = t3k_mesh_device.get_devices()
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
+    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 

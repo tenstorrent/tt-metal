@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.operations
-from models.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
+from models.utility_functions import comp_allclose_and_pcc
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
@@ -307,7 +307,7 @@ def test_moreh_matmul_wo_output(params, use_randint, dtype, compute_kernel_optio
         ),  # batched matmul
     ),
 )
-def test_moreh_matmul_enable_cache(params, device, use_program_cache):
+def test_moreh_matmul_enable_cache(params, device):
     torch.manual_seed(3072)
     for i in range(4):
         # change input's transpose option
@@ -320,7 +320,6 @@ def test_moreh_matmul_enable_cache(params, device, use_program_cache):
     assert device.num_program_cache_entries() == 2
 
 
-@skip_for_blackhole("Fails on BH. Issue #19639")
 @pytest.mark.parametrize(
     "params",
     (
@@ -417,7 +416,6 @@ def test_moreh_matmul_backward(params, requires_grad, dtype, device):
     moreh_matmul_backward(params, requires_grad, device, dtype=dtype)
 
 
-@skip_for_blackhole("Fails on BH. Issue #19639")
 @pytest.mark.parametrize(
     "params",
     (

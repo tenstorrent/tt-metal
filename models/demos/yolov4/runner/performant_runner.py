@@ -4,15 +4,9 @@
 
 
 import ttnn
-from models.demos.yolov4.common import (
-    YOLOV4_BOXES_PCC,
-    YOLOV4_CONFS_PCC,
-    get_model_result,
-)
+from models.demos.yolov4.common import YOLOV4_BOXES_PCC, YOLOV4_CONFS_PCC, get_model_result
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs, get_region_boxes
-from models.demos.yolov4.runner.performant_runner_infra import (
-    YOLOv4PerformanceRunnerInfra,
-)
+from models.demos.yolov4.runner.performant_runner_infra import YOLOv4PerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -114,15 +108,11 @@ class YOLOv4PerformantRunner:
         assert_with_pcc(ref_confs, result_confs, YOLOV4_CONFS_PCC)
 
     def run(self, torch_input_tensor, check_pcc=False):
-        n, h, w, c = torch_input_tensor.shape
-        torch_input_tensor = torch_input_tensor.reshape(1, 1, h * w * n, c)
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        tt_inputs_host = ttnn.pad(tt_inputs_host, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
+        n, c, h, w = torch_input_tensor.shape
+        tt_inputs_host, input_mem_config = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
         output = self._execute_yolov4_trace_2cqs_inference(tt_inputs_host)
 
         if check_pcc:
-            torch_input_tensor = torch_input_tensor.reshape(n, h, w, c)
-            torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
             self._validate(torch_input_tensor, output)
 
         return output

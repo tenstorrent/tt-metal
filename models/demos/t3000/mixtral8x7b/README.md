@@ -48,7 +48,7 @@ Note that the cached weights folder structure will contain the general and instr
 4. Cache the weights (first-time setup):
 ```bash
 # Build a full 32 layer model to cache the weights. This will take some time.
-pytest -svv models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py::test_mixtral_model_inference[wormhole_b0-True-1-32-output]
+pytest -svv models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py::test_mixtral_model_inference[wormhole_b0-True-32]
 ```
 
 ### Run the demo

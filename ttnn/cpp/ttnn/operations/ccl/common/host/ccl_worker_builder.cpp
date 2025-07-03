@@ -6,18 +6,17 @@
 #include <iterator>
 
 #include "hostdevcommon/kernel_structs.h"
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include <tt-metalium/fabric.hpp>
 #include "tt-metalium/kernel_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/erisc_datamover_builder.hpp>
 
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/host_api.hpp>
 
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 #include <tt_stl/overloaded.hpp>
 
 #include <optional>
@@ -162,7 +161,6 @@ void generate_ccl_slice_sequence_commands_impl(
             auto header_index = args_out.size();
             args_out.push_back(static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandHeader::to_uint32(
                 ttnn::ccl::cmd::CclCommandHeader{command_type, dest_args, 1})));
-            std::size_t num_args = 0;
 
             // tensor shape
             if (last_slice.tensor_shape != slice.tensor_shape) {
@@ -176,8 +174,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
-
-                num_args++;
             }
 
             // tensor slice shape
@@ -193,8 +189,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t i = args_out.size() - num_words_for_args; i < args_out.size(); i++) {
                     log_trace(tt::LogOp, "\t{}", args_out[i]);
                 }
-
-                num_args++;
             }
 
             // tensor slice offset
@@ -210,8 +204,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
-
-                num_args++;
             }
 
             // worker slice offset
@@ -229,7 +221,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
-                num_args++;
             }
 
             // worker_pages_per_slice
@@ -245,8 +236,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
-
-                num_args++;
             }
 
             args_out[header_index] = static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandHeader::to_uint32(
@@ -275,19 +264,15 @@ size_t generate_ccl_tensor_slice_command_args(
     std::size_t num_command_args_added = 0;
     auto const args_index_old = args_out.size();
     if (!last_tensor_slice.has_value()) {
-        const std::size_t args_index_old = args_out.size();
         // push back Command Header
         // push back arg 0 header
         log_trace(tt::LogOp, "Generating full tensor spec command args");
         add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>(
             current_tensor_slice, args_out);
-        const size_t args_index_new = args_out.size();
         // We can reused cached values for the first slice
         num_command_args_added++;
     } else {
         auto const& last_slice = last_tensor_slice.value();
-        const std::size_t args_index_old = args_out.size();
-        auto header_index = args_out.size();
 
         // tensor shape
         if (last_slice.tensor_shape != current_tensor_slice.tensor_shape) {
@@ -862,7 +847,6 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
         num_packet_headers_storable * packet_header_size_bytes,
         packet_header_size_bytes,
         worker_core_range);
-    auto reserved_packet_header_CB_handle = CreateCircularBuffer(program, worker_core_range, cb_config);
 
     {  // CT ARGS
         std::vector<uint32_t> ct_args = {my_chip_id.value_or(0xFFFF), reserved_packet_header_CB_index};
@@ -1306,12 +1290,16 @@ void generate_multi_input_command_stream_kernel_rt_args(
     rt_args.push_back(forward_device.has_value() and forward_device.value());
     auto worker_core = corerange_to_cores(worker_core_range).at(0);
     if (forward_device.has_value() and forward_device.value()) {
-        tt::tt_fabric::append_fabric_connection_rt_args(device->id(), forward_device.value()->id(), link, program, {worker_core}, rt_args);
+        const auto device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+        const auto forward_device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        tt::tt_fabric::append_fabric_connection_rt_args(device_fabric_node_id, forward_device_fabric_node_id, link, program, {worker_core}, rt_args);
     }
 
     rt_args.push_back(backward_device.has_value() and backward_device.value());
     if (backward_device.has_value() and backward_device.value()) {
-        tt::tt_fabric::append_fabric_connection_rt_args(device->id(), backward_device.value()->id(), link, program, {worker_core}, rt_args);
+        const auto device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+        const auto backward_device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        tt::tt_fabric::append_fabric_connection_rt_args(device_fabric_node_id, backward_device_fabric_node_id, link, program, {worker_core}, rt_args);
     }
 
     for (size_t i = 0; i < num_command_streams; i++) {
@@ -1548,7 +1536,6 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
     const std::size_t num_commands_expected = this->input_tensor_partition.partition_size;
 
     auto const& tensor_shape = worker_slice.tensor_shape;
-    auto const& tensor_slice_shape = worker_slice.tensor_slice_shape;
 
     auto num_slices = input_tensor_partition.partition_size;
     auto start_slice_index = input_tensor_partition.partition_index;
@@ -1571,12 +1558,12 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
 
     // If we are on device zero, we send n-1 chunks in ascending order
     auto& input_tensor = this->op_config.get_input_tensor(0);
-    TT_ASSERT(input_tensor.get_padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
+    TT_ASSERT(input_tensor.padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
     ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {
-        input_tensor.get_padded_shape()[0],
-        input_tensor.get_padded_shape()[1],
-        input_tensor.get_padded_shape()[2],
-        input_tensor.get_padded_shape()[3]};
+        input_tensor.padded_shape()[0],
+        input_tensor.padded_shape()[1],
+        input_tensor.padded_shape()[2],
+        input_tensor.padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(input_tensor.buffer()->address()),
@@ -1595,7 +1582,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
 
     auto const& addr_gen_rt_args = ttnn::ccl::legacy_emit_address_generator_runtime_args(this->device, input_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
-    for (auto const& arg : addr_gen_rt_args) {
+    for ([[maybe_unused]] auto const& arg : addr_gen_rt_args) {
         log_trace(tt::LogOp, "ccl_send_reader arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);
         logged_arg_idx++;
     }
@@ -1627,7 +1614,6 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
     const std::size_t num_commands_expected = this->output_tensor_partition.partition_size - 1;
 
     auto const& tensor_shape = worker_slice.tensor_shape;
-    auto const& tensor_slice_shape = worker_slice.tensor_slice_shape;
 
     auto num_slices = output_tensor_partition.partition_size;
     auto start_slice_index = output_tensor_partition.partition_index;
@@ -1650,12 +1636,12 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
 
     // If we are on device zero, we send n-1 chunks in ascending order
     auto& output_tensor = this->op_config.get_output_tensor(0);
-    TT_ASSERT(output_tensor.get_padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
+    TT_ASSERT(output_tensor.padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
     ttnn::ccl::Shape4D<uint32_t> output_tensor_shape = {
-        output_tensor.get_padded_shape()[0],
-        output_tensor.get_padded_shape()[1],
-        output_tensor.get_padded_shape()[2],
-        output_tensor.get_padded_shape()[3]};
+        output_tensor.padded_shape()[0],
+        output_tensor.padded_shape()[1],
+        output_tensor.padded_shape()[2],
+        output_tensor.padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(output_tensor.buffer()->address()),
@@ -1756,7 +1742,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
 
     auto const& addr_gen_rt_args = ttnn::ccl::legacy_emit_address_generator_runtime_args(this->device, output_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
-    for (auto const& arg : addr_gen_rt_args) {
+    for ([[maybe_unused]] auto const& arg : addr_gen_rt_args) {
         log_trace(tt::LogOp, "ccl_send_writer arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);
         logged_arg_idx++;
     }
@@ -1772,7 +1758,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
 std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_ct_args() const {
     auto const& input_tensor = this->op_config.get_input_tensor(0);
     std::vector<uint32_t> args = {
-        static_cast<uint32_t>(input_tensor.memory_config().memory_layout),  // tensor memory layout
+        static_cast<uint32_t>(input_tensor.memory_config().memory_layout()),  // tensor memory layout
         static_cast<uint32_t>(input_tensor.buffer()->buffer_type()),        // buffer type
         static_cast<uint32_t>(input_tensor.layout()),                       // page layout
         static_cast<uint32_t>(tt::CB::c_in0)                                // cb_id
@@ -1787,7 +1773,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_ct_args
 std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_ct_args() const {
     auto const& output_tensor = this->op_config.get_output_tensor(0);
     std::vector<uint32_t> args = {
-        static_cast<uint32_t>(output_tensor.memory_config().memory_layout),  // tensor memory layout
+        static_cast<uint32_t>(output_tensor.memory_config().memory_layout()),  // tensor memory layout
         static_cast<uint32_t>(output_tensor.buffer()->buffer_type()),        // buffer type
         static_cast<uint32_t>(output_tensor.layout()),                       // page layout
         static_cast<uint32_t>(tt::CB::c_in0)                                 // cb_id
@@ -1805,7 +1791,7 @@ bool can_command_stream_be_lowered_to_noc_commands(const Tensor& tensor) {
     static constexpr size_t args_per_noc_command = 4;
     static constexpr size_t max_noc_commands = 256;
     size_t page_num_elements =
-        tensor.layout() == Layout::TILE ? tensor.get_tensor_spec().tile().get_tile_hw(): tensor.padded_shape()[-1];
+        tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile().get_tile_hw(): tensor.padded_shape()[-1];
     size_t num_tensor_pages = tensor.padded_shape().volume() / page_num_elements;
 
     // Interleaved tensors are currently not iterable on host so we can't resolve the page locations

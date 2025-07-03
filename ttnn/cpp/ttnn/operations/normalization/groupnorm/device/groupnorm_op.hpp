@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "groupnorm_types.hpp"
@@ -35,13 +36,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     const std::optional<const Tensor>& input_mask,
     Tensor& output,
     float eps,
-    const uint32_t num_groups,
-    const uint32_t num_batches,
-    MathFidelity fidelity,
+    uint32_t num_groups,
+    uint32_t num_batches,
     DataType im_data_format,
     CoreCoord grid_size,
     bool inplace,
-    uint32_t num_out_blocks);
+    uint32_t num_out_blocks,
+    const DeviceComputeKernelConfig& compute_kernel_config);
+
 operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const Tensor& a,
     const std::optional<const Tensor>& gamma,
@@ -49,17 +51,19 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const std::optional<const Tensor>& input_mask,
     Tensor& output,
     float eps,
-    const uint32_t num_groups,
-    const uint32_t num_batches,
-    MathFidelity fidelity,
+    uint32_t num_groups,
+    uint32_t num_batches,
     tt::tt_metal::DataType im_data_format,
     CoreCoord grid_size,
-    bool inplace);
+    bool inplace,
+    const DeviceComputeKernelConfig& compute_kernel_config);
+
 struct GroupNorm {
     float eps;
     uint32_t num_groups;
     MemoryConfig output_mem_config;
     GroupNormProgramConfig program_config;
+    const DeviceComputeKernelConfig compute_kernel_config;
 
     void validate(
         const std::vector<Tensor>& input_tensors,

@@ -26,13 +26,13 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include "jit_build/build.hpp"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/detail/kernel_cache.hpp"
@@ -171,7 +171,7 @@ Program create_program(IDevice* device, const ProgramAttributes& program_attribu
             .math_approx_mode = program_attributes.math_approx_mode,
             .compile_args = compute_kernel_args});
 
-    return std::move(program);
+    return program;
 }
 
 void assert_kernel_binary_path_exists(
@@ -203,7 +203,7 @@ void assert_kernel_hash_matches(
     const std::unordered_map<std::string, std::string>& golden_kernel_name_to_hash,
     const KernelCacheStatus& kernel_cache_status) {
     for (const auto& [kernel_name, hash] : kernel_cache_status.kernel_name_to_hash_str) {
-        auto expected_hash = golden_kernel_name_to_hash.at(kernel_name);
+        const auto& expected_hash = golden_kernel_name_to_hash.at(kernel_name);
         TT_FATAL(hash == expected_hash, "Expected hash for {} {} but got {}", kernel_name, expected_hash, hash);
     }
 }

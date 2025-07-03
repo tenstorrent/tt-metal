@@ -73,22 +73,21 @@ Tensor optimized_conv_new(
     bool enable_weights_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding) {
-    TT_FATAL(
-        b.get_layout() == Layout::TILE,
-        "Weights should be in TILE layout.");  // Weights should already be formatted
+    TT_FATAL(b.layout() == Layout::TILE,
+             "Weights should be in TILE layout.");  // Weights should already be formatted
     const auto& ashape = input_tensor_shape;
     auto padded_a_shape = ttnn::Shape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
     experimental::auto_format::FormatParams input_a_format_params = {
         .pad_shape = padded_a_shape, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
     experimental::auto_format::FormatParams input_b_format_params = {
-        .pad_shape = b.get_padded_shape(), .pad_value = 0.0, .target_layout = Layout::TILE};
+        .pad_shape = b.padded_shape(), .pad_value = 0.0, .target_layout = Layout::TILE};
     experimental::auto_format::FormatParams input_bias_format_params = {};
     if (bias.has_value()) {
         input_bias_format_params = {
-            .pad_shape = bias.value().get_padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
+            .pad_shape = bias.value().padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
     }
     auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-    auto arch = is_tensor_on_device_or_multidevice(a)
+    auto arch = is_device_tensor(a)
                     ? a.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     bool fp32_accum =
@@ -133,21 +132,21 @@ void OptimizedConvNew::validate(
         uint32_t per_core_out_matrix_width_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
         auto [act_matrix_shape, act_matrix_shape_unpadded] =
             optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-                input_tensor_a.get_padded_shape(),
+                input_tensor_a.padded_shape(),
                 sliding_window_config,
                 parallelization_config.num_cores_nhw,
                 out_block_h_ntiles);
         uint32_t out_width_ntiles = this->compute_output_specs(input_tensors).at(0).padded_shape()[-1] / TILE_WIDTH;
-        if (this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (this->memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             TT_FATAL(per_core_out_matrix_width_ntiles == out_width_ntiles, "Error");
             TT_FATAL(
                 this->block_config.out_subblock_w_ntiles == out_width_ntiles ||
                     this->block_config.out_subblock_h_ntiles == 1,
                 "Error");
-        } else if (this->memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        } else if (this->memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             // For block sharded, out_width per core is shard width, and this is split along row
             // TODO: We should clean this up and relax constraints on out_subblock h and w
-            if (this->memory_config.shard_spec.value().orientation == ShardOrientation::COL_MAJOR) {
+            if (this->memory_config.shard_spec().value().orientation == ShardOrientation::COL_MAJOR) {
                 out_width_ntiles = tt::div_up(out_width_ntiles, this->parallelization_config.grid_size.y);
             } else {
                 out_width_ntiles = tt::div_up(out_width_ntiles, this->parallelization_config.grid_size.x);
@@ -179,7 +178,7 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
 
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (this->memory_config.is_sharded()) {
-        if (this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (this->memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             uint32_t total_height_tiles = padded_output_shape.volume() / padded_output_shape[-1] / TILE_HEIGHT;
             uint32_t num_cores = total_height_tiles / this->parallelization_config.per_core_out_matrix_height_ntile;
             std::array<uint32_t, 2> shard_shape = {
@@ -187,33 +186,30 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
             CoreRangeSet shard_grid =
                 tt::tt_metal::num_cores_to_corerangeset(num_cores, this->parallelization_config.grid_size, true);
             auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
-            auto mem_config = this->memory_config;
-            mem_config.shard_spec = shard_spec;
+            auto mem_config = this->memory_config.with_shard_spec(shard_spec);
             return {TensorSpec(
                 output_shape,
                 TensorLayout::fromPaddedShape(
                     dtype, PageConfig(output_layout), mem_config, output_shape, padded_output_shape))};
-        } else if (this->memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        } else if (this->memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
             uint32_t total_height_tiles = padded_output_shape.volume() / padded_output_shape[-1] / TILE_HEIGHT;
             std::array<uint32_t, 2> shard_shape = {
                 this->parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT,
                 this->parallelization_config.per_core_out_matrix_width_ntile * TILE_WIDTH};
-            auto shard_grid = this->memory_config.shard_spec.value().grid;
-            auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec.value().orientation};
-            auto mem_config = this->memory_config;
-            mem_config.shard_spec = shard_spec;
+            auto shard_grid = this->memory_config.shard_spec().value().grid;
+            auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec().value().orientation};
+            auto mem_config = this->memory_config.with_shard_spec(shard_spec);
             return {TensorSpec(
                 output_shape,
                 TensorLayout::fromPaddedShape(
                     dtype, PageConfig(output_layout), mem_config, output_shape, padded_output_shape))};
-        } else if (this->memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            auto shard_grid = this->memory_config.shard_spec.value().grid;
+        } else if (this->memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+            auto shard_grid = this->memory_config.shard_spec().value().grid;
             auto shard_spec = ShardSpec{
                 shard_grid,
-                this->memory_config.shard_spec.value().shape,
-                this->memory_config.shard_spec.value().orientation};
-            auto mem_config = this->memory_config;
-            mem_config.shard_spec = shard_spec;
+                this->memory_config.shard_spec().value().shape,
+                this->memory_config.shard_spec().value().orientation};
+            auto mem_config = this->memory_config.with_shard_spec(shard_spec);
             return {TensorSpec(
                 output_shape,
                 TensorLayout::fromPaddedShape(
@@ -240,7 +236,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     const bool has_bias = input_tensor_bias.has_value();
 
-    const auto weights_shape = input_tensor_b.get_padded_shape();
+    const auto& weights_shape = input_tensor_b.padded_shape();
 
     std::optional<unary::UnaryWithParam> fused_activation = std::nullopt;
 
@@ -282,13 +278,12 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         Conv2dConfig{
             .dtype = output_tensor.dtype(),
             .weights_dtype = input_tensor_b.dtype(),
-            .shard_layout = this->memory_config.memory_layout,
+            .shard_layout = this->memory_config.memory_layout(),
             .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
             .enable_act_double_buffer = enable_act_double_buffer,
             .enable_weights_double_buffer = enable_weights_double_buffer,
-            .enable_split_reader = enable_split_reader,
-            .enable_subblock_padding = enable_subblock_padding},
-        this->memory_config,
+            .enable_split_reader = enable_split_reader},
+        input_tensor_a.dtype(),
         has_bias,
         is_1d_deptwise_conv(
             groups,
@@ -338,7 +333,7 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(
 
     const auto& t = output_tensors.at(0);
     if (t.storage_type() != StorageType::DEVICE) {
-        tt::log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
+        log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
 
     auto arch = t.storage_type() == StorageType::DEVICE
@@ -367,14 +362,14 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(
     operation::OpPerformanceModel result(input_tensors, output_tensors, ideal_dev_clock_cycles);
 
 #if 0
-    tt::log_info(tt::LogOp, "OptimizedConv PerfModel:");
-    tt::log_info(tt::LogOp, "\t Batch: {}", batch_size);
-    tt::log_info(tt::LogOp, "\t In (H, W, C): ({}, {}, {})", conv_activation_h, conv_activation_w, conv_activation_c);
-    tt::log_info(tt::LogOp, "\t Filter (H, W): ({}, {})", filter_h, filter_w);
-    tt::log_info(tt::LogOp, "\t Filter Stride (H, W): ({}, {})", stride_h, stride_w);
-    tt::log_info(tt::LogOp, "\t Pad (H, W): ({}, {})", pad_h, pad_w);
-    tt::log_info(tt::LogOp, "\t Out (H, W, C): ({}, {}, {})", output_height, output_width, this->output_channels);
-    tt::log_info(tt::LogOp, "\t ideal_dev_clock_cycles: {}", ideal_dev_clock_cycles);
+    log_info(tt::LogOp, "OptimizedConv PerfModel:");
+    log_info(tt::LogOp, "\t Batch: {}", batch_size);
+    log_info(tt::LogOp, "\t In (H, W, C): ({}, {}, {})", conv_activation_h, conv_activation_w, conv_activation_c);
+    log_info(tt::LogOp, "\t Filter (H, W): ({}, {})", filter_h, filter_w);
+    log_info(tt::LogOp, "\t Filter Stride (H, W): ({}, {})", stride_h, stride_w);
+    log_info(tt::LogOp, "\t Pad (H, W): ({}, {})", pad_h, pad_w);
+    log_info(tt::LogOp, "\t Out (H, W, C): ({}, {}, {})", output_height, output_width, this->output_channels);
+    log_info(tt::LogOp, "\t ideal_dev_clock_cycles: {}", ideal_dev_clock_cycles);
 #endif
 
     return result;

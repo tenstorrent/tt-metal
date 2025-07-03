@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/overloaded.hpp>
-#include <circular_buffer_types.hpp>
+#include <circular_buffer_config.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
+#include "dispatch/system_memory_manager.hpp"
 
 #include <kernel_types.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -98,8 +99,7 @@ void CaptureBufferCreate(
     DeviceAddr size,
     DeviceAddr page_size,
     const BufferType buffer_type,
-    const TensorMemoryLayout buffer_layout,
-    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
     auto& ctx = LightMetalCaptureContext::get();
@@ -114,7 +114,7 @@ void CaptureBufferCreate(
         size,
         page_size,
         buffer_type,
-        buffer_layout,
+        sharding_args.buffer_layout(),
         buffer_global_id);
 
     // Convert the optional fields to flatbuffer offsets.
@@ -123,7 +123,7 @@ void CaptureBufferCreate(
     auto address_offset = address.has_value() ? flatbuffer::CreateUint32Optional(fbb, address.value()) : 0;
     auto bottom_up_offset = bottom_up.has_value() ? flatbuffer::CreateBoolOptional(fbb, bottom_up.value()) : 0;
     auto sub_device_id_offset = sub_device_id.has_value() ? flatbuffer::CreateUint8Optional(fbb, **sub_device_id) : 0;
-    auto shard_parameters_offset = to_flatbuffer(shard_parameters, fbb);
+    auto shard_parameters_offset = to_flatbuffer(sharding_args.shard_spec(), fbb);
 
     auto cmd = tt::tt_metal::flatbuffer::CreateBufferCreateCommand(
         fbb,
@@ -133,7 +133,7 @@ void CaptureBufferCreate(
         size,
         page_size,
         to_flatbuffer(buffer_type),
-        to_flatbuffer(buffer_layout),
+        to_flatbuffer(sharding_args.buffer_layout()),
         shard_parameters_offset,
         bottom_up_offset,
         sub_device_id_offset);

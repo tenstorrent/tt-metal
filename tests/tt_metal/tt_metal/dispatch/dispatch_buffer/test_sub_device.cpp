@@ -72,8 +72,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, shard_config_2.size / sizeof(uint32_t));
 
     uint32_t page_size_3 = 1024;
-    InterleavedBufferConfig interleaved_config = {
-        device, page_size_3, page_size_3, BufferType::L1, TensorMemoryLayout::INTERLEAVED};
+    InterleavedBufferConfig interleaved_config = {device, page_size_3, page_size_3, BufferType::L1};
     auto input_3 =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, interleaved_config.size / sizeof(uint32_t));
 

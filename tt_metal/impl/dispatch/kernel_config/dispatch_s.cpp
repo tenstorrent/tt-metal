@@ -4,7 +4,6 @@
 #include "dispatch_s.hpp"
 
 #include <host_api.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <tt_metal.hpp>
 #include <map>
 #include <string>
@@ -13,11 +12,12 @@
 #include <vector>
 
 #include "assert.hpp"
-#include "command_queue_common.hpp"
+#include "dispatch/command_queue_common.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "prefetch.hpp"
@@ -25,6 +25,8 @@
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
+
+#include "tt_metal/api/tt-metalium/device_pool.hpp"
 
 using namespace tt::tt_metal;
 
@@ -86,16 +88,16 @@ void DispatchSKernel::GenerateDependentConfigs() {
 
 void DispatchSKernel::CreateKernel() {
     // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
-    // Num num_virtual_active_eth_cores is set if the user application requested virtualizing the
+    // num_virtual_active_eth_cores is set if the user application requested virtualizing the
     // number of ethernet cores across devices (to essentially fake uniformity). This value is the
-    // max number of ethernet cores acorss all chip in the cluster.
+    // max number of ethernet cores across all chips in the opened cluster.
     // num_physical_ethernet_cores is the number of actual available ethernet cores on the current device.
     // virtualize_num_eth_cores is set if the number of virtual cores is greater than the number of actual
     // ethernet cores in the chip.
-    uint32_t num_virtual_active_eth_cores = dynamic_cast<Device*>(device_)->get_ethernet_core_count_on_dispatcher();
+    uint32_t num_virtual_active_eth_cores = tt::DevicePool::instance().get_max_num_eth_cores_across_all_devices();
     uint32_t num_physical_active_eth_cores =
         MetalContext::instance()
-            .get_cluster()
+            .get_control_plane()
             .get_active_ethernet_cores(device_->id(), /*skip_reserved_tunnel_cores*/ true)
             .size();
     bool virtualize_num_eth_cores = num_virtual_active_eth_cores > num_physical_active_eth_cores;
@@ -142,8 +144,8 @@ void DispatchSKernel::CreateKernel() {
         {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual_noc_coords.x)},
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},  // Unused, remove later
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},  // Unused, remove later
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},  // Unused, remove later
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},  // Unused, remove later
     };
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], compile_args, defines, false, false, false);
 }

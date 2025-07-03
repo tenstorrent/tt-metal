@@ -1,23 +1,18 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.demos.qwen.tt.qwen_attention import TtQwenAttention
-from models.demos.qwen.tt.model_config import TtModelArgs
-from models.demos.qwen.tt.qwen_common import (
-    precompute_freqs,
-    get_single_rot_mat,
-)
 from models.demos.qwen.reference.model import Attention
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.demos.qwen.tt.model_config import TtModelArgs
+from models.demos.qwen.tt.qwen_attention import TtQwenAttention
+from models.demos.qwen.tt.qwen_common import get_single_rot_mat, precompute_freqs
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
@@ -31,7 +26,7 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_qwen_attention_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc):
+def test_qwen_attention_inference(mesh_device, reset_seeds, ensure_gc):
     if mesh_device.shape != (1, 1):
         pytest.skip("Only N150 is supported")
     dtype = ttnn.bfloat8_b

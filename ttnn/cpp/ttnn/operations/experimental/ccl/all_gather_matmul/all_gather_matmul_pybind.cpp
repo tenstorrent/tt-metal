@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul.hpp"
 #include "ttnn/types.hpp"
 
@@ -31,6 +31,7 @@ void py_bind_all_gather_matmul(pybind11::module& module) {
             * :attr:`all_gather_core_grid_offset` (ttnn.CoreCoord): Core grid offset for the all-gather operation.
 
         Keyword Args:
+            * :attr:`bias` (ttnn.Tensor): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
             * :attr:`num_links` (int): Number of links to use for the all-gather operation.
             * :attr:`memory_config_ag` (Optional[ttnn.MemoryConfig]): Memory configuration for the All Gather operation.
             * :attr:`memory_config_mm` (Optional[ttnn.MemoryConfig]): Memory configuration for the Matmul operation.
@@ -55,6 +56,7 @@ void py_bind_all_gather_matmul(pybind11::module& module) {
                const ttnn::Tensor& weight_tensor,
                const uint32_t dim,
                const CoreCoord all_gather_core_grid_offset,
+	       const std::optional<const Tensor>& bias,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config_ag,
                const std::optional<size_t> num_workers,
@@ -72,6 +74,7 @@ void py_bind_all_gather_matmul(pybind11::module& module) {
                     weight_tensor,
                     dim,
                     all_gather_core_grid_offset,
+		    bias,
                     num_links,
                     memory_config_ag,
                     num_workers,
@@ -90,6 +93,7 @@ void py_bind_all_gather_matmul(pybind11::module& module) {
             py::arg("dim"),
             py::arg("all_gather_core_grid_offset"),
             py::kw_only(),
+            py::arg("bias") = std::nullopt,
             py::arg("num_links") = 1,
             py::arg("memory_config_ag") = std::nullopt,
             py::arg("num_workers") = std::nullopt,

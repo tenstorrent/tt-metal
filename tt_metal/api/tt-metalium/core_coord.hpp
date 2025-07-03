@@ -33,7 +33,7 @@ struct to_json_t;
 
 using CoreCoord = tt_xy_pair;
 
-struct CoreRangeSet;
+class CoreRangeSet;
 
 template <>
 struct fmt::formatter<CoreCoord> {
@@ -59,7 +59,8 @@ constexpr inline bool operator!=(const RelativeCoreCoord& a, const RelativeCoreC
 
 CoreCoord get_core_coord_from_relative(const RelativeCoreCoord& in, const CoreCoord& grid_size);
 
-struct CoreRange {
+class CoreRange {
+public:
     CoreCoord start_coord;
     CoreCoord end_coord;
     CoreRange(const CoreCoord& point);
@@ -208,18 +209,17 @@ std::vector<CoreCoord> grid_to_cores(CoreCoord start, CoreCoord end, bool row_wi
 
 // Noop cores are appended at the end with no guarantees on ordering
 std::vector<CoreCoord> grid_to_cores_with_noop(
-    const uint32_t bbox_x,
-    const uint32_t bbox_y,
-    const uint32_t grid_size_x,
-    const uint32_t grid_size_y,
-    const bool row_wise = false);
+    uint32_t bbox_x, uint32_t bbox_y, uint32_t grid_size_x, uint32_t grid_size_y, bool row_wise = false);
 
 // Noop cores are appended at the end with no guarantees on ordering
 std::vector<CoreCoord> grid_to_cores_with_noop(
-    const CoreRangeSet& used_cores, const CoreRangeSet& all_cores, const bool row_wise = false);
+    const CoreRangeSet& used_cores, const CoreRangeSet& all_cores, bool row_wise = false);
 
 std::vector<CoreCoord> corerange_to_cores(
     const CoreRangeSet& crs, std::optional<uint32_t> max_cores = std::nullopt, bool row_wise = false);
+
+CoreRangeSet select_from_corerange(
+    const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise = false);
 
 bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b);
 
@@ -256,7 +256,7 @@ struct hash<CoreRangeSet> {
 
 }  // namespace std
 
-namespace tt::stl::json {
+namespace ttsl::json {
 
 template <>
 struct to_json_t<CoreCoord> {
@@ -298,4 +298,4 @@ struct from_json_t<CoreRangeSet> {
     CoreRangeSet operator()(const nlohmann::json& json) noexcept;
 };
 
-}  // namespace tt::stl::json
+}  // namespace ttsl::json

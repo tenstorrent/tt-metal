@@ -66,12 +66,11 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
     num_links,
     input_dtype,
     layout,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
@@ -88,7 +87,6 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
         input_dtype,
         layout,
         ttnn.BufferType.L1,
-        use_program_cache,
         function_level_defaults,
         input_shard_spec=input_shard_spec,
         num_iters=num_iters,
@@ -196,12 +194,11 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
     num_links,
     input_dtype,
     layout,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     if num_links == 3 and input_dtype == ttnn.bfloat8_b and dim == 3:
@@ -223,7 +220,6 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
         input_dtype,
         layout,
         ttnn.BufferType.L1,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         input_shard_spec=input_shard_spec,
@@ -270,12 +266,11 @@ def test_line_all_gather_on_TG_cols_nightly(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -287,7 +282,6 @@ def test_line_all_gather_on_TG_cols_nightly(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,

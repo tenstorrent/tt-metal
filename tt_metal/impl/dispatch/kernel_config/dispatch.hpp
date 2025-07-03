@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,12 +9,15 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
+#include "dispatch/kernel_config/relay_mux.hpp"
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
-#include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include <umd/device/tt_xy_pair.h>
+
+namespace tt {
+namespace tt_metal {
 
 struct dispatch_static_config_t {
     std::optional<uint32_t> dispatch_cb_base;  // 0
@@ -45,11 +48,14 @@ struct dispatch_static_config_t {
     std::optional<uint32_t> dev_completion_q_wr_ptr;
     std::optional<uint32_t> dev_completion_q_rd_ptr;
 
+    std::optional<uint32_t> fabric_header_rb_base;
+    std::optional<uint32_t> fabric_header_rb_entries;
+    std::optional<uint32_t> my_fabric_sync_status_addr;
+    std::optional<bool> is_2d_fabric;
+    std::optional<bool> is_2d_fabric_dynamic;
+
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
-
-    // Populated if fabric is being used to talk to downstream
-    std::optional<uint32_t> client_interface_addr;
 };
 
 struct dispatch_dependent_config_t {
@@ -69,13 +75,15 @@ struct dispatch_dependent_config_t {
     std::optional<uint32_t> prefetch_h_noc_xy;                     // Dependent. Used if split_prefetch is true
     std::optional<uint32_t> prefetch_h_local_downstream_sem_addr;  // Dependent. Used if split_prefetch is true
 
-    // Populated if fabric is being used to talk to downstream
-    std::optional<uint32_t> fabric_router_noc_xy;
-    std::optional<uint32_t> upstream_mesh_id;
-    std::optional<uint32_t> upstream_dev_id;
-    std::optional<uint32_t> downstream_mesh_id;
-    std::optional<uint32_t> downstream_dev_id;
-    std::optional<uint32_t> outbound_eth_chan;
+    std::optional<uint32_t> num_hops;
+
+    tt::tt_metal::relay_mux_client_config fabric_mux_client_config;
+
+    std::optional<uint32_t> my_dev_id;
+    std::optional<uint32_t> ew_dim;
+    std::optional<uint32_t> to_mesh_id;
+    std::optional<uint32_t> to_dev_id;
+    std::optional<uint32_t> router_direction;
 };
 
 class DispatchKernel : public FDKernel {
@@ -109,6 +117,7 @@ public:
         } else if (d_variant) {
             this->logical_core_ = core_manager.dispatcher_d_core(device_id, channel, cq_id);
         }
+        this->kernel_type_ = FDKernelType::DISPATCH;
     }
 
     void CreateKernel() override;
@@ -119,14 +128,6 @@ public:
 
     void ConfigureCore() override;
 
-    void UpdateArgsForFabric(
-        const CoreCoord& fabric_router,
-        uint32_t outbound_eth_chan,
-        tt::tt_fabric::mesh_id_t src_mesh_id,
-        chip_id_t src_chip_id,
-        tt::tt_fabric::mesh_id_t dst_mesh_id,
-        chip_id_t dst_chip_id) override;
-
     uint32_t GetDispatchBufferSize() const {
         return (1 << static_config_.dispatch_cb_log_page_size.value()) * static_config_.dispatch_cb_pages.value();
     }
@@ -135,4 +136,10 @@ public:
 private:
     dispatch_static_config_t static_config_;
     dispatch_dependent_config_t dependent_config_;
+    FDKernelEdmConnectionAttributes edm_connection_attributes_;
+
+    bool is_hd() const { return static_config_.is_h_variant.value() && static_config_.is_d_variant.value(); }
 };
+
+}  // namespace tt_metal
+}  // namespace tt

@@ -25,14 +25,14 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
@@ -60,7 +60,6 @@ enum ReduceDim : uint8_t { H = 0, W = 1, HW = 2 };
 
 enum ReduceType : uint8_t { SUM = 0, AVG = 1, MAX = 2 };
 struct ReduceConfig {
-    bool short_init = false;
     tt_metal::Tile tile_shape = tt_metal::Tile({TILE_HEIGHT, TILE_WIDTH});
     std::vector<uint32_t> shape;
     ReduceDim reduce_dim;
@@ -79,7 +78,6 @@ struct ReduceConfig {
     bool fp32_dest_acc_en = false;
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
-    bool at_start = false;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 };
 
@@ -349,7 +347,6 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         uint(Ht),
         uint(Wt),
         uint(NC),
-        test_config.at_start,
     };
 
     std::map<string, string> reduce_defines = {{"REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim)}};
@@ -366,9 +363,6 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
             reduce_defines["REDUCE_OP"] = "PoolType::MAX";
             break;
         }
-    }
-    if (test_config.short_init) {
-        reduce_defines["SHORT_INIT"] = "1";
     }
     reduce_defines["MATH_ONLY"] = test_config.math_only_reduce ? "1" : "0";
     reduce_defines["DST_ACCUM_MODE"] = test_config.fp32_dest_acc_en ? "1" : "0";
@@ -447,15 +441,13 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
     EXPECT_TRUE(pass);
     log_info(
         LogTest,
-        "TileDimH = {}, TileDimW = {}, MathFid = {}, ReduceType = {}, FP32DestAcc = {}, DstSyncFull = {}, at_start = "
-        "{}",
+        "TileDimH = {}, TileDimW = {}, MathFid = {}, ReduceType = {}, FP32DestAcc = {}, DstSyncFull = {}",
         test_config.tile_shape.get_tile_shape()[0],
         test_config.tile_shape.get_tile_shape()[1],
         test_config.math_fidelity,
         test_config.reduce_type,
         test_config.fp32_dest_acc_en,
-        test_config.dst_full_sync_en,
-        test_config.at_start);
+        test_config.dst_full_sync_en);
 }
 
 }  // namespace unit_tests::compute::reduce
@@ -477,25 +469,22 @@ TEST_F(DeviceFixture, TensixComputeReduceH) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
-                    for (bool at_start : {true, false}) {
-                        ReduceConfig test_config = {
-                            .shape = shape,
-                            .reduce_dim = ReduceDim::H,
-                            .reduce_type = ReduceType(reduce_type),
-                            .data_gen_rand_max = 10.0f,
-                            .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-                            .data_gen_offset = -10.0f,
-                            .atol = 1e-2f,
-                            .rtol = 0.08f,
-                            .golden_function = ::unit_tests::compute::gold_reduce_h,
-                            .result_shape = result_shape,
-                            .fp32_dest_acc_en = fp32_dest_acc_en,
-                            .dst_full_sync_en = dst_full_sync_en,
-                            .at_start = at_start,
-                            .math_fidelity = MathFidelity(math_fid),
-                        };
-                        run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    }
+                    ReduceConfig test_config = {
+                        .shape = shape,
+                        .reduce_dim = ReduceDim::H,
+                        .reduce_type = ReduceType(reduce_type),
+                        .data_gen_rand_max = 10.0f,
+                        .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                        .data_gen_offset = -10.0f,
+                        .atol = 1e-2f,
+                        .rtol = 0.08f,
+                        .golden_function = ::unit_tests::compute::gold_reduce_h,
+                        .result_shape = result_shape,
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en,
+                        .math_fidelity = MathFidelity(math_fid),
+                    };
+                    run_single_core_reduce_program(this->devices_.at(0), test_config);
                 }
             }
         }
@@ -516,25 +505,22 @@ TEST_F(DeviceFixture, TensixComputeReduceW) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
-                    for (bool at_start : {true, false}) {
-                        ReduceConfig test_config = {
-                            .shape = shape,
-                            .reduce_dim = ReduceDim::W,
-                            .reduce_type = ReduceType(reduce_type),
-                            .data_gen_rand_max = 10.0f,
-                            .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-                            .data_gen_offset = -10.0f,
-                            .atol = 1e-2f,
-                            .rtol = 0.08f,
-                            .golden_function = ::unit_tests::compute::gold_reduce_w,
-                            .result_shape = result_shape,
-                            .fp32_dest_acc_en = fp32_dest_acc_en,
-                            .dst_full_sync_en = dst_full_sync_en,
-                            .at_start = at_start,
-                            .math_fidelity = MathFidelity(math_fid),
-                        };
-                        run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    }
+                    ReduceConfig test_config = {
+                        .shape = shape,
+                        .reduce_dim = ReduceDim::W,
+                        .reduce_type = ReduceType(reduce_type),
+                        .data_gen_rand_max = 10.0f,
+                        .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                        .data_gen_offset = -10.0f,
+                        .atol = 1e-2f,
+                        .rtol = 0.08f,
+                        .golden_function = ::unit_tests::compute::gold_reduce_w,
+                        .result_shape = result_shape,
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en,
+                        .math_fidelity = MathFidelity(math_fid),
+                    };
+                    run_single_core_reduce_program(this->devices_.at(0), test_config);
                 }
             }
         }
@@ -556,24 +542,21 @@ TEST_F(DeviceFixture, TensixComputeReduceHW) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
-                    for (bool at_start : {true, false}) {
-                        ReduceConfig test_config = {
-                            .shape = shape,
-                            .reduce_dim = ReduceDim::HW,
-                            .reduce_type = ReduceType(reduce_type),
-                            .data_gen_rand_max = 10.0f,
-                            .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-                            .data_gen_offset = -10.0f,
-                            .atol = 1e-2f,
-                            .rtol = 0.08f,
-                            .golden_function = ::unit_tests::compute::gold_reduce_hw,
-                            .result_shape = result_shape,
-                            .fp32_dest_acc_en = fp32_dest_acc_en,
-                            .dst_full_sync_en = dst_full_sync_en,
-                            .at_start = at_start,
-                            .math_fidelity = MathFidelity(math_fid)};
-                        run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    }
+                    ReduceConfig test_config = {
+                        .shape = shape,
+                        .reduce_dim = ReduceDim::HW,
+                        .reduce_type = ReduceType(reduce_type),
+                        .data_gen_rand_max = 10.0f,
+                        .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                        .data_gen_offset = -10.0f,
+                        .atol = 1e-2f,
+                        .rtol = 0.08f,
+                        .golden_function = ::unit_tests::compute::gold_reduce_hw,
+                        .result_shape = result_shape,
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en,
+                        .math_fidelity = MathFidelity(math_fid)};
+                    run_single_core_reduce_program(this->devices_.at(0), test_config);
                 }
             }
         }
@@ -595,25 +578,22 @@ TEST_F(DeviceFixture, TensixComputeReduceHMathOnly) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
-                    for (bool at_start : {true, false}) {
-                        ReduceConfig test_config = {
-                            .shape = shape,
-                            .reduce_dim = ReduceDim::H,
-                            .reduce_type = ReduceType(reduce_type),
-                            .data_gen_rand_max = 10.0f,
-                            .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-                            .data_gen_offset = -10.0f,
-                            .atol = 1e-2f,
-                            .rtol = 0.08f,
-                            .golden_function = ::unit_tests::compute::gold_reduce_h,
-                            .result_shape = result_shape,
-                            .math_only_reduce = true,
-                            .fp32_dest_acc_en = fp32_dest_acc_en,
-                            .dst_full_sync_en = dst_full_sync_en,
-                            .at_start = at_start,
-                            .math_fidelity = MathFidelity(math_fid)};
-                        run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    }
+                    ReduceConfig test_config = {
+                        .shape = shape,
+                        .reduce_dim = ReduceDim::H,
+                        .reduce_type = ReduceType(reduce_type),
+                        .data_gen_rand_max = 10.0f,
+                        .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                        .data_gen_offset = -10.0f,
+                        .atol = 1e-2f,
+                        .rtol = 0.08f,
+                        .golden_function = ::unit_tests::compute::gold_reduce_h,
+                        .result_shape = result_shape,
+                        .math_only_reduce = true,
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en,
+                        .math_fidelity = MathFidelity(math_fid)};
+                    run_single_core_reduce_program(this->devices_.at(0), test_config);
                 }
             }
         }
@@ -634,32 +614,29 @@ TEST_F(DeviceFixture, TensixComputeReduceWMathOnly) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
-                    for (bool at_start : {true, false}) {
-                        ReduceConfig test_config = {
-                            .shape = shape,
-                            .reduce_dim = ReduceDim::W,
-                            .reduce_type = ReduceType(reduce_type),
-                            .data_gen_rand_max = 10.0f,
-                            .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-                            .data_gen_offset = -10.0f,
-                            .atol = 1e-2f,
-                            .rtol = 0.08f,
-                            .golden_function = ::unit_tests::compute::gold_reduce_w,
-                            .result_shape = result_shape,
-                            .math_only_reduce = true,
-                            .fp32_dest_acc_en = fp32_dest_acc_en,
-                            .dst_full_sync_en = dst_full_sync_en,
-                            .at_start = at_start,
-                            .math_fidelity = MathFidelity(math_fid)};
-                        run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    }
+                    ReduceConfig test_config = {
+                        .shape = shape,
+                        .reduce_dim = ReduceDim::W,
+                        .reduce_type = ReduceType(reduce_type),
+                        .data_gen_rand_max = 10.0f,
+                        .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                        .data_gen_offset = -10.0f,
+                        .atol = 1e-2f,
+                        .rtol = 0.08f,
+                        .golden_function = ::unit_tests::compute::gold_reduce_w,
+                        .result_shape = result_shape,
+                        .math_only_reduce = true,
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en,
+                        .math_fidelity = MathFidelity(math_fid)};
+                    run_single_core_reduce_program(this->devices_.at(0), test_config);
                 }
             }
         }
     }
 }
-// Disabled due to GH issue #14510
-TEST_F(DeviceFixture, DISABLED_TensixComputeReduceHWMathOnly) {
+
+TEST_F(DeviceFixture, TensixComputeReduceHWMathOnly) {
     std::vector<uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -674,144 +651,22 @@ TEST_F(DeviceFixture, DISABLED_TensixComputeReduceHWMathOnly) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
-                    for (bool at_start : {true, false}) {
-                        ReduceConfig test_config = {
-                            .shape = shape,
-                            .reduce_dim = ReduceDim::HW,
-                            .reduce_type = ReduceType(reduce_type),
-                            .data_gen_rand_max = 10.0f,
-                            .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-                            .data_gen_offset = -10.0f,
-                            .atol = 1e-2f,
-                            .rtol = 0.08f,
-                            .golden_function = ::unit_tests::compute::gold_reduce_hw,
-                            .result_shape = result_shape,
-                            .math_only_reduce = true,
-                            .fp32_dest_acc_en = fp32_dest_acc_en,
-                            .dst_full_sync_en = dst_full_sync_en,
-                            .at_start = at_start,
-                            .math_fidelity = MathFidelity(math_fid)};
-                        run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    }
-                }
-            }
-        }
-    }
-}
-
-TEST_F(DeviceFixture, TensixComputeReduceHShortInit) {
-    if (this->arch_ != tt::ARCH::BLACKHOLE) {
-        // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
-        GTEST_SKIP();
-    }
-    std::vector<uint32_t> shape = {1, 3, 19 * TILE_HEIGHT, 17 * TILE_WIDTH};
-    std::vector<uint32_t> result_shape = {shape[0], shape[1], TILE_HEIGHT, shape[3]};
-    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
-        // MathFidelity : {0, 2, 3, 4}; so skip value 1
-        if (math_fid == 1) {
-            continue;
-        }
-        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
-            for (bool fp32_dest_acc_en : {true, false}) {
-                for (bool dst_full_sync_en : {true, false}) {
-                    for (bool at_start : {true, false}) {
-                        ReduceConfig test_config = {
-                            .short_init = true,
-                            .shape = shape,
-                            .reduce_dim = ReduceDim::H,
-                            .reduce_type = ReduceType(reduce_type),
-                            .data_gen_rand_max = 10.0f,
-                            .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-                            .data_gen_offset = -10.0f,
-                            .atol = 1e-2f,
-                            .rtol = 0.08f,
-                            .golden_function = ::unit_tests::compute::gold_reduce_h,
-                            .result_shape = result_shape,
-                            .fp32_dest_acc_en = fp32_dest_acc_en,
-                            .dst_full_sync_en = dst_full_sync_en,
-                            .at_start = at_start,
-                            .math_fidelity = MathFidelity(math_fid)};
-                        run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    }
-                }
-            }
-        }
-    }
-}
-
-TEST_F(DeviceFixture, TensixComputeReduceWShortInit) {
-    std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
-    std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
-    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
-        // MathFidelity : {0, 2, 3, 4}; so skip value 1
-        if (math_fid == 1) {
-            continue;
-        }
-        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
-            for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                    continue;
-                }
-                for (bool dst_full_sync_en : {true, false}) {
-                    for (bool at_start : {true, false}) {
-                        ReduceConfig test_config = {
-                            .short_init = true,
-                            .shape = shape,
-                            .reduce_dim = ReduceDim::W,
-                            .reduce_type = ReduceType(reduce_type),
-                            .data_gen_rand_max = 10.0f,
-                            .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-                            .data_gen_offset = -10.0f,
-                            .atol = 1e-2f,
-                            .rtol = 0.08f,
-                            .golden_function = ::unit_tests::compute::gold_reduce_w,
-                            .result_shape = result_shape,
-                            .fp32_dest_acc_en = fp32_dest_acc_en,
-                            .dst_full_sync_en = dst_full_sync_en,
-                            .at_start = at_start,
-                            .math_fidelity = MathFidelity(math_fid)};
-                        run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    }
-                }
-            }
-        }
-    }
-}
-// Disabled due to GH issue #14510
-TEST_F(DeviceFixture, DISABLED_TensixComputeReduceHWShortInit) {
-    std::vector<uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
-    std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
-    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
-        // MathFidelity : {0, 2, 3, 4}; so skip value 1
-        if (math_fid == 1) {
-            continue;
-        }
-        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
-            for (bool fp32_dest_acc_en : {true, false}) {
-                // Currently fp32 dest unsupported with reduce scalar
-                if (fp32_dest_acc_en) {
-                    continue;
-                }
-                for (bool dst_full_sync_en : {true, false}) {
-                    for (bool at_start : {true, false}) {
-                        ReduceConfig test_config = {
-                            .short_init = true,
-                            .shape = shape,
-                            .reduce_dim = ReduceDim::HW,
-                            .reduce_type = ReduceType(reduce_type),
-                            .data_gen_rand_max = 10.0f,
-                            .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-                            .data_gen_offset = -10.0f,
-                            .atol = 1e-2f,
-                            .rtol = 0.08f,
-                            .golden_function = ::unit_tests::compute::gold_reduce_hw,
-                            .result_shape = result_shape,
-                            .fp32_dest_acc_en = fp32_dest_acc_en,
-                            .dst_full_sync_en = dst_full_sync_en,
-                            .at_start = at_start,
-                            .math_fidelity = MathFidelity(math_fid)};
-                        run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    }
+                    ReduceConfig test_config = {
+                        .shape = shape,
+                        .reduce_dim = ReduceDim::HW,
+                        .reduce_type = ReduceType(reduce_type),
+                        .data_gen_rand_max = 10.0f,
+                        .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                        .data_gen_offset = -10.0f,
+                        .atol = 1e-2f,
+                        .rtol = 0.08f,
+                        .golden_function = ::unit_tests::compute::gold_reduce_hw,
+                        .result_shape = result_shape,
+                        .math_only_reduce = true,
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en,
+                        .math_fidelity = MathFidelity(math_fid)};
+                    run_single_core_reduce_program(this->devices_.at(0), test_config);
                 }
             }
         }
@@ -833,68 +688,23 @@ TEST_F(DeviceFixture, TensixComputeReduceWTinyTiles) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
-                    for (bool at_start : {true, false}) {
-                        ReduceConfig test_config = {
-                            .tile_shape = tile_shape,
-                            .shape = shape,
-                            .reduce_dim = ReduceDim::W,
-                            .reduce_type = ReduceType(reduce_type),
-                            .data_gen_rand_max = 0.0f,
-                            .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-                            .data_gen_offset = 1.0f,
-                            .atol = 1e-2f,
-                            .rtol = 0.08f,
-                            .golden_function = ::unit_tests::compute::gold_reduce_w,
-                            .result_shape = result_shape,
-                            .fp32_dest_acc_en = fp32_dest_acc_en,
-                            .dst_full_sync_en = dst_full_sync_en,
-                            .at_start = at_start,
-                            .math_fidelity = MathFidelity(math_fid),
-                        };
-                        run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    }
-                }
-            }
-        }
-    }
-}
-
-TEST_F(DeviceFixture, TensixComputeReduceWTinyTilesShortInit) {
-    tt_metal::Tile tile_shape = tt_metal::Tile({TILE_HEIGHT / 2, TILE_WIDTH});
-    std::vector<uint32_t> shape = {1, 1, 1 * tile_shape.get_tile_shape()[0], 13 * tile_shape.get_tile_shape()[1]};
-    std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], tile_shape.get_tile_shape()[1]};
-    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
-        // MathFidelity : {0, 2, 3, 4}; so skip value 1
-        if (math_fid == 1) {
-            continue;
-        }
-        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
-            for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                    continue;
-                }
-                for (bool dst_full_sync_en : {true, false}) {
-                    for (bool at_start : {true, false}) {
-                        ReduceConfig test_config = {
-                            .short_init = true,
-                            .tile_shape = tile_shape,
-                            .shape = shape,
-                            .reduce_dim = ReduceDim::W,
-                            .reduce_type = ReduceType(reduce_type),
-                            .data_gen_rand_max = 0.0f,
-                            .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-                            .data_gen_offset = 1.0f,
-                            .atol = 1e-2f,
-                            .rtol = 0.08f,
-                            .golden_function = ::unit_tests::compute::gold_reduce_w,
-                            .result_shape = result_shape,
-                            .fp32_dest_acc_en = fp32_dest_acc_en,
-                            .dst_full_sync_en = dst_full_sync_en,
-                            .at_start = at_start,
-                            .math_fidelity = MathFidelity(math_fid),
-                        };
-                        run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    }
+                    ReduceConfig test_config = {
+                        .tile_shape = tile_shape,
+                        .shape = shape,
+                        .reduce_dim = ReduceDim::W,
+                        .reduce_type = ReduceType(reduce_type),
+                        .data_gen_rand_max = 0.0f,
+                        .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                        .data_gen_offset = 1.0f,
+                        .atol = 1e-2f,
+                        .rtol = 0.08f,
+                        .golden_function = ::unit_tests::compute::gold_reduce_w,
+                        .result_shape = result_shape,
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en,
+                        .math_fidelity = MathFidelity(math_fid),
+                    };
+                    run_single_core_reduce_program(this->devices_.at(0), test_config);
                 }
             }
         }

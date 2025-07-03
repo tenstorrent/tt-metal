@@ -15,11 +15,11 @@ using namespace tt_metal;
 
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads(
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
-    const auto& ashape = a.get_padded_shape();
+    const auto& ashape = a.padded_shape();
 
     tt_metal::IDevice* device = a.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
@@ -212,7 +212,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
 
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads_sharded(
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -225,7 +225,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
     uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
     uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
     // tensor shape
-    const auto shape = a.get_padded_shape();
+    const auto& shape = a.padded_shape();
     uint32_t M = shape[2] * shape[0];  // 4608
     uint32_t K = shape[3];             // 3072
     uint32_t Mt = M / TILE_WIDTH;

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 #include "ttnn/operations/experimental/plusone/plusone.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"

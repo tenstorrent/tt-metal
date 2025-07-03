@@ -17,9 +17,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
     should_skip_model_load,
 )
-from models.demos.t3000.llama2_70b.tt.llama_model_optimized import (
-    TtLlamaModel_optimized,
-)
+from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import profiler, skip_for_grayskull
 
@@ -210,7 +208,6 @@ def test_Llama_perf_host(
     max_context_len,
     mesh_device,
     llama_version,
-    use_program_cache,
     n_layers=80,
     n_devices=8,
 ):
@@ -419,7 +416,6 @@ def test_Llama_perf_hybrid_data_tensor_parallel(
     seq_len,
     max_context_len,
     llama_version,
-    use_program_cache,
     n_layers=80,
     n_devices=8,
 ):

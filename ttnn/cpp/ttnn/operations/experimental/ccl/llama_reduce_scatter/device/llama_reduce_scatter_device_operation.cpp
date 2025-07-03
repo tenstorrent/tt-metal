@@ -5,9 +5,9 @@
 #include <cstdint>
 #include <utility>
 
-#include "cpp/ttnn/tensor/types.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "llama_reduce_scatter_device_operation.hpp"
-#include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
@@ -20,8 +20,7 @@ LlamaReduceScatterDeviceOperation::program_factory_t LlamaReduceScatterDeviceOpe
 void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
-    auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
-    auto input_spec = input_tensor.get_tensor_spec();
+    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
 
     TT_FATAL(attributes.dim == 3, "dim must be 1, got {}", attributes.dim);
     TT_FATAL(attributes.cluster_axis == 1, "cluster_axis must be 1, got {}", attributes.cluster_axis);
@@ -45,17 +44,17 @@ void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
         "intermediate_packet_buffer shard height must be 32 but got {}",
         tensor_args.intermediate_packet_buffer.shard_spec().value().shape[0]);
     TT_FATAL(
-        tensor_args.intermediate_packet_buffer.get_tensor_spec().tile().get_tile_shape() == tile_shape,
+        tensor_args.intermediate_packet_buffer.tensor_spec().tile().get_tile_shape() == tile_shape,
         "intermediate_packet_buffer must have the same tile shape ({}, {}) as input_tensor",
         tile_shape[0],
         tile_shape[1]);
     if (attributes.output_mem_config.has_value()) {
         TT_FATAL(
-            attributes.output_mem_config.value().shard_spec.has_value(), "output_mem_config must have a shard spec");
+            attributes.output_mem_config.value().shard_spec().has_value(), "output_mem_config must have a shard spec");
         TT_FATAL(
-            attributes.output_mem_config.value().shard_spec.value().shape[0] == 32,
+            attributes.output_mem_config.value().shard_spec().value().shape[0] == 32,
             "output_mem_config shard height must be 32 but got {}",
-            attributes.output_mem_config.value().shard_spec.value().shape[0]);
+            attributes.output_mem_config.value().shard_spec().value().shape[0]);
     }
 }
 
@@ -69,8 +68,8 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
     // input is unpadded, output is padded. Ex, input: 3584, 112 tiles, padded to 5 tiles per core, total width is 120
     // tiles (3840). this should be changed to use unpadded output in the future.
     auto input_tensor = tensor_args.input_tensor;
-    auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
-    auto input_spec = input_tensor.get_tensor_spec();
+    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    const auto& input_spec = input_tensor.tensor_spec();
     auto input_shard_spec = input_tensor.shard_spec().value();
     auto input_grid = input_shard_spec.grid;
     auto input_shard_height = input_shard_spec.shape[0];
@@ -93,9 +92,7 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
         return {TensorSpec(
             Shape(output_shape),
             TensorLayout(
-                input_tensor.get_dtype(),
-                PageConfig(input_tensor.get_layout()),
-                attributes.output_mem_config.value()))};
+                input_tensor.dtype(), PageConfig(input_tensor.layout()), attributes.output_mem_config.value()))};
     }
 
     input_shard_spec = input_tensor.shard_spec().value();
@@ -108,12 +105,10 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
 
     // this op only supports one tile per output core for now
     ShardSpec shard_spec{core_range, {input_shape[-2], tile_shape[1]}};
-    tt::tt_metal::MemoryConfig out_memory_config = input_tensor.memory_config();
-    out_memory_config.shard_spec = shard_spec;
+    tt::tt_metal::MemoryConfig out_memory_config = input_tensor.memory_config().with_shard_spec(shard_spec);
 
     return {TensorSpec(
-        Shape(output_shape),
-        TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), out_memory_config))};
+        Shape(output_shape), TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), out_memory_config))};
 }
 
 LlamaReduceScatterDeviceOperation::tensor_return_value_t LlamaReduceScatterDeviceOperation::create_output_tensors(
@@ -134,16 +129,20 @@ LlamaReduceScatterDeviceOperation::invoke(
     const uint32_t cluster_axis,
     const uint32_t ring_devices,
     const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config) {
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    tt::tt_fabric::Topology topology,
+    bool use_noc1_only) {
     return {
         operation_attributes_t{
-            .dim = (dim < 0 ? uint32_t(input_tensor.get_logical_shape().rank() + dim) : (uint32_t)dim),
+            .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
             .cross_device_semaphore = semaphore,
             .subdevice_id = subdevice_id,
             .cluster_axis = cluster_axis,
             .output_mem_config = memory_config,
             .ring_devices = ring_devices,
             .num_links = num_links,
+            .topology = topology,
+            .use_noc1_only = use_noc1_only,
         },
         tensor_args_t{.input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer}};
 }

@@ -7,9 +7,11 @@ from typing import Optional, Tuple
 import pytest
 import torch
 import ttnn
+from loguru import logger
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 TIMEOUT = 15
 
@@ -358,25 +360,34 @@ def run_max(device, params, dtype, layout):
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=layout, device=device)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.max(input_tensor, dim=dim, keepdim=keepdim)
-    output_tensor = ttnn.to_torch(output_tensor)
+    op_output_tensor = ttnn.max(input_tensor, dim=dim, keepdim=keepdim)
+    output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999
-    return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+    tensors = [input_tensor, op_output_tensor]
+    return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
 
 
 @pytest.mark.parametrize("params", parameters["pytorch"]["params"])
 @pytest.mark.parametrize("dtype", parameters["pytorch"]["dtype"])
 @pytest.mark.parametrize("layout", parameters["pytorch"]["layout"])
 def test_pytorch(device, params, dtype, layout):
-    run_max(device, params, dtype, layout)
+    (result, msg), e2e_perf = run_max(device, params, dtype, layout)
+    assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"E2E Performance: {e2e_perf}")
 
 
 @pytest.mark.parametrize("params", parameters["forge"]["params"])
 @pytest.mark.parametrize("dtype", parameters["forge"]["dtype"])
 @pytest.mark.parametrize("layout", parameters["forge"]["layout"])
 def test_forge(device, params, dtype, layout):
-    run_max(device, params, dtype, layout)
+    (result, msg), e2e_perf = run_max(device, params, dtype, layout)
+    assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"E2E Performance: {e2e_perf}")
 
 
 def run(

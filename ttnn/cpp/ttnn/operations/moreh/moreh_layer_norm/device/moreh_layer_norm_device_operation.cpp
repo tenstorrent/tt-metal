@@ -12,10 +12,8 @@ namespace ttnn::operations::moreh::moreh_layer_norm {
 
 namespace {
 inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
-    TT_FATAL(
-        tensor.get_layout() == Layout::TILE, "{} only supports tiled layout. Got: {}", op_name, tensor.get_layout());
-    TT_FATAL(
-        tensor.get_dtype() == DataType::BFLOAT16, "{} only supports bfloat16. Got: {}", op_name, tensor.get_dtype());
+    TT_FATAL(tensor.layout() == Layout::TILE, "{} only supports tiled layout. Got: {}", op_name, tensor.layout());
+    TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "{} only supports bfloat16. Got: {}", op_name, tensor.dtype());
     TT_FATAL(
         tensor.storage_type() == StorageType::DEVICE,
         "Operands to {} need to be on device! Got: {}",
@@ -38,9 +36,9 @@ void MorehLayerNormOperation::validate_inputs(
 
     TT_FATAL(normalized_dims > 0, "normalized_dims should > 0. Got {}", normalized_dims);
     TT_FATAL(
-        normalized_dims <= input.get_padded_shape().rank(),
+        normalized_dims <= input.padded_shape().rank(),
         "normalized_dims should <= input rank ({}). Got: {}",
-        input.get_padded_shape().rank(),
+        input.padded_shape().rank(),
         normalized_dims);
 
     if (gamma.has_value()) {
@@ -86,19 +84,19 @@ MorehLayerNormOperation::spec_return_value_t MorehLayerNormOperation::compute_ou
     std::vector<std::optional<TensorSpec>> result(3);
 
     if (tensor_args.output.has_value()) {
-        result[0] = tensor_args.output->get_tensor_spec();
+        result[0] = tensor_args.output->tensor_spec();
     } else {
         result[0] = TensorSpec(
-            input.get_logical_shape(),
-            TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
+            input.logical_shape(),
+            TensorLayout(input.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
     }
 
     if (tensor_args.mean.has_value()) {
-        result[1] = tensor_args.mean->get_tensor_spec();
+        result[1] = tensor_args.mean->tensor_spec();
     }
 
     if (tensor_args.rstd.has_value()) {
-        result[2] = tensor_args.rstd->get_tensor_spec();
+        result[2] = tensor_args.rstd->tensor_spec();
     }
 
     return result;

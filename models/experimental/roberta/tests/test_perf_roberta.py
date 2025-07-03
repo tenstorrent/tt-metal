@@ -100,7 +100,7 @@ def run_perf_roberta(expected_inference_time, expected_compile_time, device):
         ),
     ),
 )
-def test_perf_bare_metal(device, use_program_cache, expected_inference_time, expected_compile_time):
+def test_perf_bare_metal(device, expected_inference_time, expected_compile_time):
     run_perf_roberta(expected_inference_time, expected_compile_time, device)
 
 
@@ -114,5 +114,5 @@ def test_perf_bare_metal(device, use_program_cache, expected_inference_time, exp
         ),
     ),
 )
-def test_perf_virtual_machine(device, use_program_cache, expected_inference_time, expected_compile_time):
+def test_perf_virtual_machine(device, expected_inference_time, expected_compile_time):
     run_perf_roberta(expected_inference_time, expected_compile_time, device)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,12 +32,11 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
 #include <tt_stl/span.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
@@ -306,8 +305,12 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Test cannot run on specified device.");
         }
 
-        auto [dev_l_mesh_id, dev_l_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(test_device_id_l);
-        auto [dev_r_mesh_id, dev_r_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(test_device_id_r);
+        auto dev_l_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(test_device_id_l);
+        auto dev_r_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(test_device_id_r);
+        auto dev_l_mesh_id = dev_l_fabric_node_id.mesh_id;
+        auto dev_l_chip_id = dev_l_fabric_node_id.chip_id;
+        auto dev_r_mesh_id = dev_r_fabric_node_id.mesh_id;
+        auto dev_r_chip_id = dev_r_fabric_node_id.chip_id;
 
         log_info(
             LogTest,
@@ -325,7 +328,7 @@ int main(int argc, char** argv) {
         bool router_core_found = false;
         CoreCoord router_logical_core;
         CoreCoord router_phys_core;
-        routing_plane_id_t routing_plane;
+        routing_plane_id_t routing_plane{};
         CoreCoord gk_phys_core;
         uint32_t routing_table_addr =
             device_map[test_device_id_l]->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
@@ -354,8 +357,7 @@ int main(int argc, char** argv) {
                                             .get_cluster()
                                             .get_soc_desc(test_device_id_l)
                                             .logical_eth_core_to_chan_map.at(router_logical_core);
-                        routing_plane = control_plane->get_routing_plane_id(eth_chan);
-
+                        routing_plane = control_plane->get_routing_plane_id(dev_l_fabric_node_id, eth_chan);
                         router_core_found = true;
                     }
                     auto connected_logical_cores = device.second->get_ethernet_sockets(neighbor);
@@ -482,7 +484,7 @@ int main(int argc, char** argv) {
                 (device_map[test_device_id_l]->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id
                 0x410,                                                                  // 1: dest_noc_offset
                 routing_plane,
-                (dev_r_mesh_id << 16 | dev_r_chip_id)};
+                (*dev_r_mesh_id << 16 | dev_r_chip_id)};
 
             if (ASYNC_WR == fabric_command) {
                 runtime_args.push_back(target_address);
@@ -525,7 +527,7 @@ int main(int argc, char** argv) {
                 (rx_queue_size_bytes >> 4),                            // 13: queue_size_words
             };
 
-            std::vector<uint32_t> runtime_args = {(dev_l_mesh_id << 16 | dev_l_chip_id)};
+            std::vector<uint32_t> runtime_args = {(*dev_l_mesh_id << 16 | dev_l_chip_id)};
 
             log_info(LogTest, "run socket rx at x={},y={}", core.x, core.y);
             auto kernel = tt_metal::CreateKernel(
@@ -637,11 +639,9 @@ int main(int argc, char** argv) {
 
         if (pass) {
             double total_tx_bw = 0.0;
-            uint64_t total_tx_words_sent = 0;
             uint64_t total_rx_words_checked = 0;
             for (uint32_t i = 0; i < num_src_endpoints; i++) {
                 uint64_t tx_words_sent = get_64b_result(tx_results[i], TT_FABRIC_WORD_CNT_INDEX);
-                total_tx_words_sent += tx_words_sent;
                 uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], TT_FABRIC_CYCLES_INDEX);
                 double tx_bw = ((double)tx_words_sent) * PACKET_WORD_SIZE_BYTES / tx_elapsed_cycles;
                 total_tx_bw += tx_bw;
@@ -679,7 +679,7 @@ int main(int argc, char** argv) {
 
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);

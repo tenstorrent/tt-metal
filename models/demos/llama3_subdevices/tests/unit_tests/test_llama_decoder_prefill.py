@@ -37,22 +37,22 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        # True,
-        False,
+        True,
+        # False,
     ),
     ids=(
-        # "paged_attention",
-        "default_attention",
+        "paged_attention",
+        # "default_attention",
     ),
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
 )
 @pytest.mark.parametrize(
     "max_seq_len",
     (
-        # 4096,
+        4096,
         128,
     ),
 )
@@ -66,7 +66,6 @@ def test_llama_decoder_inference(
     paged_attention,
     page_params,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):

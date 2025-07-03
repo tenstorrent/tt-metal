@@ -11,14 +11,13 @@ namespace ttnn::operations::experimental::transformer {
 void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto batch_size = input_tensor.get_padded_shape()[0];
+    const auto batch_size = input_tensor.padded_shape()[0];
     // TODO: See issue #1744
-    TT_FATAL((input_tensor.get_padded_shape() == ttnn::Shape({batch_size, 1, 384, 3072})), "Unsupported input shape");
     TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
-        input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
-            input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
 
     if (!input_tensor.is_sharded()) {
@@ -31,7 +30,7 @@ void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(
             "Error");
         TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1, "Error");
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, "Error");
+            input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, "Error");
     }
 
     if (!output_tensors.empty()) {
@@ -48,17 +47,17 @@ std::vector<ttnn::TensorSpec> SplitFusedQKVAndSplitHeadsDeviceOperation::compute
     if (output_tensors.size() == 3 && output_tensors[0].has_value() && output_tensors[1].has_value() &&
         output_tensors[2].has_value()) {
         return {
-            output_tensors.at(0)->get_tensor_spec(),
-            output_tensors.at(1)->get_tensor_spec(),
-            output_tensors.at(2)->get_tensor_spec()};
+            output_tensors.at(0)->tensor_spec(),
+            output_tensors.at(1)->tensor_spec(),
+            output_tensors.at(2)->tensor_spec()};
     }
 
     const auto& input_tensor = input_tensors.at(0);
-    const auto batch_size = input_tensor.get_padded_shape()[0];
+    const auto batch_size = input_tensor.padded_shape()[0];
     uint32_t num_heads = this->num_heads;
     uint32_t num_output_tensors = 3;
-    uint32_t M = input_tensor.get_padded_shape()[2];                                    // 384
-    uint32_t K = input_tensor.get_padded_shape()[-1] / num_output_tensors / num_heads;  // 64
+    uint32_t M = input_tensor.padded_shape()[2];                                    // 384
+    uint32_t K = input_tensor.padded_shape()[-1] / num_output_tensors / num_heads;  // 64
 
     if (input_tensor.is_sharded()) {
         // core range
@@ -75,23 +74,21 @@ std::vector<ttnn::TensorSpec> SplitFusedQKVAndSplitHeadsDeviceOperation::compute
         uint32_t per_core_N_k = M;                              // 384
         auto shard_spec_k = tt::tt_metal::ShardSpec{all_cores, {per_core_M_k, per_core_N_k}, shard_orientation};
         // create sharded tensors
-        auto mem_config_qv = this->output_mem_config;
-        mem_config_qv.shard_spec = shard_spec_qv;
-        auto mem_config_k = this->output_mem_config;
-        mem_config_k.shard_spec = shard_spec_k;
+        auto mem_config_qv = this->output_mem_config.with_shard_spec(shard_spec_qv);
+        auto mem_config_k = this->output_mem_config.with_shard_spec(shard_spec_k);
         auto out_tensor_q = TensorSpec(
             Shape({batch_size, num_heads, M, K}),
-            TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config_qv));
+            TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), mem_config_qv));
         auto out_tensor_k = TensorSpec(
             Shape({batch_size, num_heads, K, M}),
-            TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config_k));
+            TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), mem_config_k));
         auto out_tensor_v = TensorSpec(
             Shape({batch_size, num_heads, M, K}),
-            TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config_qv));
+            TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), mem_config_qv));
         return {out_tensor_q, out_tensor_k, out_tensor_v};
     }
 
-    TensorLayout layout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config);
+    TensorLayout layout(input_tensor.dtype(), PageConfig(Layout::TILE), output_mem_config);
     return {
         TensorSpec(Shape({batch_size, this->num_heads, M, K}), layout),
         TensorSpec(Shape({batch_size, this->num_heads, K, M}), layout),

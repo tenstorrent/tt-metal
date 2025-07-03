@@ -16,11 +16,11 @@
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include <tt-metalium/dev_msgs.h>
+#include "dev_msgs.h"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "umd/device/types/xy_pair.h"
 
@@ -67,90 +67,65 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
 
     // Set up the kernel on the correct risc
-    KernelHandle assert_kernel;
     switch(riscv_type) {
         case DebugBrisc:
-            assert_kernel = CreateKernel(
+            CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
                 DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default
-                }
-            );
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
             break;
         case DebugNCrisc:
-            assert_kernel = CreateKernel(
+            CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
                 DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = tt_metal::NOC::RISCV_1_default
-                }
-            );
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
             break;
         case DebugTrisc0:
-            assert_kernel = CreateKernel(
+            CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
-                ComputeConfig{
-                    .defines = {{"TRISC0", "1"}}
-                }
-            );
+                ComputeConfig{.defines = {{"TRISC0", "1"}}});
             break;
         case DebugTrisc1:
-            assert_kernel = CreateKernel(
+            CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
-                ComputeConfig{
-                    .defines = {{"TRISC1", "1"}}
-                }
-            );
+                ComputeConfig{.defines = {{"TRISC1", "1"}}});
             break;
         case DebugTrisc2:
-            assert_kernel = CreateKernel(
+            CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
-                ComputeConfig{
-                    .defines = {{"TRISC2", "1"}}
-                }
-            );
+                ComputeConfig{.defines = {{"TRISC2", "1"}}});
             break;
         case DebugErisc:
-            assert_kernel = CreateKernel(
+            CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
-                EthernetConfig{
-                    .noc = tt_metal::NOC::NOC_0
-                }
-            );
+                EthernetConfig{.noc = tt_metal::NOC::NOC_0});
             break;
         case DebugIErisc:
-            assert_kernel = CreateKernel(
+            CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
-                EthernetConfig{
-                    .eth_mode = Eth::IDLE,
-                    .noc = tt_metal::NOC::NOC_0
-                }
-            );
+                EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
             break;
-        default:
-            log_info("Unsupported risc type: {}, skipping test...", riscv_type);
-            GTEST_SKIP();
+        default: log_info(tt::LogTest, "Unsupported risc type: {}, skipping test...", riscv_type); GTEST_SKIP();
     }
 
     // Run the program
     fixture->RunProgram(device, program, true);
 
-    log_info("Checking file: {}", fixture->log_file_name);
+    log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
 
     // Check log
     EXPECT_TRUE(

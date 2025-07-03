@@ -14,7 +14,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include "galaxy_fixture.hpp"
-#include <tt-metalium/system_memory_manager.hpp>
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "umd/device/types/xy_pair.h"
@@ -44,8 +43,11 @@ is updated with this option, we can call that over this function.
 std::unordered_set<chip_id_t> get_ethernet_connected_device_ids(const chip_id_t device_id) {
     std::unordered_set<chip_id_t> connected_device_ids;
     const std::unordered_set<CoreCoord>& active_ethernet_cores =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
     for (const CoreCoord& ethernet_core : active_ethernet_cores) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_id, ethernet_core)) {
+            continue;
+        }
         const auto& [connected_device_id, _] =
             tt::tt_metal::MetalContext::instance().get_cluster().get_connected_ethernet_core(
                 {device_id, ethernet_core});
@@ -66,8 +68,12 @@ TEST_F(TGFixture, ActiveEthValidateNumLinksBetweenAdjacentGalaxyChips) {
         if (is_galaxy_device(device_id)) {
             std::unordered_map<chip_id_t, uint32_t> connected_devices_to_num_links_found;
             const std::unordered_set<CoreCoord>& active_ethernet_cores =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
             for (const CoreCoord& ethernet_core : active_ethernet_cores) {
+                if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                        device_id, ethernet_core)) {
+                    continue;
+                }
                 const auto& [connected_device_id, _] =
                     tt::tt_metal::MetalContext::instance().get_cluster().get_connected_ethernet_core(
                         {device_id, ethernet_core});

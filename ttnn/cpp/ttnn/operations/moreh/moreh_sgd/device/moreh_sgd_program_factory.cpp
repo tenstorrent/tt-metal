@@ -31,10 +31,10 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
 
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto shape = param_in.get_logical_shape();
+    auto shape = param_in.logical_shape();
     auto H = shape[-2];
     auto W = shape[-1];
-    auto num = param_in.volume() / H / W;
+    auto num = param_in.physical_volume() / H / W;
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
 
@@ -61,7 +61,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(param_in.get_dtype());
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(param_in.dtype());
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
     CreateCircularBuffer(
         program,

@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "control_plane.hpp"
+#include "fabric_host_utils.hpp"
+
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/assert.hpp>
@@ -13,30 +16,40 @@
 #include <set>
 #include <vector>
 #include <algorithm>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "fabric/hw/inc/fabric_routing_mode.h"
+#include "fabric_context.hpp"
 
 namespace tt::tt_fabric {
 
-bool is_1d_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
+bool is_tt_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
     return fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D ||
-           fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING;
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_TORUS ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC;
 }
 
 bool is_2d_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
     return fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D ||
-           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH;
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_TORUS ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC;
 }
 
-Topology get_1d_topology(tt::tt_metal::FabricConfig fabric_config) {
-    switch (fabric_config) {
-        case tt::tt_metal::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
-        case tt::tt_metal::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
-        case tt::tt_metal::FabricConfig::DISABLED:
-        case tt::tt_metal::FabricConfig::FABRIC_2D:
-        case tt::tt_metal::FabricConfig::FABRIC_2D_PUSH:
-        case tt::tt_metal::FabricConfig::CUSTOM:
-            TT_THROW("Unsupported fabric config for 1D: {}", magic_enum::enum_name(fabric_config));
+uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology) {
+    if (topology == Topology::Mesh) {
+        return FabricEriscDatamoverConfig::num_sender_channels_2d;
+    } else {
+        return FabricEriscDatamoverConfig::num_sender_channels_1d;
     }
-    return tt::tt_fabric::Topology::Linear;
+}
+
+uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology) {
+    if (topology == Topology::Mesh) {
+        return FabricEriscDatamoverConfig::num_downstream_edms_2d;
+    } else {
+        return FabricEriscDatamoverConfig::num_downstream_edms;
+    }
 }
 
 FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::ClusterType cluster_type) {
@@ -46,23 +59,123 @@ FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::Cluster
     return FabricType::MESH;
 }
 
-std::vector<chan_id_t> get_ordered_fabric_eth_chans(chip_id_t chip_id, const std::set<chan_id_t>& eth_chans) {
-    std::vector<std::pair<chan_id_t, CoreCoord>> ordered_eth_chans_cores;
-    auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip_id);
-    for (const auto& chan : eth_chans) {
-        ordered_eth_chans_cores.push_back(
-            std::make_pair(chan, soc_desc.get_eth_core_for_channel(chan, CoordSystem::VIRTUAL)));
+std::vector<uint32_t> get_forwarding_link_indices_in_direction(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const bool is_2d_fabric = control_plane.get_fabric_context().get_fabric_topology() == Topology::Mesh;
+
+    const std::vector<chan_id_t>& fabric_channels =
+        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
+
+    // the subset of routers that support forwarding b/w those chips
+    std::vector<chan_id_t> forwarding_channels;
+    if (is_2d_fabric) {
+        forwarding_channels =
+            control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
+    } else {
+        const auto src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+        const auto dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
+        // for 1D check if each port has an active connection to the dst_chip_id
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& soc_desc = cluster.get_soc_desc(src_chip_id);
+
+        for (const auto& channel : fabric_channels) {
+            const auto eth_core = soc_desc.get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
+            auto [connected_chip_id, connected_eth_core] =
+                cluster.get_connected_ethernet_core(std::make_tuple(src_chip_id, CoreCoord{eth_core.x, eth_core.y}));
+            if (connected_chip_id == dst_chip_id) {
+                forwarding_channels.push_back(channel);
+            }
+        }
     }
 
-    std::sort(ordered_eth_chans_cores.begin(), ordered_eth_chans_cores.end(), [](const auto& a, const auto& b) {
-        return a.second.x < b.second.x;
-    });
-
-    std::vector<chan_id_t> ordered_eth_chans;
-    for (const auto& [chan, _] : ordered_eth_chans_cores) {
-        ordered_eth_chans.push_back(chan);
+    std::vector<uint32_t> link_indices;
+    for (uint32_t i = 0; i < fabric_channels.size(); i++) {
+        if (std::find(forwarding_channels.begin(), forwarding_channels.end(), fabric_channels[i]) !=
+            forwarding_channels.end()) {
+            link_indices.push_back(i);
+        }
     }
-    return ordered_eth_chans;
+
+    return link_indices;
+}
+
+std::vector<uint32_t> get_forwarding_link_indices(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // find the forwarding direction b/w src and dest chip
+    const auto& forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    if (!forwarding_direction.has_value()) {
+        return {};
+    }
+
+    return get_forwarding_link_indices_in_direction(
+        src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+}
+
+void set_routing_mode(uint16_t routing_mode) {
+    // override for forced routing mode
+    if (routing_mode == ROUTING_MODE_UNDEFINED) {
+        return;
+    }
+
+    // Validate dimension flags are orthogonal (only one can be set)
+    TT_FATAL(
+        __builtin_popcount(routing_mode & (ROUTING_MODE_1D | ROUTING_MODE_2D | ROUTING_MODE_3D)) == 1,
+        "Only one dimension mode (1D, 2D, 3D) can be active at once");
+
+    // Validate topology flags are orthogonal
+    TT_FATAL(
+        __builtin_popcount(
+            routing_mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_MESH | ROUTING_MODE_TORUS)) == 1,
+        "Only one topology mode (RING, LINE, MESH, TORUS) can be active at once");
+
+    // Validate push/pull flags are orthogonal
+    TT_FATAL(
+        __builtin_popcount(routing_mode & (ROUTING_MODE_PUSH | ROUTING_MODE_PULL)) <= 1,
+        "PUSH and PULL routing modes cannot be used together");
+
+    // Validate push/pull flags are only for 2D
+    TT_FATAL(
+        !(routing_mode & (ROUTING_MODE_PUSH | ROUTING_MODE_PULL)) || (routing_mode & ROUTING_MODE_2D),
+        "PUSH and PULL routing modes can only be used with 2D topology");
+
+    // Validate 1D can't be used with MESH or TORUS
+    TT_FATAL(
+        !(routing_mode & ROUTING_MODE_1D) || !(routing_mode & (ROUTING_MODE_MESH | ROUTING_MODE_TORUS)),
+        "1D routing mode cannot be combined with MESH or TORUS topology");
+
+    // Validate 2D can't be used with LINE or RING
+    TT_FATAL(
+        !(routing_mode & ROUTING_MODE_2D) || !(routing_mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING)),
+        "2D routing mode cannot be combined with LINE or RING topology");
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    control_plane.set_routing_mode(routing_mode);
+}
+
+void set_routing_mode(Topology topology, tt::tt_metal::FabricConfig fabric_config, uint32_t dimension /*, take more*/) {
+    // TODO: take more parameters to set detail routing mode
+    TT_FATAL(
+        dimension == 1 || dimension == 2 || dimension == 3,
+        "Invalid dimension {}. Supported dimensions are 1, 2, or 3",
+        dimension);
+
+    uint16_t mode = (dimension == 3 ? ROUTING_MODE_3D : 0);
+    if (topology == Topology::Ring) {
+        mode |= (ROUTING_MODE_1D | ROUTING_MODE_RING);
+    } else if (topology == Topology::Linear) {
+        mode |= (ROUTING_MODE_1D | ROUTING_MODE_LINE);
+    } else if (topology == Topology::Mesh) {
+        mode |= (ROUTING_MODE_2D | ROUTING_MODE_MESH);
+    }
+    if (fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC) {
+        mode |= ROUTING_MODE_DYNAMIC;
+    } else {
+        mode |= ROUTING_MODE_LOW_LATENCY;
+    }
+    set_routing_mode(mode);
 }
 
 void get_optimal_noc_for_edm(
@@ -82,8 +195,9 @@ void get_optimal_noc_for_edm(
     }
     log_debug(
         tt::LogTest,
-        "device {} edm_builder1 {} {} is connecting to edm_builder2 {} {} num links {}",
-        edm_builder1.my_chip_id,
+        "Fabric MeshId {} ChipId {} edm_builder1 {} {} is connecting to edm_builder2 {} {} num links {}",
+        *(edm_builder1.local_fabric_node_id.mesh_id),
+        edm_builder1.local_fabric_node_id.chip_id,
         edm_builder1.my_noc_x,
         edm_builder1.my_noc_y,
         edm_builder2.my_noc_x,

@@ -38,7 +38,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
 
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    uint32_t num_tiles = param_in.volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = param_in.physical_volume() / tt::constants::TILE_HW;
 
     Program program{};
 
@@ -59,7 +59,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(param_in.get_dtype());
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(param_in.dtype());
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
     CreateCircularBuffer(
         program,

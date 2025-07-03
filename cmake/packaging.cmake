@@ -3,8 +3,15 @@ set(CPACK_PACKAGE_CONTACT "support@tenstorrent.com")
 set(CMAKE_PROJECT_HOMEPAGE_URL "https://tenstorrent.com")
 set(CPACK_PACKAGE_NAME tt)
 
-set(CPACK_COMPONENT_METALIUM_DESCRIPTION "TT-Metalium runtime library")
+# Suppress the summary so that we can have per-component summaries
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "")
 set(CPACK_DEBIAN_METALIUM_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_METALIUM-EXAMPLES_PACKAGE_SECTION "doc")
+set(CPACK_DEBIAN_METALIUM-VALIDATION_PACKAGE_SECTION "utils")
+set(CPACK_DEBIAN_NN_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_NN-VALIDATION_PACKAGE_SECTION "utils")
 
 set(CPACK_DEB_COMPONENT_INSTALL YES)
 set(CPACK_DEBIAN_PACKAGE_VERSION "${VERSION_DEB}")
@@ -34,7 +41,7 @@ set(CPACK_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
 )
 
 set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS TRUE)
-set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS FALSE) # FIXME(afuller): enable this
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS TRUE)
 # jit-build is cross compiling; shlibdeps does not find dependencies on the host; it should be self-contained anyway.
 set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SHLIBDEPS FALSE)
 
@@ -73,20 +80,51 @@ list(
     Unspecified # TODO: audit if there's anything we need to ship here
 )
 
+cpack_add_component_group(metalium-jit)
+cpack_add_component(metalium-jit GROUP metalium-jit DESCRIPTION "TT-Metalium JIT runtime library")
 cpack_add_component(jit-build GROUP metalium-jit)
 
+cpack_add_component_group(metalium)
+cpack_add_component(metalium GROUP metalium DESCRIPTION "TT-Metalium runtime library")
 cpack_add_component(metalium-runtime GROUP metalium)
 cpack_add_component(umd-runtime GROUP metalium)
-cpack_add_component_group(metalium)
+cpack_add_component(tracy GROUP metalium)
 
-cpack_add_component(metalium-dev GROUP metalium-dev)
+cpack_add_component_group(metalium-dev)
+cpack_add_component(metalium-dev DEPENDS metalium GROUP metalium-dev DESCRIPTION "TT-Metalium SDK")
 cpack_add_component(fmt-core GROUP metalium-dev)
 cpack_add_component(json-dev GROUP metalium-dev)
 cpack_add_component(magic-enum-dev GROUP metalium-dev)
 cpack_add_component(umd-dev GROUP metalium-dev)
-cpack_add_component_group(metalium-dev)
+cpack_add_component(spdlog-dev GROUP metalium-dev)
+cpack_add_component(tt-logger-dev GROUP metalium-dev)
 
-cpack_add_component(gtest GROUP metalium-validation)
+cpack_add_component_group(metalium-examples)
+cpack_add_component(metalium-examples DEPENDS metalium-dev GROUP metalium-examples DESCRIPTION "TT-Metalium examples")
+
 cpack_add_component_group(metalium-validation)
+cpack_add_component(
+    metalium-validation
+    DEPENDS
+        metalium
+    GROUP metalium-validation
+    DESCRIPTION "TT-Metalium validation tools"
+)
+cpack_add_component(gtest GROUP metalium-validation)
+
+cpack_add_component_group(nn)
+cpack_add_component(nn DEPENDS metalium GROUP nn DESCRIPTION "TT-NN runtime library")
+cpack_add_component(ttnn-runtime GROUP nn)
+
+cpack_add_component_group(nn-validation)
+cpack_add_component(
+    nn-validation
+    DEPENDS
+        nn
+        metalium
+    GROUP nn-validation
+    DESCRIPTION "TT-NN validation tools"
+)
+cpack_add_component(ttnn-validation GROUP nn-validation)
 
 include(CPack)

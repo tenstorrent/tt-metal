@@ -14,7 +14,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include <tt-metalium/global_semaphore.hpp>
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/run_operation.hpp"
 
@@ -33,6 +33,7 @@ struct AllReduceAsync {
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+    bool use_noc1_only;
     uint32_t cluster_axis;
     const distributed::MeshDevice* mesh_device;
 
@@ -44,6 +45,7 @@ struct AllReduceAsync {
         ccl::Topology topology,
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+        bool use_noc1_only,
         uint32_t cluster_axis,
         const distributed::MeshDevice* mesh_device) :
         num_links(num_links),
@@ -53,6 +55,7 @@ struct AllReduceAsync {
         topology(topology),
         semaphore(semaphore),
         sub_device_id(sub_device_id),
+        use_noc1_only(use_noc1_only),
         cluster_axis(cluster_axis),
         mesh_device(mesh_device) {}
     // Add attributes method for reflection
@@ -66,6 +69,7 @@ struct AllReduceAsync {
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
+        attrs.emplace_back("use_noc1_only", use_noc1_only);
         attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
     }
@@ -87,19 +91,20 @@ namespace ccl {
 namespace all_reduce_async_detail {
 AllReduceAsync create_all_reduce_async_struct(
     const Tensor& input_tensor,
-    const uint32_t num_links,
-    const std::optional<const DataType> dtype,
+    uint32_t num_links,
+    std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<IDevice*>& devices,
-    const ccl::Topology topology,
+    ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    bool use_noc1_only);
 
 }  // namespace all_reduce_async_detail
 }  // namespace ccl
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
-    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, const CoreRangeSet& available_cores);
+    size_t num_links, size_t num_workers_per_link, const CoreRangeSet& available_cores);
 
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
@@ -109,12 +114,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
     DataType output_dtype,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool use_noc1_only);
 
 namespace operations {
 namespace experimental {
@@ -123,26 +129,28 @@ namespace ccl {
 Tensor all_reduce_async(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
-    const uint32_t cluster_axis,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const ttnn::ccl::Topology topology,
+    ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
-    const std::optional<DataType> dtype = std::nullopt,
+    std::optional<DataType> dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+    std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool use_noc1_only = false);
 
 std::vector<Tensor> all_reduce_async(
     const std::vector<Tensor>& input_tensors,
     Tensor& buffer_tensor,
-    const uint32_t cluster_axis,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const ttnn::ccl::Topology topology,
+    ttnn::ccl::Topology topology,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-    const std::optional<const DataType> dtype = std::nullopt,
+    std::optional<const DataType> dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+    std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool use_noc1_only = false);
 
 }  // namespace ccl
 }  // namespace experimental

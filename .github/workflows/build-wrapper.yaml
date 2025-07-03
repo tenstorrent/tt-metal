@@ -15,6 +15,8 @@ permissions:
 jobs:
   build:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     strategy:
       fail-fast: false
@@ -32,12 +34,18 @@ jobs:
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
             build-type: "Release"
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
+            build-type: "Debug"
           - version: "24.04"
             toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
             build-type: "Release"
           - version: "24.04"
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
             build-type: "Release"
+          - version: "24.04"
+            toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
+            build-type: "RelWithDebInfo"
     with:
       version: ${{ matrix.config.version }}
       toolchain: ${{ matrix.config.toolchain }}

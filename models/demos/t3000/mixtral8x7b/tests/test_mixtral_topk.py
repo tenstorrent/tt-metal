@@ -1,16 +1,16 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
+import torch
 from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
 import ttnn
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, preprocess_inputs, load_inputs
-from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import load_inputs, prepare_inputs_ttnn, preprocess_inputs
+from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 
 
@@ -38,9 +38,7 @@ class Emb(torch.nn.Module):
         # "256seqlen"
     ),
 )
-def test_mixtral_model_inference(
-    t3k_mesh_device, use_program_cache, reset_seeds, iterations, expected_top1, expected_top5
-):
+def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, iterations, expected_top1, expected_top5):
     # TODO Currently topk test is supporting decode-only mode. Add prefill support.
 
     dtype = ttnn.bfloat8_b
@@ -52,7 +50,7 @@ def test_mixtral_model_inference(
     running_top5 = 0
     inputs_file = "models/demos/t3000/mixtral8x7b/demo/input_data.json"
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0), max_batch_size=batch, max_seq_len=max_seq_len)
+    model_args = TtModelArgs(t3k_mesh_device, max_batch_size=batch, max_seq_len=max_seq_len)
     state_dict = model_args.load_state_dict()
     tokenizer = Tokenizer(model_args.tokenizer_path)
 

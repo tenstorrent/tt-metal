@@ -1,14 +1,11 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
+import torch
 
 import ttnn
-from models.demos.t3000.llama2_70b.tt.model_config import (
-    get_model_config,
-    # get_tt_cache_path,
-)
+from models.demos.t3000.llama2_70b.tt.model_config import get_model_config  # get_tt_cache_path,
 from models.utility_functions import torch2tt_tensor
 
 FF_DIM = int(32 * 1024 / 8)
@@ -133,7 +130,6 @@ def test_ff1(
     # model_location_generator,
     device,
     n_devices,
-    use_program_cache,
 ):
     model_config = get_model_config(model_config_str, num_devices=n_devices)
 

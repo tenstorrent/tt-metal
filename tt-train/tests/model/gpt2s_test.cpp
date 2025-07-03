@@ -71,8 +71,8 @@ TEST_F(GPT2SBatch64Test, Matmul) {
     auto run_matmul = [](auto& a, auto& b, bool transpose_a, bool transpose_b) {
         fmt::println(
             "Running matmul with shapes {} and {}, tranpose_a {} transpose_b {}",
-            a.get_logical_shape(),
-            b.get_logical_shape(),
+            a.logical_shape(),
+            b.logical_shape(),
             transpose_a,
             transpose_b);
         [[maybe_unused]] auto c = ttnn::matmul(

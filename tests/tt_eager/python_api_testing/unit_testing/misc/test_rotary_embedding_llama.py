@@ -17,6 +17,7 @@ from models.tt_transformers.tt.common import (
     get_rot_transformation_mat,
 )
 from models.tt_transformers.tt.rope import RotarySetup
+from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup
 
 MAX_SEQ_LEN = 128 * 1024
 
@@ -291,6 +292,133 @@ def run_test_rotary_embedding_llama(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
+def run_test_row_major_rotary_embedding_llama(
+    device,
+    batch,
+    seq_len,
+    pcc,
+    n_heads,
+    n_kv_heads,
+    head_dim,
+    max_seq_len,
+    datatype=ttnn.bfloat16,
+    fuse_qk=False,
+):
+    torch.manual_seed(0)
+
+    max_seq_len = MAX_SEQ_LEN
+
+    inp = [
+        (torch.rand(seq_len, batch, n_heads, head_dim) * 2) - 1,
+        (torch.rand(seq_len, batch, n_kv_heads, head_dim) * 2) - 1,
+    ]
+
+    freqs_cis = precompute_freqs_cis(head_dim, max_seq_len * 2)
+
+    start_pos = 0  # Must pick non-zero start pos to get non-zero freqs_cis
+
+    position_ids = torch.arange(batch)
+
+    freqs_cis = freqs_cis[position_ids]
+
+    # PyTorch Ground Truth output --------------------------------------------------------------------
+    torch_xq = inp[0]
+    torch_xk = inp[1]
+
+    torch_xq, torch_xk = apply_rotary_emb(torch_xq, torch_xk, freqs_cis=freqs_cis)
+
+    pytorch_out = (torch_xq, torch_xk)
+
+    # Set up rope with 2 * batch size (for fused qk) (no scaling)
+    rope_setup_decode = TtLlamaRotarySetup(
+        device, batch, head_dim, max_seq_len, rope_theta=10000, use_scaled_rope=False, scale_factor=None
+    )
+    transformation_mat = rope_setup_decode.transformation_mat
+    cos, sin = rope_setup_decode.get_rm_rot_mats(position_ids)
+    sub_core_grids = rope_setup_decode.sub_core_grids
+
+    q_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 8, sub_core_grids, row_wise=True)
+    k_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(3, 2), 8, sub_core_grids, row_wise=True)
+
+    q_input_mem_config = ttnn.create_sharded_memory_config(
+        shape=(n_heads, head_dim),
+        core_grid=q_core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    k_input_mem_config = ttnn.create_sharded_memory_config(
+        shape=(n_kv_heads, head_dim),
+        core_grid=k_core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_mem_configs = [q_input_mem_config, k_input_mem_config]
+
+    tt_inp = [
+        ttnn.from_torch(
+            x,
+            device=device,
+            dtype=datatype,
+            memory_config=input_mem_configs[i],
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 1), mesh_shape=list(device.shape)),
+        )
+        for i, x in enumerate(inp)
+    ]
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    rotary_output_q, rotary_output_k = ttnn.experimental.rotary_embedding_llama_fused_qk(
+        tt_inp[0],
+        tt_inp[1],
+        cos,
+        sin,
+        transformation_mat,
+        compute_kernel_config=compute_kernel_config,
+    )
+    tt_out = [
+        ttnn.to_torch(rotary_output_q, mesh_composer=ttnn.ConcatMesh2dToTensor(device, dims=(0, 1), mesh_shape=(8, 4)))[
+            0, ...
+        ].unsqueeze(0)
+    ]
+    tt_out += [
+        ttnn.to_torch(rotary_output_k, mesh_composer=ttnn.ConcatMesh2dToTensor(device, dims=(0, 1), mesh_shape=(8, 4)))[
+            0, ...
+        ].unsqueeze(0)
+    ]
+    # check outputs ----------------------------------------------------------------------
+    assert len(pytorch_out) == len(tt_out), "Lengths of pytorch and tt outputs do not match!"
+    does_pass = True
+    for i in range(len(pytorch_out)):
+        out_pass, output_pcc = comp_pcc(pytorch_out[i], tt_out[i], pcc)
+        # Check each shape matches
+        assert pytorch_out[i].shape == tt_out[i].shape
+        logger.info(f"PCC value: {output_pcc}")
+        does_pass = does_pass and out_pass
+
+        mae = torch.mean(torch.abs(pytorch_out[i] - tt_out[i]))
+        logger.info(f"MAE: {mae}")
+
+        max_incorrect = torch.max(torch.abs(pytorch_out[i] - tt_out[i]))
+        logger.info(f"Max incorrect: {max_incorrect}")
+
+        max_gt = torch.max(torch.abs(pytorch_out[i]))
+        logger.info(f"Max ground truth: {max_gt}")
+
+    if does_pass:
+        logger.info("Llama QKV output Passed!")
+    else:
+        logger.warning("Llama QKV output Failed!")
+        assert does_pass, f"PCC value is lower than {pcc}"
+
+
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
@@ -421,7 +549,6 @@ def test_rotary_embedding_llama_with_program_cache(
     datatype,
     pcc,
     device,
-    use_program_cache,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if compute_grid_size.x < 8 or compute_grid_size.y < 8:
@@ -460,3 +587,88 @@ def test_rotary_embedding_llama_with_program_cache(
             num_ops += 1  # slice
 
     assert device.num_program_cache_entries() == num_ops
+
+
+def apply_rotary_emb_qk_real(
+    x: torch.Tensor,
+    freqs_cos: torch.Tensor,
+    freqs_sin: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Ground truth implementation which is required when cos/sin have num_heads > 1.
+    """
+    x_even = x[..., 0::2]
+    x_odd = x[..., 1::2]
+
+    # Apply rotation
+    cos_part = x_even * freqs_cos - x_odd * freqs_sin
+    sin_part = x_even * freqs_sin + x_odd * freqs_cos
+
+    out = torch.stack([cos_part, sin_part], dim=-1).flatten(-2)
+    return out
+
+
+@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
+@pytest.mark.parametrize(
+    "batch, seq_len",
+    (
+        (1, 2048),
+        (1, 3 * 1024),  # To test non-power of 2
+        (1, 4096),
+        (2, 1024),  # Test batch > 1
+    ),
+    ids=("prefill_2048", "prefill_3072", "prefill_4096", "batch2_1024"),
+)
+@pytest.mark.parametrize(
+    "n_heads, head_dim",
+    (
+        (24, 128),
+        (3, 128),
+    ),
+)
+@pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
+@pytest.mark.parametrize("pcc", (0.9997,))
+def test_rotary_embedding_llama_per_head(
+    batch,
+    seq_len,
+    n_heads,
+    head_dim,
+    datatype,
+    pcc,
+    device,
+):
+    """
+    This test is for Mochi-style rotary embeddings, where attention is MHA
+    and each head has independent rotary embeddings.
+    """
+    x = torch.randn(batch, n_heads, seq_len, head_dim)
+    cos = torch.randn(1, n_heads, seq_len, head_dim // 2)
+    sin = torch.randn(1, n_heads, seq_len, head_dim // 2)
+
+    # ttnn implementation requires stacked cos, sin
+    cos_reshape = torch.stack([cos, cos], dim=-1).flatten(-2)
+    sin_reshape = torch.stack([sin, sin], dim=-1).flatten(-2)
+    trans_mat = get_rot_transformation_mat(None)
+
+    # Apply ground truth implementation with unstacked cos, sin
+    gt = apply_rotary_emb_qk_real(x, cos, sin)
+    x_tt = ttnn.from_torch(x, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+    cos_tt = ttnn.from_torch(cos_reshape, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+    sin_tt = ttnn.from_torch(sin_reshape, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+    trans_mat_tt = ttnn.from_torch(trans_mat, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=(True if head_dim <= 128 else False),
+        packer_l1_acc=True,
+    )
+
+    out_tt = ttnn.experimental.rotary_embedding_llama(
+        x_tt, cos_tt, sin_tt, trans_mat_tt, is_decode_mode=False, compute_kernel_config=compute_kernel_config
+    )
+
+    out = ttnn.to_torch(out_tt)
+    passing, out_pcc = comp_pcc(gt, out, pcc)
+    logger.info(out_pcc)
+    assert passing

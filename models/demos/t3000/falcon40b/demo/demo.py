@@ -3,26 +3,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import pytest
+import time
 from functools import partial
-import ttnn
+
+import pytest
 import torch
 import torch.nn.functional as F
 from loguru import logger
-import time
+from tqdm import tqdm
 from transformers import AutoTokenizer
 from transformers.generation.utils import top_k_top_p_filtering
-from tqdm import tqdm
 
-from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
+import ttnn
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
+from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
-from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    profiler,
-    nearest_32,
-)
+from models.utility_functions import enable_persistent_kernel_cache, nearest_32, profiler
 
 END_OF_TEXT = 11
 SPACE = 204
@@ -190,7 +187,6 @@ def run_falcon_demo_kv(
         logger.info("Running in performance measurement mode (invalid outputs)!")
 
     configuration = FalconConfig(**model_config_entries)
-    devices = mesh_device.get_devices()
 
     profiler.start(f"loading_inputs")
     if len(user_input) == 1:
@@ -223,7 +219,9 @@ def run_falcon_demo_kv(
     profiler.end(f"tokenizing_inputs")
 
     # Update model_config for prefill
-    model_config = get_model_config(model_config_str_for_prefill, "prefill", [1, prefill_ids.shape[1]], len(devices))
+    model_config = get_model_config(
+        model_config_str_for_prefill, "prefill", [1, prefill_ids.shape[1]], mesh_device.get_num_devices()
+    )
 
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
@@ -289,7 +287,9 @@ def run_falcon_demo_kv(
 
     ### First run decode stage with compile ###
     # Update model_config for decode
-    model_config = get_model_config(model_config_str_for_decode, "decode", [batch_size, 1], len(devices))
+    model_config = get_model_config(
+        model_config_str_for_decode, "decode", [batch_size, 1], mesh_device.get_num_devices()
+    )
     tt_FalconCausalLM_singlelayer.set_model_config(model_config)
 
     logger.info("Running 1st run decode stage with compile...")
@@ -331,7 +331,9 @@ def run_falcon_demo_kv(
     del kv_cache_singlelayer
 
     # Update model_config for prefill
-    model_config = get_model_config(model_config_str_for_prefill, "prefill", [1, prefill_ids.shape[1]], len(devices))
+    model_config = get_model_config(
+        model_config_str_for_prefill, "prefill", [1, prefill_ids.shape[1]], mesh_device.get_num_devices()
+    )
 
     logger.info("Moving weights (all layers) to device; might take some time...")
     profiler.start(f"moving_to_device")
@@ -436,7 +438,9 @@ def run_falcon_demo_kv(
     logger.info("Running inference decode stage...")
 
     # Update model_config for decode
-    model_config = get_model_config(model_config_str_for_decode, "decode", [batch_size, 1], len(devices))
+    model_config = get_model_config(
+        model_config_str_for_decode, "decode", [batch_size, 1], mesh_device.get_num_devices()
+    )
     tt_FalconCausalLM.set_model_config(model_config)
 
     decode_ids = torch.zeros(batch_size, 1, dtype=torch.int64)
@@ -575,7 +579,6 @@ def test_demo(
     model_location_generator,
     get_tt_cache_path,
     t3k_mesh_device,
-    use_program_cache,
 ):
     # disable_persistent_kernel_cache()
 

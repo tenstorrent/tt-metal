@@ -74,9 +74,9 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
         out_shard_spec.num_cores(),
         ncores);
 
-    tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b->get_dtype());
-    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b->dtype());
+    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
     uint32_t input1_tile_size = tt::tt_metal::detail::TileSize(b_df);
@@ -89,11 +89,11 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
     TT_FATAL(input_tile_size <= shard_size_in_bytes, "Input tile size should be less than shard size");
 
     uint32_t Wt, Ht;
-    if (a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         ncores_x = all_cores.ranges().begin()->end_coord.y + 1;
         Wt = shard_spec.shape[1] / TILE_WIDTH;
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
-    } else if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+    } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         Wt = shard_spec.shape[1] / TILE_WIDTH;
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
         TT_ASSERT(
@@ -159,6 +159,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
 
     uint32_t ncores_y = ncores / ncores_x;
     log_debug(
+        tt::LogOp,
         "ncores {}, ncores_x {}, Wt {}, Ht {}, src0_cb_index {}, src1_cb_index {}, output_cb_index {}, src1_is_dram "
         "{}, dst_is_dram {}",
         ncores,
@@ -174,7 +175,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
         CoreCoord core;
         uint32_t offset = 0;
         uint32_t Ht_per_core = 0;
-        if (a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             core = {i / ncores_x, i % ncores_x};
             Ht_per_core = Wt * Ht;
             if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
@@ -182,7 +183,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
             } else {
                 offset = Wt * (i % ncores_x) + Wt * ncores_x * ((i / ncores_x) / (ncores_y / bN));
             }
-        } else if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
             core = {i % ncores_x, i / ncores_x};
             if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
                 offset = Wt * (core.x + core.y * ncores_x);
@@ -253,10 +254,10 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
     uint32_t N = ashape[0], C = ashape[1], H = ashape[2], W = ashape[3];
     uint32_t bN = input_tensor_b->padded_shape()[0];
     uint32_t NC = N * C;
-    if (a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         Wt = shard_spec.shape[1] / TILE_WIDTH;
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
-    } else if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+    } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         Wt = shard_spec.shape[1] / TILE_WIDTH;
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
     } else {
@@ -266,7 +267,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
     for (uint32_t i = 0; i < ncores; i++) {
         CoreCoord core;
         uint32_t offset = 0;
-        if (a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             core = {i / ncores_x, i % ncores_x};
             Ht_per_core = Wt * Ht;
             if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
@@ -274,7 +275,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
             } else {
                 offset = Wt * (i % ncores_x) + Wt * ncores_x * ((i / ncores_x) / (ncores_y / bN));
             }
-        } else if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
             core = {i % ncores_x, i / ncores_x};
             if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
                 offset = Wt * (core.x + core.y * ncores_x);

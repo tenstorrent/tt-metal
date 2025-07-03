@@ -6,6 +6,7 @@ import os
 import glob
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from functools import partial
 from collections import namedtuple
@@ -13,6 +14,22 @@ from collections import namedtuple
 from pathlib import Path
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
+
+readme = None
+
+# Read README.md file from project root
+readme_path = Path(__file__).absolute().parent / "README.md"
+readme = readme_path.read_text(encoding="utf-8")
+
+
+# Get the platform-specific lib directory name
+def get_lib_dir():
+    if sys.platform == "win32":
+        return "bin"  # Windows DLLs go in bin directory
+    elif sys.platform.startswith("linux"):
+        return "lib64" if os.path.exists("/usr/lib64") else "lib"
+    else:  # macOS and others
+        return "lib"
 
 
 BUNDLE_SFPI = False
@@ -165,7 +182,51 @@ class CMakeBuild(build_ext):
             # - Bundles (most) of our libraries into a static library to deal with a potential singleton bug error with tt_cluster (to fix)
             build_script_args = ["--build-static-libs", "--release"]
 
-            subprocess.check_call(["./build_metal.sh", *build_script_args], cwd=source_dir, env=build_env)
+            if "CIBUILDWHEEL" in os.environ:
+                cmake_args = [
+                    "cmake",
+                    "-B",
+                    build_dir,
+                    "-G",
+                    "Ninja",
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DCMAKE_INSTALL_PREFIX=build_Release",
+                    "-DBUILD_SHARED_LIBS=OFF",
+                    "-DTT_INSTALL=OFF",
+                    "-DTT_UNITY_BUILDS=ON",
+                    "-DTT_ENABLE_LIGHT_METAL_TRACE=ON",
+                    "-DWITH_PYTHON_BINDINGS=ON",
+                    "-DTT_USE_SYSTEM_SFPI=ON",
+                    "-DENABLE_CCACHE=TRUE",
+                ]
+
+                # Add Tracy flags if enabled
+                if os.environ.get("CIBW_ENABLE_TRACY") == "ON":
+                    cmake_args.extend(
+                        [
+                            "-DENABLE_TRACY=ON",
+                        ]
+                    )
+
+                cmake_args.extend(["-S", source_dir])
+
+                subprocess.check_call(cmake_args)
+                subprocess.check_call(
+                    [
+                        "cmake",
+                        "--build",
+                        build_dir,
+                    ]
+                )
+                subprocess.check_call(
+                    [
+                        "cmake",
+                        "--install",
+                        build_dir,
+                    ]
+                )
+            else:
+                subprocess.check_call(["./build_metal.sh", *build_script_args], cwd=source_dir, env=build_env)
 
         # Some verbose sanity logging to see what files exist in the outputs
         subprocess.check_call(["ls", "-hal"], cwd=source_dir, env=build_env)
@@ -175,6 +236,7 @@ class CMakeBuild(build_ext):
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
         lib_patterns = [
             "_ttnn.so",
+            "_ttnncpp.so",
             "libtt_metal.so",
             "libdevice.so",
         ]
@@ -205,8 +267,11 @@ class CMakeBuild(build_ext):
                 "riscv32-unknown-elf-gcc-nm",
                 "riscv32-unknown-elf-gdb-add-index",
             ]
+        ttnn_patterns = [
+            # These weren't supposed to be in the JIT API, but one file currently is
+            "api/ttnn/tensor/enum_types.hpp",
+        ]
         ttnn_cpp_patterns = [
-            "ttnn/tensor/**/*",
             "ttnn/deprecated/**/kernels/**/*",
             "ttnn/operations/**/kernels/**/*",
             "ttnn/operations/ccl/**/*",
@@ -222,6 +287,7 @@ class CMakeBuild(build_ext):
             "api/tt-metalium/fabric_host_interface.h",
             "api/tt-metalium/fabric_edm_types.hpp",
             "api/tt-metalium/fabric_edm_packet_header.hpp",
+            "api/tt-metalium/edm_fabric_counters.hpp",
             "core_descriptors/*.yaml",
             "fabric/hw/**/*",
             "fabric/mesh_graph_descriptors/*.yaml",
@@ -234,11 +300,12 @@ class CMakeBuild(build_ext):
             "tools/profiler/*",
             "soc_descriptors/*.yaml",
         ]
-        copy_tree_with_patterns(build_dir / "lib", self.build_lib + "/ttnn/build/lib", lib_patterns)
+        copy_tree_with_patterns(build_dir / get_lib_dir(), self.build_lib + f"/ttnn/build/lib", lib_patterns)
         copy_tree_with_patterns(build_dir, self.build_lib + "/ttnn/build/lib", ["sfpi-version.json"])
         copy_tree_with_patterns(
             source_dir / "runtime", self.build_lib + "/ttnn/runtime", runtime_patterns, runtime_exclude_files
         )
+        copy_tree_with_patterns(source_dir / "ttnn", self.build_lib + "/ttnn", ttnn_patterns)
         copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/cpp", ttnn_cpp_patterns)
         copy_tree_with_patterns(source_dir / "tt_metal", self.build_lib + "/ttnn/tt_metal", tt_metal_patterns)
 
@@ -287,8 +354,9 @@ setup(
     package_dir={
         "": "ttnn",
     },
-    long_description_content_type="text/markdown",
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
+    long_description=readme,
+    long_description_content_type="text/markdown",
 )

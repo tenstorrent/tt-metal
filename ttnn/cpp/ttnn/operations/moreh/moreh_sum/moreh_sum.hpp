@@ -10,7 +10,7 @@ struct MorehSum {
     static Tensor invoke(
         const Tensor& input,
         const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dims,
-        const bool keepdim,
+        bool keepdim,
         const std::optional<Tensor>& output,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);

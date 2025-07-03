@@ -43,6 +43,7 @@ FORCE_INLINE void eth_wait_for_remote_receiver_done_and_get_local_receiver_data(
     }
     noc_semaphore_inc(receiver_semaphore_noc_addr, 1);
     while (erisc_info->channels[0].bytes_sent != 0) {
+        invalidate_l1_cache();
         internal_::risc_context_switch();
     }
 }

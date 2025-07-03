@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/command_queue_common.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
+#include "command_queue_common.hpp"
+#include "dispatch_settings.hpp"
 
 #include "impl/context/metal_context.hpp"
 
@@ -101,5 +101,13 @@ inline uint32_t get_cq_completion_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint3
 
 template uint32_t get_cq_completion_rd_ptr<true>(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
 template uint32_t get_cq_completion_rd_ptr<false>(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
+
+uint32_t calculate_expected_workers_to_finish(const tt::tt_metal::IDevice* device, const SubDeviceId& sub_device_id, tt::tt_metal::HalProgrammableCoreType core_type) {
+    // Sub Device manager state must be correct (from device init)
+    // If core type is active ethernet, it does not include fabric routers which were created using slow dispatch
+    // Not managed by fast dispatch
+    const auto num_workers = device->num_worker_cores(core_type, sub_device_id);
+    return num_workers;
+}
 
 }  // namespace tt::tt_metal

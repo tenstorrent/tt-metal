@@ -24,38 +24,35 @@ Tensor BcastOperation::invoke(
     auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
 
     if (bcast_dim == BcastOpDim::W) {
-        TT_FATAL(input_tensor_a.get_padded_shape()[-2] == input_tensor_b.get_padded_shape()[-2], "Error");
-        if (input_tensor_b.get_layout() == Layout::TILE) {
-            TT_FATAL(input_tensor_b.get_padded_shape()[-1] == TILE_WIDTH, "Error");
-        } else if (input_tensor_b.get_layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(input_tensor_a.padded_shape()[-2] == input_tensor_b.padded_shape()[-2], "Error");
+        if (input_tensor_b.layout() == Layout::TILE) {
+            TT_FATAL(input_tensor_b.padded_shape()[-1] == TILE_WIDTH, "Error");
+        } else if (input_tensor_b.layout() == Layout::ROW_MAJOR) {
             TT_FATAL(
-                input_tensor_b.get_padded_shape()[-1] == 1 || input_tensor_b.get_padded_shape()[-1] == TILE_WIDTH,
-                "Error");
+                input_tensor_b.padded_shape()[-1] == 1 || input_tensor_b.padded_shape()[-1] == TILE_WIDTH, "Error");
         } else {
             TT_THROW("Unsupported layout");
         }
     } else if (bcast_dim == BcastOpDim::H) {
-        TT_FATAL(input_tensor_a.get_padded_shape()[-1] == input_tensor_b.get_padded_shape()[-1], "Error");
-        if (input_tensor_b.get_layout() == Layout::TILE) {
-            TT_FATAL(input_tensor_b.get_padded_shape()[-2] == TILE_HEIGHT, "Error");
-        } else if (input_tensor_b.get_layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(input_tensor_a.padded_shape()[-1] == input_tensor_b.padded_shape()[-1], "Error");
+        if (input_tensor_b.layout() == Layout::TILE) {
+            TT_FATAL(input_tensor_b.padded_shape()[-2] == TILE_HEIGHT, "Error");
+        } else if (input_tensor_b.layout() == Layout::ROW_MAJOR) {
             TT_FATAL(
-                input_tensor_b.get_padded_shape()[-2] == 1 || input_tensor_b.get_padded_shape()[-2] == TILE_HEIGHT,
-                "Error");
+                input_tensor_b.padded_shape()[-2] == 1 || input_tensor_b.padded_shape()[-2] == TILE_HEIGHT, "Error");
         } else {
             TT_THROW("Unsupported layout");
         }
     } else if (bcast_dim == BcastOpDim::HW) {
-        if (input_tensor_b.get_layout() == Layout::TILE) {
+        if (input_tensor_b.layout() == Layout::TILE) {
             TT_FATAL(
-                input_tensor_b.get_padded_shape()[-2] == TILE_HEIGHT &&
-                    input_tensor_b.get_padded_shape()[-1] == TILE_WIDTH,
+                input_tensor_b.padded_shape()[-2] == TILE_HEIGHT && input_tensor_b.padded_shape()[-1] == TILE_WIDTH,
                 "Error");
-        } else if (input_tensor_b.get_layout() == Layout::ROW_MAJOR) {
+        } else if (input_tensor_b.layout() == Layout::ROW_MAJOR) {
             TT_FATAL(
-                (input_tensor_b.get_padded_shape()[-2] == 1 && input_tensor_b.get_padded_shape()[-1] == 1) ||
-                    (input_tensor_b.get_padded_shape()[-2] == TILE_HEIGHT &&
-                     input_tensor_b.get_padded_shape()[-1] == TILE_WIDTH),
+                (input_tensor_b.padded_shape()[-2] == 1 && input_tensor_b.padded_shape()[-1] == 1) ||
+                    (input_tensor_b.padded_shape()[-2] == TILE_HEIGHT &&
+                     input_tensor_b.padded_shape()[-1] == TILE_WIDTH),
                 "Error");
         }
     }

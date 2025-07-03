@@ -84,6 +84,21 @@ def main():
         help="Collect noc event traces when profiling",
         default=False,
     )
+    parser.add_option(
+        "--check-exit-code",
+        dest="check_exit_code",
+        action="store_true",
+        help="Exit the run and do not attempt post processing if the test command fails",
+        default=False,
+    )
+    parser.add_option(
+        "-a",
+        "--device-analysis-types",
+        dest="device_analysis_types",
+        action="append",
+        help="List of device analysis types",
+        default=[],
+    )
 
     if not sys.argv[1:]:
         parser.print_usage()
@@ -214,10 +229,19 @@ def main():
             signal.signal(signal.SIGTERM, signal_handler)
 
             testProcess.communicate()
+            if options.check_exit_code and testProcess.returncode != 0:
+                logger.error(f"{testCommand} exited with a non-zero return code")
+                sys.exit(4)
 
             try:
                 captureProcess.communicate(timeout=15)
-                generate_report(outputFolder, options.name_append, options.child_functions, options.collect_noc_traces)
+                generate_report(
+                    outputFolder,
+                    options.name_append,
+                    options.child_functions,
+                    options.collect_noc_traces,
+                    options.device_analysis_types,
+                )
             except subprocess.TimeoutExpired as e:
                 captureProcess.terminate()
                 captureProcess.communicate()

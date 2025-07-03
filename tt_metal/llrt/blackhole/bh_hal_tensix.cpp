@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -10,10 +10,12 @@
 
 #include "assert.hpp"
 #include "blackhole/bh_hal.hpp"
+#include "blackhole/bh_hal_tensix_asserts.hpp"
 #include "core_config.h"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include "llrt_common/mailbox.hpp"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
 #include <umd/device/tt_core_coordinates.h>
@@ -28,8 +30,8 @@ HalCoreInfoType create_tensix_mem_map() {
     std::vector<DeviceAddr> mem_map_bases;
     const uint32_t default_l1_kernel_config_size = 69 * 1024;
 
-    mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
-     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_L1_BASE;
+    mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_L1_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = MEM_L1_BARRIER;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_MAILBOX_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = GET_MAILBOX_ADDRESS_HOST(launch);
@@ -43,11 +45,12 @@ HalCoreInfoType create_tensix_mem_map() {
         GET_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LOCAL)] = MEM_LOCAL_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_BANK_TO_NOC_SCRATCH;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_TABLE)] = MEM_TENSIX_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         ((MEM_MAP_END + default_l1_kernel_config_size - 1) | (max_alignment - 1)) + 1;
 
     std::vector<uint32_t> mem_map_sizes;
-    mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
+    mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_L1_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_MAILBOX_SIZE;
@@ -59,8 +62,12 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LOCAL)] = MEM_TRISC_LOCAL_SIZE; // TRISC, BRISC, or NCRISC?
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_BANK_TO_NOC_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_TABLE)] = MEM_TENSIX_ROUTING_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
+
+    // Base FW api not supported on WH
+    std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumTensixDispatchClasses);
     std::vector<HalJitBuildConfig> processor_types;
@@ -68,8 +75,9 @@ HalCoreInfoType create_tensix_mem_map() {
         uint32_t num_processors = processor_class_idx == (NumTensixDispatchClasses - 1) ? 3 : 1;
         processor_types.resize(num_processors);
         for (size_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
-            DeviceAddr fw_base, local_init, fw_launch;
-            uint32_t fw_launch_value;
+            DeviceAddr fw_base{}, local_init{}, fw_launch{};
+            uint32_t fw_launch_value{};
+            ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
             switch (processor_class_idx) {
                 case 0: {
                     fw_base = MEM_BRISC_FIRMWARE_BASE;
@@ -117,21 +125,20 @@ HalCoreInfoType create_tensix_mem_map() {
                 .fw_base_addr = fw_base,
                 .local_init_addr = local_init,
                 .fw_launch_addr = fw_launch,
-                .fw_launch_addr_value = fw_launch_value
+                .fw_launch_addr_value = fw_launch_value,
+                .memory_load = memory_load,
             };
         }
         processor_classes[processor_class_idx] = processor_types;
     }
-    constexpr uint32_t mailbox_size =
-        sizeof(mailboxes_t) - sizeof(profiler_msg_t::buffer) +
-        sizeof(profiler_msg_t::buffer) / PROFILER_RISC_COUNT * static_cast<uint8_t>(TensixProcessorTypes::COUNT);
-    static_assert(mailbox_size <= MEM_MAILBOX_SIZE);
+    static_assert(llrt_common::k_SingleProcessorMailboxSize<TensixProcessorTypes> <= MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::TENSIX,
         CoreType::WORKER,
         processor_classes,
         mem_map_bases,
         mem_map_sizes,
+        fw_mailbox_addr,
         true /*supports_cbs*/,
         true /*supports_receiving_multicast_cmds*/};
 }

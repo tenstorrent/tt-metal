@@ -2,22 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import math
-from torch import nn
 from typing import Optional, Tuple
 
-from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid
+import torch
+from torch import nn
+
 import ttnn
-from ttnn import ReplicateTensorToMesh
-
-from models.utility_functions import (
-    nearest_32,
-    is_wormhole_b0,
-)
-
-from models.demos.falcon7b_common.tt.model_utils import get_weights_cached
 from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
+from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid, get_weights_cached
+from models.utility_functions import is_wormhole_b0, nearest_32
+from ttnn import ReplicateTensorToMesh
 
 
 class TtFalconRotaryEmbedding(torch.nn.Module):

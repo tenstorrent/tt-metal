@@ -8,7 +8,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 #include "noc_nonblocking_api.h"
 #include "sfpi.h"
 
@@ -27,7 +27,7 @@ enum {
 
 template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS = 8>
 void calculate_binop_with_scalar(uint32_t param) {
-    const vFloat parameter = Converter::to_float(param);
+    const vFloat parameter = Converter::as_float(param);
 
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat val = dst_reg[0];

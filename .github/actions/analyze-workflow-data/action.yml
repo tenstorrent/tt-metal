@@ -1,0 +1,37 @@
+name: 'Analyze Workflow Data'
+description: 'Analyzes cached workflow run data and generates a report'
+
+inputs:
+  cache-path:
+    description: 'Path to the cached workflow data file'
+    required: true
+  GITHUB_TOKEN:
+    description: 'GitHub token for API access. Used to fetch PR information and workflow details.'
+    required: true
+  workflow_configs:
+    description: |
+      JSON array of workflow configurations. Each config object should have:
+      - display: Human-readable name for the workflow group
+      - wkflw_name: Exact workflow name to match (mutually exclusive with wkflw_prefix)
+      - wkflw_prefix: Prefix to match workflow names (mutually exclusive with wkflw_name)
+
+      Example:
+      [
+        {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
+        {"display": "(TG) prefix", "wkflw_prefix": "(TG)"}
+      ]
+    required: true
+  days:
+    description: 'Number of days to look back for workflow data'
+    required: false
+    default: '15'
+
+outputs:
+  failed_workflows:
+    description: 'JSON array of workflow names that have failed their latest run on the main branch'
+  report:
+    description: 'The generated workflow report in markdown format, containing workflow statistics and failure details'
+
+runs:
+  using: 'node20'
+  main: 'analyze-workflow-data.js'

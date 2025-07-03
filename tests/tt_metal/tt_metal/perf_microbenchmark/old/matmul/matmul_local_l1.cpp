@@ -30,10 +30,10 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
@@ -123,19 +123,6 @@ std::vector<T> slice(std::vector<T> const& v, int m, int n) {
 
     std::vector<T> vec(first, last);
     return vec;
-}
-
-void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const std::string& name) {
-    std::cout << name << ": " << std::endl;
-    int index = 0;
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            std::cout << data.at(index).to_float() << " ";
-            index++;
-        }
-        std::cout << std::endl;
-    }
-    std::cout << std::endl;
 }
 
 int main(int argc, char** argv) {
@@ -246,8 +233,8 @@ int main(int argc, char** argv) {
         auto identity = create_identity_matrix(Kt * 32, Nt * 32, std::min(Kt, Nt) * 32);  // bflaot16 identity
 
         if (print_tensor) {
-            print_vec(tensor.get_values(), 2, Kt * 32, std::string("Activation first row"));
-            print_vec(identity, 2, Nt * 32, std::string("Weights first row"));
+            print_vec_of_bfloat16(tensor.get_values(), 1, "Activation first row");
+            print_vec_of_bfloat16(identity, 1, "Weights first row");
         }
 
         log_info(LogTest, "Slicing input tensors and copying them to L1");
@@ -260,14 +247,14 @@ int main(int argc, char** argv) {
                 CoreCoord core = {(std::size_t)c, (std::size_t)r};
                 auto activations_tilized = tilize_swizzled(activation_slice, per_core_Mt * 32, Kt * 32);
                 auto activations_tile_layout =
-                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(activations_tilized));
+                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
                 auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
                 pass &= tt_metal::detail::WriteToDeviceL1(device, core, activations_addr, activations);
                 TT_FATAL(pass, "Error");
 
                 auto identity_tilized = tilize_swizzled(weights_slice, Kt * 32, per_core_Nt * 32);
                 auto weights_tile_layout =
-                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(identity_tilized));
+                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
                 auto weights_tile_transposed = transpose_tiles(weights, Kt, per_core_Nt, 1);
                 pass &= tt_metal::detail::WriteToDeviceL1(device, core, weights_addr, weights_tile_transposed);
@@ -330,7 +317,7 @@ int main(int argc, char** argv) {
         Finish(device->command_queue());
         auto end = std::chrono::high_resolution_clock::now();
         duration = end - start;
-        tt_metal::DumpDeviceProfileResults(device, program);
+        tt_metal::detail::DumpDeviceProfileResults(device);
 
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);
@@ -359,15 +346,12 @@ int main(int argc, char** argv) {
                         device, core, output_addr, cb_output_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                     auto result_flat_layout =
-                        convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
+                        convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
                     auto result_untilized = untilize_swizzled(result_flat_layout, per_core_Mt * 32, per_core_Nt * 32);
 
                     if (print_tensor) {
-                        print_vec(
-                            result_untilized,
-                            2,
-                            Nt * 32,
-                            std::string("result_untilized" + std::to_string(r) + " " + std::to_string(c)));
+                        print_vec_of_bfloat16(
+                            result_untilized, 1, "result_untilized" + std::to_string(r) + " " + std::to_string(c));
                     }
 
                     if (!(per_core_golden == result_untilized)) {

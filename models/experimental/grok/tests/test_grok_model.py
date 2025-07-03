@@ -40,11 +40,11 @@ from models.experimental.grok.reference.configuration_grok1 import Grok1Config
     "iterations",
     (1, 2, 10),
 )
-def test_grok_model_inference(t3k_mesh_device, use_program_cache, reset_seeds, iterations, n_layers, validation_type):
+def test_grok_model_inference(t3k_mesh_device, reset_seeds, iterations, n_layers, validation_type):
     pcc = 0.97
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device)
     model_args.n_layers = n_layers
 
     state_dict = model_args.load_state_dict()
@@ -201,10 +201,10 @@ def test_grok_model_inference(t3k_mesh_device, use_program_cache, reset_seeds, i
     (1, 2, 4, 8, 16, 32, 64),
 )
 @pytest.mark.timeout(60 * 30 * 64)
-def test_grok_model_layers(t3k_mesh_device, use_program_cache, reset_seeds, n_layers):
+def test_grok_model_layers(t3k_mesh_device, reset_seeds, n_layers):
     pcc = 0.97
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -303,7 +303,7 @@ def test_grok_model_layers(t3k_mesh_device, use_program_cache, reset_seeds, n_la
 def run_layer(layer_num, tt_decode_input, pt_decode_input, attn_mask, rot_mat, t3k_mesh_device):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict(start_layer=layer_num)
     key_start = f"model.layers.{layer_num}."

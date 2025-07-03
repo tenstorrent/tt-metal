@@ -3,23 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import time
 from functools import partial
+
 import torch
 from loguru import logger
-import time
-from transformers import AutoTokenizer, FalconConfig, FalconForCausalLM
 from tqdm import tqdm
-import ttnn
+from transformers import AutoTokenizer, FalconConfig, FalconForCausalLM
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
 
+import ttnn
+from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
 from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path, model_config_entries
 from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
-    profiler,
     nearest_32,
+    profiler,
 )
 
 END_OF_TEXT = 11
@@ -94,8 +95,6 @@ def run_falcon_demo_kv(
     user_input, model_version, batch_size, num_layers, max_seq_len, model_config, model_location_generator, device
 ):
     torch.manual_seed(0)
-
-    device.enable_program_cache()
 
     tt_cache_path = get_tt_cache_path(model_version)
 
@@ -397,8 +396,6 @@ def run_falcon_demo_kv(
 
     print_output_prompts(generated_ids, tokenizer)
 
-    device.disable_and_clear_program_cache()
-
     generated_text = tokenizer.batch_decode(generated_ids.tolist())
 
     measurements = {
@@ -444,7 +441,6 @@ def test_demo(
     user_input,
     model_location_generator,
     device,
-    use_program_cache,
 ):
     disable_persistent_kernel_cache()
 

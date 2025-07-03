@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,6 @@
 #include <map>
 #include <set>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #include "core_coord.hpp"
@@ -77,6 +76,25 @@ struct TargetSelection {
     bool prepend_device_core_risc;
 };
 
+struct WatcherSettings {
+    bool enabled = false;
+    bool dump_all = false;
+    bool append = false;
+    bool auto_unpause = false;
+    bool noinline = false;
+    bool phys_coords = false;
+    bool text_start = false;
+    bool skip_logging = false;
+    int interval_ms = 0;
+};
+
+struct InspectorSettings {
+    bool enabled = true;
+    bool initialization_is_important = false;
+    bool warn_on_write_exceptions = true;
+    std::filesystem::path log_path;
+};
+
 class RunTimeOptions {
     bool is_root_dir_env_var_set = false;
     std::string root_dir;
@@ -86,18 +104,17 @@ class RunTimeOptions {
 
     bool is_kernel_dir_env_var_set = false;
     std::string kernel_dir;
+    std::string system_kernel_dir;
+
+    bool is_visible_devices_env_var_set = false;
+    std::vector<uint32_t> visible_devices;
 
     bool build_map_enabled = false;
 
-    bool watcher_enabled = false;
-    int watcher_interval_ms;
-    bool watcher_dump_all = false;
-    bool watcher_append = false;
-    bool watcher_auto_unpause = false;
-    bool watcher_noinline = false;
-    bool watcher_phys_coords = false;
-    bool watcher_text_start = false;
+    WatcherSettings watcher_settings;
     bool record_noc_transfer_data = false;
+
+    InspectorSettings inspector_settings;
 
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
 
@@ -117,6 +134,7 @@ class RunTimeOptions {
     bool kernels_early_return = false;
 
     bool clear_l1 = false;
+    bool clear_dram = false;
 
     bool skip_loading_fw = false;
     bool skip_reset_cores_on_init = false;
@@ -127,7 +145,8 @@ class RunTimeOptions {
     bool validate_kernel_binaries = false;
     unsigned num_hw_cqs = 1;
 
-    bool fb_fabric_en = false;
+    bool fd_fabric_en = false;
+    bool using_slow_dispatch = false;
 
     bool enable_dispatch_data_collection = false;
 
@@ -144,7 +163,23 @@ class RunTimeOptions {
 
     bool erisc_iram_enabled = false;
 
+    bool fast_dispatch = true;
+
     bool skip_eth_cores_with_retrain = false;
+
+    // Relaxed ordering on BH allows loads to bypass stores when going to separate addresses
+    // e.g. Store A followed by Load A will be unchanges but Store A followed by Load B may return B before A is written
+    // This option will disable the relaxed ordering
+    bool disable_relaxed_memory_ordering = false;
+
+    // Enable instruction gathering in Tensix core.
+    bool enable_gathering = false;
+
+    // Buffer in DRAM to store various ARC processor samples. Feature not ready yet
+    uint32_t arc_debug_buffer_size = 0;
+
+    // Force disables using DMA for reads and writes
+    bool disable_dma_ops = false;
 
 public:
     RunTimeOptions();
@@ -159,27 +194,34 @@ public:
 
     inline bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
     const std::string& get_kernel_dir() const;
+    // Location where kernels are installed via package manager.
+    const std::string& get_system_kernel_dir() const;
+
+    inline bool is_visible_devices_specified() const { return this->is_visible_devices_env_var_set; }
+    inline const std::vector<uint32_t>& get_visible_devices() const { return this->visible_devices; }
 
     inline bool get_build_map_enabled() const { return build_map_enabled; }
 
     // Info from watcher environment variables, setters included so that user
     // can override with a SW call.
-    inline bool get_watcher_enabled() const { return watcher_enabled; }
-    inline void set_watcher_enabled(bool enabled) { watcher_enabled = enabled; }
-    inline int get_watcher_interval() const { return watcher_interval_ms; }
-    inline void set_watcher_interval(int interval_ms) { watcher_interval_ms = interval_ms; }
-    inline int get_watcher_dump_all() const { return watcher_dump_all; }
-    inline void set_watcher_dump_all(bool dump_all) { watcher_dump_all = dump_all; }
-    inline int get_watcher_append() const { return watcher_append; }
-    inline void set_watcher_append(bool append) { watcher_append = append; }
-    inline int get_watcher_auto_unpause() const { return watcher_auto_unpause; }
-    inline void set_watcher_auto_unpause(bool auto_unpause) { watcher_auto_unpause = auto_unpause; }
-    inline int get_watcher_noinline() const { return watcher_noinline; }
-    inline void set_watcher_noinline(bool noinline) { watcher_noinline = noinline; }
-    inline int get_watcher_phys_coords() const { return watcher_phys_coords; }
-    inline void set_watcher_phys_coords(bool phys_coords) { watcher_phys_coords = phys_coords; }
-    inline int get_watcher_text_start() const { return watcher_text_start; }
-    inline void set_watcher_text_start(bool text_start) { watcher_text_start = text_start; }
+    inline bool get_watcher_enabled() const { return watcher_settings.enabled; }
+    inline void set_watcher_enabled(bool enabled) { watcher_settings.enabled = enabled; }
+    inline int get_watcher_interval() const { return watcher_settings.interval_ms; }
+    inline void set_watcher_interval(int interval_ms) { watcher_settings.interval_ms = interval_ms; }
+    inline int get_watcher_dump_all() const { return watcher_settings.dump_all; }
+    inline void set_watcher_dump_all(bool dump_all) { watcher_settings.dump_all = dump_all; }
+    inline int get_watcher_append() const { return watcher_settings.append; }
+    inline void set_watcher_append(bool append) { watcher_settings.append = append; }
+    inline int get_watcher_auto_unpause() const { return watcher_settings.auto_unpause; }
+    inline void set_watcher_auto_unpause(bool auto_unpause) { watcher_settings.auto_unpause = auto_unpause; }
+    inline int get_watcher_noinline() const { return watcher_settings.noinline; }
+    inline void set_watcher_noinline(bool noinline) { watcher_settings.noinline = noinline; }
+    inline int get_watcher_phys_coords() const { return watcher_settings.phys_coords; }
+    inline void set_watcher_phys_coords(bool phys_coords) { watcher_settings.phys_coords = phys_coords; }
+    inline bool get_watcher_text_start() const { return watcher_settings.text_start; }
+    inline void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
+    inline bool get_watcher_skip_logging() const { return watcher_settings.skip_logging; }
+    inline void set_watcher_skip_logging(bool skip_logging) { watcher_settings.skip_logging = skip_logging; }
     inline const std::set<std::string>& get_watcher_disabled_features() const { return watcher_disabled_features; }
     inline bool watcher_status_disabled() const { return watcher_feature_disabled(watcher_waypoint_str); }
     inline bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
@@ -188,6 +230,16 @@ public:
     inline bool watcher_ring_buffer_disabled() const { return watcher_feature_disabled(watcher_ring_buffer_str); }
     inline bool watcher_stack_usage_disabled() const { return watcher_feature_disabled(watcher_stack_usage_str); }
     inline bool watcher_dispatch_disabled() const { return watcher_feature_disabled(watcher_dispatch_str); }
+
+    // Info from inspector environment variables, setters included so that user
+    // can override with a SW call.
+    inline const std::filesystem::path& get_inspector_log_path() const { return inspector_settings.log_path; }
+    inline bool get_inspector_enabled() const { return inspector_settings.enabled; }
+    inline void set_inspector_enabled(bool enabled) { inspector_settings.enabled = enabled; }
+    inline bool get_inspector_initialization_is_important() const { return inspector_settings.initialization_is_important; }
+    inline void set_inspector_initialization_is_important(bool important) { inspector_settings.initialization_is_important = important; }
+    inline bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
+    inline void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
@@ -266,9 +318,13 @@ public:
     inline void set_validate_kernel_binaries(bool val) { validate_kernel_binaries = val; }
 
     // Returns the string representation for hash computation.
-    inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) {
+    inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) const {
         switch (feature) {
-            case RunTimeDebugFeatureDprint: return std::to_string(get_feature_enabled(feature));
+            case RunTimeDebugFeatureDprint: {
+                std::string hash_str = std::to_string(get_feature_enabled(feature));
+                hash_str += std::to_string(get_feature_all_chips(feature));
+                return hash_str;
+            }
             case RunTimeDebugFeatureReadDebugDelay:
             case RunTimeDebugFeatureWriteDebugDelay:
             case RunTimeDebugFeatureAtomicDebugDelay:
@@ -280,6 +336,14 @@ public:
             case RunTimeDebugFeatureDisableL1DataCache: return std::to_string(get_feature_enabled(feature));
             default: return "";
         }
+    }
+    inline std::string get_compile_hash_string() const {
+        std::string compile_hash_str = fmt::format("{}_{}", get_watcher_enabled(), get_kernels_early_return());
+        for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
+            compile_hash_str += "_";
+            compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
+        }
+        return compile_hash_str;
     }
 
     // Used for both watcher and dprint servers, this dev option (no corresponding env var) sets
@@ -307,6 +371,9 @@ public:
     inline bool get_clear_l1() const { return clear_l1; }
     inline void set_clear_l1(bool clear) { clear_l1 = clear; }
 
+    inline bool get_clear_dram() const { return clear_dram; }
+    inline void set_clear_dram(bool clear) { clear_dram = clear; }
+
     inline bool get_skip_loading_fw() const { return skip_loading_fw; }
     inline bool get_skip_reset_cores_on_init() const { return skip_reset_cores_on_init; }
 
@@ -317,7 +384,8 @@ public:
     inline unsigned get_num_hw_cqs() const { return num_hw_cqs; }
     inline void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
 
-    inline bool get_fd_fabric() const { return fb_fabric_en; }
+    inline bool get_fd_fabric() const { return fd_fabric_en && !using_slow_dispatch; }
+    inline void set_fd_fabric(bool enable) { fd_fabric_en = enable; }
 
     inline uint32_t get_watcher_debug_delay() const { return watcher_debug_delay; }
     inline void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
@@ -327,6 +395,9 @@ public:
 
     inline bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 
+    inline bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
+    inline bool get_gathering_enabled() const { return this->enable_gathering; }
+
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
     inline bool get_skip_deleting_built_cache() const { return skip_deleting_built_cache; }
@@ -335,8 +406,15 @@ public:
     inline const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
     inline bool get_erisc_iram_enabled() const { return erisc_iram_enabled; }
+    inline bool get_fast_dispatch() const { return fast_dispatch; }
 
     inline bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
+
+    inline uint32_t get_arc_debug_buffer_size() { return arc_debug_buffer_size; }
+    inline void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
+
+    inline bool get_disable_dma_ops() const { return disable_dma_ops; }
+    inline void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.
@@ -364,6 +442,9 @@ private:
     bool watcher_feature_disabled(const std::string& name) const {
         return watcher_disabled_features.find(name) != watcher_disabled_features.end();
     }
+
+    // Helper function to parse inspector-specific environment variables.
+    void ParseInspectorEnv();
 };
 
 }  // namespace llrt

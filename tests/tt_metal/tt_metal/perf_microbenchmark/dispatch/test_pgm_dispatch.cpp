@@ -22,18 +22,18 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/semaphore.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
@@ -53,6 +53,7 @@ constexpr uint32_t MAX_ARGS = 255;
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal::distributed;
 
 static bool dump_test_info = false;
 
@@ -97,7 +98,7 @@ std::tuple<uint32_t, uint32_t> get_core_count() {
         core_x = 12;
         core_y = 9;
     } else {
-        log_fatal("Unexpected ARCH_NAME {}", arch_name);
+        log_fatal(tt::LogTest, "Unexpected ARCH_NAME {}", arch_name);
         exit(0);
     }
     return std::make_tuple(core_x, core_y);
@@ -167,27 +168,28 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
     info.use_trace = test_args::has_command_option(input_args, "-tr");
     info.dispatch_from_eth = test_args::has_command_option(input_args, "-de");
     if (info.kernel_size < MIN_KERNEL_SIZE_BYTES) {
-        log_fatal("Minimum kernel size is {} bytes", MIN_KERNEL_SIZE_BYTES);
+        log_fatal(tt::LogTest, "Minimum kernel size is {} bytes", MIN_KERNEL_SIZE_BYTES);
         exit(0);
     }
     if (info.n_cbs > MAX_CBS) {
-        log_fatal("CB count must be 0..{}", MAX_CBS);
+        log_fatal(tt::LogTest, "CB count must be 0..{}", MAX_CBS);
         exit(0);
     }
     if (info.n_args > MAX_ARGS) {
-        log_fatal("Runtime arg count must be 0..{}", MAX_ARGS);
+        log_fatal(tt::LogTest, "Runtime arg count must be 0..{}", MAX_ARGS);
         exit(0);
     }
     if (info.n_common_args > MAX_ARGS) {
-        log_fatal("Common Runtime arg count must be 0..{}", MAX_ARGS);
+        log_fatal(tt::LogTest, "Common Runtime arg count must be 0..{}", MAX_ARGS);
         exit(0);
     }
     if (info.n_sems > NUM_SEMAPHORES) {
-        log_fatal("Sem count must be 0..{}", NUM_SEMAPHORES);
+        log_fatal(tt::LogTest, "Sem count must be 0..{}", NUM_SEMAPHORES);
         exit(0);
     }
     if (info.n_kgs > core_x + 1) {
-        log_fatal("This test uses columns for kernel groups so number of kernel groups must be <= x core range");
+        log_fatal(
+            tt::LogTest, "This test uses columns for kernel groups so number of kernel groups must be <= x core range");
         exit(0);
     }
     info.brisc_enabled = !test_args::has_command_option(input_args, "-b");
@@ -200,10 +202,11 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
 
     if (info.nfast_kernels != 0 && info.slow_kernel_cycles <= info.fast_kernel_cycles) {
         log_error(
+            tt::LogTest,
             "The number of fast kernels is non-zero, but slow_kernel_ cycles ({}) is <= fast_kernel_cycles ({})",
             info.slow_kernel_cycles,
             info.fast_kernel_cycles);
-        log_error("For meaningful results, run multiple fast kernels between single slow kernels");
+        log_error(tt::LogTest, "For meaningful results, run multiple fast kernels between single slow kernels");
         exit(0);
     }
 }
@@ -219,7 +222,7 @@ void set_runtime_args(
 }
 
 bool initialize_program(
-    const TestInfo& info, tt_metal::IDevice* device, tt_metal::Program& program, uint32_t run_cycles) {
+    const TestInfo& info, std::shared_ptr<MeshDevice> mesh_device, tt_metal::Program& program, uint32_t run_cycles) {
     program = tt_metal::CreateProgram();
 
     std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(info.kernel_size)}};
@@ -297,9 +300,10 @@ bool initialize_program(
     }
 
     if (info.erisc_enabled) {
-        auto erisc_cores = device->get_active_ethernet_cores(true);
+        auto erisc_cores = mesh_device->get_device(0, 0)->get_active_ethernet_cores(true);
         if (info.erisc_count > erisc_cores.size()) {
             log_fatal(
+                tt::LogTest,
                 "Requested number of erisc cores {} exceeds actual erisc core count {}",
                 info.erisc_count,
                 erisc_cores.size());
@@ -390,62 +394,68 @@ static int pgm_dispatch(T& state, TestInfo info) {
     bool pass = true;
     try {
         const chip_id_t device_id = 0;
+        const std::size_t cq_id = 0;
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(
-            device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000, DispatchCoreConfig{dispatch_core_type});
-        CommandQueue& cq = device->command_queue();
+        auto mesh_device = MeshDevice::create_unit_mesh(
+            device_id, DEFAULT_L1_SMALL_SIZE, 900000000, 1, DispatchCoreConfig{dispatch_core_type});
+        auto& mesh_cq = mesh_device->mesh_command_queue(cq_id);
 
         tt_metal::Program program[2];
-        if (!initialize_program(info, device, program[0], info.slow_kernel_cycles)) {
+        if (!initialize_program(info, mesh_device, program[0], info.slow_kernel_cycles)) {
             if constexpr (std::is_same_v<T, benchmark::State>) {
                 state.SkipWithError("Program creation failed");
             }
-            tt_metal::CloseDevice(device);
+            mesh_device->close();
             return 1;
         }
-        if (!initialize_program(info, device, program[1], info.fast_kernel_cycles)) {
+        if (!initialize_program(info, mesh_device, program[1], info.fast_kernel_cycles)) {
             if constexpr (std::is_same_v<T, benchmark::State>) {
                 state.SkipWithError("Program creation failed");
             }
-            tt_metal::CloseDevice(device);
+            mesh_device->close();
             return 1;
         }
 
         // Cache stuff
+        MeshWorkload mesh_workload[2];
+        AddProgramToMeshWorkload(
+            mesh_workload[0], std::move(program[0]), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+        AddProgramToMeshWorkload(
+            mesh_workload[1], std::move(program[1]), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
         for (int i = 0; i < info.warmup_iterations; i++) {
-            EnqueueProgram(cq, program[0], false);
+            EnqueueMeshWorkload(mesh_cq, mesh_workload[0], false);
             for (int j = 0; j < info.nfast_kernels; j++) {
-                EnqueueProgram(cq, program[1], false);
+                EnqueueMeshWorkload(mesh_cq, mesh_workload[1], false);
             }
         }
 
         auto main_program_loop = [&]() {
             for (int i = 0; i < info.iterations; i++) {
-                EnqueueProgram(cq, program[0], false);
+                EnqueueMeshWorkload(mesh_cq, mesh_workload[0], false);
                 for (int j = 0; j < info.nfast_kernels; j++) {
-                    EnqueueProgram(cq, program[1], false);
+                    EnqueueMeshWorkload(mesh_cq, mesh_workload[1], false);
                 }
             }
         };
-        uint32_t tid = 0;
+        MeshTraceId tid;
         if (info.use_trace) {
-            tid = BeginTraceCapture(device, cq.id());
+            tid = BeginTraceCapture(mesh_device.get(), cq_id);
             main_program_loop();
-            EndTraceCapture(device, cq.id(), tid);
-            Finish(cq);
+            EndTraceCapture(mesh_device.get(), cq_id, tid);
+            Finish(mesh_cq);
         }
 
         for (auto _ : state) {
             auto start = std::chrono::system_clock::now();
             if (info.use_trace) {
-                EnqueueTrace(cq, tid, false);
+                ReplayTrace(mesh_device.get(), cq_id, tid, false);
             } else {
                 main_program_loop();
             }
             if (info.time_just_finish) {
                 start = std::chrono::system_clock::now();
             }
-            Finish(cq);
+            Finish(mesh_cq);
             auto end = std::chrono::system_clock::now();
 
             if constexpr (std::is_same_v<T, benchmark::State>) {
@@ -461,13 +471,14 @@ static int pgm_dispatch(T& state, TestInfo info) {
         if constexpr (std::is_same_v<T, benchmark::State>) {
             state.counters["IterationTime"] = benchmark::Counter(
                 info.iterations, benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
-            state.counters["Clock"] = benchmark::Counter(get_tt_npu_clock(device), benchmark::Counter::kDefaults);
+            state.counters["Clock"] =
+                benchmark::Counter(get_tt_npu_clock(mesh_device->get_device(0, 0)), benchmark::Counter::kDefaults);
         }
 
-        pass &= tt_metal::CloseDevice(device);
+        pass &= mesh_device->close();
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);

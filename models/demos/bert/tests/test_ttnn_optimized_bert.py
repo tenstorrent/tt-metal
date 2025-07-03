@@ -3,25 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 import torch
 import transformers
-
-from models.demos.bert.reference import torch_bert
-from models.demos.bert.tt import ttnn_optimized_sharded_bert
-
-import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
+import ttnn
+from models.demos.bert.reference import torch_bert
+from models.demos.bert.tt import ttnn_optimized_sharded_bert
+from models.utility_functions import is_blackhole, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_wormhole_b0, is_blackhole
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
-def test_bert_for_question_answering(device, use_program_cache, model_name, batch_size, sequence_size):
+def test_bert_for_question_answering(device, model_name, batch_size, sequence_size):
     torch.manual_seed(1234)
 
     ttnn.device.EnableMemoryReports()

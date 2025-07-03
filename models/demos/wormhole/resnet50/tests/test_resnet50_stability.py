@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import ttnn
-from models.utility_functions import (
-    run_for_wormhole_b0,
-)
 import time
+
+import pytest
 from loguru import logger
+
+import ttnn
 from models.demos.wormhole.resnet50.demo.demo import test_demo_trace_with_imagenet
+from models.utility_functions import run_for_wormhole_b0
 
 test_demo_trace_with_imagenet.__test__ = False
 
@@ -26,7 +26,6 @@ test_demo_trace_with_imagenet.__test__ = False
 @pytest.mark.parametrize("test_duration_seconds", [24 * 60 * 60, 10], ids=["long", "short"])
 def test_resnet_stability(
     mesh_device,
-    use_program_cache,
     batch_size,
     iterations,
     imagenet_label_dict,
@@ -45,7 +44,6 @@ def test_resnet_stability(
 
         test_demo_trace_with_imagenet(
             mesh_device,
-            use_program_cache,
             batch_size,
             iterations,
             imagenet_label_dict,

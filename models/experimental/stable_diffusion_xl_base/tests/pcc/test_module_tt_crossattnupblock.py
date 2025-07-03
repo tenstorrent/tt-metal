@@ -1,13 +1,17 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+import gc
+from loguru import logger
 import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_crossattnupblock2d import TtCrossAttnUpBlock2D
-from diffusers import DiffusionPipeline
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
@@ -22,7 +26,7 @@ from models.utility_functions import torch_random
             20,
             1280,
             0,
-            0.928,
+            0.966,
         ),
         (
             (1, 1280, 64, 64),
@@ -33,11 +37,11 @@ from models.utility_functions import torch_random
             10,
             640,
             1,
-            0.926,
+            0.988,
         ),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_crossattnup(
     device,
     input_shape,
@@ -49,19 +53,26 @@ def test_crossattnup(
     out_dim,
     block_id,
     pcc,
-    use_program_cache,
     reset_seeds,
 ):
-    pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
+    unet = UNet2DConditionModel.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
-    unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 
     torch_crosattn = unet.up_blocks[block_id]
+
+    model_config = ModelOptimisations()
     tt_crosattn = TtCrossAttnUpBlock2D(
-        device, state_dict, f"up_blocks.{block_id}", query_dim, num_attn_heads, out_dim, True
+        device,
+        state_dict,
+        f"up_blocks.{block_id}",
+        model_config,
+        query_dim,
+        num_attn_heads,
+        out_dim,
+        True,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
@@ -101,8 +112,14 @@ def test_crossattnup(
         temb=ttnn_temb_tensor,
         encoder_hidden_states=ttnn_encoder_tensor,
     )
+    model_config.clear_weight_preprocess()
+
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
     output_tensor = output_tensor.reshape(B, output_shape[1], output_shape[2], output_shape[0])
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    del unet, tt_crosattn
+    gc.collect()
+
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    logger.info(f"PCC is: {pcc_message}")

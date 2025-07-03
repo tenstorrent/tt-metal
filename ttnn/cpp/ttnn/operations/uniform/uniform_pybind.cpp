@@ -4,7 +4,7 @@
 
 #include "uniform_pybind.hpp"
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "uniform.hpp"
 
 namespace ttnn::operations::uniform {

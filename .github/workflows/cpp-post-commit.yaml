@@ -38,14 +38,15 @@ jobs:
           {name: All C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
           {name: tools, cmd: ./tests/scripts/run_tools_tests.sh},
 
-          {name: user kernel path, cmd: "rm -rf /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api_${{ inputs.arch }} --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*"},
-          {name: api, cmd: "./build/test/tt_metal/unit_tests_api_${{ inputs.arch }}"},
+          {name: user kernel path, cmd: "rm -rf /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*"},
+          {name: api, cmd: "./build/test/tt_metal/unit_tests_api"},
           {name: debug_tools, cmd: "./build/test/tt_metal/unit_tests_debug_tools"},
           {name: device, cmd: "./build/test/tt_metal/unit_tests_device"},
           {name: dispatch, cmd: "./build/test/tt_metal/unit_tests_dispatch"},
           {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth"},
-          {name: stl, cmd: "./build/test/tt_metal/unit_tests_stl"},
-          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests_${{ inputs.arch }}"},
+          {name: sfpi, cmd: "./build/test/tt_metal/unit_tests_sfpi"},
+          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests"},
+          {name: distributed_multiprocess, cmd: "./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh"},
           {name: lightmetal, cmd: "./build/test/tt_metal/unit_tests_lightmetal"},
           {name: dispatch multicmd queue, cmd: "TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*"},
           {name: ttnn cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn},
@@ -104,9 +105,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - name: Generate system logs on failure
-        uses: tenstorrent/tt-metal/.github/actions/generate-system-logs@main
-        if: ${{ failure() }}
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}

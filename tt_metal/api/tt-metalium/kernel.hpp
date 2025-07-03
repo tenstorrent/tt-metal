@@ -23,12 +23,9 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/jit_build_options.hpp>
-#include <tt-metalium/jit_build_settings.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_memory.h>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
@@ -43,8 +40,8 @@ namespace tt {
 namespace tt_metal {
 
 class IDevice;
-class JitBuildOptions;
 enum class DataMovementProcessor;
+class KernelImpl;
 
 constexpr uint32_t max_runtime_args = 256;
 
@@ -71,14 +68,8 @@ struct KernelSource {
     }
 };
 
-class Kernel : public JitBuildSettings {
-   public:
-    Kernel(
-        const KernelSource &kernel_src,
-        const CoreRangeSet &core_range_set,
-        const std::vector<uint32_t> &compile_args,
-        const std::map<std::string, std::string> &defines);
-
+class Kernel {
+public:
     virtual ~Kernel() {}
 
     std::string name() const;
@@ -92,8 +83,6 @@ class Kernel : public JitBuildSettings {
     std::vector<CoreRange> logical_coreranges() const;
 
     bool is_on_logical_core(const CoreCoord &logical_core) const;
-
-    std::vector<ll_api::memory const*> const& binaries(uint32_t build_key) const;
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
 
@@ -119,13 +108,8 @@ class Kernel : public JitBuildSettings {
     virtual Config config() const = 0;
 
     std::string compute_hash() const;
-    virtual void set_build_options(JitBuildOptions &build_options) const {}
-    virtual void generate_binaries(IDevice* device, JitBuildOptions &build_options) const = 0;
-    uint32_t get_binary_packed_size(IDevice* device, int index) const;
-    uint32_t get_binary_text_size(IDevice* device, int index) const;
-    void set_binaries(uint32_t build_key, std::vector<ll_api::memory const*>&& binaries);
-    virtual bool binaries_exist_on_disk(const IDevice* device) const = 0;
-    virtual void read_binaries(IDevice* device) = 0;
+
+    virtual const string& get_full_kernel_name() const = 0;
 
     void validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core);
     void set_runtime_args(const CoreCoord &logical_core, stl::Span<const uint32_t> runtime_args);
@@ -136,22 +120,16 @@ class Kernel : public JitBuildSettings {
     HalProgrammableCoreType get_kernel_programmable_core_type() const;
     CoreType get_kernel_core_type() const;
     void set_full_name(const string& s) { kernel_full_name_ = s; }
-    const string& get_full_kernel_name() const override;
     void add_defines(const std::map<std::string, std::string>& defines);
-    void process_defines(const std::function<void (const string& define, const string &value)>) const override;
-    void process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)>) const override;
+    virtual uint32_t get_binary_packed_size(IDevice* device, int index) const = 0;
 
     bool is_idle_eth() const;
 
-   protected:
+protected:
     int watcher_kernel_id_;
     KernelSource kernel_src_;
     std::string kernel_full_name_;  // Name + hash
     CoreRangeSet core_range_set_;
-    // DataMovement kernels have one binary each and Compute kernels have three binaries
-    // Different set of binaries per device because kernel compilation is device dependent
-    // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
-    std::unordered_map<chip_id_t, std::vector<ll_api::memory const*>> binaries_;
     uint8_t dispatch_class_;
     std::vector<uint32_t> compile_time_args_;
     std::vector< std::vector< std::vector<uint32_t>> > core_to_runtime_args_;
@@ -165,112 +143,19 @@ class Kernel : public JitBuildSettings {
     std::map<std::string, std::string> defines_;        // preprocessor defines. this is to be able to generate generic instances.
     std::set<CoreCoord> logical_cores_;
 
-    virtual uint8_t expected_num_binaries() const = 0;
-
     virtual std::string config_hash() const = 0;
 
-   private:
+private:
     void register_kernel_with_watcher();
-};
 
-class DataMovementKernel : public Kernel {
-   public:
-    DataMovementKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const DataMovementConfig &config) :
-        Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
-        this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(config.processor);
-    }
+    Kernel(
+        const KernelSource& kernel_src,
+        const CoreRangeSet& core_range_set,
+        const std::vector<uint32_t>& compile_args,
+        const std::map<std::string, std::string>& defines);
 
-    ~DataMovementKernel() {}
-
-    RISCV processor() const override;
-
-    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    bool binaries_exist_on_disk(const IDevice* device) const override;
-    void read_binaries(IDevice* device) override;
-
-    bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
-
-    Config config() const override { return this->config_; }
-
-    void process_defines(const std::function<void (const string& define, const string &value)>) const override;
-
-    std::string_view get_compiler_opt_level() const override;
-
-    std::string_view get_linker_opt_level() const override;
-
-private:
-    const DataMovementConfig config_;
-
-    uint8_t expected_num_binaries() const override;
-
-    std::string config_hash() const override;
-};
-
-class EthernetKernel : public Kernel {
-   public:
-    EthernetKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const EthernetConfig &config) :
-        Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
-        this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(config.processor);
-    }
-
-    ~EthernetKernel() {}
-
-    RISCV processor() const override;
-
-    void generate_binaries(IDevice* device, JitBuildOptions &build_options) const override;
-    bool binaries_exist_on_disk(const IDevice* device) const override;
-    void read_binaries(IDevice* device) override;
-
-    bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
-
-    Config config() const override { return this->config_; }
-
-    void process_defines(const std::function<void(const string &define, const string &value)>) const override;
-
-    std::string_view get_compiler_opt_level() const override;
-
-    std::string_view get_linker_opt_level() const override;
-
-private:
-    const EthernetConfig config_;
-
-    uint8_t expected_num_binaries() const override;
-
-    std::string config_hash() const override;
-};
-
-class ComputeKernel : public Kernel {
-   public:
-    ComputeKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const ComputeConfig &config) :
-        Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
-        this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
-    }
-
-    ~ComputeKernel() {}
-
-    RISCV processor() const override;
-
-    void set_build_options(JitBuildOptions& build_options) const override;
-    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    bool binaries_exist_on_disk(const IDevice* device) const override;
-    void read_binaries(IDevice* device) override;
-
-    bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
-
-    Config config() const override { return this->config_; }
-
-    void process_defines(const std::function<void (const string& define, const string &value)>) const override;
-
-    std::string_view get_compiler_opt_level() const override;
-
-    std::string_view get_linker_opt_level() const override;
-
-private:
-    const ComputeConfig config_;
-
-    uint8_t expected_num_binaries() const override;
-
-    std::string config_hash() const override;
+    // Only allow KernelImpl to inherit from Kernel.
+    friend class KernelImpl;
 };
 
 std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor);

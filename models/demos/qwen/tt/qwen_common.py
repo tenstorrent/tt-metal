@@ -2,10 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from safetensors.torch import load_file as safetensors_load_file
 import json
+
+import torch
+from safetensors.torch import load_file as safetensors_load_file
+
+import ttnn
 
 
 class HostEmbedding(torch.nn.Module):

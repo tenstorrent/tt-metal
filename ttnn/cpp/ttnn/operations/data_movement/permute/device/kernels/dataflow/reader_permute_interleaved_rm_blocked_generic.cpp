@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <algorithm>
 #include "dataflow_api.h"
 
 void kernel_main() {
@@ -69,11 +70,11 @@ void kernel_main() {
 
         // Compute X block boundaries
         uint32_t x_start = x_block * x_block_size;
-        uint32_t x_end = min(x_start + x_block_size, X);
+        uint32_t x_end = std::min(x_start + x_block_size, X);
 
         // Compute W block boundaries
         uint32_t w_start = w_block * w_block_size;
-        uint32_t w_end = min(w_start + w_block_size, input_shape[N - 1]);
+        uint32_t w_end = std::min(w_start + w_block_size, input_shape[N - 1]);
         uint32_t w_offset = w_start * element_size;
 
         uint32_t w_read_size_bytes = (w_end - w_start) * element_size;

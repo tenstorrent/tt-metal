@@ -18,7 +18,7 @@
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "system_memory_cq_interface.hpp"
 #include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
@@ -90,14 +90,14 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
 
         for (const std::vector<string>& device_data : device_map) {
             if (host_data == device_data) {
-                tt::log_info("Matched on {}", type);
+                log_info(tt::LogMetal, "Matched on {}", type);
                 match = true;
                 break;
             }
         }
 
         if (not match) {
-            tt::log_info("Mismatch between host and device program data on {}", type);
+            log_info(tt::LogMetal, "Mismatch between host and device program data on {}", type);
         }
         all_match &= match;
     }
@@ -106,7 +106,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
     device_dispatch_dump_file.close();
 
     if (all_match) {
-        tt::log_info("Full match between host and device program data");
+        log_info(tt::LogMetal, "Full match between host and device program data");
     }
 }
 
@@ -212,7 +212,7 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
             case CQ_DISPATCH_CMD_SINK: break;
             case CQ_DISPATCH_CMD_EXEC_BUF_END: break;
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: break;
-            case CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL: break;
+            case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL: break;
             case CQ_DISPATCH_CMD_TERMINATE: break;
             case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: break;
             default: TT_THROW("Unrecognized dispatch command: {}", cmd_id); break;
@@ -327,14 +327,15 @@ void dump_completion_queue_entries(
     // Read out in pages, this is fine since all completion Q entries are page aligned.
     std::vector<uint8_t> read_data;
     read_data.resize(DispatchSettings::TRANSFER_PAGE_SIZE);
-    tt::log_info("Reading Device {} CQ {}, Completion Queue...", sysmem_manager.get_device_id(), cq_interface.id);
+    log_info(
+        tt::LogMetal, "Reading Device {} CQ {}, Completion Queue...", sysmem_manager.get_device_id(), cq_interface.id);
     cq_file << fmt::format(
         "Device {}, CQ {}, Completion Queue: write_ptr={:#010x}, read_ptr={:#010x}\n",
         sysmem_manager.get_device_id(),
         cq_interface.id,
         completion_write_ptr,
         completion_read_ptr);
-    uint32_t last_span_start;
+    uint32_t last_span_start{};
     bool last_span_invalid = false;
     print_progress_bar(0.0, true);
     for (uint32_t page_offset = 0; page_offset < completion_q_bytes;) {  // page_offset increment at end of loop
@@ -423,14 +424,14 @@ void dump_issue_queue_entries(
     // Read out in 4K pages, could do ISSUE_Q_ALIGNMENT chunks to match the entries but this is ~2x faster.
     std::vector<uint8_t> read_data;
     read_data.resize(DispatchSettings::TRANSFER_PAGE_SIZE);
-    tt::log_info("Reading Device {} CQ {}, Issue Queue...", sysmem_manager.get_device_id(), cq_interface.id);
+    log_info(tt::LogMetal, "Reading Device {} CQ {}, Issue Queue...", sysmem_manager.get_device_id(), cq_interface.id);
     iq_file << fmt::format(
         "Device {}, CQ {}, Issue Queue: write_ptr={:#010x}, read_ptr={:#010x} (read_ptr not currently implemented)\n",
         sysmem_manager.get_device_id(),
         cq_interface.id,
         issue_write_ptr,
         issue_read_ptr);
-    uint32_t last_span_start;
+    uint32_t last_span_start{};
     bool last_span_invalid = false;
     print_progress_bar(0.0, true);
     uint32_t first_page_addr = issue_q_base_addr - (issue_q_base_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
@@ -595,7 +596,8 @@ void dump_command_queue_raw_data(
                     cq_interface.id,
                     queue_type_name)
              << std::hex;
-    tt::log_info(
+    log_info(
+        tt::LogMetal,
         "Reading Device {} CQ {}, {} Queue Raw Data...",
         sysmem_manager.get_device_id(),
         cq_interface.id,

@@ -4,9 +4,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <functional>
-#include <limits>
-#include <random>
 #include <tuple>
 #include <map>
 #include <set>
@@ -16,7 +13,7 @@
 
 #include "umd/device/types/arch.h"
 #include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -24,11 +21,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/profiler/profiler_paths.hpp"
 
 #include <tt-metalium/persistent_kernel_cache.hpp>
@@ -40,8 +34,6 @@
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
-
-static uint64_t program_runtime_id = 0;
 
 struct TestParams {
     BenchmarkType benchmark_type;
@@ -273,9 +265,13 @@ private:
 
         for (auto sender_chip_id : sender_chips) {
             auto non_tunneling_eth_cores =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(
                     sender_chip_id, !slow_dispath_mode);
             for (auto logical_active_eth : non_tunneling_eth_cores) {
+                if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                        sender_chip_id, logical_active_eth)) {
+                    continue;
+                }
                 auto sender_eth = tt_cxy_pair(sender_chip_id, logical_active_eth);
                 auto receiver_eth_tuple =
                     tt::tt_metal::MetalContext::instance().get_cluster().get_connected_ethernet_core(
@@ -327,9 +323,6 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
     for (const auto& link : device_helper.unique_links) {
         auto& sender_program = programs.at(link.sender.chip);
         auto& receiver_program = programs.at(link.receiver.chip);
-
-        sender_program.set_runtime_id(program_runtime_id++);
-        receiver_program.set_runtime_id(program_runtime_id++);
 
         auto sender_device = find_device_with_id(device_helper.devices, link.sender.chip);
         auto receiver_device = find_device_with_id(device_helper.devices, link.receiver.chip);
@@ -565,18 +558,18 @@ void run(
             device_helper, iteration, sender_stats, receiver_stats, params.num_iterations, false, iteration == 0);
         if (slow_dispath_mode) {
             std::vector<std::thread> threads;
-            for (int i = 0; i < device_helper.devices.size(); ++i) {
-                threads.emplace_back([&]() {
-                    tt_metal::detail::LaunchProgram(
-                        device_helper.devices.at(i), programs.at(device_helper.devices.at(i)->id()));
-                });
-
-                for (auto& thread : threads) {
-                    thread.join();
-                }
+            for (auto device : device_helper.devices) {
+                auto& program = programs.at(device->id());
+                program.set_runtime_id(iteration);
+                threads.emplace_back([&]() { tt_metal::detail::LaunchProgram(device, programs.at(device->id())); });
+            }
+            for (auto& thread : threads) {
+                thread.join();
             }
         } else {
             for (auto device : device_helper.devices) {
+                auto& program = programs.at(device->id());
+                program.set_runtime_id(iteration);
                 tt_metal::EnqueueProgram(device->command_queue(), programs.at(device->id()), false);
             }
             log_info(tt::LogTest, "Iteration {} Calling Finish", iteration);

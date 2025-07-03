@@ -5,12 +5,8 @@
 import pytest
 from loguru import logger
 
-
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
-    check_mesh_device,
-)
-from models.demos.t3000.llama2_70b.demo.demo import main, construct_arg
+from models.demos.t3000.llama2_70b.demo.demo import construct_arg, main
+from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
 
 
 @pytest.mark.timeout(240000)
@@ -88,7 +84,6 @@ def test_LlamaModel_demo(
     ground_truth,
     max_batch_size,
     max_context_len,
-    use_program_cache,
 ):
     logger.info("Running LlamaModel demo")
     ## Get model config

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
 from models.utility_functions import is_wormhole_b0
 
@@ -43,7 +44,6 @@ def test_demo_multichip(
     model_location_generator,
     get_tt_cache_path,
     mesh_device,
-    use_program_cache,
     is_ci_env,
 ):
     num_devices = mesh_device.get_num_devices()

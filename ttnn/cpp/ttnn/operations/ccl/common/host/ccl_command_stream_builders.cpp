@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
-#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 #include <tt-metalium/assert.hpp>
 
-#include "cpp/ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 #include <ranges>
 #include <vector>
@@ -40,7 +40,6 @@ std::vector<std::pair<size_t, size_t>> compute_evenly_split_sizes(size_t size, s
 
     auto compute_slice_offset = [num_larger_slices_total, larger_slice_size, smaller_slice_size](int64_t slice_index) {
         int64_t num_larger_slices = std::min(slice_index, num_larger_slices_total);
-        int64_t num_smaller_slices = std::min(slice_index - num_larger_slices, 0L);
         return num_larger_slices * larger_slice_size + (slice_index - num_larger_slices) * smaller_slice_size;
     };
 
@@ -126,7 +125,7 @@ std::vector<ttnn::ccl::v2::TensorSlice> compute_page_aligned_slices(
     TT_FATAL(num_slices > 0, "Number of slices must be greater than 0");
     std::vector<ttnn::ccl::v2::TensorSlice> tensor_slices;
 
-    const auto input_tensor_shape_in_tiles = shape_to_shape_in_tiles(input_tensor.get_logical_shape());
+    const auto input_tensor_shape_in_tiles = shape_to_shape_in_tiles(input_tensor.logical_shape());
     tensor_slices.reserve(num_slices);
 
     // split the input tensor, by shape, into pieces

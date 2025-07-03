@@ -7,7 +7,7 @@
 
 #include "indexed_fill_pybind.hpp"
 #include "indexed_fill.hpp"
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace detail {

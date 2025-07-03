@@ -18,13 +18,14 @@ from models.experimental.functional_unet.tests.common import (
     is_n300_with_eth_dispatch_cores,
     is_t3k_with_eth_dispatch_cores,
     UNET_FULL_MODEL_PCC,
+    UNET_L1_SMALL_REGION_SIZE,
 )
 
 
 @pytest.mark.parametrize("batch", [1])
 @pytest.mark.parametrize("groups", [4])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, reset_seeds):
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
+def test_unet_multi_device_model(batch, groups, mesh_device, reset_seeds):
     if not is_n300_with_eth_dispatch_cores(mesh_device) and not is_t3k_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300 or T3000")
 
@@ -42,7 +43,14 @@ def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, 
     total_batch = num_devices * batch
     logger.info(f"Using {num_devices} devices for this test")
     torch_input, ttnn_input = create_unet_input_tensors(
-        total_batch, groups, channel_order="first", pad=False, fold=False, mesh_mapper=inputs_mesh_mapper
+        total_batch,
+        groups,
+        channel_order="first",
+        pad=False,
+        fold=True,
+        device=mesh_device,
+        memory_config=unet_shallow_ttnn.UNet.input_sharded_memory_config,
+        mesh_mapper=inputs_mesh_mapper,
     )
     logger.info(f"Created reference input tensors: {list(torch_input.shape)}")
     logger.info(
@@ -50,7 +58,7 @@ def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, 
     )
 
     torch_output_tensor = model(torch_input)
-    output_tensor = ttnn_model(ttnn_input)
+    output_tensor = ttnn_model(ttnn_input, move_input_tensor_to_device=False)
 
     B, C, H, W = torch_output_tensor.shape
     ttnn_output_tensor = ttnn.to_torch(output_tensor, mesh_composer=output_mesh_composer).reshape(B, C, H, W)

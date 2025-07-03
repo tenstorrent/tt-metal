@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -21,21 +21,6 @@ class PagedAttentionConfig:
     def __init__(self, block_size=32, max_num_blocks=1024):
         self.block_size = block_size
         self.max_num_blocks = max_num_blocks
-
-
-def check_mesh_tensor_alloc(tensor):
-    """
-    Check if the tensor has the same address for all devices.
-    """
-    device_tensors = ttnn.get_device_tensors(tensor)
-    buffer_addr = device_tensors[0].buffer_address()
-
-    if len(device_tensors) > 1:
-        for i in range(1, len(device_tensors)):
-            addr = device_tensors[i].buffer_address()
-            if not addr == buffer_addr:
-                return False
-    return True
 
 
 def encode_prompt_llama_instruct(tokenizer, prompt_text, system_prompt_text=None):
@@ -96,7 +81,7 @@ def precompute_freqs(dim: int, end: int, theta: float = 500000.0, use_scaled: bo
     """
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
-    if use_scaled:
+    if use_scaled and scale_factor is not None:
         freqs = apply_scaling(freqs, scale_factor)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)

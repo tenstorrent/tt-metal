@@ -1,16 +1,17 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import torch
-import pytest
 import time
-from tqdm.auto import tqdm
+
+import pytest
+import torch
 from diffusers import LMSDiscreteScheduler, StableDiffusionPipeline
+from tqdm.auto import tqdm
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
@@ -56,7 +57,7 @@ def unsqueeze_all_params_to_4d(params):
         (2, 4, 64, 64),
     ],
 )
-def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width, use_program_cache):
+def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
     # setup envvar if testing on N300
     wh_arch_yaml_org = None
     if device.core_grid.y == 7:

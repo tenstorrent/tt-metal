@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,10 +12,9 @@
 #include "demux.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"
-#include "dispatch/kernel_config/fabric_router_vc.hpp"
+#include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
-#include "dprint_server.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
 #include "fabric_types.hpp"
@@ -29,7 +28,6 @@
 
 using namespace tt::tt_metal;
 
-// Helper function to get upstream device in the tunnel from current device, not valid for mmio
 chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
@@ -46,12 +44,21 @@ chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
     return device_id;
 }
 
-// Same thing for downstream, is ambiuous for mmio device though if it drives more than one tunnel
-chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id) {
+chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id, int tunnel) {
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-    for (auto tunnel :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
+    auto tunnels = tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+    if (tunnel < -1 || tunnel >= static_cast<int>(tunnels.size())) {
+        TT_THROW("Tunnel {} is out of range. {} tunnels exist", tunnel, tunnels.size());
+    }
+
+    if (tunnel != -1) {
+        // Remove all tunnels except the relevant one which will be at the front
+        std::swap(tunnels[0], tunnels[tunnel]);
+        tunnels.erase(tunnels.begin() + 1, tunnels.end());
+    }
+
+    for (auto tunnel : tunnels) {
         for (int idx = 0; idx < tunnel.size(); idx++) {
             if (tunnel[idx] == device_id) {
                 // End of tunnel doesn't have downstream, just return itself
@@ -63,7 +70,6 @@ chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id) {
     return device_id;
 }
 
-// Helper function to get the tunnel stop of current device
 uint32_t FDKernel::GetTunnelStop(chip_id_t device_id) {
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
@@ -85,7 +91,8 @@ FDKernel* FDKernel::Generate(
     chip_id_t servicing_device_id,
     uint8_t cq_id,
     noc_selection_t noc_selection,
-    DispatchWorkerType type) {
+    DispatchWorkerType type,
+    int tunnel_index) {
     switch (type) {
         case PREFETCH_HD:
             return new PrefetchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true, true);
@@ -110,12 +117,35 @@ FDKernel* FDKernel::Generate(
             return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
         case PACKET_ROUTER_DEMUX:
             return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
-        case FABRIC_ROUTER_VC: return new tt::tt_metal::FabricRouterVC(node_id, device_id, servicing_device_id, cq_id);
+        case FABRIC_MUX:
+            return new tt::tt_metal::RelayMux(
+                node_id, device_id, servicing_device_id, cq_id, noc_selection, false, tunnel_index);
+        case RETURN_FABRIC_MUX:
+            return new tt::tt_metal::RelayMux(
+                node_id, device_id, servicing_device_id, cq_id, noc_selection, true, tunnel_index);
         default: TT_FATAL(false, "Unrecognized dispatch kernel type: {}.", type); return nullptr;
     }
 }
 
-void FDKernel::configure_kernel_variant(
+uint32_t FDKernel::get_programmable_core_type_index(CoreType dispatch_core_type, bool is_active_eth_core) {
+    // TODO(#22895): Too many core types. Consolidate programmable_core_type_index with ProgrammableCoreType and
+    // CoreType
+    uint32_t programmable_core_type_index =
+        (dispatch_core_type == CoreType::WORKER)
+            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
+        : is_active_eth_core
+            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)
+            : MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+
+    return programmable_core_type_index;
+}
+
+CoreCoord FDKernel::get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const CoreType& core_type) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    return cluster.get_virtual_coordinate_from_logical_coordinates(logical_cxy, core_type);
+}
+
+KernelHandle FDKernel::configure_kernel_variant(
     const string& path,
     const std::vector<uint32_t>& compile_args,
     std::map<string, string> defines_in,
@@ -123,13 +153,7 @@ void FDKernel::configure_kernel_variant(
     bool send_to_brisc,
     bool force_watcher_no_inline,
     KernelBuildOptLevel opt_level) {
-    // TODO: just pass in the programmable index
-    uint32_t programmable_core_type_index =
-        (GetCoreType() == CoreType::WORKER)
-            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
-        : is_active_eth_core
-            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)
-            : MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+    uint32_t programmable_core_type_index = get_programmable_core_type_index(GetCoreType(), is_active_eth_core);
 
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
@@ -142,16 +166,14 @@ void FDKernel::configure_kernel_variant(
     if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config() != FabricConfig::FABRIC_2D_PUSH) {
-        defines["FVC_MODE_PULL"] = "1";
-    }
-    if (!DPrintServerReadsDispatchCores(device_->id())) {
+    if (!(MetalContext::instance().dprint_server() and
+          MetalContext::instance().dprint_server()->reads_dispatch_cores(device_->id()))) {
         defines["FORCE_DPRINT_OFF"] = "1";
     }
     defines.insert(defines_in.begin(), defines_in.end());
 
     if (GetCoreType() == CoreType::WORKER) {
-        tt::tt_metal::CreateKernel(
+        return tt::tt_metal::CreateKernel(
             *program_,
             path,
             logical_core_,
@@ -163,7 +185,7 @@ void FDKernel::configure_kernel_variant(
                 .defines = defines,
                 .opt_level = opt_level});
     } else {
-        tt::tt_metal::CreateKernel(
+        return tt::tt_metal::CreateKernel(
             *program_,
             path,
             logical_core_,
@@ -174,4 +196,10 @@ void FDKernel::configure_kernel_variant(
                 .defines = defines,
                 .opt_level = opt_level});
     }
+}
+
+void FDKernel::create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes) {
+    attributes.worker_flow_control_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+    attributes.worker_buffer_index_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+    attributes.worker_teardown_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
 }

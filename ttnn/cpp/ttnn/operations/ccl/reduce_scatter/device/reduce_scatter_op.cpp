@@ -11,11 +11,11 @@ namespace ttnn {
 void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
         TT_FATAL(
-            t.get_padded_shape()[this->scatter_dim] / this->ring_size > 0,
+            t.padded_shape()[this->scatter_dim] / this->ring_size > 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
             this->scatter_dim);
         TT_FATAL(
-            t.get_padded_shape()[this->scatter_dim] % this->ring_size == 0,
+            t.padded_shape()[this->scatter_dim] % this->ring_size == 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
             this->scatter_dim);
     }
@@ -23,7 +23,7 @@ void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<ttnn::TensorSpec> ReduceScatter::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto shape = input_tensor.get_logical_shape();
+    auto shape = input_tensor.logical_shape();
     TT_FATAL(
         shape[this->scatter_dim] % this->ring_size == 0,
         "The size of the scatter dimension must be a multiple of the ring size. Dimension size: {}, ring Size: {}",
@@ -33,7 +33,7 @@ std::vector<ttnn::TensorSpec> ReduceScatter::compute_output_specs(const std::vec
     TensorSpec spec(
         shape,
         tt::tt_metal::TensorLayout(
-            input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), output_mem_config));
+            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), output_mem_config));
     return std::vector<ttnn::TensorSpec>(input_tensors.size(), spec);
 }
 
@@ -117,7 +117,7 @@ Tensor reduce_scatter_impl(
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
 
-    int16_t rank = input_tensor.get_logical_shape().rank();
+    int16_t rank = input_tensor.logical_shape().rank();
 
     int16_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
@@ -163,7 +163,7 @@ Tensor reduce_scatter_impl(
     const auto mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    int16_t rank = input_tensor.get_logical_shape().rank();
+    int16_t rank = input_tensor.logical_shape().rank();
 
     int16_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
@@ -210,7 +210,7 @@ Tensor reduce_scatter(
         topology,
         user_defined_num_workers,
         user_defined_num_buffers_per_channel,
-        input_tensor.active_physical_devices());
+        ttnn::ccl::get_active_physical_devices(input_tensor));
 }
 
 std::vector<Tensor> reduce_scatter(

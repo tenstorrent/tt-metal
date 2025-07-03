@@ -3,29 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+
+import evaluate
 import pytest
 import torch
-
 from loguru import logger
+from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
 import ttnn
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    profiler,
-)
-
-from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
+from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
+from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import (
     get_model_config,
     get_tt_cache_path,
     skip_unsupported_config,
 )
-from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
-
-from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
-
-import evaluate
+from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path, batch):
@@ -369,7 +362,6 @@ def test_demo(
     NUM_RUNS,
     model_location_generator,
     device,
-    use_program_cache,
 ):
     model_config_str = "BFLOAT8_B-SHARDED"
     skip_unsupported_config(device, model_config_str, batch)
@@ -395,7 +387,7 @@ def test_demo(
     "loop_count",
     ((20),),
 )
-def test_demo_squadv2(model_location_generator, device, use_program_cache, batch, loop_count):
+def test_demo_squadv2(model_location_generator, device, batch, loop_count):
     model_config_str = "BFLOAT8_B-SHARDED"
     skip_unsupported_config(device, model_config_str, batch)
     disable_persistent_kernel_cache()

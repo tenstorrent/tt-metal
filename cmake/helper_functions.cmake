@@ -19,6 +19,7 @@ function(CREATE_EAGER_TEST_EXE TESTLIST)
             PUBLIC
                 test_eager_common_libs
                 ttnn
+                Python3::Python
         )
         target_include_directories(
             ${TEST_TARGET}
@@ -53,7 +54,9 @@ function(CREATE_PGM_EXAMPLES_EXE TESTLIST SUBDIR)
                 m
                 pthread
         )
+
         target_include_directories(${TEST_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
         set_target_properties(
             ${TEST_TARGET}
             PROPERTIES

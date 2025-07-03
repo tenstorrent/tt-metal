@@ -9,7 +9,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -38,14 +37,14 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
@@ -144,7 +143,7 @@ create_programs(
     const std::shared_ptr<tt::tt_metal::Buffer>& in1_buffer,
     const std::shared_ptr<tt::tt_metal::Buffer>& output_buffer,
     bool use_sub_devices) {
-    log_info("created program");
+    log_info(tt::LogTest, "created program");
 
     std::vector<tt_metal::Program> programs;
     programs.push_back(tt_metal::Program());
@@ -180,8 +179,8 @@ create_programs(
     get_max_page_size_and_num_pages(
         in1_block_w / num_receivers, single_tile_size, in1_writer_page_size, in1_writer_num_pages);
 
-    log_info("in1_writer_page_size: {}", in1_writer_page_size);
-    log_info("in1_writer_num_pages: {}", in1_writer_num_pages);
+    log_info(tt::LogTest, "in1_writer_page_size: {}", in1_writer_page_size);
+    log_info(tt::LogTest, "in1_writer_num_pages: {}", in1_writer_num_pages);
 
     tt_metal::CircularBufferConfig in1_reader_cb_config =
         tt_metal::CircularBufferConfig(in1_reader_cb_size, {{in1_reader_cb_index, tile_format}})
@@ -239,8 +238,8 @@ create_programs(
             .set_page_size(sync_cb_index, sync_cb_size);
     auto sync_cb = tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, sync_cb_config);
 
-    log_info("in1_reader_cb_size: {}", in1_reader_cb_size);
-    log_info("in1_receiver_cb_size: {}", in1_receiver_cb_size);
+    log_info(tt::LogTest, "in1_reader_cb_size: {}", in1_reader_cb_size);
+    log_info(tt::LogTest, "in1_receiver_cb_size: {}", in1_receiver_cb_size);
 
     // in1 reader
     std::vector<uint32_t> in1_reader_compile_time_args = {
@@ -329,7 +328,7 @@ create_programs(
 
     // reader rt
     auto dram_reader_core_coord = dram_reader_core.ranges().begin()->start_coord;
-    log_info("dram_reader_core_coord: {}", dram_reader_core_coord);
+    log_info(tt::LogTest, "dram_reader_core_coord: {}", dram_reader_core_coord);
     auto dram_reader_core_coord_physical = device->worker_core_from_logical_core(dram_reader_core_coord);
     uint32_t bank_id = 0;
     uint32_t vc = bank_id & 0x1;
@@ -401,7 +400,7 @@ create_programs(
             receiver_rt_args.push_back(in1_receiver_block_num_tile);
         }
 
-        log_info("l1_receiver_core_coords: {}", l1_receiver_core_coords[i]);
+        log_info(tt::LogTest, "l1_receiver_core_coords: {}", l1_receiver_core_coords[i]);
 
         tt_metal::SetRuntimeArgs(receiver_program, in1_receiver_kernel, l1_receiver_core_coords[i], receiver_rt_args);
     }
@@ -525,7 +524,7 @@ bool validation_fp16(
     std::vector<uint32_t> result;
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
+    auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
     auto result_untilized = untilize_swizzled(result_flat_layout, mt * 32, nt * 32);
 
     const auto& in0_values = in0_tensor.get_values();
@@ -584,10 +583,10 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {ht, wt});
 
-    log_info("cores: {}", cores);
-    log_info("size_bytes: {}", size_bytes);
-    log_info("page_size_bytes: {}", page_size_bytes);
-    log_info("num_receivers: {}", num_receivers);
+    log_info(tt::LogTest, "cores: {}", cores);
+    log_info(tt::LogTest, "size_bytes: {}", size_bytes);
+    log_info(tt::LogTest, "page_size_bytes: {}", page_size_bytes);
+    log_info(tt::LogTest, "num_receivers: {}", num_receivers);
 
     auto config = tt::tt_metal::ShardedBufferConfig{
         .device = device,
@@ -606,14 +605,14 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     tt::tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-    log_info("created sharded tensor");
+    log_info(tt::LogTest, "created sharded tensor");
 
     return input_buffer;
 }
 
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        log_error("Test not supported w/ slow dispatch, exiting");
+        log_error(tt::LogTest, "Test not supported w/ slow dispatch, exiting");
     }
 
     bool pass = true;
@@ -663,8 +662,8 @@ int main(int argc, char** argv) {
             TT_ASSERT(false);
         }
 
-        log_info("num_layers: {} ", num_layers);
-        log_info("num_receivers: {} ", num_receivers);
+        log_info(tt::LogTest, "num_layers: {} ", num_layers);
+        log_info(tt::LogTest, "num_receivers: {} ", num_receivers);
 
         TT_FATAL(cb_num_blocks >= num_blocks, "Global CB must contain more (or equal) blocks than a single layer");
 
@@ -817,7 +816,7 @@ int main(int argc, char** argv) {
             // in1
             for (uint32_t i = 0; i < num_layers; ++i) {
                 auto input_vec_tilized = tilize_swizzled(in1_tensor_fp16.get_values(), k, n);
-                auto input_vec_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(input_vec_tilized));
+                auto input_vec_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(input_vec_tilized));
                 vector<uint32_t> packed_input_vec_tile_layout =
                     pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
                 in1_buffers[i] = create_and_transfer_data_sharded_cb(
@@ -833,7 +832,7 @@ int main(int argc, char** argv) {
 
             // in0
             auto activations_tilized = tilize_swizzled(in0_tensor_fp16.get_values(), m, k * num_receivers);
-            auto activations_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(activations_tilized));
+            auto activations_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
             vector<uint32_t> activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
             in0_buffer = create_and_transfer_data_sharded_cb(
                 device,
@@ -859,7 +858,7 @@ int main(int argc, char** argv) {
         }
 
         for (uint32_t i = 0; i < num_layers; ++i) {
-            log_info("in1_buffers addr: {}", in1_buffers[i]->address());
+            log_info(tt::LogTest, "in1_buffers addr: {}", in1_buffers[i]->address());
         }
 
         ////////////////////////////////////////////////////////////////////////////
@@ -909,7 +908,7 @@ int main(int argc, char** argv) {
             }
             Finish(device->command_queue());
             for (auto& program : programs) {
-                tt_metal::DumpDeviceProfileResults(device, program);
+                tt_metal::detail::DumpDeviceProfileResults(device);
             }
         }
 

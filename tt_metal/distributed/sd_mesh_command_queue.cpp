@@ -14,22 +14,33 @@ SDMeshCommandQueue::SDMeshCommandQueue(MeshDevice* mesh_device, uint32_t id) :
     MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool()) {}
 
 void SDMeshCommandQueue::write_shard_to_device(
-    Buffer* shard_view, const void* src, const BufferRegion& region, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    TT_FATAL(region.offset == 0, "Offset is not supported for slow dispatch");
+    const MeshBuffer& buffer,
+    const MeshCoordinate& device_coord,
+    const void* src,
+    const std::optional<BufferRegion>& region,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    auto device_buffer = buffer.get_device_buffer(device_coord);
+    auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
+    auto shard_view = device_buffer->view(region_value);
+
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
     tt::tt_metal::detail::WriteToBuffer(
-        *shard_view, tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src), region.size));
+        *shard_view,
+        tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size));
 }
 
 void SDMeshCommandQueue::read_shard_from_device(
-    Buffer* shard_view,
+    const MeshBuffer& buffer,
+    const MeshCoordinate& device_coord,
     void* dst,
-    const BufferRegion& region,
+    const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>&,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    TT_FATAL(region.offset == 0, "Offset is not supported for slow dispatch");
+    auto device_buffer = buffer.get_device_buffer(device_coord);
+    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
+
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
-    tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst), region.size);
+    tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
 }
 
 void SDMeshCommandQueue::submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>&, bool) {}

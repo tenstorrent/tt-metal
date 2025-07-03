@@ -18,7 +18,7 @@ ttnn::Tensor NLPKVCacheLoadSliceOperation::invoke(
     const uint32_t seq_len_end,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    auto input_tensor_shape = input_tensor.get_padded_shape();
+    auto input_tensor_shape = input_tensor.padded_shape();
     auto dim0 = input_tensor_shape[0];
     auto dim1 = input_tensor_shape[1];
     auto head_dim = input_tensor_shape[3];

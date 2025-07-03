@@ -14,7 +14,7 @@
 #include "impl/debug/noc_logging.hpp"
 #include "impl/debug/watcher_server.hpp"
 #include "impl/dispatch/debug_tools.hpp"
-#include "system_memory_manager.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -108,6 +108,7 @@ int main(int argc, char* argv[]) {
     // Default devices is all of them.
     vector<chip_id_t> device_ids;
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+    device_ids.reserve(num_devices);
     for (chip_id_t id = 0; id < num_devices; id++) {
         device_ids.push_back(id);
     }
@@ -147,9 +148,11 @@ int main(int argc, char* argv[]) {
         } else if (s == "-w" || s == "--dump-watcher") {
             dump_watcher = true;
         } else if (s == "-c" || s == "--dump-cqs") {
-            dump_cqs = true;
+            cout << "CQ dumping currently disabled" << endl;
+            // dump_cqs = true;
         } else if (s == "--dump-cqs-data") {
-            dump_cqs_raw_data = true;
+            cout << "CQ raw data dumping currently disabled" << endl;
+            // dump_cqs_raw_data = true;
         } else if (s == "--dump-noc-transfer-data") {
             tt::tt_metal::MetalContext::instance().rtoptions().set_record_noc_transfers(true);
             dump_noc_xfers = true;

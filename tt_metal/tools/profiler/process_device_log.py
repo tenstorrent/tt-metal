@@ -80,10 +80,6 @@ def analyze_stats(timerStats, timerStatsCores):
         print(f"Please reboot the host to make sure the device is not in a bad reset state")
 
 
-def is_print_supported(devicesData):
-    return devicesData["deviceInfo"]["arch"] == "grayskull"
-
-
 def print_stats_outfile(devicesData, setup):
     original_stdout = sys.stdout
     with open(f"{PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}/{setup.deviceStatsTXT}", "w") as statsFile:
@@ -113,66 +109,6 @@ def print_stats(devicesData, setup):
                 else:
                     print(f"{'Duration':>12} [cycles] = {stats['Max']:>10,.0f}")
                 print()
-                if is_print_supported(devicesData) and setup.timerAnalysis[analysis]["across"] in ["risc", "core"]:
-                    for core_y in range(-2, 12):
-                        # Print row number
-                        if core_y > 0:
-                            print(f"{core_y:>2}|| ", end="")
-                        else:
-                            print(f"{' ':>4} ", end="")
-
-                        for core_x in range(0, 13):
-                            if core_x > 0:
-                                if core_y == -2:
-                                    print(f"{core_x:>{numberWidth}}", end="")
-                                elif core_y == -1:
-                                    print(f"{'=':=>{numberWidth}}", end="")
-                                elif core_y == 0:
-                                    if core_x in [1, 4, 7, 10]:
-                                        print(f"{f'DRAM{int(core_x/3)}':>{numberWidth}}", end="")
-                                    else:
-                                        print(f"{'---':>{numberWidth}}", end="")
-                                elif core_y != 6:
-                                    core = (core_x, core_y)
-                                    noCoreData = True
-                                    if core in deviceData["cores"].keys():
-                                        for risc, riscData in deviceData["cores"][core]["riscs"].items():
-                                            if (
-                                                "analysis" in riscData.keys()
-                                                and analysis in riscData["analysis"].keys()
-                                            ):
-                                                stats = riscData["analysis"][analysis]["stats"]
-                                                plusMinus = (stats["Max"] - stats["Min"]) // 2
-                                                median = stats["Median"]
-                                                tmpStr = f"{median:,.0f}"
-                                                if stats["Count"] > 1:
-                                                    tmpStr = "{tmpStr}{sign}{plusMinus:,}".format(
-                                                        tmpStr=tmpStr, sign="\u00B1", plusMinus=plusMinus
-                                                    )
-                                                print(f"{tmpStr:>{numberWidth}}", end="")
-                                                noCoreData = False
-                                    if noCoreData:
-                                        print(f"{'X':>{numberWidth}}", end="")
-                                else:
-                                    if core_x in [1, 4, 7, 10]:
-                                        print(f"{f'DRAM{4 + int(core_x/3)}':>{numberWidth}}", end="")
-                                    else:
-                                        print(f"{'---':>{numberWidth}}", end="")
-
-                            else:
-                                if core_y == 1:
-                                    print("ARC", end="")
-                                elif core_y == 3:
-                                    print("PCI", end="")
-                                elif core_y > -1:
-                                    print("---", end="")
-                                else:
-                                    print("   ", end="")
-
-                        print()
-                    print()
-                    print()
-                    print()
 
 
 def print_help():
@@ -332,11 +268,28 @@ def get_ops(timeseries):
                     if (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START") or (
                         risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START"
                     ):
-                        assert False, "Unexpected FW start"
+                        if len(opCores[core]) == 2:
+                            corruption = False
+                            for core, coreOp in opCores.items():
+                                if coreOp and len(coreOp) != 2:
+                                    corruption = True
+                            if corruption:
+                                assertMsg = f"This is before other cores are finished with this op. Data corruption could be the cause of this. Please retry your run"
+                            else:
+                                assertMsg = f"This is before other cores have reported any activity on this op. Other cores might have their profiler buffer filled up. "
+                                assertMsg += "Please either decrease the number of ops being profiled or run dump device profiler more often"
+                        else:
+                            assertMsg = f"This is before a FW end was received for this op. Data corruption could be the cause of this. Please retry your run"
+                        assert (
+                            False
+                        ), f"Unexpected FW start, core {core}, risc {risc} is reporting a second start of FW for op {opID}. {assertMsg}"
+
                     elif (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END") or (
                         risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END"
                     ):
-                        assert len(opCores[core]) == 1, "Unexpected FW end"
+                        assert (
+                            len(opCores[core]) == 1
+                        ), "Unexpected FW end, core {core}, risc {risc} is reporting a second end of FW for op {opID}"
                         opCores[core] = (opCores[core][0], timerID)
                         opIsDone = True
                         for core, coreOp in opCores.items():
@@ -365,10 +318,10 @@ def get_ops(timeseries):
 
 def get_dispatch_core_ops(timeseries):
     masterRisc = "BRISC"
-    slaveRisc = "NCRISC"
+    subordinateRisc = "NCRISC"
     riscData = {
         masterRisc: {"zone": [], "opID": 0, "cmdType": "", "ops": {}, "orderedOpIDs": [], "opFinished": False},
-        slaveRisc: {"zone": [], "opID": 0, "cmdType": "", "ops": {}, "orderedOpIDs": [], "opFinished": False},
+        subordinateRisc: {"zone": [], "opID": 0, "cmdType": "", "ops": {}, "orderedOpIDs": [], "opFinished": False},
     }
     for ts in timeseries:
         timerID, tsValue, attachedData, risc = ts
@@ -383,7 +336,7 @@ def get_dispatch_core_ops(timeseries):
 
         if "meta_data" in timerID and "dispatch_command_type" in timerID["meta_data"]:
             riscData[risc]["cmdType"] = eval(timerID["meta_data"])["dispatch_command_type"]
-            if "CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL" in riscData[risc]["cmdType"]:
+            if "CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL" in riscData[risc]["cmdType"]:
                 riscData[risc]["opFinished"] = True
 
             if "CQ_DISPATCH_CMD_SEND_GO_SIGNAL" in riscData[risc]["cmdType"]:
@@ -406,8 +359,13 @@ def get_dispatch_core_ops(timeseries):
         data["orderedOpIDs"].sort(key=lambda x: data["ops"][x][0][1])
 
     opsDict = {}
-    for masterOpID, slaveOpID in zip(riscData[masterRisc]["orderedOpIDs"], riscData[slaveRisc]["orderedOpIDs"]):
-        opsDict[masterOpID] = riscData[masterRisc]["ops"][masterOpID] + riscData[slaveRisc]["ops"][slaveOpID]
+    for masterOpID, subordinateOpID in zip(
+        riscData[masterRisc]["orderedOpIDs"], riscData[subordinateRisc]["orderedOpIDs"]
+    ):
+        opsDict[masterOpID] = (
+            riscData[masterRisc]["ops"][masterOpID] + riscData[subordinateRisc]["ops"][subordinateOpID]
+        )
+
         opsDict[masterOpID].sort(key=lambda x: x[1])
 
     ops = []

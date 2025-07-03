@@ -16,7 +16,6 @@ class Command;
 
 // Forward decl for light_metal_binary_generated.h
 namespace tt::tt_metal::flatbuffer {
-struct TraceDescriptor;
 struct TraceDescriptorByTraceId;
 }  // namespace tt::tt_metal::flatbuffer
 
@@ -36,6 +35,9 @@ using TraceDescriptorByTraceIdOffset = flatbuffers::Offset<tt::tt_metal::flatbuf
 class LightMetalCaptureContext {
 public:
     static LightMetalCaptureContext& get();
+
+    LightMetalCaptureContext(const LightMetalCaptureContext&) = delete;
+    LightMetalCaptureContext& operator=(const LightMetalCaptureContext&) = delete;
 
     bool is_tracing() const;
     void set_tracing(bool tracing);
@@ -59,10 +61,10 @@ public:
     uint32_t add_to_map(const Kernel* obj);
     void remove_from_map(const Kernel* obj);
     uint32_t get_global_id(const Kernel* obj);
-    bool is_in_map(const CBHandle handle);
-    uint32_t add_to_map(const CBHandle handle);
-    void remove_from_map(const CBHandle handle);
-    uint32_t get_global_id(const CBHandle handle);
+    bool is_in_map(CBHandle handle);
+    uint32_t add_to_map(CBHandle handle);
+    void remove_from_map(CBHandle handle);
+    uint32_t get_global_id(CBHandle handle);
 
 private:
     LightMetalCaptureContext();  // Private constructor
@@ -80,9 +82,6 @@ private:
     std::unordered_map<const Kernel*, uint32_t> kernel_to_global_id_map_;
     std::unordered_map<CBHandle, uint32_t> cb_handle_to_global_id_map_;
     // TODO (kmabee) - consider adding map for CommandQueue object.
-
-    LightMetalCaptureContext(const LightMetalCaptureContext&) = delete;
-    LightMetalCaptureContext& operator=(const LightMetalCaptureContext&) = delete;
 };
 
 TraceDescriptorByTraceIdOffset to_flatbuffer(

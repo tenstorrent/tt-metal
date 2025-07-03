@@ -35,9 +35,15 @@ run_python_model_tests_wormhole_b0() {
     # higher sequence lengths and different formats trigger memory issues
     pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
     pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50.py -k "pretrained_weight_false"
+
+    # Yolov4
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py -k "pretrained_weight_false"
 
+    # Yolov8
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/integration_tests/yolov8x/test_yolov8x.py::test_yolov8x_640
+
+    # Yolov8s
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/integration_tests/yolov8s/test_yolov8s.py::test_yolov8s_640
 
     # Unet Shallow
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
@@ -50,6 +56,12 @@ run_python_model_tests_wormhole_b0() {
 
     #Yolov10
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/yolov10/test_ttnn_yolov10.py::test_yolov10x
+
+    #Yolov7
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/yolov7/test_ttnn_yolov7.py
+
+    # ViT-base
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/vit/test_ttnn_optimized_sharded_vit_wh.py
 
     # Llama3.1-8B
     llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
@@ -65,6 +77,10 @@ run_python_model_tests_wormhole_b0() {
         LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
         echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
+
+    # Mistral-7B-v0.3
+    mistral_weights=mistralai/Mistral-7B-Instruct-v0.3
+    HF_MODEL=$mistral_weights WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
 }
 
 run_python_model_tests_slow_runtime_mode_wormhole_b0() {
@@ -91,4 +107,16 @@ run_python_model_tests_blackhole() {
 
     pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50.py
     pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4_bh.py
+    pytest models/experimental/functional_unet/tests/test_unet_model.py
+}
+
+run_python_model_tests_slow_runtime_mode_blackhole() {
+    # Unet Shallow
+    export TTNN_CONFIG_OVERRIDES='{
+        "enable_fast_runtime_mode": false,
+        "enable_comparison_mode": true,
+        "comparison_mode_should_raise_exception": true,
+        "comparison_mode_pcc": 0.998
+    }'
+    pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
 }

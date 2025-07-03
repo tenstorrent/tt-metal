@@ -6,9 +6,11 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_utils import (
+from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     get_default_compute_config,
     get_default_conv_config,
+)
+from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_utils import (
     prepare_split_conv_weights_bias,
     split_conv_and_run,
 )
@@ -34,7 +36,6 @@ def test_split_conv(
     output_width,
     conv_in_channel_split_factor,
     conv_out_channel_split_factor,
-    use_program_cache,
 ):
     torch_input = torch.randn([1, in_channels, input_height, input_width])
     torch_weights = torch.randn([out_channels, in_channels, 3, 3])

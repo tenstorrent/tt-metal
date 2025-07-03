@@ -5,8 +5,6 @@
 import torch
 from loguru import logger
 from transformers.generation.configuration_utils import GenerationConfig
-
-
 from transformers.generation.logits_process import (
     EncoderNoRepeatNGramLogitsProcessor,
     EncoderRepetitionPenaltyLogitsProcessor,

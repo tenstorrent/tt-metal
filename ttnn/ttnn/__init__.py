@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -97,15 +97,18 @@ def manage_config(name, value):
 from ttnn._ttnn.multi_device import (
     CppMeshToTensor,
     CppTensorToMesh,
-    Shard2dConfig,
-    Concat2dConfig,
+    PlacementReplicate,
+    PlacementShard,
+    MeshMapperConfig,
+    MeshComposerConfig,
     get_device_tensors,
     aggregate_as_tensor,
+    combine_device_tensors,
     replicate_tensor_to_mesh_mapper,
     shard_tensor_to_mesh_mapper,
-    shard_tensor_to_2d_mesh_mapper,
+    create_mesh_mapper,
     concat_mesh_to_tensor_composer,
-    concat_2d_mesh_to_tensor_composer,
+    create_mesh_composer,
     aggregate_tensor,
     distribute_tensor,
     get_t3k_physical_device_ids_ring,
@@ -115,6 +118,7 @@ from ttnn._ttnn.events import (
     MeshEvent,
     record_event,
     wait_for_event,
+    event_synchronize,
 )
 
 from ttnn._ttnn.operations.trace import (
@@ -129,7 +133,7 @@ from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
-from ttnn._ttnn.fabric import FabricConfig, initialize_fabric_config
+from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, set_fabric_config
 
 from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
@@ -161,6 +165,7 @@ from ttnn.types import (
     ShardOrientation,
     ShardMode,
     ShardSpec,
+    NdShardSpec,
     CoreRangeSet,
     CoreRange,
     CoreCoord,
@@ -187,6 +192,14 @@ from ttnn.types import (
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    CBFormatDescriptor,
+    CBDescriptor,
+    ReaderConfigDescriptor,
+    WriterConfigDescriptor,
+    ComputeConfigDescriptor,
+    KernelDescriptor,
+    SemaphoreDescriptor,
+    ProgramDescriptor,
 )
 
 from ttnn.device import (
@@ -196,8 +209,6 @@ from ttnn.device import (
     DispatchCoreConfig,
     open_device,
     close_device,
-    enable_program_cache,
-    disable_and_clear_program_cache,
     manage_device,
     synchronize_device,
     dump_device_memory_state,
@@ -343,11 +354,19 @@ from ttnn.operations.ccl import (
 from ttnn.operations.conv2d import (
     Conv2dConfig,
     get_conv_output_dim,
-    prepare_conv_weights,
-    prepare_conv_bias,
     Conv2dSliceConfig,
     Conv2dSliceHeight,
     Conv2dSliceWidth,
+    prepare_conv_weights,
+    prepare_conv_bias,
+    prepare_conv_transpose2d_weights,
+    prepare_conv_transpose2d_bias,
+    SlidingWindowParallelConfig,
+)
+from ttnn._ttnn.operations.conv import (
+    convert_conv_weight_tensor_to_tiled_layout,
+    convert_conv_weight_tensor_to_special_padding_tiled_layout,
+    convert_conv_weight_tensor_to_grouped_layout,
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig

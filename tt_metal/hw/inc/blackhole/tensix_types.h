@@ -196,11 +196,11 @@ static constexpr std::uint32_t BIT32_DEST_REGISTER_HALF_SIZE = DEST_REGISTER_HAL
 static constexpr std::uint32_t DEST_REGISTER_FULL_SIZE_BYTES = DEST_REGISTER_FULL_SIZE * 2 * 16;
 static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE_BYTES = DEST_REGISTER_FULL_SIZE_BYTES / 2;
 
-static constexpr std::uint32_t SIM_L1_SIZE = 0x16E000;  // 1.5MB - 72KB
+static constexpr std::uint32_t SIM_L1_SIZE = 0x180000;  // 1.5MB
 #ifdef TENSIX_FIRMWARE
-static constexpr std::uint32_t L1_SIZE = 0x16E000;  // 1.5MB - 72KB
+static constexpr std::uint32_t L1_SIZE = 0x180000;  // 1.5MB
 #else
-static constexpr std::uint32_t L1_SIZE = 0x16E000;  // 1.5MB - 72KB
+static constexpr std::uint32_t L1_SIZE = 0x180000;  // 1.5MB
 #endif
 
 // Voluntary FIFO alignment so that we can pack fifo address down to 16 bits in the command.

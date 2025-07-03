@@ -44,7 +44,7 @@ Tensor pre_sort_transform_tensor(
     const bool is_dim_last_idx,
     const bool is_rank_le_4d,
     const bool descending) {
-    if (input_tensor.get_logical_shape() == ttnn::Shape{1}) {
+    if (input_tensor.logical_shape() == ttnn::Shape{1}) {
         // Early exit for scalar tensors, return the same tensor
         // Scalar tensors do not require sorting.
         return input_tensor;
@@ -60,12 +60,16 @@ Tensor pre_sort_transform_tensor(
 
     // Check for need of manual padding - Bitonic sort works on dataset that are the size of power of two - add manual
     // padding if needed
-    const auto current_padded_shape = padded_tensor.get_padded_shape();
+    const auto current_padded_shape = padded_tensor.padded_shape();
     const auto last_dim = current_padded_shape[-1];
-    const auto padded_last_dim = next_power_of_two(last_dim);
-    if (padded_last_dim == last_dim) {
-        // If the last dimension is already a power of two, no padding is needed
+    auto padded_last_dim = next_power_of_two(last_dim);
+    if ((padded_last_dim == last_dim) && (last_dim > tt::constants::TILE_WIDTH)) {
+        // If the last dimension is already a power of two and is multiple of 64, no padding is needed
         return padded_tensor;
+    }
+    if (padded_last_dim == tt::constants::TILE_WIDTH) {
+        // Bitonic sort works on tiles that are the size of power of two - need at least 2 tiles
+        padded_last_dim = tt::constants::TILE_WIDTH * 2;
     }
     const Tensor padded_output_tensor = ttnn::pad(
         padded_tensor,
@@ -84,16 +88,16 @@ std::vector<Tensor> post_sort_transform_tensor(
     const bool is_dim_last_idx,
     const Shape& original_lshape,
     const MemoryConfig& input_memory_config) {
-    auto input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     const auto orig_rank = input_shape.rank();
 
     // Check if manual padding was applied for the last dimension
-    const auto output_logical_shape = result[0].get_logical_shape();
+    const auto output_logical_shape = result[0].logical_shape();
     if (output_logical_shape[-1] != original_lshape[-1]) {
         const ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
         const ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         const ttnn::SmallVector<uint32_t> end_index = {
-            output_logical_shape[0], output_logical_shape[1], output_logical_shape[2], original_lshape[-1]};
+            original_lshape[-4], original_lshape[-3], original_lshape[-2], original_lshape[-1]};
         result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
         result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
     }
@@ -113,9 +117,9 @@ std::vector<Tensor> post_sort_transform_tensor(
     }
 
     TT_FATAL(
-        result[0].get_logical_shape() == original_lshape,
+        result[0].logical_shape() == original_lshape,
         "Output tensor transformation did not create correct output shape! Got: {}, expected: {}",
-        result[0].get_logical_shape(),
+        result[0].logical_shape(),
         original_lshape);
 
     return result;
@@ -130,8 +134,19 @@ bool validate_optional_output_tensors_for_early_exit(
     auto output_tensor_0 = std::get<0>(optional_output_tensors.value());
     auto output_tensor_1 = std::get<1>(optional_output_tensors.value());
 
-    return output_tensor_0.get_logical_shape() == original_lshape &&
-           output_tensor_1.get_logical_shape() == original_lshape;
+    return output_tensor_0.logical_shape() == original_lshape && output_tensor_1.logical_shape() == original_lshape;
+}
+
+void convert_tensor_dtype(Tensor& tensor, const DataType& target_dtype, IDevice* device) {
+    if (tensor.dtype() == target_dtype) {
+        // No need to change the dtype
+        return;
+    }
+    // Convert the tensor to the target dtype
+    // ttnn::to_dtype does not convert the tensor on Device, need to move it to CPU first
+    tensor = tensor.cpu();  // blocking
+    tensor = ttnn::to_dtype(tensor, target_dtype);
+    tensor = tensor.to_device(device);
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -144,15 +159,16 @@ std::vector<Tensor> ExecuteSort::invoke(
     const bool descending,
     const bool stable,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
-    ttnn::Shape original_lshape = input_tensor.get_logical_shape();
-    auto rank = input_tensor.get_padded_shape().rank();
+    std::optional<std::tuple<Tensor&, Tensor&>> optional_output_tensors) {
+    const ttnn::Shape& original_lshape = input_tensor.logical_shape();
+    auto rank = input_tensor.padded_shape().rank();
 
     // Check for early exit for scalar or empty tensors tensors
     if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {
         if (CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
                 optional_output_tensors, original_lshape)) {
-            std::get<0>(optional_output_tensors.value()).populate_buffers_and_metadata(input_tensor);
+            std::get<0>(*optional_output_tensors).tensor_attributes->get_storage() =
+                input_tensor.tensor_attributes->get_storage();
             return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
         } else {
             return {input_tensor, ttnn::zeros_like(input_tensor)};
@@ -172,8 +188,14 @@ std::vector<Tensor> ExecuteSort::invoke(
         output_tensors = reduction_common::tuple_to_vector_optional(*optional_output_tensors);
         output_tensors[0] = CMAKE_UNIQUE_NAMESPACE::pre_sort_transform_tensor(
             output_tensors[0].value(), dim, is_dim_last_idx, is_rank_le_4d, descending);
+
         output_tensors[1] = CMAKE_UNIQUE_NAMESPACE::pre_sort_transform_tensor(
             output_tensors[1].value(), dim, is_dim_last_idx, is_rank_le_4d, descending);
+
+        const auto target_index_dtype = DataType::UINT16;
+        CMAKE_UNIQUE_NAMESPACE::convert_tensor_dtype(
+            output_tensors[1].value(), target_index_dtype, input_tensor.device());
+
     } else {
         output_tensors = std::vector<std::optional<Tensor>>{
             std::nullopt,  // Placeholder for values tensor
@@ -184,8 +206,20 @@ std::vector<Tensor> ExecuteSort::invoke(
     auto sorted_tensors =
         ttnn::prim::sort(queue_id, padded_input_tensor, dim, descending, stable, memory_config_value, output_tensors);
 
-    return CMAKE_UNIQUE_NAMESPACE::post_sort_transform_tensor(
+    auto post_transform_output_tensors = CMAKE_UNIQUE_NAMESPACE::post_sort_transform_tensor(
         input_tensor, sorted_tensors, dim, is_dim_last_idx, original_lshape, memory_config_value);
+
+    // Check if padding or dtype conversion changed buffer address
+    if (optional_output_tensors.has_value()) {
+        if (std::get<0>(optional_output_tensors.value()).buffer() != output_tensors.at(0)->buffer()) {
+            std::get<0>(optional_output_tensors.value()) = post_transform_output_tensors.at(0);
+        }
+        if (std::get<1>(optional_output_tensors.value()).buffer() != output_tensors.at(1)->buffer()) {
+            std::get<1>(optional_output_tensors.value()) = post_transform_output_tensors.at(1);
+        }
+    }
+
+    return post_transform_output_tensors;
 }
 
 }  // namespace ttnn::operations::experimental::reduction::sort

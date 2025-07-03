@@ -9,14 +9,14 @@
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/copy.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::binary {
 namespace detail {
 
 inline Tensor to_dtype(const Tensor& input, DataType dtype) {
-    if (input.get_dtype() == dtype) {
+    if (input.dtype() == dtype) {
         return input;
     }
 
@@ -34,7 +34,7 @@ inline bool is_block_format(DataType dtype) {
     }
 }
 
-inline bool is_layout(const Tensor& input, Layout layout) { return input.get_layout() == layout; }
+inline bool is_layout(const Tensor& input, Layout layout) { return input.layout() == layout; }
 
 inline bool is_layout([[maybe_unused]] float input, [[maybe_unused]] Layout layout) { return true; }
 
@@ -43,13 +43,13 @@ inline Tensor to_layout(const Tensor& input, Layout layout) {
         return input;
     }
 
-    return ttnn::to_layout(input, layout, std::nullopt, std::nullopt, (IDevice*)nullptr);
+    return ttnn::to_layout(input, layout);
 }
 
 inline float to_layout(float input, [[maybe_unused]] Layout layout) { return input; }
 
 inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input) {
-    if (not detail::is_block_format(input.get_dtype())) {
+    if (not detail::is_block_format(input.dtype())) {
         return false;
     }
 
@@ -63,7 +63,7 @@ inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, [[m
 }
 
 inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, const Tensor& other) {
-    if (not detail::is_block_format(input.get_dtype())) {
+    if (not detail::is_block_format(input.dtype())) {
         return false;
     }
 
@@ -73,8 +73,8 @@ inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, con
         return true;
     }
 
-    const auto& input_shape = input.get_logical_shape();
-    const auto& other_shape = other.get_logical_shape();
+    const auto& input_shape = input.logical_shape();
+    const auto& other_shape = other.logical_shape();
 
     return (input_shape[-2] == 1 and other_shape[-2] > 1) or (input_shape[-1] == 1 and other_shape[-1] > 1);
 }
@@ -88,7 +88,7 @@ constexpr bool is_associative(BinaryOpType op) {
     return op == BinaryOpType::ADD || op == BinaryOpType::MUL || op == BinaryOpType::EQ || op == BinaryOpType::NE ||
            op == BinaryOpType::LOGICAL_AND || op == BinaryOpType::LOGICAL_OR || op == BinaryOpType::LOGADDEXP ||
            op == BinaryOpType::LOGADDEXP2 || op == BinaryOpType::LOGICAL_XOR || op == BinaryOpType::MAXIMUM ||
-           op == BinaryOpType::MINIMUM;
+           op == BinaryOpType::MINIMUM || op == BinaryOpType::GCD || op == BinaryOpType::LCM;
 }
 
 // Tensor - Scalar
@@ -146,8 +146,8 @@ inline Tensor binary_impl(
 inline auto preprocess_inputs(BinaryOpType binary_op_type, Tensor a, Tensor b) {
     // TODO: #7731 (Remove calls to repeat)
     constexpr auto repeat_smaller = [](const Tensor& first, Tensor& second) {
-        const auto& first_shape = first.get_logical_shape();
-        const auto& second_shape = second.get_logical_shape();
+        const auto& first_shape = first.logical_shape();
+        const auto& second_shape = second.logical_shape();
         // repeats second if it is smaller
         if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[0] > second_shape[0]) {
             TT_FATAL(second_shape[0] == 1, "Dimension trying to broadcast is not equal to 1");
@@ -169,12 +169,222 @@ inline auto preprocess_inputs(BinaryOpType binary_op_type, Tensor a, Tensor b) {
     repeat_smaller(b, a);
 
     // Swap tensors if a needs to be broadcasted to b
-    if (detail::is_associative(binary_op_type) and a.get_logical_volume() < b.get_logical_volume()) {
+    if (detail::is_associative(binary_op_type) and a.logical_volume() < b.logical_volume()) {
         return std::make_tuple(b, a);
     }
 
     return std::make_tuple(a, b);
 }
+
+inline auto any_row_broadcasted(const Tensor& a, const auto& b) {
+    if constexpr (requires { b.get_logical_shape(); }) {
+        const auto& a_shape = a.get_logical_shape();
+        const auto& b_shape = b.get_logical_shape();
+
+        return (a_shape[-2] == 1 and b_shape[-2] > 1 and a_shape[-1] > 1) or
+               (b_shape[-2] == 1 and a_shape[-2] > 1 and b_shape[-1] > 1);
+    }
+
+    return false;
+}
+inline auto any_sharded_block_format(const Tensor& a, const auto& b) {
+    if (a.is_sharded() and is_block_format(a.get_dtype())) {
+        return true;
+    }
+
+    if constexpr (requires { b.is_sharded(); }) {
+        if (b.is_sharded() and is_block_format(b.get_dtype())) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b) {
+    if constexpr (requires { b.get_logical_shape(); }) {
+        const auto& a_shape = a.get_logical_shape();
+        const auto& b_shape = b.get_logical_shape();
+
+        if (is_block_format(a.get_dtype()) and
+            (a_shape[-2] == 1 and b_shape[-2] > 1 or a_shape[-1] == 1 and b_shape[-1] > 1)) {
+            return true;
+        }
+
+        if (is_block_format(b.get_dtype()) and
+            (b_shape[-2] == 1 and a_shape[-2] > 1 or b_shape[-1] == 1 and a_shape[-1] > 1)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+inline auto any_sharded_scalar(const Tensor& a, const auto& b) {
+    if constexpr (requires {
+                      b.get_logical_shape();
+                      b.is_sharded();
+                  }) {
+        const auto& a_shape = a.get_logical_shape();
+        const auto& b_shape = b.get_logical_shape();
+        return (a.is_sharded() or b.is_sharded()) and
+               ((a_shape[-2] == 1 and a_shape[-1] == 1) or (b_shape[-2] == 1 and b_shape[-1] == 1));
+    }
+
+    return false;
+}
+
+inline auto is_w_bcast(const Tensor& a, const auto& b) {
+    if constexpr (requires { b.get_padded_shape(); }) {
+        const auto& shape_a = a.get_padded_shape();
+        const auto& shape_b = b.get_padded_shape();
+        return (shape_a[-1] == 1 and shape_b[-1] > 1) or (shape_b[-1] == 1 and shape_a[-1] > 1);
+    }
+    return false;
+}
+
+inline auto any_non_height_sharded_w_bcast(const Tensor& a, const auto& b, const MemoryConfig& c) {
+    // NOTE: currently with sharded tensor, broadcast is on w dimension only,
+    // so only check for w dimension, not all dimensions
+    if (a.is_sharded()) {
+        return a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED and is_w_bcast(a, b);
+    }
+
+    if constexpr (requires { b.is_sharded(); }) {
+        if (b.is_sharded()) {
+            return b.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED and is_w_bcast(a, b);
+        }
+    }
+
+    if (c.is_sharded()) {
+        return c.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED and is_w_bcast(a, b);
+    }
+
+    return false;
+}
+
+inline auto is_uneven(const Tensor& t) {
+    if (not t.is_sharded()) {
+        return false;
+    }
+
+    const auto& shape = t.get_padded_shape();
+    const auto& shard = t.shard_spec()->shape;
+
+    return (shape[-4] * shape[-3] * shape[-2] % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
+}
+
+inline auto any_uneven(const Tensor& a, const auto& b, const std::optional<Tensor>& c) {
+    if (is_uneven(a)) {
+        return true;
+    }
+
+    if constexpr (requires { is_uneven(b); }) {
+        if (is_uneven(b)) {
+            return true;
+        }
+    }
+
+    if (c.has_value() and is_uneven(*c)) {
+        return true;
+    }
+
+    return false;
+}
+
+inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binary_op_type) {
+    if constexpr (requires {
+                      b.dtype();
+                      b.is_sharded();
+                      b.get_logical_shape();
+                  }) {
+        if (a.dtype() == DataType::INT32 or b.dtype() == DataType::INT32 or a.dtype() == DataType::UINT32 or
+            b.dtype() == DataType::UINT32 or a.dtype() == DataType::UINT16 or b.dtype() == DataType::UINT16 or
+            a.dtype() == DataType::UINT8 or b.dtype() == DataType::UINT8) {
+            return true;
+        }
+
+        if (any_row_broadcasted(a, b) and
+            (binary_op_type != BinaryOpType::ADD and binary_op_type != BinaryOpType::SUB and
+             binary_op_type != BinaryOpType::MUL)) {
+            return true;
+        }
+
+        if (a.get_logical_shape().rank() > 4 or b.get_logical_shape().rank() > 4) {
+            return true;
+        }
+
+        if (a.get_logical_shape()[-2] == 1 && b.get_logical_shape()[-2] > 1 && a.get_logical_shape()[-1] > 1 &&
+            b.get_logical_shape()[-1] == 1) {
+            return true;
+        }
+        if (b.get_logical_shape()[-2] == 1 && a.get_logical_shape()[-2] > 1 && b.get_logical_shape()[-1] > 1 &&
+            a.get_logical_shape()[-1] == 1) {
+            return true;
+        }
+
+        if (any_row_broadcasted(a, b) and (is_block_format(a.get_dtype()) or is_block_format(b.get_dtype()))) {
+            // TODO
+            // return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace detail
+
+bool is_legacy_only(
+    const Tensor& lhs,
+    const auto& rhs,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations) {
+    const auto& output_mem_cfg = memory_config.value_or(output ? output->memory_config() : MemoryConfig{});
+
+    if (detail::any_row_broadcasted(lhs, rhs) or detail::any_sharded_block_format(lhs, rhs) or
+        detail::any_subtile_broadcasted_block_format(lhs, rhs) or
+        detail::any_non_height_sharded_w_bcast(lhs, rhs, output_mem_cfg) or detail::any_uneven(lhs, rhs, output) or
+        detail::any_sharded_scalar(lhs, rhs)) {
+        TT_FATAL(
+            lhs_activations.size() <= 1,
+            "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "
+            "but note there may be issues");
+        TT_FATAL(
+            rhs_activations.empty(),
+            "rhs_activations not supported for legacy-only configuration; Override with use_legacy=False but note "
+            "there may be issues");
+        return true;
+    }
+
+    return false;
+}
+
+template bool is_legacy_only<Tensor>(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations);
+
+template bool is_legacy_only<float>(
+    const Tensor& lhs,
+    const float& rhs,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations);
+
+template bool is_legacy_only<int32_t>(
+    const Tensor& lhs,
+    const int32_t& rhs,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations);
+
+namespace detail {
 
 inline auto invoke_binary_ng(
     QueueId queue_id,
@@ -188,9 +398,9 @@ inline auto invoke_binary_ng(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
-    const auto& output_mem_cfg = memory_config ? *memory_config : output ? output->memory_config() : MemoryConfig{};
-
-    if (use_legacy.value_or(true)) {
+    if (use_legacy ? *use_legacy
+                   : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
+                         (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
         const std::vector activations(post_activations.begin(), post_activations.end());
         const std::optional lhs_activation =
             lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
@@ -206,9 +416,9 @@ inline auto invoke_binary_ng(
         }
     }
 
-    const auto a_dtype = lhs.get_dtype();
+    const auto a_dtype = lhs.dtype();
     const auto output_preallocated = output.has_value();
-    const auto out_dtype = output_preallocated ? output->get_dtype() : dtype.value_or(a_dtype);
+    const auto out_dtype = output_preallocated ? output->dtype() : dtype.value_or(a_dtype);
 
     const auto mem_config = output_preallocated ? output->memory_config() : memory_config.value_or(lhs.memory_config());
 
@@ -265,7 +475,7 @@ inline auto invoke_binary_ng(
             input_a,
             input_b,
             binary_op_type,
-            input_a.get_dtype(),
+            input_a.dtype(),
             mem_config,
             output_tensor,
             lhs_activations,
@@ -368,8 +578,12 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
-    if (use_legacy.value_or(true)) {
-        return detail::binary_impl(DefaultQueueId, binary_op_type, lhs, rhs, dtype, memory_config, output);
+    if (use_legacy ? *use_legacy
+                   : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
+                         (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
+        {
+            return detail::binary_impl(DefaultQueueId, binary_op_type, lhs, rhs, dtype, memory_config, output);
+        }
     }
 
     return detail::invoke_binary_ng(
@@ -588,5 +802,7 @@ template struct BinaryOperationSfpu<BinaryOpType::LEFT_SHIFT>;
 template struct BinaryOperationSfpu<BinaryOpType::RIGHT_SHIFT>;
 template struct BinaryOperationSfpu<BinaryOpType::MAXIMUM>;
 template struct BinaryOperationSfpu<BinaryOpType::MINIMUM>;
+template struct BinaryOperationSfpu<BinaryOpType::GCD>;
+template struct BinaryOperationSfpu<BinaryOpType::LCM>;
 
 }  // namespace ttnn::operations::binary

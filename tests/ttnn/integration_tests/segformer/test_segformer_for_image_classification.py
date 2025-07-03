@@ -52,7 +52,7 @@ def create_custom_preprocessor(device):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_image_classificaton(device, reset_seeds):
     dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
+    image = dataset["train"]["image"][0]
     torch_model = SegformerForImageClassification.from_pretrained("nvidia/mit-b0")
     config = torch_model.config
     reference_model = SegformerForImageClassificationReference(config=config)
@@ -66,11 +66,17 @@ def test_segformer_image_classificaton(device, reset_seeds):
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
+    CONV2D_MIN_CHANNEL_SIZE = 8
     # adjust padding if necessary
-    if ttnn_input_tensor.shape[3] < 16:
-        padded_shape = [ttnn_input_tensor.shape[0], ttnn_input_tensor.shape[1], ttnn_input_tensor.shape[2], 16]
+    if ttnn_input_tensor.shape[3] < CONV2D_MIN_CHANNEL_SIZE:
+        padded_shape = [
+            ttnn_input_tensor.shape[0],
+            ttnn_input_tensor.shape[1],
+            ttnn_input_tensor.shape[2],
+            CONV2D_MIN_CHANNEL_SIZE,
+        ]
         ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, padded_shape, [0, 0, 0, 0], 0)
-    elif ttnn_input_tensor.shape[3] > 16 and ttnn_input_tensor.shape[3] % 32 != 0:
+    elif ttnn_input_tensor.shape[3] > CONV2D_MIN_CHANNEL_SIZE and ttnn_input_tensor.shape[3] % 32 != 0:
         padded_shape = [
             ttnn_input_tensor.shape[0],
             ttnn_input_tensor.shape[1],

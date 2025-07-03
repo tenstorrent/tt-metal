@@ -9,7 +9,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -27,7 +26,7 @@ bool test_2d_tensor(distributed::MeshDevice* device) {
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to_layout(Layout::TILE);
     tensor = tensor.to_device(device);
-    pass &= tensor.get_logical_shape().rank() == 2;
+    pass &= tensor.logical_shape().rank() == 2;
 
     return pass;
 }
@@ -40,7 +39,7 @@ bool test_3d_tensor(distributed::MeshDevice* device) {
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to_layout(Layout::TILE);
     tensor = tensor.to_device(device);
-    pass &= tensor.get_logical_shape().rank() == 3;
+    pass &= tensor.logical_shape().rank() == 3;
 
     return pass;
 }
@@ -53,7 +52,7 @@ bool test_4d_tensor(distributed::MeshDevice* device) {
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to_layout(Layout::TILE);
     tensor = tensor.to_device(device);
-    pass &= tensor.get_logical_shape().rank() == 4;
+    pass &= tensor.logical_shape().rank() == 4;
 
     return pass;
 }
@@ -66,7 +65,7 @@ bool test_5d_tensor(distributed::MeshDevice* device) {
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to_layout(Layout::TILE);
     tensor = tensor.to_device(device);
-    pass &= tensor.get_logical_shape().rank() == 5;
+    pass &= tensor.logical_shape().rank() == 5;
 
     return pass;
 }
@@ -79,7 +78,7 @@ bool test_6d_tensor(distributed::MeshDevice* device) {
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to_layout(Layout::TILE);
     tensor = tensor.to_device(device);
-    pass &= tensor.get_logical_shape().rank() == 6;
+    pass &= tensor.logical_shape().rank() == 6;
 
     return pass;
 }
@@ -92,7 +91,7 @@ bool test_7d_tensor(distributed::MeshDevice* device) {
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to_layout(Layout::TILE);
     tensor = tensor.to_device(device);
-    pass &= tensor.get_logical_shape().rank() == 7;
+    pass &= tensor.logical_shape().rank() == 7;
 
     return pass;
 }
@@ -105,7 +104,7 @@ bool test_8d_tensor(distributed::MeshDevice* device) {
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to_layout(Layout::TILE);
     tensor = tensor.to_device(device);
-    pass &= tensor.get_logical_shape().rank() == 8;
+    pass &= tensor.logical_shape().rank() == 8;
 
     return pass;
 }

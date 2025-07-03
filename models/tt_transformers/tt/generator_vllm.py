@@ -1,34 +1,23 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import os
 from typing import List, Union
-import torch
-import PIL
-from tqdm import tqdm
-from llama_models.llama3.api.chat_format import create_vision_mask
-import ttnn
 
-from models.tt_transformers.tt.generator import Generator
+import PIL
+import torch
+from llama_models.llama3.api.chat_format import create_vision_mask
+from tqdm import tqdm
+from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext, TokenInputs, token_inputs
+from vllm.model_executor.models.interfaces import SupportsMultiModal
+
+import ttnn
+from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
+from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
-from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 from models.utility_functions import nearest_32
-
-from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext
-from vllm.model_executor.models.interfaces import SupportsMultiModal
-from vllm.model_executor.models.mllama import MLLAMA_IMAGE_TOKEN_ID, MLLAMA_IMAGE_TOKEN
-
-
-def generate_submeshes(mesh_device, data_parallel):
-    if not isinstance(mesh_device, ttnn.MeshDevice) or data_parallel == 1:
-        return [mesh_device]
-
-    num_devices = mesh_device.get_num_devices()
-    assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
-
-    return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
@@ -68,7 +57,7 @@ def initialize_vllm_text_transformer(
     dtype=ttnn.bfloat8_b,
     optimizations=DecodersPrecision.performance,
 ):
-    submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
+    submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
     # Load model args, weights
     model_args = []
     for submesh in submesh_devices:
@@ -107,48 +96,87 @@ def initialize_vllm_text_transformer(
     return tt_model, model_args
 
 
-def input_processor_for_mllama(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
+# TODO: Update input processor to inherit from EncDecMultiModalProcessor as is done in vllm.model_executor.models.mllama.py
+def input_processor_for_mllama(
+    ctx: InputContext,
+    inputs: EncoderDecoderInputs,
+) -> EncoderDecoderInputs:
     """
-    Based on vllm.model_executor.models.mllama.py::input_processor_for_mllama().
-    Note that vLLM's input_processor_for_mllama performs additional processing to compute num_tiles while here it is fixed.
+    This was based on a previous version of vllm.model_executor.models.mllama.py::input_processor_for_mllama()
+    without the additional processing for computing num_tiles (here it is fixed).
     """
+    # Example input to processor:
+    # {
+    #     'encoder': {
+    #         'type': 'token',
+    #         'prompt_token_ids': [128000, 128256, 128000, 3923, 374, 279, 2262, 315, 420, 2217, 30],  # noqa: E501
+    #         'prompt': '<|image|><|begin_of_text|>What is the content of this image?',  # noqa: E501
+    #         'multi_modal_data': {'image': <PIL.Image.Image image mode=RGB size=1770x1180 at 0x7FDE2C624880>},  # noqa: E501
+    #     },
+    #     'decoder': {
+    #         'type': 'token',
+    #         'prompt_token_ids': [128000],
+    #     },
+    # }
 
     # Move encoder_prompt to prompt. If the user does not explicitly provide separate
     # encoder and decoder prompts, vLLM by default will treat the prompt as the encoder prompt.
     # For the block manager to allocate enough blocks and add them to the block table, the decoder prompt
     # must contain the full text prompt.
-    if inputs.get("prompt") is None:
-        inputs["prompt"] = inputs["encoder_prompt"]
-        inputs["prompt_token_ids"] = inputs["encoder_prompt_token_ids"]
-        if os.environ.get("MESH_DEVICE") == "N300":
-            prompt_len = len(inputs.get("prompt_token_ids"))
-            MAX_PROMPT_LEN = 8192
-            if prompt_len > MAX_PROMPT_LEN:
-                raise ValueError(
-                    f"TT-LLama11B-Vision does not support prompts longer than {MAX_PROMPT_LEN} tokens on N300 (received prompt with {prompt_len} tokens)"
-                )
+    dec_inputs = TokenInputs(**inputs["encoder"])
 
-    multi_modal_data = inputs.get("encoder_multi_modal_data")
-    if multi_modal_data is None or "image" not in multi_modal_data or multi_modal_data["image"] is None:
+    if os.environ.get("MESH_DEVICE") == "N300":
+        prompt_len = len(dec_inputs.get("prompt_token_ids"))
+        MAX_PROMPT_LEN = 8192
+        if prompt_len > MAX_PROMPT_LEN:
+            raise ValueError(
+                f"TT-LLama11B-Vision does not support prompts longer than {MAX_PROMPT_LEN} tokens on N300 (received prompt with {prompt_len} tokens)"
+            )
+
+    multi_modal_data = dec_inputs.get("multi_modal_data")
+    if multi_modal_data is None or "image" not in multi_modal_data:
         # text-only
-        inputs["encoder_prompt"] = ""
-        inputs["encoder_prompt_token_ids"] = []
-        inputs["encoder_multi_modal_data"] = {}
-        return inputs
+        return EncoderDecoderInputs(
+            encoder=token_inputs([]),
+            decoder=dec_inputs,
+        )
 
     # Set encoder prompt length based on the number of vision tokens so block manager allocates enough blocks (cross block tables).
     hf_config = ctx.model_config.hf_config
-    assert hf_config.vision_config.image_size % 14 == 0, "chunk size should be multiple of 14"
+    vision_config = hf_config.vision_config
+    assert vision_config.image_size % 14 == 0, "chunk size should be multiple of 14"
     token_per_chunk = nearest_32(
-        (hf_config.vision_config.image_size // 14) ** 2 + 1
+        (vision_config.image_size // 14) ** 2 + 1
     )  # Note: we use nearest 32 while vLLM does not by default
     num_vision_tokens = (
-        hf_config.vision_config.max_num_tiles * token_per_chunk
+        vision_config.max_num_tiles * token_per_chunk
     )  # Note: we use max_num_tiles while vLLM uses num_tiles by default
-    inputs["encoder_prompt"] = MLLAMA_IMAGE_TOKEN * num_vision_tokens
-    inputs["encoder_prompt_token_ids"] = [MLLAMA_IMAGE_TOKEN_ID] * num_vision_tokens
 
-    return inputs
+    # Example output from processor:
+    # {
+    #     'encoder': {
+    #         'type': 'token',
+    #         'prompt_token_ids': [128256, 128256, ..., 128256],
+    #         'prompt': '<|image|><|image|>...<|image|>',
+    #         'multi_modal_data': {'image': <PIL.Image.Image image mode=RGB size=1770x1180 at 0x7FDE2C624880>},  # noqa: E501
+    #     },
+    #     'decoder': {
+    #         'type': 'token',
+    #         'prompt_token_ids': [128000, 128256, 128000, 3923, 374, 279, 2262, 315, 420, 2217, 30],  # noqa: E501
+    #         'prompt': '<|image|><|begin_of_text|>What is the content of this image?',  # noqa: E501
+    #         'multi_modal_data': {'image': <PIL.Image.Image image mode=RGB size=1770x1180 at 0x7FDE2C624880>},  # noqa: E501
+    #     },
+    # }
+    MLLAMA_IMAGE_TOKEN_ID = 128256
+    MLLAMA_IMAGE_TOKEN = "<|image|>"
+    return EncoderDecoderInputs(
+        encoder=token_inputs(
+            prompt_token_ids=[MLLAMA_IMAGE_TOKEN_ID] * num_vision_tokens,
+            prompt=MLLAMA_IMAGE_TOKEN * num_vision_tokens,
+            multi_modal_data=multi_modal_data,
+        ),
+        decoder=dec_inputs,
+    )
 
 
 def input_processor_for_llama_text(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
@@ -176,7 +204,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
     def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, tt_data_parallel=1):
         max_seq_len = 131072
 
-        submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
         model_args = []
         model = []
@@ -206,7 +234,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
     def prefill_forward(
         self,
         tokens: torch.Tensor,
-        images: List[PIL.Image.Image],
+        images: Union[List[PIL.Image.Image], List[List[PIL.Image.Image]]],
         page_table: torch.Tensor,
         kv_cache,
         prompt_lens,
@@ -222,6 +250,9 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         total_lens = []
         for user_id in range(batch):
             image = images[user_id]
+            if isinstance(image, list):
+                assert len(image) == 1, "Only one image is supported for each user in the batch"
+                image = image[0]
             vision_images.append([image] if image else None)
             prompt_tokens = [int(tokens[user_id, i]) for i in range(prompt_lens[user_id])]
             vision_masks.append(create_vision_mask(prompt_tokens, self.MLLAMA_IMAGE_TOKEN_ID) if image else None)
@@ -276,7 +307,7 @@ class LlamaForCausalLM(Generator):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
-class Qwen2ForCausalLM(Generator):
+class QwenForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -288,6 +319,38 @@ class Qwen2ForCausalLM(Generator):
             mesh_device,
             max_batch_size,
             max_seq_len=131072,
+            n_layers=n_layers,
+            dtype=ttnn.bfloat8_b,
+            optimizations=DecodersPrecision.performance,
+        )
+        return cls(tt_model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, **kwargs):
+        return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward_text(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
+class MistralForCausalLM(Generator):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, n_layers=None, tt_data_parallel=1):
+        tt_model, model_args = initialize_vllm_text_transformer(
+            hf_config,
+            tt_data_parallel,
+            mesh_device,
+            max_batch_size,
+            max_seq_len=32768,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
             optimizations=DecodersPrecision.performance,

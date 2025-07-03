@@ -126,13 +126,13 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
             H_ = overrideH
 
         # first compute the mean (m)
-        means = ttnn.sum(x, 3, scalar=1.0 / W)  # -> NCH1
+        means = ttnn.sum(x, dim=3, keepdim=True, scalar=1.0 / W)  # -> NCH1
         x_minus_mean = ttnn.subtract(x, means)  # need to blank out the H for non-multiple of 32
         if False and refx is not None:
             ry, rmean, rvar, rstd, rinvstd, ry1 = ref_ln(refx, refgamma, refbeta)
 
         var = ttnn.mul(x_minus_mean, x_minus_mean)  # (x-m)^2
-        var_redW = ttnn.sum(var, 3)  # sum[(x-m)^2]
+        var_redW = ttnn.sum(var, dim=3, keepdim=True)  # sum[(x-m)^2]
 
         # print(f"layernorm_1d_ var_scaler shape {var_scaler.padded_shape} H {H} H_ {H_} W {W}")
 
@@ -163,8 +163,8 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         W = x.padded_shape[3]
 
         # first compute the mean (m)
-        redW = ttnn.sum(x, 3, scalar=1.0 / W)  # -> NCH1
-        mean = ttnn.sum(redW, 2)  # -> NC11 (HW reduce doesn't behave well with small scaler)
+        redW = ttnn.sum(x, dim=3, keepdim=True, scalar=1.0 / W)  # -> NCH1
+        mean = ttnn.sum(redW, dim=2, keepdim=True)  # -> NC11 (HW reduce doesn't behave well with small scaler)
         x_minus_mean0 = ttnn.subtract(x, mean)  # need to blank out the H for non-multiple of 32
 
         hmasku = ttnn.fill_ones_rm(N, C, H, 32, 1, 1, x)  # generate a H-mask with mask[h, w] = 1.0 where h,w < 1
@@ -174,8 +174,8 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         print(f"layernorm_2d_ hmasku shape {hmasku.padded_shape}")
 
         var = ttnn.mul(x_minus_mean, x_minus_mean)  # (x-m)^2
-        var_redW = ttnn.sum(var, 3)  # sum[(x-m)^2]
-        var_redHW = ttnn.sum(var_redW, 2)  # sum[(x-m)^2]
+        var_redW = ttnn.sum(var, dim=3, keepdim=True)  # sum[(x-m)^2]
+        var_redHW = ttnn.sum(var_redW, dim=2, keepdim=True)  # sum[(x-m)^2]
         var_div_n1 = ttnn.multiply(var_redHW, var_scaler_)  # *= 1/(everything not batch)
         var_plus_eps = ttnn.add(var_div_n1, epsilon_)
 

@@ -16,13 +16,6 @@ on:
       build-artifact-name:
         required: true
         type: string
-concurrency:
-  # Note that people may spam the post-commit pipeline on their branch, and
-  # we have this docs pipeline in the post-commit pipeline, then people
-  # would have to wait until the previous one fully completes. That may be
-  # ok because each post-commit pipeline definitely takes more than 30 min
-  group: "pages-${{ github.ref }}"
-  cancel-in-progress: false
 
 jobs:
   build-docs:
@@ -85,7 +78,15 @@ jobs:
 
   deploy-docs:
     needs: build-docs
+    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/releases/v') }}
     runs-on: ubuntu-latest
+    concurrency:
+      # Note that people may spam the post-commit pipeline on their branch, and
+      # we have this docs pipeline in the post-commit pipeline, then people
+      # would have to wait until the previous one fully completes. That may be
+      # ok because each post-commit pipeline definitely takes more than 30 min
+      group: "pages-${{ github.ref }}"
+      cancel-in-progress: false # WARNING: This will only queue a single job; all else will still be cancelled!
     defaults:
       run:
         shell: bash
@@ -100,7 +101,6 @@ jobs:
           name: gh_pages_${{ inputs.version }}
           path: gh_pages/${{ inputs.version }}
       - name: Deploy to GitHub Pages
-        if: ${{ github.ref == 'refs/heads/main' }}
         uses: JamesIves/github-pages-deploy-action@v4
         id: deployment
         with:

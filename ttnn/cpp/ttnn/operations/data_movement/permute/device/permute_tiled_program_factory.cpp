@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include <tt-metalium/hal.hpp>
@@ -11,21 +11,24 @@ namespace ttnn::operations::data_movement {
 
 namespace detail {
 uint32_t tile_volume(const ttnn::Tensor& input_tensor) {
-    const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
+    const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     return tile_shape[0] * tile_shape[1];
 }
 
 uint32_t num_tiles(const ttnn::Tensor& input_tensor) {
-    const auto& shape = input_tensor.get_padded_shape();
+    const auto& shape = input_tensor.padded_shape();
     auto tile_vol = tile_volume(input_tensor);
     return shape.volume() / tile_vol;
 }
 
-uint32_t tile_size(const ttnn::Tensor& input_tensor) { return tile_volume(input_tensor) * input_tensor.element_size(); }
+uint32_t tile_size(const ttnn::Tensor& input_tensor) {
+    auto dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    return tt::tt_metal::detail::TileSize(dataformat);
+}
 
 ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
-    const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
-    const auto& shape = input_tensor.get_padded_shape();
+    const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    const auto& shape = input_tensor.padded_shape();
     ttnn::SmallVector<uint32_t> tiled_shape;
     tiled_shape.reserve(shape.rank());
     for (int i = 0; i < shape.rank(); i++) {
@@ -96,10 +99,10 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_page_size = detail::tile_size(input_tensor);
 
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t output_page_size = detail::tile_size(tensor_return_value);
 
     uint32_t num_tiles = detail::num_tiles(tensor_return_value);
@@ -262,12 +265,12 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     auto& output_tensor = tensor_return_value;
     auto dims = operation_attributes.dims;
 
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.logical_shape();
 
-    auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
-    auto face_shape = input_tensor.get_tensor_spec().tile().get_face_shape();
+    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    auto face_shape = input_tensor.tensor_spec().tile().get_face_shape();
 
-    auto padded_output_shape = output_tensor.get_padded_shape();
+    auto padded_output_shape = output_tensor.padded_shape();
     uint32_t rank = operation_attributes.dims.size();
     bool swap_hw = dims[rank - 1] == rank - 2;
 
@@ -290,10 +293,10 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_page_size = detail::tile_size(input_tensor);
 
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t output_page_size = detail::tile_size(tensor_return_value);
 
     uint32_t num_tiles = detail::num_tiles(input_tensor);
@@ -357,7 +360,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
         if (output_H % tile_shape[1] != 0) {
             uint32_t num_packed_values = sizeof(uint32_t) / element_size;
             num_writes = face_shape[1] / num_packed_values;
-            if (input_tensor.get_dtype() == DataType::BFLOAT16) {
+            if (input_tensor.dtype() == DataType::BFLOAT16) {
                 padding_val_packed =
                     pack_two_bfloat16_into_uint32({bfloat16(pad_value.value()), bfloat16(pad_value.value())});
             } else if (num_packed_values == 2) {
@@ -556,14 +559,14 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     const std::optional<float> pad_value = operation_attributes.pad_value;
 
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     const auto& dims = operation_attributes.dims;
     uint32_t rank = dims.size();
     auto& output_tensor = tensor_return_value;
-    auto& output_shape = output_tensor.get_logical_shape();
-    auto& padded_output_shape = output_tensor.get_padded_shape();
-    const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
-    const auto& face_shape = input_tensor.get_tensor_spec().tile().get_face_shape();
+    auto& output_shape = output_tensor.logical_shape();
+    auto& padded_output_shape = output_tensor.padded_shape();
+    const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    const auto& face_shape = input_tensor.tensor_spec().tile().get_face_shape();
 
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
@@ -633,7 +636,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = face_shape[1] / num_packed_values;
 
-        if (input_tensor.get_dtype() == DataType::BFLOAT16) {
+        if (input_tensor.dtype() == DataType::BFLOAT16) {
             padding_val_packed =
                 pack_two_bfloat16_into_uint32({bfloat16(pad_value.value()), bfloat16(pad_value.value())});
         } else if (num_packed_values == 2) {
@@ -673,7 +676,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, xw_blocks);
 
-    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.get_padded_shape()[rank - 2] /
+    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.padded_shape()[rank - 2] /
                                                            tile_shape[0]);  // only last row of Xt should have padding
     auto
         [padded_num_cores,
@@ -686,7 +689,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     all_cores = num_cores > padded_num_cores ? all_cores : padded_all_cores;
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_page_size = detail::tile_size(tensor_return_value) + misalignment;
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =

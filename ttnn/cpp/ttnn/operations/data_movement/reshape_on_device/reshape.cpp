@@ -8,10 +8,11 @@
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/reshape_op.hpp"
 
-#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -23,16 +24,17 @@ static Tensor manual_insertion(
     const ttnn::Shape& padded_shape,
     IDevice* device,
     const MemoryConfig& output_mem_config) {
-    TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR);
+    TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
     TT_ASSERT(
-        logical_shape.volume() == input_tensor.get_logical_volume(),
+        logical_shape.volume() == input_tensor.logical_volume(),
         "Required shape volume ({}) must match old shape volume ({})",
         logical_shape.volume(),
-        input_tensor.get_logical_volume());
-    auto owned_buffer = ttnn::detail::to_host_buffer<uint16_t>(input_tensor);
+        input_tensor.logical_volume());
+    auto cpu_tensor = input_tensor.cpu();
+    auto host_buffer = tt::tt_metal::host_buffer::get_host_buffer(cpu_tensor);
     auto output =
         Tensor(
-            OwnedStorage{owned_buffer},
+            std::move(host_buffer),
             TensorSpec(
                 logical_shape,
                 TensorLayout::fromPaddedShape(
@@ -54,23 +56,23 @@ ttnn::Tensor ReshapeOperation::invoke(
     using namespace tt::constants;
     auto output_mem_config = memory_config_arg.value_or(input_tensor.memory_config());
     // No-op (Will do a tensor copy)
-    if (((input_tensor.get_layout() == Layout::TILE or input_tensor.get_layout() == Layout::ROW_MAJOR) &&
-         padded_output_shape[3] == input_tensor.get_padded_shape()[3])) {
+    if (((input_tensor.layout() == Layout::TILE or input_tensor.layout() == Layout::ROW_MAJOR) &&
+         padded_output_shape[3] == input_tensor.padded_shape()[3])) {
         // Don't need to do a check here to see the H and W both divisible by 32
         // since handled within the tensor reshape method
         return ttnn::experimental::view(input_tensor, logical_output_shape, padded_output_shape);
     }
-    if (input_tensor.get_padded_shape() == padded_output_shape) {
+    if (input_tensor.padded_shape() == padded_output_shape) {
         return ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
             input_tensor, output_mem_config);
     }
     uint32_t ROW_MAJOR_WIDTH = 8;
-    if (input_tensor.get_layout() == Layout::ROW_MAJOR &&
-        (input_tensor.get_padded_shape()[3] % ROW_MAJOR_WIDTH != 0 || padded_output_shape[3] % ROW_MAJOR_WIDTH != 0) &&
+    if (input_tensor.layout() == Layout::ROW_MAJOR &&
+        (input_tensor.padded_shape()[3] % ROW_MAJOR_WIDTH != 0 || padded_output_shape[3] % ROW_MAJOR_WIDTH != 0) &&
         ((padded_output_shape.volume() / padded_output_shape[-1]) % TILE_HEIGHT != 0 ||
-         padded_output_shape[-1] % TILE_WIDTH != 0 || input_tensor.get_padded_shape()[-1] % TILE_WIDTH != 0 ||
-         (input_tensor.volume() / input_tensor.get_padded_shape()[-1]) % TILE_HEIGHT != 0)) {
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16, "Error");
+         padded_output_shape[-1] % TILE_WIDTH != 0 || input_tensor.padded_shape()[-1] % TILE_WIDTH != 0 ||
+         (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % TILE_HEIGHT != 0)) {
+        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "Error");
 
         return detail::manual_insertion(
             (tt::tt_metal::Tensor)input_tensor,

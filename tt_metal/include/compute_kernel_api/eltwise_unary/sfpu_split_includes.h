@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -92,12 +92,8 @@
 #include "compute_kernel_api/eltwise_unary/bitwise_or.h"
 #endif
 
-#if SFPU_OP_FLOOR_INCLUDE
-#include "compute_kernel_api/eltwise_unary/floor.h"
-#endif
-
-#if SFPU_OP_ROUND_INCLUDE
-#include "compute_kernel_api/eltwise_unary/round.h"
+#if SFPU_OP_ROUND_FAMILY_INCLUDE
+#include "compute_kernel_api/eltwise_unary/rounding.h"
 #endif
 
 #if SFPU_OP_LEFT_SHIFT_INCLUDE
@@ -110,10 +106,6 @@
 
 #if SFPU_OP_FMOD_INCLUDE
 #include "compute_kernel_api/eltwise_unary/fmod.h"
-#endif
-
-#if SFPU_OP_CEIL_INCLUDE
-#include "compute_kernel_api/eltwise_unary/ceil.h"
 #endif
 
 #if SFPU_OP_BINOP_WITH_SCALAR_INCLUDE

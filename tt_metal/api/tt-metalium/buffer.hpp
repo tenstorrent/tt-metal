@@ -25,9 +25,11 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/buffer_page_mapping.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_soc_descriptor.h>
 #include <umd/device/types/xy_pair.h>
@@ -90,8 +92,8 @@ struct ShardSpec {
             shard_shape_[1]);
     }
 
-    const uint32_t num_cores() const { return this->grid.num_cores(); }
-    const uint32_t numel() const { return this->shape[0] * this->shape[1]; }
+    uint32_t num_cores() const { return this->grid.num_cores(); }
+    uint32_t numel() const { return this->shape[0] * this->shape[1]; }
 
     bool operator==(const ShardSpec& other) const;
     bool operator!=(const ShardSpec& other) const;
@@ -143,7 +145,6 @@ struct BufferConfig {
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type;
-    TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED;
 };
 
 using InterleavedBufferConfig = BufferConfig;
@@ -159,21 +160,46 @@ struct ShardedBufferConfig {
     ShardSpecBuffer shard_parameters;
 };
 
-bool is_sharded(const TensorMemoryLayout& layout);
+class BufferShardingArgs {
+public:
+    BufferShardingArgs() = default;
+    BufferShardingArgs(std::nullopt_t) {}
 
-struct BufferPageMapping {
-    std::vector<CoreCoord> all_cores_;
-    std::vector<uint32_t> core_bank_indices_;
-    std::vector<std::vector<uint32_t>> core_host_page_indices_;
-    std::vector<uint32_t> dev_page_to_core_mapping_;
+    BufferShardingArgs(BufferDistributionSpec buffer_distribution_spec) :
+        buffer_distribution_spec_(std::move(buffer_distribution_spec)),
+        buffer_layout_(TensorMemoryLayout::BLOCK_SHARDED) {}
+    BufferShardingArgs(std::optional<BufferDistributionSpec> buffer_distribution_spec) :
+        buffer_distribution_spec_(std::move(buffer_distribution_spec)),
+        buffer_layout_(
+            buffer_distribution_spec_.has_value() ? TensorMemoryLayout::BLOCK_SHARDED
+                                                  : TensorMemoryLayout::INTERLEAVED) {}
 
-    // some dev pages don't have mapping to host (in case of padding)
-    std::vector<std::optional<uint32_t>> dev_page_to_host_page_mapping_;
-    std::vector<uint32_t> host_page_to_dev_page_mapping_;
-    std::unordered_map<CoreCoord, uint32_t> core_to_core_id_;
-    std::vector<uint32_t> host_page_to_local_shard_page_mapping_;
-    std::vector<std::array<uint32_t, 2>> core_shard_shape_;
+    BufferShardingArgs(ShardSpecBuffer shard_spec, TensorMemoryLayout buffer_layout) :
+        shard_spec_(std::move(shard_spec)), buffer_layout_(buffer_layout) {}
+    BufferShardingArgs(std::optional<ShardSpecBuffer> shard_spec, TensorMemoryLayout buffer_layout) :
+        shard_spec_(std::move(shard_spec)), buffer_layout_(buffer_layout) {}
+
+    BufferShardingArgs(
+        std::optional<BufferDistributionSpec> buffer_distribution_spec,
+        std::optional<ShardSpecBuffer> shard_spec,
+        TensorMemoryLayout buffer_layout) :
+        buffer_distribution_spec_(std::move(buffer_distribution_spec)),
+        shard_spec_(std::move(shard_spec)),
+        buffer_layout_(buffer_layout) {}
+
+    const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const { return buffer_distribution_spec_; }
+
+    const std::optional<ShardSpecBuffer>& shard_spec() const { return shard_spec_; }
+
+    TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
+
+private:
+    std::optional<BufferDistributionSpec> buffer_distribution_spec_;
+    std::optional<ShardSpecBuffer> shard_spec_;
+    TensorMemoryLayout buffer_layout_ = TensorMemoryLayout::INTERLEAVED;
 };
+
+bool is_sharded(const TensorMemoryLayout& layout);
 
 struct BufferRegion {
     DeviceAddr offset = 0;
@@ -183,7 +209,7 @@ struct BufferRegion {
     BufferRegion(DeviceAddr offset, DeviceAddr size) : offset(offset), size(size) {}
 };
 
-class Buffer final {
+class Buffer final : public std::enable_shared_from_this<Buffer> {
     // Used in public Buffer constructors so they are only callable within Buffer
     // Buffer constructors are public so we can call std::make_shared on Buffer
     struct Private {
@@ -196,8 +222,7 @@ public:
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
-        TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
+        const BufferShardingArgs& sharding_args = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
     static std::shared_ptr<Buffer> create(
@@ -206,10 +231,14 @@ public:
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
-        TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
+        const BufferShardingArgs& sharding_args = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
+
+    // Creates a view of the region of the buffer.
+    // The view is a new buffer (unless the region is the entire buffer) that shares the same underlying device memory.
+    // The view keeps the underlying buffer alive as long as the view is alive.
+    std::shared_ptr<Buffer> view(const BufferRegion& region);
 
     Buffer(const Buffer& other) = delete;
     Buffer& operator=(const Buffer& other) = delete;
@@ -248,23 +277,23 @@ public:
 
     DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
 
-    DeviceAddr bank_local_page_address(uint32_t bank_id, uint32_t page_index) const;
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
     DeviceAddr aligned_size() const;
     DeviceAddr aligned_size_per_bank() const;
 
     // SHARDED API STARTS HERE
-    // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
-
-    DeviceAddr sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
-
+    const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const;
+    bool has_shard_spec() const { return shard_spec_.has_value(); }
     ShardSpecBuffer shard_spec() const;
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
-
     std::optional<uint32_t> num_cores() const;
-
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
+
+    // Returns the buffer that owns the underlying device memory.
+    // Typically returns itself unless the buffer was created with a view method.
+    std::shared_ptr<Buffer> root_buffer();
+    BufferRegion root_buffer_region() const { return BufferRegion(root_buffer_offset_, size_); }
 
     std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
 
@@ -278,8 +307,7 @@ public:
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
-        TensorMemoryLayout buffer_layout,
-        const std::optional<ShardSpecBuffer>& shard_parameter,
+        const BufferShardingArgs& sharding_args,
         std::optional<bool> bottom_up,
         std::optional<SubDeviceId> sub_device_id,
         bool owns_data,
@@ -288,7 +316,6 @@ public:
 private:
     enum class AllocationStatus : uint8_t {
         ALLOCATION_REQUESTED,
-        ALLOCATION_FAILED,
         ALLOCATED,
         DEALLOCATED,
     };
@@ -297,7 +324,6 @@ private:
 
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();
-    static void deleter(Buffer* buffer);
     void deallocate_impl();
     friend void DeallocateBuffer(Buffer& buffer);
 
@@ -314,24 +340,28 @@ private:
     std::optional<SubDeviceManagerId> sub_device_manager_id_;
     Allocator* allocator_;
 
-    std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
+    AllocationStatus allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
+    bool hooked_allocation_ = false;
     DeviceAddr address_ = 0;
-    mutable std::mutex allocation_mutex_;
-    mutable std::condition_variable allocation_cv_;
-    // Used exclusively for is_allocated() method
-    std::atomic<bool> deallocation_requested_ = false;
 
     // These members must be only accessed on the device worker thread
     DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
-    std::optional<ShardSpecBuffer> shard_parameters_;
+    std::optional<ShardSpecBuffer> shard_spec_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
-    std::weak_ptr<Buffer> weak_self;
+    std::optional<BufferDistributionSpec> buffer_distribution_spec_;
+
+    // The root buffer is the buffer that owns the underlying device memory.
+    // The root buffer is populated only when the buffer was created with a view method.
+    std::shared_ptr<Buffer> root_buffer_;
+    // Offset of the current view buffer in the root buffer
+    DeviceAddr root_buffer_offset_ = 0;
+
     size_t unique_id_ = 0;
     static std::atomic<size_t> next_unique_id;
 };
 
-BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer);
+UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer);
 
 using HostDataType = std::variant<
     const std::shared_ptr<std::vector<uint8_t>>,
@@ -344,9 +374,9 @@ using HostDataType = std::variant<
 
 }  // namespace tt::tt_metal
 
-namespace tt::stl::json {
+namespace ttsl::json {
 template <>
-struct from_json_t<tt_metal::ShardSpec> {
-    tt_metal::ShardSpec operator()(const nlohmann::json& json_object) const;
+struct from_json_t<tt::tt_metal::ShardSpec> {
+    tt::tt_metal::ShardSpec operator()(const nlohmann::json& json_object) const;
 };
-}  // namespace tt::stl::json
+}  // namespace ttsl::json

@@ -13,38 +13,38 @@ namespace ttnn::operations::experimental::transformer {
 
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(
     const Tensor& input_tensor,
-    const uint32_t num_q_heads,
-    const uint32_t num_kv_heads,
-    const uint32_t head_dim,
-    const bool overlap_qk_coregrid,
-    const bool input_on_subcoregrids,
+    uint32_t num_q_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim,
+    bool overlap_qk_coregrid,
+    bool input_on_subcoregrids,
     const std::optional<const Tensor>& batch_offset,
     std::optional<const uint32_t> slice_size,
     std::vector<Tensor>& output,
     CoreCoord compute_with_storage_grid_size);
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_interleaved_input(
     const Tensor& input_tensor,
-    const uint32_t num_q_heads,
-    const uint32_t num_kv_heads,
-    const uint32_t head_dim,
+    uint32_t num_q_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim,
     std::vector<Tensor>& output,
     CoreCoord compute_with_storage_grid_size);
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_input(
     const Tensor& input_tensor,
-    const uint32_t num_q_heads,
-    const uint32_t num_kv_heads,
-    const uint32_t head_dim,
-    const bool overlap_qk_coregrid,
+    uint32_t num_q_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim,
+    bool overlap_qk_coregrid,
     const std::optional<const Tensor>& batch_offset,
     std::optional<const uint32_t> slice_size,
     std::vector<Tensor>& output,
     CoreCoord compute_with_storage_grid_size);
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_input_subcoregrid(
     const Tensor& input_tensor,
-    const uint32_t num_q_heads,
-    const uint32_t num_kv_heads,
-    const uint32_t head_dim,
-    const bool overlap_qk_coregrid,
+    uint32_t num_q_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim,
+    bool overlap_qk_coregrid,
     const std::optional<const Tensor>& batch_offset,
     std::optional<const uint32_t> slice_size,
     std::vector<Tensor>& output,
@@ -75,7 +75,7 @@ struct NLPCreateHeadsDecodeDeviceOperation {
         "input_on_subcoregrids",
         "slice_size",
         "output_mem_config");
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::forward_as_tuple(
             this->num_q_heads,
             this->num_kv_heads,

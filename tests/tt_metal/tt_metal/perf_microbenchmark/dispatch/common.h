@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,18 +7,18 @@
 #include <cstdint>
 #include <unordered_map>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
 
-#include "noc/noc_parameters.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
-#include <tt-metalium/hal.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
-#include <magic_enum/magic_enum.hpp>
+
+#include "llrt/hal.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
 
 using namespace tt::tt_metal;  // test only
 
@@ -46,8 +46,8 @@ private:
     bool banked;  // TODO banked and unbanked tests still don't play nicely together
     int amt_written;
     // 10 is a hack...bigger than any core_type
-    uint64_t base_data_addr[magic_enum::enum_count<CoreType>()];
-    uint64_t base_result_data_addr[magic_enum::enum_count<CoreType>()];
+    uint64_t base_data_addr[static_cast<size_t>(CoreType::COUNT)];
+    uint64_t base_result_data_addr[static_cast<size_t>(CoreType::COUNT)];
     std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>> all_data;
     CoreCoord host_core;
 
@@ -56,7 +56,7 @@ private:
         IDevice* device,
         std::unordered_set<CoreCoord>& validated_cores,
         const one_core_data_t& one_core_data,
-        const uint32_t start_index,
+        uint32_t start_index,
         uint32_t result_addr);
     bool validate_host(std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& one_core_data);
 
@@ -384,7 +384,7 @@ inline bool DeviceData::validate_one_core(
     } else if (core_type == CoreType::PCIE) {
         core_string = "PCIE";
     } else {
-        tt::log_fatal("Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
+        log_fatal(tt::LogTest, "Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
         TT_ASSERT(false, "Core type not found");
     }
 
@@ -533,7 +533,8 @@ template <bool is_dram_variant, bool is_host_variant>
 void configure_kernel_variant(
     Program& program,
     string path,
-    std::vector<uint32_t> compile_args,  // yes, copy
+    const std::map<std::string, std::string>& defines_in,
+    std::vector<uint32_t> compile_args,
     CoreCoord my_core,
     CoreCoord phys_my_core,
     CoreCoord phys_upstream_core,
@@ -555,12 +556,18 @@ void configure_kernel_variant(
         {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual_noc_coords.x)},
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(0xff)},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(0xff)},  // todo, add dispatch_s testing
-        {"FD_CORE_TYPE", std::to_string(0)},               // todo, support dispatch on eth
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(0xff)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(0xff)},  // todo, add dispatch_s testing
+        {"FD_CORE_TYPE", std::to_string(0)},                     // todo, support dispatch on eth
+        {"IS_D_VARIANT", std::to_string(is_dram_variant)},
+        {"IS_H_VARIANT", std::to_string(is_host_variant)},
     };
+
     compile_args.push_back(is_dram_variant);
     compile_args.push_back(is_host_variant);
+
+    defines.insert(defines_in.begin(), defines_in.end());
+
     tt::tt_metal::CreateKernel(
         program,
         path,
@@ -852,7 +859,8 @@ inline void add_dispatcher_packed_cmd(
     add_bare_dispatcher_cmd(cmds, cmd);
     for (CoreCoord core : worker_cores) {
         CoreCoord phys_worker_core = device->worker_core_from_logical_core(core);
-        cmds.push_back(NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y));
+        cmds.push_back(
+            tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_worker_core.x, phys_worker_core.y));
     }
     cmds.resize(
         padded_size(cmds.size(), MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t)));
@@ -872,7 +880,8 @@ inline void gen_bare_dispatcher_unicast_write_cmd(
     const uint32_t bank_id = 0;  // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
-    cmd.write_linear.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
+    cmd.write_linear.noc_xy_addr =
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_worker_core.x, phys_worker_core.y);
     cmd.write_linear.addr = device_data.get_result_data_addr(worker_core, bank_id);
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = 0;
@@ -892,7 +901,8 @@ inline void gen_dispatcher_unicast_write_cmd(
     const uint32_t bank_id = 0;  // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
-    cmd.write_linear.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
+    cmd.write_linear.noc_xy_addr =
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_worker_core.x, phys_worker_core.y);
     cmd.write_linear.addr = device_data.get_result_data_addr(worker_core, bank_id);
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = 0;
@@ -918,8 +928,8 @@ inline void gen_dispatcher_multicast_write_cmd(
     const uint32_t bank_id = 0;  // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
-    cmd.write_linear.noc_xy_addr =
-        NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+    cmd.write_linear.noc_xy_addr = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
+        physical_start.x, physical_start.y, physical_end.x, physical_end.y);
     cmd.write_linear.addr = device_data.get_result_data_addr(worker_core_range.start_coord);
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = worker_core_range.size();
@@ -1124,8 +1134,8 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(
         CQDispatchWritePackedLargeSubCmd sub_cmd;
         CoreCoord physical_start = device->worker_core_from_logical_core(range.start_coord);
         CoreCoord physical_end = device->worker_core_from_logical_core(range.end_coord);
-        sub_cmd.noc_xy_addr =
-            NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+        sub_cmd.noc_xy_addr = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
+            physical_start.x, physical_start.y, physical_end.x, physical_end.y);
         sub_cmd.addr = device_data.get_result_data_addr(range.start_coord);
         sub_cmd.length = xfer_size_bytes;
         sub_cmd.num_mcast_dests =
@@ -1176,11 +1186,11 @@ inline void gen_dispatcher_set_write_offset_cmd(
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_SET_WRITE_OFFSET;
-    cmd.set_write_offset.offset0 = wo0;
-    cmd.set_write_offset.offset1 = wo1;
-    cmd.set_write_offset.offset2 = wo2;
-    uint32_t payload_length = 0;
-    add_dispatcher_cmd(cmds, cmd, payload_length);
+    cmd.set_write_offset.offset_count = 3;
+    add_bare_dispatcher_cmd(cmds, cmd);
+    cmds.push_back(wo0);
+    cmds.push_back(wo1);
+    cmds.push_back(wo2);
 }
 
 inline void gen_dispatcher_terminate_cmd(std::vector<uint32_t>& cmds) {

@@ -7,7 +7,6 @@
 #include <string>
 #include <tuple>
 
-// #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 
@@ -43,7 +42,7 @@ struct HaloDeviceOperation {
         "output_memory_config_",
         "is_out_tiled_",
         "in_place_");
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::make_tuple(
             std::cref(config_),
             std::cref(parallel_config_),
