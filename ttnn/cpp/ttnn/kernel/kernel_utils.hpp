@@ -14,6 +14,7 @@
 #include <utility>
 #include "compile_time_args.h"
 #include "ttnn/kernel/kernel_common_utils.hpp"  // SerializableKernelArgs
+#include <bit>
 
 namespace ttnn::kernel_utils {
 template <typename KernelArgsStruct, uint32_t... I>
@@ -22,7 +23,11 @@ KernelArgsStruct make_runtime_struct_from_args(std::integer_sequence<uint32_t, I
         ttnn::kernel_utils::SerializableKernelArgs<KernelArgsStruct>,
         "Struct does not satisfy the requirements of SerializableKernelArgs concept.");
     const uint32_t args[]{get_arg_val<uint32_t>(I)...};
+#if defined(__cpp_lib_bit_cast) && (__cpp_lib_bit_cast >= 201806L)
+    return std::bit_cast<KernelArgsStruct>(args);
+#else
     return __builtin_bit_cast(KernelArgsStruct, args);
+#endif
 }
 
 template <typename KernelArgsStruct>
@@ -40,7 +45,11 @@ constexpr KernelArgsStruct make_compile_time_struct_from_args(std::integer_seque
         ttnn::kernel_utils::SerializableKernelArgs<KernelArgsStruct>,
         "Struct does not satisfy the requirements of SerializableKernelArgs concept.");
     constexpr uint32_t args[]{get_compile_time_arg_val(I)...};
+#if defined(__cpp_lib_bit_cast) && (__cpp_lib_bit_cast >= 201806L)
+    return std::bit_cast<KernelArgsStruct>(args);
+#else
     return __builtin_bit_cast(KernelArgsStruct, args);
+#endif
 }
 
 template <typename KernelArgsStruct>
