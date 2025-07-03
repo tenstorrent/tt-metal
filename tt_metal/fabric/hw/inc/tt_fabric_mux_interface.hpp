@@ -81,6 +81,19 @@ FORCE_INLINE void fabric_client_disconnect(WorkerToFabricMuxSender<FABRIC_MUX_CH
     connection_handle.close();
 }
 
+FORCE_INLINE void fabric_endpoint_terminate(
+    uint8_t fabric_ep_x,
+    uint8_t fabric_ep_y,
+    size_t fabric_ep_termination_signal_address,
+    bool graceful_termination = true) {
+    uint64_t noc_addr = get_noc_addr(fabric_ep_x, fabric_ep_y, fabric_ep_termination_signal_address);
+    noc_inline_dw_write(
+        noc_addr,
+        graceful_termination ? tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE
+                             : tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+    noc_async_write_barrier();
+}
+
 // assumes packet header is correctly populated
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 FORCE_INLINE void fabric_async_write(

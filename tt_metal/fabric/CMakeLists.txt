@@ -11,6 +11,7 @@ target_sources(
         fabric.cpp
         fabric_host_utils.cpp
         fabric_context.cpp
+        fabric_mux_config.cpp
         serialization/intermesh_link_table.cpp
 )
 
