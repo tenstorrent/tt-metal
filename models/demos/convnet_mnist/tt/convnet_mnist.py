@@ -62,6 +62,15 @@ def convnet_mnist(
             **conv_kwargs,
         )
         tt_weight = ttnn.to_device(tt_weight, device)
+    if not ttnn.is_tensor_storage_on_device(tt_bias):
+        tt_bias = ttnn.prepare_conv_bias(
+            bias_tensor=tt_bias,
+            weights_format="OIHW",
+            input_memory_config=x.memory_config(),
+            input_layout=x.get_layout(),
+            **conv_kwargs,
+        )
+        tt_bias = ttnn.to_device(tt_bias, device)
 
     x = ttnn.conv2d(
         input_tensor=x, weight_tensor=tt_weight, bias_tensor=tt_bias, **conv_kwargs, compute_config=compute_config

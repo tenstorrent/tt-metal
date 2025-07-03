@@ -416,8 +416,6 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
-            bool,
-            bool,
             bool>(),
         py::kw_only(),
         py::arg("dtype") = DataType::BFLOAT16,
@@ -433,8 +431,6 @@ void py_bind_conv2d(py::module& module) {
         py::arg("core_grid") = std::nullopt,
         py::arg("transpose_shards") = false,
         py::arg("output_layout") = Layout::TILE,
-        py::arg("preprocess_weights_on_device") = false,
-        py::arg("always_preprocess_weights") = false,
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
         py::arg("enable_split_reader") = false,
@@ -515,19 +511,6 @@ void py_bind_conv2d(py::module& module) {
         Conv2D expects it's input to be in :class:`ttnn.Layout.ROW_MAJOR` format.
         If the input is in :class:`ttnn.Layout.TILE` format, the halo micro-op will convert it to :class:`ttnn.Layout.ROW_MAJOR` format.
         So if the next op is a conv op, it is recommended to set this to :class:`ttnn.Layout.ROW_MAJOR`.
-        )doc");
-    py_conv_config.def_readwrite("preprocess_weights_on_device", &Conv2dConfig::preprocess_weights_on_device, R"doc(
-        Determines if the weights should be preprocessed on host or device.
-        For large weights, it is recommended to set this to true, as it would be faster.
-        )doc");
-    py_conv_config.def_readwrite("always_preprocess_weights", &Conv2dConfig::always_preprocess_weights, R"doc(
-        Used only when preprocess_weights_on_device is set to true.
-
-        The Conv2d op determines if the weights should be preprocessed or not, by examining the storage type.
-        If the weights are on device, then the op assumes that the weights are already preprocessed.
-
-        However, if this flag is set to true, the op will always preprocess the weights, even if they are on device.
-        This is useful when the weights are on device, but in the PyTorch format [out_channels, in_channels, kernel_height, kernel_width].
         )doc");
     py_conv_config.def_readwrite("enable_act_double_buffer", &Conv2dConfig::enable_act_double_buffer, R"doc(
             Doubles the size of the Activation Circular Buffer to allow for double buffering, preventing stalls of the activation reader kernel.
