@@ -212,11 +212,6 @@ def log_statistics(
                     i, j
                 ] = 0  # no metadata packets sent to self or to devices that are not on the same row
 
-    # logger.info(f"Token packet sending matrix: {total_token_packets_sent}")
-    # logger.info(f"Metadata packet sending matrix: {total_metadata_packets_sent}")
-    # logger.info(f"Unique token packets sent: {total_unique_packets_sent}")
-    # logger.info(f"Unique metadata packets sent: {total_unique_metadata_packets_sent}")
-
     logger.info(f"Total token packets received: {torch.sum(total_token_packets_sent, dim=0)}")
     logger.info(f"Total metadata packets received: {torch.sum(total_metadata_packets_sent, dim=0)}")
     logger.info(f"Total unique token packets sent: {torch.sum(total_unique_packets_sent, dim=0)}")
