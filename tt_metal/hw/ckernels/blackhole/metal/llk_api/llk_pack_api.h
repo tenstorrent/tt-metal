@@ -35,7 +35,7 @@ inline void llk_pack_mop_config(const uint32_t output) {
         pack_dst_format[output_id], face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
 }
 
-template <bool is_fp32_dest_acc_en, bool untilize = false, bool tilize = false>
+template <DestAccumulation fp32_dest_accumulation, bool untilize = false, bool tilize = false>
 inline void llk_pack_hw_configure(const llk_pack_params_t* pack_params) {
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -46,7 +46,7 @@ inline void llk_pack_hw_configure(const llk_pack_params_t* pack_params) {
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize, tilize>(
+    _llk_pack_hw_configure_<fp32_dest_accumulation, untilize, tilize>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
@@ -59,7 +59,7 @@ inline void llk_pack_hw_configure(const llk_pack_params_t* pack_params) {
 }
 
 template <
-    bool is_fp32_dest_acc_en,
+    DestAccumulation fp32_dest_accumulation,
     bool untilize = false,
     ReluType relu_type = ReluType::NO_RELU,
     std::uint32_t relu_threshold = 0,
@@ -72,10 +72,10 @@ inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output) {
                 .ApplyRelu = (std::uint32_t)relu_type,
                 .Threshold = relu_threshold,
             }}};
-    llk_pack_hw_configure<is_fp32_dest_acc_en, untilize, tilize>(&llk_pack_params);
+    llk_pack_hw_configure<fp32_dest_accumulation, untilize, tilize>(&llk_pack_params);
 }
 
-template <bool is_fp32_dest_acc_en, bool untilize = false, bool tilize = false>
+template <DestAccumulation fp32_dest_accumulation, bool untilize = false, bool tilize = false>
 inline void llk_pack_untilize_hw_configure(
     const llk_pack_params_t* pack_params, const std::uint32_t face_r_dim, const std::uint32_t num_faces) {
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
@@ -85,7 +85,7 @@ inline void llk_pack_untilize_hw_configure(
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize, tilize>(
+    _llk_pack_hw_configure_<fp32_dest_accumulation, untilize, tilize>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
@@ -98,7 +98,7 @@ inline void llk_pack_untilize_hw_configure(
 }
 
 template <
-    bool is_fp32_dest_acc_en,
+    DestAccumulation fp32_dest_accumulation,
     bool untilize = false,
     ReluType relu_type = ReluType::NO_RELU,
     std::uint32_t relu_threshold = 0,
@@ -112,10 +112,10 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
                 .ApplyRelu = (std::uint32_t)relu_type,
                 .Threshold = relu_threshold,
             }}};
-    llk_pack_untilize_hw_configure<is_fp32_dest_acc_en, untilize, tilize>(&llk_pack_params, face_r_dim, num_faces);
+    llk_pack_untilize_hw_configure<fp32_dest_accumulation, untilize, tilize>(&llk_pack_params, face_r_dim, num_faces);
 }
 
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, bool untilize = false>
+template <PoolType type, ReduceDim dim, DestAccumulation fp32_dest_accumulation, bool untilize = false>
 inline void llk_pack_reduce_hw_configure(const llk_pack_params_t* pack_params) {
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -126,7 +126,7 @@ inline void llk_pack_reduce_hw_configure(const llk_pack_params_t* pack_params) {
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
-    _llk_pack_reduce_hw_configure_<type, dim, is_fp32_dest_acc_en, untilize>(
+    _llk_pack_reduce_hw_configure_<type, dim, fp32_dest_accumulation, untilize>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
@@ -141,7 +141,7 @@ inline void llk_pack_reduce_hw_configure(const llk_pack_params_t* pack_params) {
 template <
     PoolType type,
     ReduceDim dim,
-    bool is_fp32_dest_acc_en,
+    DestAccumulation fp32_dest_accumulation,
     bool untilize = false,
     ReluType relu_type = ReluType::NO_RELU,
     std::uint32_t relu_threshold = 0>
@@ -149,7 +149,7 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
     llk_pack_params_t llk_pack_params = {
         .pack_output = pack_output,
         .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold}}};
-    llk_pack_reduce_hw_configure<type, dim, is_fp32_dest_acc_en, untilize>(&llk_pack_params);
+    llk_pack_reduce_hw_configure<type, dim, fp32_dest_accumulation, untilize>(&llk_pack_params);
 }
 
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
@@ -189,7 +189,7 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
     return pack_tile_addr;
 }
 
-template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, bool untilize = false>
+template <DestAccumulation fp32_dest_accumulation, bool out_of_order_output = false, bool untilize = false>
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
     std::uint8_t output_id = get_output_id(output);
 
@@ -197,7 +197,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
+    _llk_pack_<DST_SYNC_MODE, fp32_dest_accumulation, untilize>(tile_index, pack_tile_addr);
 }
 
 /*************************************************************************
@@ -268,7 +268,7 @@ inline void llk_pack_untilize(
     }
 }
 
-template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, bool untilize = false>
+template <DestAccumulation fp32_dest_accumulation, bool out_of_order_output = false, bool untilize = false>
 inline void llk_matmul_pack(
     std::uint32_t start_tile_index, std::uint32_t output, uint32_t ntiles, std::uint32_t output_tile_index = 0) {
     std::uint8_t output_id = get_output_id(output);
@@ -279,7 +279,7 @@ inline void llk_matmul_pack(
         std::uint32_t pack_tile_addr =
             get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
+        _llk_pack_<DST_SYNC_MODE, fp32_dest_accumulation, untilize>(tile_index, pack_tile_addr);
     }
 }
 
@@ -294,9 +294,9 @@ inline void llk_packer_set_math_semaphore() {
     _llk_packer_set_math_semaphore_<WaitRes>();
 }
 
-template <bool is_fp32_dest_acc_en>
+template <DestAccumulation fp32_dest_accumulation>
 inline void llk_pack_dest_section_done() {
-    _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
+    _llk_pack_dest_section_done_<DST_SYNC_MODE, fp32_dest_accumulation>();
 }
 
 template <bool untilize = false, bool diagonal = false>
@@ -308,13 +308,13 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
     _llk_init_packer_dest_offset_registers_<DST_SYNC_MODE, DstTileFaceLayout::RowMajor>(face_r_dim, narrow_tile);
 }
 
-template <bool is_fp32_dest_acc_en, bool untilize = false>
+template <DestAccumulation fp32_dest_accumulation, bool untilize = false>
 inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor>(face_r_dim, narrow_tile);
+    _llk_pack_dest_init_<DST_SYNC_MODE, fp32_dest_accumulation, DstTileFaceLayout::RowMajor>(face_r_dim, narrow_tile);
 }
 
 template <bool mail2math = true, bool mail2pack = true>
@@ -330,7 +330,7 @@ inline void llk_pack_debug_dump(std::uint8_t* data, std::uint32_t byte_size) { _
 
 inline void llk_pack_debug_dump_seek(std::uint8_t offset) { _llk_pack_debug_dump_seek_(offset); }
 
-template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
+template <DestAccumulation fp32_dest_accumulation, bool is_tile_dim_reconfig_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -339,7 +339,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en, DstTileFaceLayout::RowMajor, false>(
+    _llk_pack_reconfig_data_format_<fp32_dest_accumulation, is_tile_dim_reconfig_en, DstTileFaceLayout::RowMajor, false>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,
@@ -350,7 +350,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         narrow_tile);
 }
 
-template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
+template <DestAccumulation fp32_dest_accumulation, bool is_tile_dim_reconfig_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
     std::uint32_t old_output_id = get_output_id(old_output);
     std::uint32_t new_output_id = get_output_id(new_output);
@@ -358,7 +358,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
     if ((pack_dst_format[old_output_id] != pack_dst_format[new_output_id]) &&
         (pack_dst_format[old_output_id] != (uint)DataFormat::Invalid) &&
         (pack_dst_format[new_output_id] != (uint)DataFormat::Invalid)) {
-        llk_pack_reconfig_data_format<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(new_output);
+        llk_pack_reconfig_data_format<fp32_dest_accumulation, is_tile_dim_reconfig_en>(new_output);
     } else if constexpr (is_tile_dim_reconfig_en) {
         // Same format but different tile dims
         llk_pack_mop_config<false, false>(new_output);
@@ -377,7 +377,7 @@ inline void llk_pack_reduce_mask_config() {
 inline void llk_pack_reduce_mask_clear() { _llk_pack_reduce_mask_clear_(); }
 
 // FIXME-WH-UPLIFT
-template <ReduceDim dim, bool is_fp32_dest_acc_en, bool at_kernel_start = false, bool revert = false>
+template <ReduceDim dim, DestAccumulation fp32_dest_accumulation, bool at_kernel_start = false, bool revert = false>
 inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
     const bool untilize = false;
     if constexpr (at_kernel_start) {
@@ -394,7 +394,7 @@ inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
                 .Threshold = 0,
             }};
 
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize>(
+        _llk_pack_hw_configure_<fp32_dest_accumulation, untilize>(
             pack_src_format[output_id],
             pack_dst_format[output_id],
             tile_size,

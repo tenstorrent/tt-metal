@@ -10,7 +10,7 @@
  * LLK UNPACK AB
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
+template <DestAccumulation fp32_dest_accumulation, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_AB_hw_configure(
     const llk_unpack_AB_params_t* unpack_AB_params, const int within_face_16x16_transpose = 0) {
     // In0 -> unpA
@@ -23,7 +23,7 @@ inline void llk_unpack_AB_hw_configure(
     const uint32_t num_faces = get_operand_num_faces(unpA_operand_id);    // num faces in unpA and unpB are the same
     const uint32_t face_r_dim = get_operand_face_r_dim(unpA_operand_id);  // face r dim in unpA and unpB are the same
 
-    _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, stoch_rnd_mode>(
+    _llk_unpack_AB_hw_configure_<fp32_dest_accumulation, stoch_rnd_mode>(
         unpack_src_format[unpA_operand_id],
         unpack_src_format[unpB_operand_id],
         unpack_dst_format[unpA_operand_id],
@@ -33,12 +33,12 @@ inline void llk_unpack_AB_hw_configure(
         num_faces);
 }
 
-template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
+template <DestAccumulation fp32_dest_accumulation, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_AB_hw_configure_disaggregated(
     const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const int within_face_16x16_transpose = 0) {
     const llk_unpack_AB_params_t unpack_AB_params = {.unpA_operand = unpA_operand, .unpB_operand = unpB_operand};
 
-    llk_unpack_AB_hw_configure<is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_AB_params, within_face_16x16_transpose);
+    llk_unpack_AB_hw_configure<fp32_dest_accumulation, stoch_rnd_mode>(&unpack_AB_params, within_face_16x16_transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
