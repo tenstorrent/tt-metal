@@ -366,7 +366,7 @@ run_t3000_flux1_schnell() {
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   mesh_device=T3K
   flux1_schnell=/mnt/MLPerf/tt_dnn-models/FLUX1-schnell/
-  MESH_DEVICE=$mesh_device FLUX1_SCHNELL_DIR=$flux1_schnell WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/experimental/flux/tests/test_transformer.py ; fail+=$?
+  MESH_DEVICE=$mesh_device FLUX1_SCHNELL_DIR=$flux1_schnell WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/experimental/flux/tests/test_transformer_block.py ; fail+=$?
   MESH_DEVICE=$mesh_device FLUX1_SCHNELL_DIR=$flux1_schnell WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/experimental/flux/tests/test_timestep_embedding.py ; fail+=$?
 
 

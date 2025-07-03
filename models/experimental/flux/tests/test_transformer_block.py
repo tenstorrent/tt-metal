@@ -47,9 +47,7 @@ def test_transformer_block(
 
     torch.manual_seed(0)
 
-    checkpoint = "black-forest-labs/FLUX.1-schnell"
-
-    model_name_checkpoint = model_location_generator(checkpoint, model_subdir="Flux1_Schnell")
+    model_name_checkpoint = model_location_generator("black-forest-labs/FLUX.1-schnell", model_subdir="Flux1_Schnell")
 
     torch_model = (
         FluxTransformerReference.from_pretrained(model_name_checkpoint, subfolder="transformer")

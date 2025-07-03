@@ -51,11 +51,9 @@ def test_transformer(
 
     logger.info("loading model...")
 
-    checkpoint = "black-forest-labs/FLUX.1-schnell"
+    model_name = model_location_generator("black-forest-labs/FLUX.1-schnell", model_subdir="Flux1_Schnell")
 
-    model_name_checkpoint = model_location_generator(checkpoint, model_subdir="Flux1_Schnell")
-
-    torch_model = FluxTransformerReference.from_pretrained(model_name_checkpoint, subfolder="transformer")
+    torch_model = FluxTransformerReference.from_pretrained(model_name, subfolder="transformer")
     torch_model.eval()
     torch_model.keep_blocks_only(block_count, block_count)
 
@@ -80,7 +78,7 @@ def test_transformer(
 
     logger.info("loading model...")
     torch_model_bfloat16 = FluxTransformerReference.from_pretrained(
-        "black-forest-labs/FLUX.1-schnell", subfolder="transformer", torch_dtype=torch.bfloat16
+        model_name, subfolder="transformer", torch_dtype=torch.bfloat16
     )
     torch_model_bfloat16.eval()
     torch_model_bfloat16.keep_blocks_only(block_count, block_count)
