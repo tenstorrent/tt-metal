@@ -511,13 +511,9 @@ bool MeshDevice::close() {
         dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
     }
 
-    log_info(tt::LogMetal, "Closing mesh cq");
     mesh_command_queues_.clear();
-    log_info(tt::LogMetal, "Closing sub device manager");
     sub_device_manager_tracker_.reset();
-    log_info(tt::LogMetal, "Closing scoped devices");
     scoped_devices_.reset();
-    log_info(tt::LogMetal, "Closing parent mesh");
     parent_mesh_.reset();
     return true;
 }

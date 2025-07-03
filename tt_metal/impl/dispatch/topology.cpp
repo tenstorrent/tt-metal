@@ -1393,6 +1393,7 @@ void build_tt_fabric_program(
                 false, /* is_dateline */
                 eth_direction);
             // Both links used by dispatch on TG Gateway (mmio device)
+            // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
             configure_edm_builder_for_dispatch(edm_builder);
             edm_builders.insert({eth_chan, edm_builder});
         }
