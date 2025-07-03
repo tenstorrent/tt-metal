@@ -47,50 +47,6 @@ Tensor _xlogy(const Tensor& input_a, const Tensor& input_b, const std::optional<
     return result;
 }
 
-// addalpha(input, other, alpha) = input + (alpha * other)
-Tensor ExecuteAddalpha::invoke(
-    QueueId queue_id,
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    float alpha,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    SmallVector<unary::UnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
-    return BinaryOperation<operations::binary::BinaryOpType::ADD>::invoke(
-        queue_id,
-        input_tensor_a,
-        input_tensor_b,
-        std::nullopt,
-        memory_config,
-        optional_output_tensor,
-        {},
-        {},
-        rhs_activations,
-        false);
-}
-
-// subalpha(input, other, alpha) = input - (alpha * other)
-Tensor ExecuteSubalpha::invoke(
-    QueueId queue_id,
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    float alpha,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    SmallVector<unary::UnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
-    return BinaryOperation<operations::binary::BinaryOpType::SUB>::invoke(
-        queue_id,
-        input_tensor_a,
-        input_tensor_b,
-        std::nullopt,
-        memory_config,
-        optional_output_tensor,
-        {},
-        {},
-        rhs_activations,
-        false);
-}
-
 // nextafter
 Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const float eps = tt::tt_metal::hal::get_eps();

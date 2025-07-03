@@ -283,26 +283,6 @@ struct ExecuteGCD {
         std::optional<bool> use_legacy = std::nullopt);
 };
 
-struct ExecuteAddalpha {
-    static Tensor invoke(
-        QueueId queue_id,
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        float alpha,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
-struct ExecuteSubalpha {
-    static Tensor invoke(
-        QueueId queue_id,
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        float alpha,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
 struct ExecuteMaximum {
     static Tensor invoke(
         QueueId queue_id,
@@ -527,8 +507,6 @@ constexpr auto xlogy = ttnn::register_operation<
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::XLOGY>>();
 constexpr auto minimum = ttnn::register_operation<"ttnn::minimum", operations::binary::ExecuteMinimum>();
 constexpr auto maximum = ttnn::register_operation<"ttnn::maximum", operations::binary::ExecuteMaximum>();
-constexpr auto addalpha = ttnn::register_operation<"ttnn::addalpha", operations::binary::ExecuteAddalpha>();
-constexpr auto subalpha = ttnn::register_operation<"ttnn::subalpha", operations::binary::ExecuteSubalpha>();
 constexpr auto atan2 = ttnn::register_operation<
     "ttnn::atan2",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::ATAN2>>();
