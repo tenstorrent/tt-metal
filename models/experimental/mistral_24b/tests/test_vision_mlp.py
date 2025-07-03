@@ -9,7 +9,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.mlp import MLP
+
+# from models.tt_transformers.tt.mlp import MLP
+from models.experimental.mistral_24b.tt.vision_mlp import MistralTTVisionMLP as MLP
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
@@ -58,12 +60,12 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, rese
         args=model_args,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
-        state_dict_prefix="vision_tower.transformer.layers.0.feed_forward",
+        state_dict_prefix="vision_tower.transformer.layers.0.feed_forward.",
         dtype=dtype,
-        model_config=model_args.get_model_config(),
+        # model_config=model_args.get_model_config(),
     )
-    torch_input = torch.randn(1, 1, seq_len, model_args.dim)
+    torch_input = torch.randn(1, 1, seq_len, 1024)
+    print("torch_input shape:", torch_input.shape)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,
@@ -71,7 +73,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, rese
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         memory_config=(
             (
                 tt_model.model_config["MLP_ACT_MEMCFG"]
@@ -85,7 +87,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, rese
     )
 
     logger.info("Run MLP")
-    tt_output = tt_model(tt_input, mode)
+    tt_output = tt_model(tt_input)
 
     tt_output_torch = ttnn.to_torch(
         tt_output,
