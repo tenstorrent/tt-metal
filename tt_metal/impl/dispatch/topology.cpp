@@ -1370,7 +1370,7 @@ void build_tt_fabric_program(
         if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
             return;
         }
-        constexpr uint32_t k_DispatchFabricRouterContextSwitchInterval = 64;
+        constexpr uint32_t k_DispatchFabricRouterContextSwitchInterval = 16;
         // Dispatch requires a higher context switching freq to service slow dispatch / UMD / debug tools
         edm_builder.set_firmware_context_switch_interval(k_DispatchFabricRouterContextSwitchInterval);
         edm_builder.set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
@@ -1393,6 +1393,7 @@ void build_tt_fabric_program(
                 false, /* is_dateline */
                 eth_direction);
             // Both links used by dispatch on TG Gateway (mmio device)
+            // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
             configure_edm_builder_for_dispatch(edm_builder);
             edm_builders.insert({eth_chan, edm_builder});
         }

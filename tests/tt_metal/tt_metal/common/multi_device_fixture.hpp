@@ -9,6 +9,7 @@
 
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "kernel.hpp"
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/mesh_device.hpp>
@@ -57,7 +58,6 @@ protected:
         }
     }
 };
-
 class MeshDeviceFixtureBase : public ::testing::Test {
 public:
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> get_mesh_device() {

@@ -48,6 +48,7 @@
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/cluster_types.h>
 #include <umd/device/types/xy_pair.h>
+#include <unistd.h>
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
 static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
@@ -1160,6 +1161,18 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
             for (auto i = 0; i < cores.size(); i++) {
                 if (num_reserved_cores == num_cores_to_reserve) {
                     break;
+                }
+
+                if (rtoptions_.get_fd_fabric()) {
+                    // Last link reserved for dispatch
+                    // Only need fabric routers in the same tunnel
+                    // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+                    const auto is_mmio_device = [&](int id) { return cluster_desc_->is_chip_mmio_capable(id); };
+                    const auto is_last_link = [&]() { return num_reserved_cores == num_cores_to_reserve - 1; };
+                    if (is_last_link() && is_mmio_device(chip_id) && is_mmio_device(connnected_chip_id)) {
+                        num_reserved_cores++;
+                        break;
+                    }
                 }
 
                 const auto eth_core = cores[i];
