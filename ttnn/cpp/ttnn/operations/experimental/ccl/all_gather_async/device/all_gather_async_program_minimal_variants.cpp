@@ -54,7 +54,7 @@ void append_fabric_connection_rt_args(
     }
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const Tensor& input_tensor,
     IDevice* sender_device,
     std::optional<IDevice*> forward_device,
@@ -69,7 +69,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
-    return all_gather_async_minimal_interleaved_helper(
+    return all_gather_async_minimal_default_helper(
         program,
         input_tensor,
         sender_device,
@@ -86,7 +86,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         empty_fused_op_signaler);
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_helper(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     IDevice* sender_device,
@@ -231,7 +231,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     auto worker_sender_reader_forward_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-        "interleaved_reader.cpp",
+        "minimal_default_reader.cpp",
         sender_forward_core_ranges,
         sender_reader_forward_kernel_config);
 
@@ -255,7 +255,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     auto worker_sender_writer_forward_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-        "interleaved_writer.cpp",
+        "minimal_default_writer.cpp",
         sender_forward_core_ranges,
         sender_writer_forward_kernel_config);
 
@@ -278,7 +278,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     auto worker_sender_reader_backward_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-        "interleaved_reader.cpp",
+        "minimal_default_reader.cpp",
         sender_backward_core_ranges,
         sender_reader_backward_kernel_config);
 
@@ -302,7 +302,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     auto worker_sender_writer_backward_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-        "interleaved_writer.cpp",
+        "minimal_default_writer.cpp",
         sender_backward_core_ranges,
         sender_writer_backward_kernel_config);
 
