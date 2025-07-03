@@ -989,15 +989,15 @@ FORCE_INLINE void noc_async_read_page(
  *
  * Return value: None
  *
- * | Argument          | Description                          | Data type              | Valid range                | required |
- * |-------------------|--------------------------------------|------------------------|----------------------------|----------|
- * | id                | DOX-TODO (id of what?)               | uint32_t               | DOX-TODO (determine range) | True     |
- * | s                 | Address generator object             | InterleavedAddrGenFast | N/A                        | True     |
- * | dst_local_l1_addr | Address in local L1 memory           | uint32_t               | 0..1MB                     | True     |
- * | offset            | Custom address offset                | uint32_t               | 0..1MB                     | False    |
- * | noc               | Which NOC to use for the transaction | uint8_t                | 0 or 1                     | False    |
- * | DRAM              | Whether to read from DRAM or L1      | bool                   | True or False              | True     |
- * | tile_hw           | Tile height x width                  | uint32_t               | Any uint32_t value         | True     |
+ * | Argument          | Description                          | Data type              | Valid range         | required |
+ * |-------------------|--------------------------------------|------------------------|---------------------|----------|
+ * | id                | Page id                              | uint32_t               | Any uint32_t number | True     |
+ * | s                 | Address generator object             | InterleavedAddrGenFast | N/A                 | True     |
+ * | dst_local_l1_addr | Address in local L1 memory           | uint32_t               | 0..1MB              | True     |
+ * | offset            | Custom address offset                | uint32_t               | 0..1MB              | False    |
+ * | noc               | Which NOC to use for the transaction | uint8_t                | 0 or 1              | False    |
+ * | DRAM              | Whether to read from DRAM or L1      | bool                   | True or False       | True     |
+ * | tile_hw           | Tile height x width                  | uint32_t               | Any uint32_t number | True     |
  */
 // clang-format on
 template <bool DRAM, uint32_t tile_hw>
@@ -1075,14 +1075,14 @@ FORCE_INLINE void noc_async_write_tile(
  *
  * Return value: None
  *
- * | Argument          | Description                          | Data type                  | Valid range                | required |
- * |-------------------|--------------------------------------|----------------------------|----------------------------|----------|
- * | id                | DOX-TODO (id of what?)               | uint32_t                   | DOX-TODO (determine range) | True     |
- * | s                 | Address generator object             | InterleavedPow2AddrGenFast | N/A                        | True     |
- * | dst_local_l1_addr | Address in local L1 memory           | uint32_t                   | 0..1MB                     | True     |
- * | offset            | Custom address offset                | uint32_t                   | 0..1MB                     | False    |
- * | noc               | Which NOC to use for the transaction | uint8_t                    | 0 or 1                     | False    |
- * | DRAM              | Whether to read from DRAM or L1      | bool                       | True or False              | True     |
+ * | Argument          | Description                          | Data type                  | Valid range         | required |
+ * |-------------------|--------------------------------------|----------------------------|---------------------|----------|
+ * | id                | Page id                              | uint32_t                   | Any uint32_t number | True     |
+ * | s                 | Address generator object             | InterleavedPow2AddrGenFast | N/A                 | True     |
+ * | dst_local_l1_addr | Address in local L1 memory           | uint32_t                   | 0..1MB              | True     |
+ * | offset            | Custom address offset                | uint32_t                   | 0..1MB              | False    |
+ * | noc               | Which NOC to use for the transaction | uint8_t                    | 0 or 1              | False    |
+ * | DRAM              | Whether to read from DRAM or L1      | bool                       | True or False       | True     |
  */
 // clang-format on
 template <bool DRAM>
@@ -1116,15 +1116,15 @@ FORCE_INLINE void noc_async_read_page(
  *
  * TODO: Not used anywhere in metal, should it be removed?
  *
- * | Argument          | Description                          | Data type                  | Valid range                | required |
- * |-------------------|--------------------------------------|----------------------------|----------------------------|----------|
- * | id                | DOX-TODO (id of what?)               | uint32_t                   | DOX-TODO (determine range) | True     |
- * | s                 | Address generator object             | InterleavedPow2AddrGenFast | N/A                        | True     |
- * | dst_local_l1_addr | Address in local L1 memory           | uint32_t                   | 0..1MB                     | True     |
- * | size              | Size of data transfer in bytes       | uint32_t                   | 0..1MB                     | True     |
- * | offset            | Custom address offset                | uint32_t                   | 0..1MB                     | False    |
- * | noc               | Which NOC to use for the transaction | uint8_t                    | 0 or 1                     | False    |
- * | DRAM              | Whether to read from DRAM or L1      | bool                       | True or False              | True     |
+ * | Argument          | Description                          | Data type                  | Valid range         | required |
+ * |-------------------|--------------------------------------|----------------------------|---------------------|----------|
+ * | id                | Page id                              | uint32_t                   | Any uint32_t number | True     |
+ * | s                 | Address generator object             | InterleavedPow2AddrGenFast | N/A                 | True     |
+ * | dst_local_l1_addr | Address in local L1 memory           | uint32_t                   | 0..1MB              | True     |
+ * | size              | Size of data transfer in bytes       | uint32_t                   | 0..1MB              | True     |
+ * | offset            | Custom address offset                | uint32_t                   | 0..1MB              | False    |
+ * | noc               | Which NOC to use for the transaction | uint8_t                    | 0 or 1              | False    |
+ * | DRAM              | Whether to read from DRAM or L1      | bool                       | True or False       | True     |
  */
 // clang-format on
 template <bool DRAM>
@@ -1838,18 +1838,17 @@ FORCE_INLINE uint32_t noc_async_read_tile_dram_sharded_set_state(
  *
  * Return value: None
  *
- * | Argument      | Description                                                    | Data type | Valid range         | required |
- * |---------------|----------------------------------------------------------------|-----------|-------------------- |----------|
- * | src_base_addr | Base address of source location DOX-TODO (why is this needed?) | uint32_t  | 0..1MB              | True     |
- * | src_addr      | Address in local L1 memory on source core                      | uint32_t  | 0..1MB              | True     |
- * | dest_addr     | Address in local L1 memory on destination core                 | uint32_t  | 0..1MB              | True     |
- * | trid          | Transaction id DOX-TODO (not used, can it be removed?)         | uint32_t  | Any uint32_t number | False    |
- * | noc           | Which NOC to use for the transaction                           | uint8_t   | 0 or 1              | False    |
+ * | Argument      | Description                                    | Data type | Valid range         | required |
+ * |---------------|------------------------------------------------|-----------|-------------------- |----------|
+ * | src_base_addr | Base address of source location                | uint32_t  | 0..1MB              | True     |
+ * | src_addr      | Address in local L1 memory on source core      | uint32_t  | 0..1MB              | True     |
+ * | dest_addr     | Address in local L1 memory on destination core | uint32_t  | 0..1MB              | True     |
+ * | noc           | Which NOC to use for the transaction           | uint8_t   | 0 or 1              | False    |
  */
 // clang-format on
 FORCE_INLINE
 void noc_async_read_tile_dram_sharded_with_state(
-    uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
+    uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
 
     uint32_t src_local_addr = src_base_addr + src_addr;
