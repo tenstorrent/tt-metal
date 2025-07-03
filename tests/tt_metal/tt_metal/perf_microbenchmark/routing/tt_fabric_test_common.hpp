@@ -68,6 +68,8 @@ public:
             "Only expected a single user mesh for a single host, but got: {}",
             user_meshes.size());
 
+        // TODO: for now we are just dealing with user mesh 0 here
+        available_mesh_ids_.insert(user_meshes[0]);
         mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(user_meshes[0]);
         const auto coordinates = MeshCoordinateRange(mesh_shape_);
         for (const auto& coord : coordinates) {
@@ -141,6 +143,18 @@ public:
     }
 
     FabricNodeId get_fabric_node_id(const MeshCoordinate& device_coord) const override {
+        return mesh_coordinate_to_node_id_.at(device_coord);
+    }
+
+    FabricNodeId get_fabric_node_id(MeshId mesh_id, const MeshCoordinate& device_coord) const override {
+        TT_FATAL(
+            available_mesh_ids_.count(mesh_id) > 0,
+            "Mesh id: {} is not available for querying fabric node id",
+            mesh_id);
+        TT_FATAL(
+            mesh_coordinate_to_node_id_.count(device_coord) > 0,
+            "Mesh coordinate: {} is not available for querying fabric node id",
+            device_coord);
         return mesh_coordinate_to_node_id_.at(device_coord);
     }
 
@@ -448,6 +462,7 @@ private:
     Topology topology_;
     RoutingType routing_type_;
     MeshShape mesh_shape_;
+    std::set<MeshId> available_mesh_ids_;
     tt::tt_metal::FabricConfig current_fabric_config_;
     std::vector<MeshCoordinate> available_device_coordinates_;
     std::vector<FabricNodeId> available_node_ids_;

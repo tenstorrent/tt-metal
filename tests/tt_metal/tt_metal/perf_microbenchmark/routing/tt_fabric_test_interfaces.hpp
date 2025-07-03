@@ -27,6 +27,7 @@ public:
     virtual ~IDeviceInfoProvider() = default;
     virtual FabricNodeId get_fabric_node_id(chip_id_t physical_chip_id) const = 0;
     virtual FabricNodeId get_fabric_node_id(const MeshCoordinate& device_coord) const = 0;
+    virtual FabricNodeId get_fabric_node_id(MeshId mesh_id, const MeshCoordinate& device_coord) const = 0;
     virtual MeshCoordinate get_device_coord(const FabricNodeId& node_id) const = 0;
     virtual uint32_t get_worker_noc_encoding(const MeshCoordinate& device_coord, CoreCoord logical_core) const = 0;
     virtual uint32_t get_worker_noc_encoding(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
