@@ -59,17 +59,16 @@ void MAIN {
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(12);
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(13);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(14);
-    constexpr uint32_t interm_cb_id = get_compile_time_arg_val(15);
-    constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(16);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(17);
+    constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(15);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(16);
     constexpr uint32_t sync_cb_id1 =
-        get_compile_time_arg_val(18);  // wait for reader 0 to signal that it is done initializing
+        get_compile_time_arg_val(17);  // wait for reader 0 to signal that it is done initializing
     constexpr uint32_t sync_cb_id2 =
-        get_compile_time_arg_val(19);  // wait for reader 1 to signal that it is done initializing
+        get_compile_time_arg_val(18);  // wait for reader 1 to signal that it is done initializing
     constexpr uint32_t sync_cb_id3 =
-        get_compile_time_arg_val(20);  // signal to reader 0 that compute needs CBs reset or to output written
+        get_compile_time_arg_val(19);  // signal to reader 0 that compute needs CBs reset or to output written
     constexpr uint32_t sync_cb_id4 =
-        get_compile_time_arg_val(21);  // signal to reader 1 that compute needs CBs reset or to output written
+        get_compile_time_arg_val(20);  // signal to reader 1 that compute needs CBs reset or to output written
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -92,8 +91,8 @@ void MAIN {
 
     constexpr uint32_t face_r_dim = 16;
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, interm_cb_id, num_faces_in_input_tile, face_r_dim);
-    pack_untilize_dst_init_short<max_tiles_per_iter>(interm_cb_id, num_out_rows, num_faces_in_output_tile);
+        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
+    pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_output_tile);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
@@ -114,9 +113,6 @@ void MAIN {
             cb_wait_front(curr_scalar_cb_id, 1);
         }
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
-            // For 5x5 kernel as an example, reduction over first 16 sticks AND next 9 sticks. It runs
-            // twice, and both results are written to interm_cb_id. interm_cb_id will be the input to the
-            // next level of reduction.
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
@@ -130,11 +126,15 @@ void MAIN {
             }
             tile_regs_commit();
             tile_regs_wait();
-            cb_reserve_back(curr_sync_cb_id, 1);
-            pack_untilize_dst<max_tiles_per_iter>(
-                interm_cb_id, 1 /*out_subblock_h*/, 0, 1, num_faces_in_output_tile); /* pack 1 row (1x16 or 1x32) */
+            if (c_i < in_nblocks_c - 1) {
+                pack_untilize_dst<max_tiles_per_iter>(out_cb_id, 1 /*out_subblock_h*/, 0, 1, num_faces_in_output_tile);
+                cb_push_back(out_cb_id, max_tiles_per_iter);
+            } else {
+                pack_untilize_dst<partial_iter_output_tiles>(
+                    out_cb_id, 1 /*out_subblock_h*/, 0, 1, num_faces_in_output_tile);
+                cb_push_back(out_cb_id, partial_iter_output_tiles);
+            }
             tile_regs_release();
-            cb_push_back(curr_sync_cb_id, 1);
         }
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);

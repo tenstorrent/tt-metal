@@ -460,27 +460,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, out_df, output.buffer());
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
-    // Invalid index for circular buffer, will report error if not assigned with valid value before creation
-    uint32_t max_pool_partials_cb_id = 32;
-    if (is_large_kernel) {
-        max_pool_partials_cb_id = next_cb_index++;  // max_pool partials
-        const uint32_t max_pool_partials_cb_pagesize = in_cb_pagesize;  // page size is one row
-        const uint32_t max_pool_partials_cb_npages = 1;
-
-        tt::tt_metal::create_cb(
-            max_pool_partials_cb_id,
-            program,
-            all_cores,
-            max_pool_partials_cb_pagesize,
-            max_pool_partials_cb_npages,
-            out_df);
-        log_debug(
-            tt::LogOp,
-            "CB {} :: PS = {}, NP = {}",
-            max_pool_partials_cb_id,
-            max_pool_partials_cb_pagesize,
-            max_pool_partials_cb_npages);
-    }
     TT_FATAL(output.memory_config().is_sharded(), "Output memory config needs to be sharded");
 
     /**
@@ -558,7 +537,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_id,
         in_scalar_cb_id_0,
         in_scalar_cb_id_1,
-        max_pool_partials_cb_id,
         in_one_cb_id,
         clear_value_cb_id,
         (uint32_t)pool_type,
@@ -569,7 +547,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         sync_cb_id2,
         sync_cb_id3,
         sync_cb_id4,
-        out_cb_id,
         stride_w};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
@@ -617,7 +594,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id_0,
         in_scalar_cb_id_1,
         out_cb_id,
-        max_pool_partials_cb_id,
         in_one_cb_id,
         one_scalar_per_core,
         sync_cb_id1,

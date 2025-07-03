@@ -147,13 +147,13 @@ void kernel_main() {
     constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(20);
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(21);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t pool_type = (bool)get_compile_time_arg_val(25);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(26);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(23);
+    constexpr uint32_t pool_type = (bool)get_compile_time_arg_val(24);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(25);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(26);
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
-    constexpr uint32_t stride_w = get_compile_time_arg_val(34);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(32);
 
     constexpr uint32_t in_nbytes_leftover = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) * BYTES_PER_DATUM;
 

@@ -227,13 +227,6 @@ uint32_t calculate_L1_usage(
     uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * in_ntiles_c;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
-    uint32_t max_pool_partials_cb_config_size = 0;
-    if (is_large_kernel) {
-        uint32_t max_pool_partials_cb_pagesize = in_cb_pagesize;
-        uint32_t max_pool_partials_cb_npages = nblocks;
-        max_pool_partials_cb_config_size = max_pool_partials_cb_npages * max_pool_partials_cb_pagesize;
-    }
-
     uint32_t alignment_bytes = 32;
     if (is_blackhole) {
         alignment_bytes = 64;

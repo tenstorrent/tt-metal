@@ -259,9 +259,6 @@ def run_max_pool(
     if dtype == ttnn.bfloat8_b:
         pcc_thresh = 0.9994
 
-    print(output_pytorch[0][0])
-    print(golden_pytorch[0][0])
-
     passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch, pcc_thresh)
 
     logger.debug(f"Passing: {passing}, PCC: {pcc}")
@@ -339,6 +336,8 @@ def run_max_pool(
             # # partial grid tests
             # [1, 32, 10, 10],  # BH
             # [1, 32, 6, 6],  # WH
+            [1, 16, 48, 48],
+            [1, 256, 48, 48],
             [1, 320, 48, 48],
         )
     ),
@@ -349,8 +348,8 @@ def run_max_pool(
         # (2, 2),
         # (3, 3),
         # (5, 5),
-        # (9, 9),
-        # (13, 13),
+        (9, 9),
+        (13, 13),
         (36, 36),
     ),
 )
@@ -360,8 +359,8 @@ def run_max_pool(
         (0, 0),
         # (1, 1),
         # (2, 2),
-        # (4, 4),
-        # (6, 6),
+        (4, 4),
+        (6, 6),
     ),
 )
 @pytest.mark.parametrize(
