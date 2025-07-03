@@ -1029,6 +1029,11 @@ private:
         for (const auto& src_node : devices) {
             // instantiate N/S E/W traffic on seperate senders to avoid bottlnecking on sender.
             for (uint32_t dim = 0; dim < this->route_manager_.get_num_mesh_dims(); ++dim) {
+                // Skip dimensions with only one device
+                if (this->route_manager_.get_mesh_shape()[dim] < 2) {
+                    continue;
+                }
+
                 auto hops = this->route_manager_.get_unidirectional_linear_mcast_hops(src_node, dim);
 
                 TrafficPatternConfig specific_pattern;

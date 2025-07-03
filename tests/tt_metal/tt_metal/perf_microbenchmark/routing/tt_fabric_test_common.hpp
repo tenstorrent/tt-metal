@@ -666,7 +666,7 @@ public:
         return possible_dsts[0];
     }
 
-    MeshShape get_mesh_shape() const { return mesh_shape_; }
+    MeshShape get_mesh_shape() const override { return mesh_shape_; }
 
     RoutingDirection get_forwarding_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const override {
