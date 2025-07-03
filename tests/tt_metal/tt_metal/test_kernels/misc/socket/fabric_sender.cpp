@@ -17,7 +17,7 @@ void fabric_write_any_len(
         data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, FABRIC_MAX_PACKET_SIZE);
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_without_header_non_blocking_from_address(src_addr, FABRIC_MAX_PACKET_SIZE);
-        fabric_connection.send_payload_blocking_from_address(
+        fabric_connection.send_payload_flush_blocking_from_address(
             (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
         dst_addr += FABRIC_MAX_PACKET_SIZE;
         src_addr += FABRIC_MAX_PACKET_SIZE;
@@ -26,7 +26,8 @@ void fabric_write_any_len(
     data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, xfer_size);
     fabric_connection.wait_for_empty_write_slot();
     fabric_connection.send_payload_without_header_non_blocking_from_address(src_addr, xfer_size);
-    fabric_connection.send_payload_blocking_from_address((uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 
 void kernel_main() {

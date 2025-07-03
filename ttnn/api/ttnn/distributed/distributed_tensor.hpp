@@ -9,6 +9,7 @@
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/memory_pin.hpp>
 
+#include "tt_stl/span.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
 
@@ -189,6 +190,17 @@ Tensor create_distributed_tensor(
     tt::stl::Span<T> buffer,
     const ttnn::Shape& global_shape,
     const tt::tt_metal::MemoryPin& buffer_pin,
+    const tt::tt_metal::TensorLayout& shard_layout,
+    const TensorToMesh& mapper,
+    std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
+    ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+    T pad_value = 0);
+
+// Overload for unowned spans of data.
+template <typename T>
+Tensor create_distributed_tensor(
+    tt::stl::Span<const T> buffer,
+    const ttnn::Shape& global_shape,
     const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
