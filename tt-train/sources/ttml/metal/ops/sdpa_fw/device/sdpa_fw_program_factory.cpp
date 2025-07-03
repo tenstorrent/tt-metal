@@ -205,6 +205,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     uint32_t total_rows_to_process = NC * Ht_;
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(Et));  // calculate scale factor
+    uint32_t packed_scaler = pack_two_bfloat16_to_uint32(scale);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -284,9 +285,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     SDPAForwardKernels kernels;
-    kernels.reader = create_reader_kernel(program, all_cores, /* reader_compile_args */ {}, defines, kReaderKernelPath);
+    kernels.reader = create_reader_kernel(
+        program, all_cores, /* reader_compile_args */ {block_size, Wt, packed_scaler}, defines, kReaderKernelPath);
 
-    kernels.writer = create_writer_kernel(program, all_cores, /* writer_compile_args */ {}, defines, kWriterKernelPath);
+    kernels.writer = create_writer_kernel(
+        program, all_cores, /* writer_compile_args */ {block_size, Wt}, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for rmsnorm_fw
@@ -379,7 +382,7 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
         core_group_2.ranges().empty() ? group_1_runtime_args : GetRuntimeArgs(program, sdpa_fw_group_2_kernel);
 
     for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % num_cores_x, i / num_cores_x};
+        CoreCoord core = {i % num_cores_y, i / num_cores_y};
 
         // Update input buffers for the reader kernel
         {
