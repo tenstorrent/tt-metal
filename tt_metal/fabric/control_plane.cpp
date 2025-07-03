@@ -1365,9 +1365,11 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_channels_in_direction
 static void write_to_all_tensix_cores(
     const void* data, size_t size, tt::tt_metal::HalL1MemAddrType addr_type, chip_id_t physical_chip_id) {
     TT_FATAL(
-        tt_metal::MetalContext::instance().hal().get_dev_size(tt_metal::HalProgrammableCoreType::TENSIX, addr_type) ==
-            size,
-        "ControlPlane: Tensix core data size mismatch");
+        size ==
+            tt_metal::MetalContext::instance().hal().get_dev_size(tt_metal::HalProgrammableCoreType::TENSIX, addr_type),
+        "ControlPlane: Tensix core data size mismatch expected {} but got {}",
+        size,
+        tt_metal::MetalContext::instance().hal().get_dev_size(tt_metal::HalProgrammableCoreType::TENSIX, addr_type));
     const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
     const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
     // Write to all Tensix cores
