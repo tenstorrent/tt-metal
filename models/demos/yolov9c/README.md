@@ -61,3 +61,11 @@ pytest --disable-warnings tests/ttnn/integration_tests/yolov9c/test_ttnn_yolov9c
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_detect.py::test_e2e_performant
   ```
+
+### Performant evaluation with Trace+2CQ for Detection task
+Use the following command to run the performant evaluation with Trace+2CQs:
+
+```
+pytest models/experimental/yolo_eval/evaluate.py::test_yolov9c[res0-device_params0-tt_model]
+```
+Note: The model is evaluated with 500 samples.
