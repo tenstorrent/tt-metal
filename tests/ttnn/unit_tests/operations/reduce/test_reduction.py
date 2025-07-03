@@ -262,7 +262,6 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
-@skip_for_blackhole("Bad CosineSimilarity on BH. Issue #21881")
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize("dim2", [128256, 151936])
 @pytest.mark.parametrize("dim", [1])
