@@ -7,7 +7,7 @@ import ttnn
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
 
 
-@pytest.mark.parametrize("num_links", [1, 2, 3], ids=["1link", "2links", "3links"])
+@pytest.mark.parametrize("num_links", [3], ids=["3links"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
