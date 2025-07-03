@@ -207,19 +207,26 @@ ALWI void matmul_block(
     uint32_t kt_dim) {
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
 #ifdef TRISC_MATH
-    uint32_t mm_throttle_en = *(throttle_ptr) % 2;  // value at address is incremented by 1 to toggle throttling
-    // DPRINT_MATH(DPRINT << "mm_throttle_en: " << *(throttle_ptr) << ENDL());
+    // invalidate_l1_cache();
+    volatile uint32_t mm_throttle_en =
+        *(throttle_ptr) % 2;  // value at address is incremented by 1 to toggle throttling
+    // volatile uint32_t *mm_throttle_en_ptr = (uint32_t*)0x10;
+    // volatile uint32_t mm_throttle_en = *(throttle_ptr) % 2;
+    DPRINT_MATH(DPRINT << "mm_throttle_en at 0x10: " << *(throttle_ptr) << ENDL());
     if (mm_throttle_en) {
+        DPRINT_MATH(DPRINT << "mm_throttle_en" << mm_throttle_en << ENDL());
         if (throttled_mop_status != 1) {
             MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
             throttled_mop_status = 1;
+            DPRINT_MATH(DPRINT << "throttled_mop_status toggled: " << throttled_mop_status << ENDL());
         }
         MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, transpose, ct_dim, rt_dim, kt_dim)));
     } else {
         if (throttled_mop_status != 0) {
             MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
             throttled_mop_status = 0;
+            DPRINT_MATH(DPRINT << "throttled_mop_status toggled: " << throttled_mop_status << ENDL());
         }
         MATH((llk_math_matmul<MATH_FIDELITY>(idst, transpose, ct_dim, rt_dim, kt_dim)));
     }
