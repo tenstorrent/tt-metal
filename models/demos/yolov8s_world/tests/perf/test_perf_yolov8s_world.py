@@ -6,7 +6,6 @@ import time
 
 import pytest
 import torch
-import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
@@ -53,15 +52,13 @@ def test_perf_yolov8s_world(
         model_location_generator=None,
     )
     performant_runner._capture_yolov8s_world_trace_2cqs()
-    input_shape = (1, *resolution, 3)
+    input_shape = (1, 3, *resolution)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-    torch_input_tensor = F.pad(torch_input_tensor, (0, 29), mode="constant", value=0)
-    tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     iterations = 32
     t0 = time.time()
     for _ in range(iterations):
-        _ = performant_runner._execute_yolov8s_world_trace_2cqs_inference(tt_inputs_host)
+        _ = performant_runner.run(torch_input_tensor)
     ttnn.synchronize_device(device)
     t1 = time.time()
 
@@ -91,7 +88,7 @@ def test_perf_yolov8s_world(
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 80.0],
+        [1, 104.0],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
