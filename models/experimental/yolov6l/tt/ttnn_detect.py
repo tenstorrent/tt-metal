@@ -14,111 +14,80 @@ class TtDetect:
             device=device,
             conv=model_params.stems[0].block.conv,
             conv_pth=parameters.stems[0].block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
-            reshape=True,
         )
         self.stem_1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.stems[1].block.conv,
             conv_pth=parameters.stems[1].block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
-            reshape=True,
         )
         self.stem_2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.stems[2].block.conv,
             conv_pth=parameters.stems[2].block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
-            reshape=True,
         )
 
         self.cls_convs_0 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_convs[0].block.conv,
             conv_pth=parameters.cls_convs[0].block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
-            # is_nhwc=True,
-            reshape=True,
         )
         self.cls_convs_1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_convs[1].block.conv,
             conv_pth=parameters.cls_convs[1].block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
-            reshape=True,
         )
         self.cls_convs_2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_convs[2].block.conv,
             conv_pth=parameters.cls_convs[2].block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
-            reshape=True,
         )
 
         self.reg_convs_0 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.reg_convs[0].block.conv,
             conv_pth=parameters.reg_convs[0].block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
-            reshape=True,
+            deallocate_activation=True,
         )
         self.reg_convs_1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.reg_convs[1].block.conv,
             conv_pth=parameters.reg_convs[1].block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
-            reshape=True,
+            deallocate_activation=True,
         )
         self.reg_convs_2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.reg_convs[2].block.conv,
             conv_pth=parameters.reg_convs[2].block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
-            reshape=True,
+            deallocate_activation=True,
         )
 
         self.cls_preds_0 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_preds[0],
             conv_pth=parameters.cls_preds[0],
-            # shard_layout=None,
-            # auto_shard=True,
             reshape=True,
         )
         self.cls_preds_1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_preds[1],
             conv_pth=parameters.cls_preds[1],
-            # shard_layout=None,
-            # auto_shard=True,
             reshape=True,
         )
         self.cls_preds_2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_preds[2],
             conv_pth=parameters.cls_preds[2],
-            # shard_layout=None,
-            # auto_shard=True,
             reshape=True,
         )
 
@@ -126,32 +95,27 @@ class TtDetect:
             device=device,
             conv=model_params.reg_preds[0],
             conv_pth=parameters.reg_preds[0],
-            # shard_layout=None,
-            # auto_shard=True,
             reshape=True,
+            deallocate_activation=True,
         )
         self.reg_preds_1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.reg_preds[1],
             conv_pth=parameters.reg_preds[1],
-            # shard_layout=None,
-            # auto_shard=True,
             reshape=True,
+            deallocate_activation=True,
         )
         self.reg_preds_2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.reg_preds[2],
             conv_pth=parameters.reg_preds[2],
-            # shard_layout=None,
-            # auto_shard=True,
             reshape=True,
+            deallocate_activation=True,
         )
         self.proj_conv = Yolov6l_Conv2D(
             device=device,
             conv=model_params.proj_conv,
             conv_pth=parameters.proj_conv,
-            # shard_layout=None,
-            # auto_shard=True,
             reshape=True,
         )
 
