@@ -27,7 +27,7 @@ jobs:
             name: "TG Op Perf Unit Tests",
             arch: wormhole_b0,
             cmd: 'tests/scripts/tg/run_tg_op_perf_tests.sh',
-            timeout: 10,
+            timeout: 5,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
           },
@@ -62,7 +62,7 @@ jobs:
         with:
           name: ${{ inputs.wheel-artifact-name || 'wheel artifact not specified' }}
       - name: Run op perf regression tests
-        timeout-minutes: 20
+        timeout-minutes: 10
         uses: ./.github/actions/docker-run
         env:
           LOGURU_LEVEL: INFO

@@ -12,7 +12,6 @@ jobs:
       tracy: true
       build-wheel: true
       version: 22.04
-      toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
   tg-op-perf-tests:
     needs: build-artifact-profiler
     secrets: inherit
