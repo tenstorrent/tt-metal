@@ -273,6 +273,9 @@ def from_torch(
         Tensor([[1.375, -1.30469, -0.714844],
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
+
+    import torch
+
     if memory_config is not None and memory_config.is_sharded():
         if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
             raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
@@ -283,6 +286,20 @@ def from_torch(
 
     if memory_config is not None and device is None:
         raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
+
+    ttnn_dtype_to_torch_dtype = {
+        ttnn.uint8: torch.uint8,
+        ttnn.uint16: torch.int16,
+        ttnn.int32: torch.int32,
+        ttnn.uint32: torch.int32,
+        ttnn.bfloat4_b: torch.float32,
+        ttnn.bfloat8_b: torch.float32,
+        ttnn.float32: torch.float32,
+        ttnn.bfloat16: torch.bfloat16,
+    }
+
+    if not device and dtype in ttnn_dtype_to_torch_dtype:
+        tensor = tensor.to(ttnn_dtype_to_torch_dtype[dtype])
 
     result = ttnn.Tensor(
         tensor=tensor,
@@ -298,7 +315,7 @@ def from_torch(
         mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
     )
 
-    if dtype:
+    if dtype and device:
         assert result.layout == ttnn.TILE_LAYOUT
         result = ttnn.typecast(result, dtype=dtype)
         if layout != ttnn.TILE_LAYOUT:
@@ -355,27 +372,29 @@ def to_torch(
     """
     import torch
 
+    torch_dtype_to_ttnn_dtype = {
+        torch.uint8: ttnn.uint8,
+        torch.int16: ttnn.uint16,
+        torch.int32: ttnn.int32,
+        torch.int64: ttnn.uint32,
+        torch.bfloat16: ttnn.bfloat16,
+        torch.float32: ttnn.float32,
+    }
+
     # `torch.float64` has no ttnn mapping, so the `typecast` operation
     # might not be applicable in 100% of cases -- if that happens, some
     # data conversion still has to be performed on host.
     on_device_typecast = False
 
-    if dtype is not None:
-        torch_dtype_to_ttnn_dtype = {
-            torch.uint8: ttnn.uint8,
-            torch.int16: ttnn.uint16,
-            torch.int32: ttnn.int32,
-            torch.int64: ttnn.uint32,
-            torch.bfloat16: ttnn.bfloat16,
-            torch.float32: ttnn.float32,
-        }
+    if dtype in torch_dtype_to_ttnn_dtype and (ttnn.is_tensor_storage_on_device(tensor) or device):
+        if not ttnn.is_tensor_storage_on_device(tensor) and device:
+            tensor = ttnn.to_device(tensor, device=device)
 
-        if dtype in torch_dtype_to_ttnn_dtype:
-            if tensor.layout != ttnn.TILE_LAYOUT:
-                tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
+        if tensor.layout != ttnn.TILE_LAYOUT:
+            tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
 
-            tensor = ttnn.typecast(tensor, dtype=torch_dtype_to_ttnn_dtype[dtype])
-            on_device_typecast = True
+        tensor = ttnn.typecast(tensor, dtype=torch_dtype_to_ttnn_dtype[dtype])
+        on_device_typecast = True
 
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
