@@ -275,7 +275,8 @@ jobs:
 
           echo "🚀 Triggering ${#WORKFLOWS_TO_RUN[@]} workflow(s)..."
 
-          # Trigger workflows and collect run IDs
+          # Trigger workflows and collect run IDs with workflow mapping
+          declare -A RUN_ID_TO_WORKFLOW
           RUN_IDS=()
           for workflow in "${WORKFLOWS_TO_RUN[@]}"; do
             echo "Triggering $workflow..."
@@ -310,12 +311,14 @@ jobs:
 
               if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
                 RUN_IDS+=("$RUN_ID")
-                echo "Monitoring run ID: $RUN_ID"
+                RUN_ID_TO_WORKFLOW["$RUN_ID"]="$workflow"
+                echo "Monitoring run ID: $RUN_ID for workflow: $workflow"
 
                 # Comment on PR with workflow link
                 RUN_URL="https://github.com/${{ github.repository }}/actions/runs/$RUN_ID"
+                WORKFLOW_DISPLAY_NAME=$(echo "$workflow" | sed 's/\.yaml$//' | sed 's/-/ /g' | sed 's/\b\w/\U&/g')
                 gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
-                  --body "🔄 **$workflow** triggered: [View run]($RUN_URL)" \
+                  --body "🔄 **$WORKFLOW_DISPLAY_NAME** triggered: [View run]($RUN_URL)" \
                   --repo "${{ github.repository }}"
               fi
             else
@@ -344,8 +347,10 @@ jobs:
               echo "⏰ Timeout reached after ${TIMEOUT_MINUTES} minutes"
               for run_id in "${RUN_IDS[@]}"; do
                 RUN_URL="https://github.com/${{ github.repository }}/actions/runs/$run_id"
+                WORKFLOW_NAME="${RUN_ID_TO_WORKFLOW[$run_id]}"
+                WORKFLOW_DISPLAY_NAME=$(echo "$WORKFLOW_NAME" | sed 's/\.yaml$//' | sed 's/-/ /g' | sed 's/\b\w/\U&/g')
                 gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
-                  --body "⏰ **Workflow timed out** after ${TIMEOUT_MINUTES} minutes: [View run]($RUN_URL)" \
+                  --body "⏰ **$WORKFLOW_DISPLAY_NAME** timed out after ${TIMEOUT_MINUTES} minutes: [View run]($RUN_URL)" \
                   --repo "${{ github.repository }}"
               done
               ALL_SUCCESS=false
@@ -356,27 +361,29 @@ jobs:
             REMAINING_RUNS=()
             for run_id in "${RUN_IDS[@]}"; do
               STATUS=$(gh run view "$run_id" --json status --jq '.status // "unknown"' 2>/dev/null || echo "unknown")
+              WORKFLOW_NAME="${RUN_ID_TO_WORKFLOW[$run_id]}"
+              WORKFLOW_DISPLAY_NAME=$(echo "$WORKFLOW_NAME" | sed 's/\.yaml$//' | sed 's/-/ /g' | sed 's/\b\w/\U&/g')
 
               if [ "$STATUS" == "completed" ]; then
                 CONCLUSION=$(gh run view "$run_id" --json conclusion --jq '.conclusion // "unknown"')
                 RUN_URL="https://github.com/${{ github.repository }}/actions/runs/$run_id"
 
                 if [ "$CONCLUSION" == "success" ]; then
-                  echo "✅ Run $run_id completed successfully"
+                  echo "✅ $WORKFLOW_DISPLAY_NAME (Run $run_id) completed successfully"
                   gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
-                    --body "✅ **Workflow passed**: [View run]($RUN_URL)" \
+                    --body "✅ **$WORKFLOW_DISPLAY_NAME** passed: [View run]($RUN_URL)" \
                     --repo "${{ github.repository }}"
                 else
-                  echo "❌ Run $run_id failed with conclusion: $CONCLUSION"
+                  echo "❌ $WORKFLOW_DISPLAY_NAME (Run $run_id) failed with conclusion: $CONCLUSION"
                   gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
-                    --body "❌ **Workflow failed** (conclusion: \`$CONCLUSION\`): [View run]($RUN_URL)" \
+                    --body "❌ **$WORKFLOW_DISPLAY_NAME** failed (conclusion: \`$CONCLUSION\`): [View run]($RUN_URL)" \
                     --repo "${{ github.repository }}"
                   ALL_SUCCESS=false
                 fi
               else
                 # Still running, keep monitoring
                 REMAINING_RUNS+=("$run_id")
-                echo "⌛ Run $run_id status: $STATUS (${ELAPSED}s/${TIMEOUT_SECONDS}s)"
+                echo "⌛ $WORKFLOW_DISPLAY_NAME (Run $run_id) status: $STATUS (${ELAPSED}s/${TIMEOUT_SECONDS}s)"
               fi
             done
 
