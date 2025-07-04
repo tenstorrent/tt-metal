@@ -47,17 +47,6 @@ def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_
     return out
 
 
-def flash_mla_decode_tt(
-    query,
-    key,
-    value,
-    nh,
-    nkv,
-    is_causal=True,
-):
-    pass
-
-
 def run_flash_mla_decode_impl(
     device,
     batch,
@@ -70,6 +59,9 @@ def run_flash_mla_decode_impl(
     q_dtype,
     dtype,
 ):
+    # Can't run too many iters, or run out of L1
+    num_iters = 5
+
     # Log the test parameters
     logger.info(f"Running FlashMLA Decode with parameters: ")
     logger.info(f"Batch: {batch}")
@@ -173,35 +165,58 @@ def run_flash_mla_decode_impl(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    tt_start_indices = ttnn.from_torch(
+        torch.tensor(start_indices),
+        device=device,
+        dtype=ttnn.int32,
+    )
+
     ##########################
     ### FlashMLA Decode
     ##########################
     logger.info(
         f"Running FlashMLA Decode with TT Q shape: {tt_q.shape}, TT K shape: {tt_k.shape}, head_dim_v: {kv_lora_rank}"
     )
-    tt_out = ttnn.transformer.flash_multi_latent_attention_decode(
-        tt_q,
-        tt_k,
-        head_dim_v=kv_lora_rank,
-        cur_pos=start_indices,
-        scale=scale,
-        program_config=sdpa_program_config,
-        compute_kernel_config=compute_kernel_config,
-        memory_config=out_mem_config,
-    )
-    tt_out_torch = ttnn.to_torch(tt_out)[..., :nh, :].permute(1, 2, 0, 3)  # (S, B, H, D) -> (B, H, S, D)
+
+    def run_op():
+        tt_out = ttnn.transformer.flash_multi_latent_attention_decode(
+            tt_q,
+            tt_k,
+            head_dim_v=kv_lora_rank,
+            cur_pos_tensor=tt_start_indices,
+            scale=scale,
+            program_config=sdpa_program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=out_mem_config,
+        )
+
+        return tt_out
+
+    tt_outs = []
+    for i in range(num_iters):  # Check for program cache
+        logger.info(f"Running FlashMLA Decode operation iteration {i + 1}/{num_iters}")
+        tt_out = run_op()
+        tt_outs.append(tt_out)
+
+        # Increment start indices for the next iteration
+        ttnn.plus_one(tt_start_indices)
 
     ########################
     ### Validation
     ########################
-    out_t = scaled_dot_product_attention_reference(
-        q,
-        k,
-        v,
-        start_indices,
-        padded_layer_len,
-        scale,
-    )
+    outs = []
+    for _ in range(num_iters):
+        out_t = scaled_dot_product_attention_reference(
+            q,
+            k,
+            v,
+            start_indices,
+            padded_layer_len,
+            scale,
+        )
+        outs.append(out_t)
+
+        start_indices = [x + 1 for x in start_indices]
 
     pcc_threshold = 0.99
     if dtype == ttnn.bfloat4_b:
@@ -209,28 +224,37 @@ def run_flash_mla_decode_impl(
     if dtype == ttnn.bfloat8_b:
         pcc_threshold = 0.98
 
-    out_pass, out_pcc = comp_pcc(tt_out_torch, out_t, pcc_threshold)
-    logger.info(f"Output PCC: {out_pcc}")
+    for i, (tt_out, out_t) in enumerate(zip(tt_outs, outs)):
+        tt_out_torch = ttnn.to_torch(tt_out)[..., :nh, :].permute(1, 2, 0, 3)  # (S, B, H, D) -> (B, H, S, D)
+
+        out_pass, out_pcc = comp_pcc(tt_out_torch, out_t, pcc_threshold)
+        logger.info(f"Output PCC: {out_pcc}")
 
     assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
+
+    # Check program cache entries
+    num_program_cache_entries = device.num_program_cache_entries()
+
+    # FlashMLA + PlusOne
+    assert num_program_cache_entries == 2, f"Expected 2 program cache entries, got {num_program_cache_entries}."
 
 
 @pytest.mark.parametrize(
     "batch, seq_len, nh, nkv, kv_lora_rank, d_rope, q_num_cores",
     # batch, seq_len, num heads q, num heads kv, kv lora rank, dim rope, number of cores to shard q on
     [
-        (2, 16 * 1024, 128, 1, 512, 64, 8),  # DeepSeek V3 TG full DP
-        (2, 16 * 1024, 128, 1, 256, 64, 16),
-        (2, 16 * 1024, 128, 1, 256, 64, 32),
-        (2, 16 * 1024, 128, 1, 256, 64, 64),
-        (8, 16 * 1024, 128, 1, 256, 64, 64),
-        (8, 16 * 1024, 16, 1, 256, 64, 64),
-        (8, 16 * 1024, 48, 1, 128, 64, 16),
-        (2, 8 * 1024, 8, 1, 128, 64, 0),
-        (2, 8 * 1024, 64, 1, 256, 0, 0),
-        (2, 8 * 1024, 64, 1, 32, 64, 0),
-        (8, 4 * 1024, 8, 1, 128, 32, 0),
-        (16, 8 * 1024, 8, 1, 128, 32, 0),
+        (2, 1024, 128, 1, 512, 64, 8),  # DeepSeek V3 TG full DP
+        (2, 1024, 128, 1, 256, 64, 16),
+        (2, 1024, 128, 1, 256, 64, 32),
+        (2, 1024, 128, 1, 256, 64, 64),
+        (8, 1024, 128, 1, 256, 64, 64),
+        (8, 1024, 16, 1, 256, 64, 64),
+        (8, 1024, 48, 1, 128, 64, 16),
+        (2, 1024, 8, 1, 128, 64, 0),
+        (2, 1024, 64, 1, 256, 0, 0),
+        (2, 1024, 64, 1, 32, 64, 0),
+        (8, 1024, 8, 1, 128, 32, 0),
+        (16, 1024, 8, 1, 128, 32, 0),
     ],
 )
 @pytest.mark.parametrize(
@@ -353,6 +377,12 @@ def test_flash_mla_decode_stress(
 
     if batch * nh < ttnn.TILE_SIZE and q_num_cores > 0:
         pytest.skip("Skipping test with small batch and nh with q_num_cores > 0.")
+
+    effective_num_cores = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y
+    if nkv > 1 and nkv % (effective_num_cores / batch) != 0:
+        pytest.skip(
+            f"Skipping test with nkv {nkv} not divisible by effective_num_cores {effective_num_cores} / batch {batch}."
+        )
 
     run_flash_mla_decode_impl(
         device,
