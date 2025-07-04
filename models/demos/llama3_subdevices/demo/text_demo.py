@@ -333,6 +333,7 @@ def test_demo_text(
     pcc_decode_len,
     reset_seeds,
     request,
+    galaxy_type,
 ):
     """
     Simple demo with limited dependence on reference code.
@@ -424,7 +425,7 @@ def test_demo_text(
                     )
                 else:
                     f.seek(0)
-                    loaded_json = json.load(f)
+                    loaded_json = json.load(f)[galaxy_type]
                     if isinstance(loaded_json, list) and all(isinstance(item, str) for item in loaded_json):
                         expected_outputs_data = loaded_json
                         logger.info(
