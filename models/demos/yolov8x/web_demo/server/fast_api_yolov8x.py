@@ -12,7 +12,7 @@ from fastapi import FastAPI, File, UploadFile
 from PIL import Image
 
 import ttnn
-from models.demos.yolov8x.runner.performant_runner import YOLOv8xPerformantRunner
+from models.demos.yolov8x.tests.yolov8x_e2e_performant import Yolov8xTrace2CQ
 from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
 
 app = FastAPI(
@@ -58,12 +58,16 @@ async def startup():
             num_command_queues=2,
         )
         device.enable_program_cache()
-        model = YOLOv8xPerformantRunner(device, 1)
+        model = Yolov8xTrace2CQ()
     else:
         device_id = 0
         device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
         device.enable_program_cache()
-        model = YOLOv8xPerformantRunner(device, 1)
+        model = Yolov8xTrace2CQ()
+    model.initialize_yolov8x_trace_2cqs_inference(
+        device,
+        1,
+    )
 
 
 @app.on_event("shutdown")

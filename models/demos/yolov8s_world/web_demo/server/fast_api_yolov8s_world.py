@@ -64,6 +64,7 @@ async def startup():
         device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
         device.enable_program_cache()
         model = YOLOv8sWorldPerformantRunner(device, 1)
+    model._capture_yolov8s_world_trace_2cqs()
 
 
 @app.on_event("shutdown")
