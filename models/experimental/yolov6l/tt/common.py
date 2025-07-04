@@ -28,6 +28,8 @@ class Yolov6l_Conv2D:
         is_nhwc=False,
         reshape=False,
         deallocate_activation=False,
+        act_blocks=False,
+        act_block_h=None,
     ):
         self.is_nhw_c = is_nhw_c
         self.is_nhwc = is_nhwc
@@ -63,9 +65,8 @@ class Yolov6l_Conv2D:
         if self.in_channels == 3:
             self.conv_config.act_block_h_override = 64
         self.reshape = reshape
-        config_override = None
-        if config_override and "act_block_h" in config_override and not auto_shard:
-            self.conv_config.act_block_h_override = config_override["act_block_h"]
+        if act_block_h:
+            self.conv_config.act_block_h_override = act_blocks
 
         if "bias" in conv_pth:
             bias = ttnn.from_device(conv_pth.bias)
