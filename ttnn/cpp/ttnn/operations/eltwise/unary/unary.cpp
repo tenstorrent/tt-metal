@@ -12,6 +12,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/eltwise/unary/tanh_accurate/tanh_accurate.hpp"
+#include "ttnn/operations/eltwise/unary/i0_fpu/i0_fpu.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -293,6 +294,23 @@ Tensor Tanh::invoke(
             queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
     } else {
         return ttnn::tanh_accurate(queue_id, input_tensor, memory_config, optional_output_tensor);
+    }
+}
+
+Tensor I0::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::I0;
+    bool fpu_mode = false;
+    if (!fpu_mode) {
+        std::cout << "i0: fpu_mode: " << fpu_mode << std::endl;
+        return detail::unary_impl(
+            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    } else {
+        std::cout << "i0: fpu_mode: " << fpu_mode << std::endl;
+        return ttnn::i0_fpu(queue_id, input_tensor, memory_config, optional_output_tensor);
     }
 }
 
