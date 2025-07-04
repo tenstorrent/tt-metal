@@ -496,13 +496,17 @@ std::pair<std::vector<tt_metal::Program>, std::unordered_map<std::string, uint32
     uint32_t prefetcher_cache_size = tt::tt_metal::MetalContext::instance()
                                          .dispatch_mem_map(dispatch_core_type_to_core_type(dispatch_core_type))
                                          .ringbuffer_size();
-    uint32_t target_total_size = 2 * prefetcher_cache_size;
+    uint32_t target_total_size = (3 * prefetcher_cache_size) / 2;
     uint32_t estimated_program_size =
         1 << std::bit_width(info.kernel_size * 3);  // Rough estimate for program with 3 kernels
     uint32_t num_programs = std::max(1u, target_total_size / estimated_program_size);
 
     log_info(LogTest, "Double buffering test: prefetcher cache size = {} bytes", prefetcher_cache_size);
-    log_info(LogTest, "Target total program size = {} bytes (2x cache)", target_total_size);
+    log_info(
+        LogTest,
+        "Estimated program size = {} bytes, target total program size = {} bytes (1.5x cache)",
+        estimated_program_size,
+        target_total_size);
     log_info(LogTest, "Creating {} programs for cache overflow test", num_programs);
 
     std::vector<tt_metal::Program> programs(num_programs);
@@ -524,6 +528,9 @@ std::pair<std::vector<tt_metal::Program>, std::unordered_map<std::string, uint32
 
 // Helper function to log test configuration
 void log_test_configuration(const TestInfo& info) {
+    if (info.use_trace) {
+        log_info(LogTest, "Running with trace enabled");
+    }
     log_info(LogTest, "Warmup iterations: {}", info.warmup_iterations);
     log_info(LogTest, "Iterations: {}", info.iterations);
     log_info(
@@ -551,9 +558,6 @@ void log_test_configuration(const TestInfo& info) {
     if (info.test_double_buffering) {
         log_info(LogTest, "Double buffering test: ENABLED");
     }
-    if (info.use_trace) {
-        log_info(LogTest, "Running with trace enabled");
-    }
 }
 
 template <typename T>
@@ -577,31 +581,33 @@ static int pgm_dispatch(T& state, TestInfo info) {
         const chip_id_t device_id = 0;
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
         tt_metal::IDevice* device = tt_metal::CreateDevice(
-            device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000, DispatchCoreConfig{dispatch_core_type});
+            device_id, 1, DEFAULT_L1_SMALL_SIZE, 900 * 1024 * 1024, DispatchCoreConfig{dispatch_core_type});
         CommandQueue& cq = device->command_queue();
 
-        ProgramExecutor executor = [&]() -> ProgramExecutor {
-            if (info.test_double_buffering) {
-                auto [programs, extra_counters] = create_double_buffering_programs(info, device, dispatch_core_type);
-                auto exec = create_double_buffering_executor(info, programs, cq);
-                // Store extra counters for later use
-                if constexpr (std::is_same_v<T, benchmark::State>) {
-                    if (dump_test_info) {
-                        for (const auto& [key, value] : extra_counters) {
-                            state.counters[key] = benchmark::Counter(value, benchmark::Counter::kDefaults);
-                        }
+        // Declare program storage at function scope to ensure proper lifetime
+        std::vector<tt_metal::Program> double_buffer_programs;
+        std::array<tt_metal::Program, 2> standard_programs;
+        ProgramExecutor executor([]() {}, []() {}, 0);  // Initialize with placeholder
+
+        if (info.test_double_buffering) {
+            auto [programs, extra_counters] = create_double_buffering_programs(info, device, dispatch_core_type);
+            double_buffer_programs = std::move(programs);  // Move to function scope
+            // Store extra counters for later use
+            if constexpr (std::is_same_v<T, benchmark::State>) {
+                if (dump_test_info) {
+                    for (const auto& [key, value] : extra_counters) {
+                        state.counters[key] = benchmark::Counter(value, benchmark::Counter::kDefaults);
                     }
                 }
-                return exec;
-            } else {
-                std::array<tt_metal::Program, 2> program;
-                if (!initialize_program(info, device, program[0], info.slow_kernel_cycles) ||
-                    !initialize_program(info, device, program[1], info.fast_kernel_cycles)) {
-                    throw std::runtime_error("Program creation failed");
-                }
-                return create_standard_executor(info, program, cq);
             }
-        }();
+            executor = create_double_buffering_executor(info, double_buffer_programs, cq);
+        } else {
+            if (!initialize_program(info, device, standard_programs[0], info.slow_kernel_cycles) ||
+                !initialize_program(info, device, standard_programs[1], info.fast_kernel_cycles)) {
+                throw std::runtime_error("Program creation failed");
+            }
+            executor = create_standard_executor(info, standard_programs, cq);
+        }
 
         // Set benchmark counters before timing (all values are known at this point)
         set_benchmark_counters(state, info, device, executor.total_program_iterations);
@@ -655,6 +661,7 @@ static void Max12288Args(benchmark::internal::Benchmark* b) {
 static void Max8192Args(benchmark::internal::Benchmark* b) {
     b->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192);
 }
+static void Range1KTo8KArgs(benchmark::internal::Benchmark* b) { b->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192); }
 
 static void KernelCycleArgs(benchmark::internal::Benchmark* b) {
     // Dispatch time for most normal kernels is around 3000-4000 cycles.
@@ -888,7 +895,7 @@ BENCHMARK_CAPTURE(
         .use_trace = true,
         //.use_all_cores = true,
         .test_double_buffering = true})
-    ->Apply(Max8192Args)
+    ->Apply(Range1KTo8KArgs)
     ->UseManualTime();
 
 int main(int argc, char** argv) {
