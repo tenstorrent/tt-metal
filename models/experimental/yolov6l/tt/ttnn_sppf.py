@@ -30,7 +30,6 @@ class TtSppf:
         )
 
     def __call__(self, x):
-        print("x", x.shape)
         conv1 = self.cv1(x)
         conv1 = ttnn.to_memory_config(conv1, ttnn.L1_MEMORY_CONFIG)
         conv1 = ttnn.sharded_to_interleaved(conv1, ttnn.L1_MEMORY_CONFIG)
@@ -72,10 +71,6 @@ class TtSppf:
         m1 = ttnn.sharded_to_interleaved(m1, ttnn.L1_MEMORY_CONFIG)
         m2 = ttnn.sharded_to_interleaved(m2, ttnn.L1_MEMORY_CONFIG)
         m3 = ttnn.sharded_to_interleaved(m3, ttnn.L1_MEMORY_CONFIG)
-        print("conv1", conv1.shape)
-        print("m1", m1.shape)
-        print("m2", m2.shape)
-        print("m3", m3.shape)
         concat_output = ttnn.concat([conv1, m1, m2, m3], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         conv2 = self.cv2(concat_output)
