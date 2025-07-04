@@ -27,7 +27,7 @@ template <
     int num_fidelity_phases = 0,
     bool is_int_fpu_en = false>
 inline void llk_math_reduce(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t dst_index) {
-    const std::uint32_t operand_id = get_operand_id(operandA);
+    const std::uint32_t operand_id = get_operand_id(operandA);  // both operands must have same number of faces
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, num_fidelity_phases, is_int_fpu_en>(dst_index, false, num_faces);
 }
