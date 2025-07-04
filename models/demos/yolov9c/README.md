@@ -49,15 +49,23 @@ pytest --disable-warnings tests/ttnn/integration_tests/yolov9c/test_ttnn_yolov9c
 ### Model performant
 
 #### For 640x640 - Segmentation:
-- end-2-end perf with Trace+2CQ for Segmentation is 37 FPS.
+- end-2-end perf with Trace+2CQ for Segmentation is 43 FPS.
 
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_segment.py::test_e2e_performant
   ```
 
 #### For 640x640 - Detection:
-- end-2-end perf with Trace+2CQ for Detection is 49 FPS.
+- end-2-end perf with Trace+2CQ for Detection is 52 FPS.
 
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_detect.py::test_e2e_performant
   ```
+
+### Performant evaluation with Trace+2CQ for Detection task
+Use the following command to run the performant evaluation with Trace+2CQs:
+
+```
+pytest models/experimental/yolo_eval/evaluate.py::test_yolov9c[res0-device_params0-tt_model]
+```
+Note: The model is evaluated with 500 samples.

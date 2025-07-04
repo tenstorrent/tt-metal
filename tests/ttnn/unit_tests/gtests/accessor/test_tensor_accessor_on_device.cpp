@@ -76,11 +76,11 @@ void test_single_core_reshard(
     const auto input_accessor_args = TensorAccessorArgs(*input_buffer, params.crta_config);
     const auto output_accessor_args = TensorAccessorArgs(*output_buffer, params.crta_config);
 
-    std::vector<uint32_t> input_compile_time_args = input_accessor_args.compile_time_args;
+    std::vector<uint32_t> input_compile_time_args = input_accessor_args.get_compile_time_args();
     input_compile_time_args.push_back(cb_in0_idx);
     input_compile_time_args.push_back(aligned_page_size);
 
-    std::vector<uint32_t> output_compile_time_args = output_accessor_args.compile_time_args;
+    std::vector<uint32_t> output_compile_time_args = output_accessor_args.get_compile_time_args();
     output_compile_time_args.push_back(cb_in0_idx);
     output_compile_time_args.push_back(aligned_page_size);
 
@@ -104,12 +104,12 @@ void test_single_core_reshard(
             .compile_args = output_compile_time_args,
         });
 
-    std::vector<uint32_t> input_runtime_args = input_accessor_args.runtime_args;
+    std::vector<uint32_t> input_runtime_args = input_accessor_args.get_common_runtime_args();
     input_runtime_args.push_back(input_buffer->address());
     input_runtime_args.push_back(input_buffer->num_pages());
     SetCommonRuntimeArgs(program, reader_kernel_id, input_runtime_args);
 
-    std::vector<uint32_t> output_runtime_args = output_accessor_args.runtime_args;
+    std::vector<uint32_t> output_runtime_args = output_accessor_args.get_common_runtime_args();
     output_runtime_args.push_back(output_buffer->address());
     output_runtime_args.push_back(output_buffer->num_pages());
     SetCommonRuntimeArgs(program, writer_kernel_id, output_runtime_args);
