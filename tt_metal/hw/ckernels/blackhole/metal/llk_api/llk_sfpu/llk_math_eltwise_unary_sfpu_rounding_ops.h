@@ -6,56 +6,26 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 
 namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_rounding_op_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>();
-}
+SFPU_UNARY_KERNEL_INIT_UNUSED(rounding_op)
 
-template <bool APPROXIMATE, int ITERATIONS = 8, bool USE_FP32 = false>
-inline void llk_math_eltwise_unary_sfpu_floor(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::_calculate_floor_<APPROXIMATE, ITERATIONS, USE_FP32>, dst_index, vector_mode);
-}
+SFPU_ROUNDING_OP_KERNEL(floor)
 
-template <bool APPROXIMATE, int ITERATIONS = 8, bool USE_FP32 = true>
-inline void llk_math_eltwise_unary_sfpu_floor_float32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::_calculate_floor_<APPROXIMATE, ITERATIONS, USE_FP32>, dst_index, vector_mode);
-}
+SFPU_ROUNDING_OP_KERNEL_FLOAT32(floor)
 
-template <bool APPROXIMATE, int ITERATIONS = 8, bool USE_FP32 = false>
-inline void llk_math_eltwise_unary_sfpu_ceil(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::_calculate_ceil_<APPROXIMATE, ITERATIONS, USE_FP32>, dst_index, vector_mode);
-}
+SFPU_ROUNDING_OP_KERNEL(ceil)
 
-template <bool APPROXIMATE, int ITERATIONS = 8, bool USE_FP32 = true>
-inline void llk_math_eltwise_unary_sfpu_ceil_float32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::_calculate_ceil_<APPROXIMATE, ITERATIONS, USE_FP32>, dst_index, vector_mode);
-}
+SFPU_ROUNDING_OP_KERNEL_FLOAT32(ceil)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_trunc(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::_calculate_trunc_<APPROXIMATE>, dst_index, vector_mode);
-}
+SFPU_TRUNC_OP_KERNEL(trunc)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_trunc_float32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::_calculate_trunc_<APPROXIMATE, true>, dst_index, vector_mode);
-}
+SFPU_TRUNC_OP_KERNEL_FLOAT32(trunc)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_round(uint dst_index, int decimals, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::_calculate_round_<APPROXIMATE>, dst_index, vector_mode, decimals);
-}
+SFPU_ROUND_WITH_DECIMALS_KERNEL(round)
 
 }  // namespace ckernel

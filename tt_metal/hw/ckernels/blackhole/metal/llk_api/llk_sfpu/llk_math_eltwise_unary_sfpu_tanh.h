@@ -7,19 +7,6 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "ckernel_sfpu_tanh.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 
-namespace ckernel {
-
-// New LLK SFPU APIs
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_tanh_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::tanh, APPROXIMATE>(sfpu::tanh_init<APPROXIMATE>);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_tanh(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_tanh<APPROXIMATE>, dst_index, vector_mode);
-}
-
-}  // namespace ckernel
+SFPU_INIT_KERNEL(tanh, sfpu::tanh_init)

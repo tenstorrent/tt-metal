@@ -7,21 +7,12 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "ckernel_sfpu_clamp.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 
 namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_clamp_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::clamp, APPROXIMATE>();
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_clamp(
-    uint dst_index, uint param0, uint param1, uint param2, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_clamp<APPROXIMATE>, dst_index, vector_mode, param0, param1, param2);
-}
+SFPU_UNARY_PARAMS_KERNEL_NO_INITCB(clamp, RC, uint param0, uint param1, uint param2, param0, param1, param2)
 
 }  // namespace ckernel
