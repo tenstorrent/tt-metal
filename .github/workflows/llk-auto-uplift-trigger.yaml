@@ -8,7 +8,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 120
+        default: 180
       skip_draft:
         description: 'Skip creating PR as draft'
         required: false
@@ -255,7 +255,7 @@ jobs:
           GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
         run: |
           set -euo pipefail
-          TIMEOUT_MINUTES=${{ inputs.workflow_timeout || 120 }}
+          TIMEOUT_MINUTES=${{ inputs.workflow_timeout || 180 }}
 
           # Build workflow list based on detected changes
           WORKFLOWS_TO_RUN=()
