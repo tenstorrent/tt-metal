@@ -5,22 +5,148 @@ import os
 import torch
 import torchvision
 import torchvision.transforms as transforms
+
 import ttnn
 from loguru import logger
 
 
+def conv_pool_stage(
+    input_tensor,
+    input_BHWC,
+    conv_outchannels,
+    weights,
+    weight_str,
+    bias_str,
+    activation_str,
+    device,
+    log_first_sample=False,
+):
+    """
+    Perform convolution + activation + max pooling using TT-NN.
+    Args:
+        input_tensor: Input TT tensor in BHWC format.
+        input_BHWC: Tuple representing (Batch, Height, Width, Channels) of the input tensor.
+        conv_outchannels: Number of output channels for the convolution layer.
+        weights: Dictionary containing model weights and biases.
+        weight_str: Key name for convolution weights in the weights dict.
+        bias_str: Key name for convolution biases in the weights dict.
+        activation_str: Activation function name (e.g., 'relu') to apply after conv.
+        device: Target TT device to execute the operations on.
+        log_first_sample: Whether to log detailed info (used for debugging first sample).
+    Returns:
+        Output tensor after conv + max pooling (TT format).
+    """
+    # Extract weight and bias tensors from weights dictionary
+    W = weights[weight_str]
+    B = weights[bias_str]
+    B = B.view(1, 1, 1, -1)  # Reshape bias for broadcast compatibility
+
+    # Convert weights and bias to TT tensor format (bfloat16, row-major)
+    W_ttnn = ttnn.from_torch(W, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    B_ttnn = ttnn.from_torch(B, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+
+    # Define convolution parameters
+    conv_kernel_size = (3, 3)
+    conv_stride = (1, 1)
+    conv_padding = (1, 1)
+
+    # Set up TT-NN convolution configuration including activation function
+    conv_config = ttnn.Conv2dConfig(dtype=ttnn.bfloat16, weights_dtype=ttnn.bfloat16, activation=activation_str)
+
+    # Optional detailed logging for the first sample (shape, config, etc.)
+    if log_first_sample:
+        logger.info("=====================================================================")
+        logger.info("Input parameters to conv2d:")
+        logger.info(f"  input_tensor shape: {input_tensor.shape}")
+        logger.info(f"  weight_tensor shape: {W_ttnn.shape}")
+        logger.info(f"  bias_tensor shape: {B_ttnn.shape}")
+        logger.info(f"  in_channels: {input_BHWC[3]}")
+        logger.info(f"  out_channels: {conv_outchannels}")
+        logger.info(f"  device: {device}")
+        logger.info(f"  kernel_size: {conv_kernel_size}")
+        logger.info(f"  stride: {conv_stride}")
+        logger.info(f"  padding: {conv_padding}")
+        logger.info(f"  batch_size: {input_BHWC[0]}")
+        logger.info(f"  input_height: {input_BHWC[1]}")
+        logger.info(f"  input_width: {input_BHWC[2]}")
+        logger.info(f"  conv_config: {conv_config}")
+        logger.info(f"  groups: {0}")
+
+    # Perform convolution
+    conv1_out = ttnn.conv2d(
+        input_tensor=input_tensor,
+        weight_tensor=W_ttnn,
+        bias_tensor=B_ttnn,
+        in_channels=input_BHWC[3],
+        out_channels=conv_outchannels,
+        device=device,
+        kernel_size=conv_kernel_size,
+        stride=conv_stride,
+        padding=conv_padding,
+        batch_size=input_BHWC[0],
+        input_height=input_BHWC[1],
+        input_width=input_BHWC[2],
+        conv_config=conv_config,
+        groups=0,
+    )
+
+    # Define max pooling parameters
+    max_pool2d_kernel_size = [2, 2]
+    max_pool2d_stride = [2, 2]
+    max_pool2d_padding = [0, 0]
+    max_pool2d_dilation = [1, 1]
+
+    # Optional logging for max pooling input and parameters
+    if log_first_sample:
+        logger.info("Input parameters to max_pool2d:")
+        logger.info(f"  input shape: {conv1_out.shape}")
+        logger.info(f"  batch_size: {input_BHWC[0]}")
+        logger.info(f"  input_h: {input_BHWC[1]}")
+        logger.info(f"  input_w: {input_BHWC[2]}")
+        logger.info(f"  channels: {conv_outchannels}")
+        logger.info(f"  kernel_size: {max_pool2d_kernel_size}")
+        logger.info(f"  stride: {max_pool2d_stride}")
+        logger.info(f"  padding: {max_pool2d_padding}")
+        logger.info(f"  dilation: {max_pool2d_dilation}")
+        logger.info(f"  ceil_mode: {False}")
+
+    # Perform max pooling
+    max_pool2d_out = ttnn.max_pool2d(
+        conv1_out,
+        batch_size=input_BHWC[0],
+        input_h=input_BHWC[1],
+        input_w=input_BHWC[2],
+        channels=conv_outchannels,
+        kernel_size=max_pool2d_kernel_size,
+        stride=max_pool2d_stride,
+        padding=max_pool2d_padding,
+        dilation=max_pool2d_dilation,
+        ceil_mode=False,
+    )
+
+    # Log output shape after pooling
+    if log_first_sample:
+        logger.info(f"max_pool2d output shape: {max_pool2d_out.shape}")
+        logger.info("=====================================================================")
+
+    return max_pool2d_out
+
+
 def main():
+    # Open TT device
     device = ttnn.open_device(device_id=0, l1_small_size=8192)
 
     try:
         logger.info("\n--- Simple CNN Inference Using TT-NN on CIFAR-10 ---")
 
-        # Load CIFAR-10
+        # Define input transforms: Convert to tensor and normalize
         transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+
+        # Load CIFAR-10 test data
         testset = torchvision.datasets.CIFAR10(root="./data", train=False, download=True, transform=transform)
         testloader = torch.utils.data.DataLoader(testset, batch_size=1, shuffle=False)
 
-        # Load pretrained weights or use random weights if not found
+        # Load pre-trained weights if available, otherwise initialize randomly
         if os.path.exists("simple_cnn_cifar10_weights.pt"):
             weights = torch.load("simple_cnn_cifar10_weights.pt")
             logger.info("Loaded pretrained weights from simple_cnn_cifar10_weights.pt")
@@ -28,246 +154,92 @@ def main():
             logger.warning("simple_cnn_cifar10_weights.pt not found, using random weights")
             torch.manual_seed(0)
             weights = {
-                "conv1.weight": torch.randn((16, 3, 3, 3), dtype=torch.float32),
-                "conv1.bias": torch.randn((16,), dtype=torch.float32),
-                "conv2.weight": torch.randn((32, 16, 3, 3), dtype=torch.float32),
-                "conv2.bias": torch.randn((32,), dtype=torch.float32),
-                "fc1.weight": torch.randn((128, 2048), dtype=torch.float32),
-                "fc1.bias": torch.randn((128,), dtype=torch.float32),
-                "fc2.weight": torch.randn((10, 128), dtype=torch.float32),
-                "fc2.bias": torch.randn((10,), dtype=torch.float32),
+                "conv1.weight": torch.randn((16, 3, 3, 3)),
+                "conv1.bias": torch.randn((16,)),
+                "conv2.weight": torch.randn((32, 16, 3, 3)),
+                "conv2.bias": torch.randn((32,)),
+                "fc1.weight": torch.randn((128, 2048)),
+                "fc1.bias": torch.randn((128,)),
+                "fc2.weight": torch.randn((10, 128)),
+                "fc2.bias": torch.randn((10,)),
             }
 
         correct = 0
         total = 0
 
+        # Run inference on a few test samples
         for i, (image, label) in enumerate(testloader):
             if i >= 5:
                 break
 
-            # Preprocess input
+            # Convert image to TT tensor
             ttnn_image = ttnn.from_torch(image, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
+            ttnn_image_permuated = ttnn.permute(ttnn_image, (0, 2, 3, 1))  # BCHW -> BHWC
 
-            # Conv1
-            W1 = weights["conv1.weight"]
-            B1 = weights["conv1.bias"]
-            # W1_tt = ttnn.from_torch(W1, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-            # W1_tt = ttnn.to_layout(W1_tt, ttnn.TILE_LAYOUT)
-            # W1 = W1.permute(0, 1, 2, 3)  # Convert to [out_channels, kernel_height, kernel_width, in_channels]
-            B1 = B1.view(1, 1, 1, -1)  # Reshape bias to [1, 1, 1, out_channels]
-            # B1_tt = ttnn.from_torch(B1.view(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-            # B1_tt = ttnn.to_layout(B1_tt, ttnn.TILE_LAYOUT)
+            # Only log details for first sample
+            log_this = i == 0
 
-            # logger.info(f"W1 : shape: {W1.shape}")
-            # logger.info(f"B1 : shape: {B1.shape}")
-
-            logger.info(f"Sample {i+1}: Input shape: {ttnn.to_torch(ttnn_image).shape}")
-
-            W1_ttnn = ttnn.from_torch(W1, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
-            B1_ttnn = ttnn.from_torch(B1, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
-
-            # Data prep: permute and reshape input
-            # BCHW -> BHWC
-            image_permuted = ttnn.permute(ttnn_image, (0, 2, 3, 1))
-            image_B, image_H, image_W, image_C = image_permuted.shape
-            image_reshaped = image_permuted  # ttnn.reshape(image_permuted, (1, 1, image_H * image_W, image_C))
-
-            # if weights are on device, (1) pass correct shape, (2) preprocessed automatically to correct shape by setting always_preprocess_weights=true
-            conv_config = ttnn.Conv2dConfig(dtype=ttnn.bfloat16, weights_dtype=ttnn.bfloat16, activation="relu")
-            print("CONV1 input_tensor shape:", image_reshaped.shape)
-            print("weight_tensor shape:", W1_ttnn.shape)
-            print("bias_tensor shape:", B1_ttnn.shape)
-            print("in_channels:", image_C)
-            print("out_channels:", 16)
-            print("device:", device)
-            print("kernel_size:", (3, 3))
-            print("stride:", (1, 1))
-            print("padding:", (1, 1))
-            print("batch_size:", 1)
-            print("input_height:", 32)
-            print("input_width:", 32)
-            print("conv_config:", conv_config)
-            print("groups:", 0)
-
-            conv1_out = ttnn.conv2d(
-                input_tensor=image_reshaped,
-                weight_tensor=W1_ttnn,
-                bias_tensor=B1_ttnn,
-                in_channels=image_C,
-                out_channels=16,
-                device=device,
-                kernel_size=(3, 3),
-                stride=(1, 1),
-                padding=(1, 1),
-                batch_size=1,
-                input_height=32,
-                input_width=32,
-                conv_config=conv_config,
-                groups=0,
+            # Apply first conv + pool stage
+            conv1_pool = conv_pool_stage(
+                ttnn_image_permuated,
+                ttnn_image_permuated.shape,
+                16,
+                weights,
+                "conv1.weight",
+                "conv1.bias",
+                "relu",
+                device,
+                log_first_sample=log_this,
             )
 
-            print("conv1_out shape:", conv1_out.shape)
-
-            # conv1_relu = ttnn.relu(conv1_out)
-
-            print("Input parameters to first max_pool2d:")
-            print(f"  input shape: {conv1_out.shape}")
-            print(f"  batch_size: {1}")
-            print(f"  input_h: {32}")
-            print(f"  input_w: {32}")
-            print(f"  channels: {16}")
-            print(f"  kernel_size: {[2, 2]}")
-            print(f"  stride: {[2, 2]}")
-            print(f"  padding: {[0, 0]}")
-            print(f"  dilation: {[1, 1]}")
-            print(f"  ceil_mode: {False}")
-
-            conv1_pool_ttnn = ttnn.max_pool2d(
-                conv1_out,
-                batch_size=1,
-                input_h=32,
-                input_w=32,
-                channels=16,
-                kernel_size=[2, 2],
-                stride=[2, 2],
-                padding=[0, 0],
-                dilation=[1, 1],
-                ceil_mode=False,
+            # Apply second conv + pool stage
+            conv2_pool = conv_pool_stage(
+                conv1_pool,
+                (1, 16, 16, 16),
+                32,
+                weights,
+                "conv2.weight",
+                "conv2.bias",
+                "relu",
+                device,
+                log_first_sample=log_this,
             )
 
-            # Convert to row-major and then to torch
-            # conv1_pool_rm = ttnn.to_layout(conv1_pool_ttnn, ttnn.ROW_MAJOR_LAYOUT)
-            # conv1_pool_torch = ttnn.to_torch(conv1_pool_rm)  # Shape: (1, 1, 256, 32)
-
-            # print("Post-pool torch tensor shape:", conv1_pool_torch.shape)  # Should be [1, 1, 256, 32]
-
-            # Reshape to (1, 16, 16, 32)
-            # conv1_pool_torch_reshaped = conv1_pool_torch.reshape(1, 16, 16, 32)
-            # print("Reshaped tensor shape:", conv1_pool_torch_reshaped.shape)  # [1, 16, 16, 32]
-
-            # Slice channels from 32 to 16 → final shape: (1, 1, 256, 16)
-            # conv1_pool_tt = conv1_pool_torch[:, :, :, :16]
-            # print("Final sliced tensor shape:", conv1_pool_tt.shape)  # [1, 1, 256, 16]
-
-            # Convert back to TTNN tensor for next conv
-            # conv1_pool_tt = ttnn.from_torch(conv1_pool_torch_sliced, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-            # Conv2
-            W2 = weights["conv2.weight"]
-            B2 = weights["conv2.bias"]
-            # W2_tt = ttnn.from_torch(W2, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-            # W2_tt = ttnn.to_layout(W2_tt, ttnn.TILE_LAYOUT)
-            # W2 = W2.permute(0, 1, 2, 3)  # Convert to [out_channels, kernel_height, kernel_width, in_channels]
-            B2 = B2.view(1, 1, 1, -1)  # Reshape bias to [1, 1, 1, out_channels]
-            # B2_tt = ttnn.from_torch(B2.view(1, -1, 1, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-            # B2_tt = ttnn.to_layout(B2_tt, ttnn.TILE_LAYOUT)
-
-            W2_ttnn = ttnn.from_torch(W2, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
-            B2_ttnn = ttnn.from_torch(B2, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
-
-            # conv1_pool_tt_B, conv1_pool_tt_H, conv1_pool_tt_W, conv1_pool_tt_C = conv1_pool_tt.shape
-            # conv1_pool_tt_reshaped = ttnn.reshape(conv1_pool_tt, (1, 1, conv1_pool_tt_H * conv1_pool_tt_W, conv1_pool_tt_C))
-
-            print("CONV2 input_tensor shape:", conv1_pool_ttnn.shape)
-            print("weight_tensor shape:", W2_ttnn.shape)
-            print("bias_tensor shape:", B2_ttnn.shape)
-            print("in_channels:", 16)
-            print("out_channels:", 32)
-            print("device:", device)
-            print("kernel_size:", (3, 3))
-            print("stride:", (1, 1))
-            print("padding:", (1, 1))
-            print("batch_size:", 1)
-            print("input_height:", 16)
-            print("input_width:", 16)
-            print("conv_config:", conv_config)
-            print("groups:", 0)
-
-            conv2_out = ttnn.conv2d(
-                input_tensor=conv1_pool_ttnn,
-                weight_tensor=W2_ttnn,
-                bias_tensor=B2_ttnn,
-                in_channels=16,
-                out_channels=32,
-                device=device,
-                kernel_size=(3, 3),
-                stride=(1, 1),
-                padding=(1, 1),
-                batch_size=1,
-                input_height=16,
-                input_width=16,
-                conv_config=conv_config,
-                groups=0,
-            )
-
-            print("conv2_out shape:", conv2_out.shape)
-            # conv2_relu = ttnn.relu(conv2_out)
-
-            conv2_B, conv2_H, conv2_W, conv2_C = conv2_out.shape
-
-            print("max_pool2d input parameters:")
-            print(f"  input shape: {conv2_out.shape}")
-            print(f"  batch_size: {1}")
-            print(f"  input_h: {16}")
-            print(f"  input_w: {16}")
-            print(f"  channels: {32}")
-            print(f"  kernel_size: {[2, 2]}")
-            print(f"  stride: {[2, 2]}")
-            print(f"  padding: {[0, 0]}")
-            print(f"  dilation: {[1, 1]}")
-            print(f"  ceil_mode: {False}")
-
-            conv2_pool = ttnn.max_pool2d(
-                conv2_out,
-                batch_size=1,
-                input_h=16,
-                input_w=16,
-                channels=32,
-                kernel_size=[2, 2],
-                stride=[2, 2],
-                padding=[0, 0],
-                dilation=[1, 1],
-                ceil_mode=False,
-            )
-
-            print("conv2_pool shape:", conv2_pool.shape)
-            # After conv2_pool is computed and has shape: [1, 8, 8, 32]
+            # Flatten for FC layers
             B, H, W, C = conv2_pool.shape
-            out_flat = ttnn.to_torch(conv2_pool)
-            out_flat = out_flat.permute(0, 3, 1, 2).contiguous().view(B, -1)  # [1, 32*8*8]
+            out_flat = ttnn.to_torch(conv2_pool)  # Convert back to torch
+            out_flat = out_flat.permute(0, 3, 1, 2).contiguous().view(B, -1)  # BHWC -> BCHW -> Flatten
 
-            # Load pretrained FC weights
-            W3 = weights["fc1.weight"]  # [hidden_dim, 2048]
-            B3 = weights["fc1.bias"]  # [hidden_dim]
-            W4 = weights["fc2.weight"]  # [10, hidden_dim]
-            B4 = weights["fc2.bias"]  # [10]
+            # Prepare fully connected layers
+            W3 = weights["fc1.weight"]
+            B3 = weights["fc1.bias"]
+            W4 = weights["fc2.weight"]
+            B4 = weights["fc2.bias"]
 
-            # FC1 setup
+            # Convert to TT format for FC1
             W3_tt = ttnn.from_torch(W3.T, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
             W3_tt = ttnn.to_layout(W3_tt, ttnn.TILE_LAYOUT)
-
             B3_tt = ttnn.from_torch(B3.view(1, -1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
             B3_tt = ttnn.to_layout(B3_tt, ttnn.TILE_LAYOUT)
 
-            # Convert out_flat to TT
+            # Convert input to TT format
             x_tt = ttnn.from_torch(out_flat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
             x_tt = ttnn.to_layout(x_tt, ttnn.TILE_LAYOUT)
 
-            # FC1 + ReLU
+            # Apply FC1 + ReLU
             out = ttnn.linear(x_tt, W3_tt, bias=B3_tt)
             out = ttnn.relu(out)
 
-            # FC2 setup
+            # Convert to TT format for FC2
             W4_tt = ttnn.from_torch(W4.T, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
             W4_tt = ttnn.to_layout(W4_tt, ttnn.TILE_LAYOUT)
-
             B4_tt = ttnn.from_torch(B4.view(1, -1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
             B4_tt = ttnn.to_layout(B4_tt, ttnn.TILE_LAYOUT)
 
-            # FC2
+            # Apply FC2 (output logits)
             out = ttnn.linear(out, W4_tt, bias=B4_tt)
 
-            # Prediction
+            # Convert prediction back to torch
             prediction = ttnn.to_torch(out)
             predicted_label = torch.argmax(prediction, dim=1).item()
             correct += predicted_label == label.item()
@@ -278,7 +250,7 @@ def main():
         logger.info(f"\nTT-NN SimpleCNN Inference Accuracy: {correct}/{total} = {100.0 * correct / total:.2f}%")
 
     finally:
-        ttnn.close_device(device)
+        ttnn.close_device(device)  # Always close device when done
 
 
 if __name__ == "__main__":

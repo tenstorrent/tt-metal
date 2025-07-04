@@ -6,6 +6,7 @@ import os
 import time
 import torch
 import ttnn
+from loguru import logger
 
 from ttnn.model_preprocessing import (
     preprocess_linear_bias,
@@ -17,11 +18,10 @@ def main():
     torch.manual_seed(0)
 
     device_id = 0
-    dispatch_core_type = ttnn.device.DispatchCoreType.ETH
-    if "grayskull" in os.environ.get("ARCH_NAME"):
-        dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
     device = ttnn.open_device(
-        device_id=device_id, l1_small_size=8192, dispatch_core_config=ttnn.device.DispatchCoreConfig(dispatch_core_type)
+        device_id=device_id,
+        l1_small_size=8192,
+        dispatch_core_config=ttnn.device.DispatchCoreConfig(ttnn.device.DispatchCoreType.ETH),
     )
 
     device.enable_program_cache()
@@ -135,7 +135,7 @@ def main():
     end = time.time()
     duration = end - start
 
-    print(f"Multi-head attention ran in {duration} seconds for the first iteration")
+    logger.info(f"Multi-head attention ran in {duration} seconds for the first iteration")
 
     start = time.time()
     output = multi_head_attention(
@@ -154,7 +154,9 @@ def main():
     end = time.time()
     duration = end - start
 
-    print(f"Multi-head attention ran in {duration} seconds for the subsequent iteration because of the program cache")
+    logger.info(
+        f"Multi-head attention ran in {duration} seconds for the subsequent iteration because of the program cache"
+    )
 
     def optimized_multi_head_attention(
         hidden_states,
@@ -260,7 +262,7 @@ def main():
     end = time.time()
     duration = end - start
 
-    print(f"Optimized multi-head attention ran in {duration} seconds for the first iteration")
+    logger.info(f"Optimized multi-head attention ran in {duration} seconds for the first iteration")
 
     start = time.time()
     optimized_output = optimized_multi_head_attention(
@@ -275,7 +277,7 @@ def main():
     end = time.time()
     duration = end - start
 
-    print(
+    logger.info(
         f"Optimized multi-head attention ran in {duration} seconds for the subsequent iteration because of the program cache"
     )
 
