@@ -115,31 +115,33 @@ jobs:
           echo "Found $COMMIT_COUNT commits using ${OLD_SHA}..${NEW_SHA}"
 
           # Generate commits table content
-          COMMITS_TABLE_CONTENT="| Commit | Message | Author | PR |"$'\n'
-          COMMITS_TABLE_CONTENT+="|--------|---------|--------|----|"$'\n'
+          COMMITS_TABLE_CONTENT=$(mktemp)
 
-          # Always run this loop. Even if no commits, it'll just do nothing.
-          git log --pretty=format:'%h|%s|%an|%H' ${OLD_SHA}..${NEW_SHA} | while IFS='|' read -r short_hash message author full_hash; do
+          echo "| Commit | Message | Author | PR |" >> "$COMMITS_TABLE_CONTENT"
+          echo "|--------|---------|--------|----|" >> "$COMMITS_TABLE_CONTENT"
+
+          while IFS='|' read -r short_hash message author full_hash; do
             if [ -z "$short_hash" ]; then
               continue
             fi
 
             safe_message=$(echo "$message" | sed 's/|/\\|/g')
-            pr_number=$(echo "$message" | grep -oE '$begin:math:text$#[0-9]+$end:math:text$' | grep -oE '[0-9]+' | head -1)
+            pr_number=$(echo "$message" | grep -oE '#[0-9]+' | grep -oE '[0-9]+' | head -1)
 
             if [ -n "$pr_number" ]; then
-              COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $safe_message | $author | [#$pr_number](https://github.com/tenstorrent/tt_llk/pull/$pr_number) |"$'\n'
+              echo "| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $safe_message | $author | [#$pr_number](https://github.com/tenstorrent/tt_llk/pull/$pr_number) |" >> "$COMMITS_TABLE_CONTENT"
             else
-              COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $safe_message | $author | - |"$'\n'
+              echo "| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $safe_message | $author | - |" >> "$COMMITS_TABLE_CONTENT"
             fi
-          done < <(git log --pretty=tformat:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA})
+          done <<< "$(git log --pretty=format:'%h|%s|%an|%H' ${OLD_SHA}..${NEW_SHA})"
+
           if [ "$COMMIT_COUNT" -eq 0 ]; then
-            COMMITS_TABLE_CONTENT+="| (No commits found) | - | - | - |"$'\n'
+            echo "| (No commits found) | - | - | - |" >> "$COMMITS_TABLE_CONTENT"
           fi
 
-          # Save commits table to GITHUB_OUTPUT
+          # Save to GITHUB_OUTPUT
           echo "commits-table<<EOF" >> $GITHUB_OUTPUT
-          echo "$COMMITS_TABLE_CONTENT" >> $GITHUB_OUTPUT
+          cat "$COMMITS_TABLE_CONTENT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
           # Generate PR body
@@ -265,7 +267,8 @@ jobs:
               RUN_ID=""
               for i in {1..12}; do
                 # Look for runs created after we triggered this workflow
-                RUN_ID=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json databaseId,createdAt --jq --argjson since "$TRIGGER_TIME" '.[0] | select(.createdAt | fromdateiso8601 > $since) | .databaseId // empty')
+                RUN_ID=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json databaseId,createdAt | \
+                  jq -r --argjson since "$TRIGGER_TIME" '.[] | select((.createdAt | fromdateiso8601) > $since) | .databaseId' | head -1)
                 if [ -n "$RUN_ID" ]; then
                   break
                 fi
