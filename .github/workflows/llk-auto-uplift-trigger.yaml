@@ -244,9 +244,18 @@ jobs:
 
   trigger-and-monitor-workflows:
     needs: [llk-submodule-uplift]
-    if: needs.lk-submodule-uplift.outputs.has-changes == 'true' && (needs.lk-submodule-uplift.outputs.should-run-wormhole == 'true' || needs.lk-submodule-uplift.outputs.should-run-blackhole == 'true')
     runs-on: ubuntu-latest
     steps:
+      - name: Debug outputs
+        run: |
+          echo "has-changes: '${{ needs.llk-submodule-uplift.outputs.has-changes }}'"
+          echo "should-run-wormhole: '${{ needs.llk-submodule-uplift.outputs.should-run-wormhole }}'"
+          echo "should-run-blackhole: '${{ needs.llk-submodule-uplift.outputs.should-run-blackhole }}'"
+          echo "Condition check:"
+          echo "has-changes == 'true': ${{ needs.llk-submodule-uplift.outputs.has-changes == 'true' }}"
+          echo "should-run-wormhole == 'true': ${{ needs.llk-submodule-uplift.outputs.should-run-wormhole == 'true' }}"
+          echo "should-run-blackhole == 'true': ${{ needs.llk-submodule-uplift.outputs.should-run-blackhole == 'true' }}"
+
       - name: Checkout for GitHub CLI
         uses: actions/checkout@v4
 
@@ -260,11 +269,11 @@ jobs:
           # Build workflow list based on detected changes
           WORKFLOWS_TO_RUN=()
 
-          if [ "${{ needs.update-submodule.outputs.should-run-wormhole }}" == "true" ]; then
+          if [ "${{ needs.llk-submodule-uplift.outputs.should-run-wormhole }}" == "true" ]; then
             WORKFLOWS_TO_RUN+=("all-post-commit-workflows.yaml")
           fi
 
-          if [ "${{ needs.update-submodule.outputs.should-run-blackhole }}" == "true" ]; then
+          if [ "${{ needs.llk-submodule-uplift.outputs.should-run-blackhole }}" == "true" ]; then
             WORKFLOWS_TO_RUN+=("blackhole-post-commit.yaml")
           fi
 
@@ -314,7 +323,7 @@ jobs:
 
                 # Comment on PR with workflow link
                 RUN_URL="https://github.com/${{ github.repository }}/actions/runs/$RUN_ID"
-                gh pr comment "${{ needs.update-submodule.outputs.pr-number }}" \
+                gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
                   --body "🔄 **$workflow** triggered: [View run]($RUN_URL)" \
                   --repo "${{ github.repository }}"
               fi
@@ -344,7 +353,7 @@ jobs:
               echo "⏰ Timeout reached after ${TIMEOUT_MINUTES} minutes"
               for run_id in "${RUN_IDS[@]}"; do
                 RUN_URL="https://github.com/${{ github.repository }}/actions/runs/$run_id"
-                gh pr comment "${{ needs.update-submodule.outputs.pr-number }}" \
+                gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
                   --body "⏰ **Workflow timed out** after ${TIMEOUT_MINUTES} minutes: [View run]($RUN_URL)" \
                   --repo "${{ github.repository }}"
               done
@@ -363,12 +372,12 @@ jobs:
 
                 if [ "$CONCLUSION" == "success" ]; then
                   echo "✅ Run $run_id completed successfully"
-                  gh pr comment "${{ needs.update-submodule.outputs.pr-number }}" \
+                  gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
                     --body "✅ **Workflow passed**: [View run]($RUN_URL)" \
                     --repo "${{ github.repository }}"
                 else
                   echo "❌ Run $run_id failed with conclusion: $CONCLUSION"
-                  gh pr comment "${{ needs.update-submodule.outputs.pr-number }}" \
+                  gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
                     --body "❌ **Workflow failed** (conclusion: \`$CONCLUSION\`): [View run]($RUN_URL)" \
                     --repo "${{ github.repository }}"
                   ALL_SUCCESS=false
@@ -406,7 +415,7 @@ jobs:
         run: |
           echo "🚀 Finalizing PR merge..."
 
-          PR_NUMBER="${{ needs.update-submodule.outputs.pr-number }}"
+          PR_NUMBER="${{ needs.llk-submodule-uplift.outputs.pr-number }}"
 
           # Mark PR as ready if it was created as draft
           if [ "${{ inputs.skip_draft }}" != "true" ]; then
