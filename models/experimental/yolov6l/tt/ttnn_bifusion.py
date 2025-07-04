@@ -14,44 +14,34 @@ class TtBiFusion:
             device=device,
             conv=model_params.cv1.block.conv,
             conv_pth=parameters.cv1.block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="relu",
-            reshape=True,
         )
         self.cv2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cv2.block.conv,
             conv_pth=parameters.cv2.block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="relu",
-            reshape=True,
         )
         self.cv3 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cv3.block.conv,
             conv_pth=parameters.cv3.block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="relu",
             reshape=True,
+            deallocate_activation=True,
         )
         self.upsample = Yolov6x_Conv_T_2D(
             model_params.upsample.upsample_transpose,
             parameters.upsample.upsample_transpose,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             device=device,
-            reshape=True,
         )
         self.downsample = Yolov6l_Conv2D(
             device=device,
             conv=model_params.downsample.block.conv,
             conv_pth=parameters.downsample.block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="relu",
-            reshape=True,
+            deallocate_activation=True,
         )
 
     def __call__(self, x):
@@ -59,6 +49,9 @@ class TtBiFusion:
         conv1 = self.cv1(x[1])
         conv2 = self.cv2(x[2])
         downsample = self.downsample(conv2)
+        conv_t = ttnn.sharded_to_interleaved(conv_t, ttnn.L1_MEMORY_CONFIG)
+        conv1 = ttnn.sharded_to_interleaved(conv1, ttnn.L1_MEMORY_CONFIG)
+        downsample = ttnn.sharded_to_interleaved(downsample, ttnn.L1_MEMORY_CONFIG)
         output = ttnn.concat([conv_t, conv1, downsample], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         output = self.cv3(output)
         return output
