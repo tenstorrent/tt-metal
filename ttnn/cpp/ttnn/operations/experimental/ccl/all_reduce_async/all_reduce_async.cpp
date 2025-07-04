@@ -198,7 +198,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
     bool use_noc1_only,
-    bool use_custom_worker_core_placement) {
+    bool use_optimal_ccl_for_llama) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     return ttnn::operations::experimental::ccl::all_reduce_async(
         input_tensor,
@@ -212,7 +212,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         num_preferred_links,
         worker_subdevice_id_opt,
         use_noc1_only,
-        use_custom_worker_core_placement);
+        use_optimal_ccl_for_llama);
 }
 
 std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
@@ -227,7 +227,7 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
     bool use_noc1_only,
-    bool use_custom_worker_core_placement) {
+    bool use_optimal_ccl_for_llama) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
     return ttnn::operations::experimental::ccl::all_reduce_async(
         input_tensors,
@@ -241,7 +241,7 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
         num_preferred_links,
         worker_subdevice_id_opt,
         use_noc1_only,
-        use_custom_worker_core_placement);
+        use_optimal_ccl_for_llama);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

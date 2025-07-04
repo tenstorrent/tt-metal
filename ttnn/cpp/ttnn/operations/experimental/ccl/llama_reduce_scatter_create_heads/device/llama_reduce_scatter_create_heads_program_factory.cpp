@@ -468,7 +468,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     auto available_cores = sub_device_cores.subtract(packet_worker_cores_grid);
 
-    auto sender_core_grid = operation_attributes.use_custom_worker_core_placement
+    auto sender_core_grid = operation_attributes.use_optimal_ccl_for_llama
                                 ? detail::rs_heads_fusion::get_custom_cores(
                                       available_cores,
                                       num_workers_per_link * num_links,
