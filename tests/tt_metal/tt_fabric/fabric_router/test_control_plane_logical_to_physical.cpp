@@ -18,9 +18,6 @@
 
 #include "fabric_fixture.hpp"
 
-// Fixture for ControlPlane logical to physical mapping tests
-using ControlPlane = ::tt::tt_fabric::ControlPlane;
-
 namespace tt::tt_fabric {
 // Unified Configurable Mock ControlPlane class for testing get_mesh_physical_chip_ids
 class TestingMockControlPlane : public ControlPlane {
@@ -448,7 +445,7 @@ TEST_F(ControlPlaneFixture, TestGetMeshPhysicalChipIdsLooped2DMesh) {
 }
 
 TEST_F(ControlPlaneFixture, TestGetMeshPhysicalChipIdsWithStartingChipId) {
-    // Test 3x3 mesh with custom starting chip ID
+    // Test 3x3 mesh with custom northwest corner chip ID
     // Shape: 0-1-2
     //        | | |
     //        3-4-5
@@ -467,19 +464,19 @@ TEST_F(ControlPlaneFixture, TestGetMeshPhysicalChipIdsWithStartingChipId) {
     TestingMockControlPlane mock_cp(
         adjacency_data, tt::tt_metal::distributed::MeshShape(3, 3), {0, 1, 2, 3, 4, 5, 6, 7, 8});
 
-    // Test with default starting chip ID (should use chip 0)
+    // Test with default northwest corner chip ID (should use chip 0)
     auto physical_chip_ids_default = mock_cp.get_mesh_physical_chip_ids();
-    EXPECT_EQ(physical_chip_ids_default[0], 0) << "Default starting chip should be 0";
+    EXPECT_EQ(physical_chip_ids_default[0], 0) << "Default northwest corner chip should be 0";
 
-    // Test with custom starting chip ID (chip 4)
-    auto physical_chip_ids_custom = mock_cp.get_mesh_physical_chip_ids(mock_cp.get_mesh_container(), 4);
-    EXPECT_EQ(physical_chip_ids_custom[0], 4) << "Custom starting chip should be 4";
+    // Test with custom northwest corner chip ID (chip 4)
+    auto physical_chip_ids_custom = mock_cp.get_mesh_physical_chip_ids(mock_cp.get_mesh_container(), 2);
+    EXPECT_EQ(physical_chip_ids_custom[0], 2) << "Custom northwest corner chip should be 4";
 
-    // Test with invalid starting chip ID (should throw)
+    // Test with invalid northwest corner chip ID (should throw)
     EXPECT_THROW(
         { auto physical_chip_ids_invalid = mock_cp.get_mesh_physical_chip_ids(mock_cp.get_mesh_container(), 99); },
         std::exception)
-        << "Should throw when starting chip ID is not in mesh container";
+        << "Should throw when northwest corner chip ID is not in mesh container";
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
