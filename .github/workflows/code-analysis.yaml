@@ -118,20 +118,22 @@ jobs:
           COMMITS_TABLE_CONTENT="| Commit | Message | Author | PR |"$'\n'
           COMMITS_TABLE_CONTENT+="|--------|---------|--------|----|"$'\n'
 
+          # Always run this loop. Even if no commits, it'll just do nothing.
           git log --pretty=format:'%h|%s|%an|%H' ${OLD_SHA}..${NEW_SHA} | while IFS='|' read -r short_hash message author full_hash; do
-            # Escape pipe characters in message to not break Markdown table
-            safe_message=$(echo "$message" | sed 's/|/\\|/g')
+            if [ -z "$short_hash" ]; then
+              continue
+            fi
 
-            pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
+            safe_message=$(echo "$message" | sed 's/|/\\|/g')
+            pr_number=$(echo "$message" | grep -oE '$begin:math:text$#[0-9]+$end:math:text$' | grep -oE '[0-9]+' | head -1)
 
             if [ -n "$pr_number" ]; then
               COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $safe_message | $author | [#$pr_number](https://github.com/tenstorrent/tt_llk/pull/$pr_number) |"$'\n'
             else
               COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $safe_message | $author | - |"$'\n'
             fi
-            done < <(git log --pretty=tformat:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA})
-          else
-            echo "No commits found - this shouldn't happen if we detected changes"
+          done < <(git log --pretty=tformat:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA})
+          if [ "$COMMIT_COUNT" -eq 0 ]; then
             COMMITS_TABLE_CONTENT+="| (No commits found) | - | - | - |"$'\n'
           fi
 
