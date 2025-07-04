@@ -2426,7 +2426,10 @@ class ModelArgs:
 
     def reference_vision_attention(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder.layers[0].self_attn  # Common naming
+        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            layer = model.vision_tower.transformer.layers[0].attention
+        else:
+            layer = model.vision_tower.vision_model.encoder.layers[0].self_attn  # Common naming
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer

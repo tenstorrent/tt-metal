@@ -286,12 +286,20 @@ def map_vision_meta_to_hf_keys(loaded_weights):
         # "visual.blocks.{layer}.attn.v_proj.bias": "visual.blocks.{layer}.attn.wv.bias",
         # "visual.blocks.{layer}.attn.proj.bias": "visual.blocks.{layer}.attn.wo.bias",
         # Mistral
+        "wq.weight": "q_proj.weight",
+        "wk.weight": "k_proj.weight",
+        "wv.weight": "v_proj.weight",
+        "wo.weight": "o_proj.weight",
         "vision_tower.transformer.layers.{layer}.feed_forward.gate_proj.weight": "vision_tower.transformer.layers.{layer}.feed_forward.w1.weight",
         "vision_tower.transformer.layers.{layer}.feed_forward.gate_proj.bias": "vision_tower.transformer.layers.{layer}.feed_forward.w1.bias",
         "vision_tower.transformer.layers.{layer}.feed_forward.up_proj.weight": "vision_tower.transformer.layers.{layer}.feed_forward.w2.weight",
         "vision_tower.transformer.layers.{layer}.feed_forward.up_proj.bias": "vision_tower.transformer.layers.{layer}.feed_forward.w2.bias",
         "vision_tower.transformer.layers.{layer}.feed_forward.down_proj.weight": "vision_tower.transformer.layers.{layer}.feed_forward.w3.weight",
         "vision_tower.transformer.layers.{layer}.feed_forward.down_proj.bias": "vision_tower.transformer.layers.{layer}.feed_forward.w3.bias",
+        "vision_tower.transformer.layers.{layer}.attention.wq.weight": "vision_tower.transformer.layers.{layer}.attention.q_proj.weight",
+        "vision_tower.transformer.layers.{layer}.attention.wk.weight": "vision_tower.transformer.layers.{layer}.attention.k_proj.weight",
+        "vision_tower.transformer.layers.{layer}.attention.wv.weight": "vision_tower.transformer.layers.{layer}.attention.v_proj.weight",
+        "vision_tower.transformer.layers.{layer}.attention.wo.weight": "vision_tower.transformer.layers.{layer}.attention.o_proj.weight",
     }
     # key new key
     # key tensor
@@ -451,10 +459,10 @@ def map_vision_hf_to_meta_keys(loaded_weights):
         "vision_tower.transformer.layers.{layer}.feed_forward.up_proj.bias": "vision_tower.transformer.layers.{layer}.feed_forward.up_proj.bias",
         "vision_tower.transformer.layers.{layer}.feed_forward.down_proj.weight": "vision_tower.transformer.layers.{layer}.feed_forward.down_proj.weight",
         "vision_tower.transformer.layers.{layer}.feed_forward.down_proj.bias": "vision_tower.transformer.layers.{layer}.feed_forward.down_proj.bias",
-        #     "vision_tower.transformer.layers.{layer}.attention.wq.weight": "vision_tower.transformer.layers.{layer}.attention.wq.weight",
-        #     "vision_tower.transformer.layers.{layer}.attention.wk.weight": "vision_tower.transformer.layers.{layer}.attention.k_proj.weight",
-        #     "vision_tower.transformer.layers.{layer}.attention.wv.weight": "vision_tower.transformer.layers.{layer}.attention.v_proj.weight",
-        #     "vision_tower.transformer.layers.{layer}.attention.wo.weight": "vision_tower.transformer.layers.{layer}.attention.o_proj.weight",
+        "vision_tower.transformer.layers.{layer}.attention.q_proj.weight": "vision_tower.transformer.layers.{layer}.attention.wq.weight",
+        "vision_tower.transformer.layers.{layer}.attention.k_proj.weight": "vision_tower.transformer.layers.{layer}.attention.wk.weight",
+        "vision_tower.transformer.layers.{layer}.attention.v_proj.weight": "vision_tower.transformer.layers.{layer}.attention.wv.weight",
+        "vision_tower.transformer.layers.{layer}.attention.o_proj.weight": "vision_tower.transformer.layers.{layer}.attention.wo.weight",
     }
 
     remapped = {}
