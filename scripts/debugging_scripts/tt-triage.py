@@ -259,19 +259,7 @@ def collect_pcs_from_riscv(
         assert store is not None, f"Debug bus not found for location {block.location.to_str('logical')}"
         pc_dict = dict()
         for risc_name in block.risc_names:
-            # Name of debug bus signal for PC is standardized as risc_name + _pc
-            sig = risc_name + "_pc"
-            # We still don't have debug bus signal for ERISC on WH so we obtain it through gpr
-            # TODO: Once debug bus signal is added delete this if
-            if sig == "erisc_pc":
-                pc = block.get_risc_debug("erisc").read_gpr(32)
-            else:
-                pc = store.read_signal(sig)
-                if sig == "ncrisc_pc":
-                    if pc & 0xF0000000 == 0x70000000:
-                        pc = pc | 0x80000000  # Turn the topmost bit on as it was lost on debug bus
-
-            pc_dict[sig] = pc
+            pc_dict[risc_name + "_pc"] = block.get_risc_debug(risc_name).get_pc()
         pcs[block.location] = pc_dict
     return pcs
 
