@@ -434,6 +434,13 @@ jobs:
     outputs:
       tests-passed: ${{ steps.check-latest.outputs.tests-passed }}
     steps:
+      - name: Checkout parent repo
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.TEMP_METAL_PAT }}
+          fetch-depth: 0
+
       - name: Check latest test runs
         id: check-latest
         env:
