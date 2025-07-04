@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
-
-#include <tt-metalium/core_coord.hpp>
+#include "ttnn/operations/experimental/ccl/llama_common.hpp"
 
 namespace llama_specific {
 

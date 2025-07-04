@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <tt-metalium/core_coord.hpp>
+
 namespace llama_specific {
 
 CoreRangeSet get_custom_cores(const uint32_t num_workers, bool row_wise = true);
