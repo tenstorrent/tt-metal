@@ -824,7 +824,6 @@ def test_decode_matmuls(
     dtypes,
     program_config,
     memory_configs,
-    use_program_cache,
     function_level_defaults,
     reset_seeds,
 ):
@@ -921,7 +920,6 @@ def test_prefill_matmuls(
     program_config,
     memory_configs,
     seq_len,
-    use_program_cache,
     function_level_defaults,
     reset_seeds,
 ):
@@ -959,7 +957,6 @@ def test_decode_ropes(
     shape,
     dtype,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     reset_seeds,
 ):
@@ -1000,7 +997,6 @@ def test_prefill_ropes(
     dtype,
     mem_config,
     seq_len,
-    use_program_cache,
     function_level_defaults,
     reset_seeds,
 ):
@@ -1031,7 +1027,6 @@ def test_update_caches(
     dtype,
     mem_config,
     cache_dtype,
-    use_program_cache,
     function_level_defaults,
     reset_seeds,
 ):
@@ -1067,7 +1062,6 @@ def test_fill_caches(
     mem_config,
     cache_dtype,
     seq_len,
-    use_program_cache,
     function_level_defaults,
     reset_seeds,
 ):
@@ -1102,7 +1096,6 @@ def test_decode_rmsnorms(
     shape,
     dtype,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     reset_seeds,
 ):

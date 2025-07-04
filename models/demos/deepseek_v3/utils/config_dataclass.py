@@ -61,6 +61,13 @@ class OpConfigBase:
 
 
 @dataclass
+class ReshardConfig(OpConfigBase):
+    """Simple config for operations that only need memory configuration"""
+
+    memory_config: ttnn.MemoryConfig
+
+
+@dataclass
 class LinearConfig(OpConfigBase):
     """Common parameters for a ttnn.linear op, weights are in input_tensor_b"""
 

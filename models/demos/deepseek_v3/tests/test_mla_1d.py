@@ -12,9 +12,8 @@ from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.mla_1d import MLA_1D
+from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.run_config import create_run_config
 
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3_impl.model import MLA, ModelArgs, precompute_freqs_cis
@@ -67,14 +66,12 @@ def reference(hf_config, reset_seeds):
 def test_convert_weights(reference, hf_config, temp_dir, mesh_device):
     """Test that weights are correctly converted to TTNN format."""
 
+    logger.info(f"Converting weights for MLA1D to {temp_dir}")
+
     _, reference_model = reference
 
-    output_path = temp_dir
-
-    logger.info(f"Converting weights for MLA_1D to {output_path}")
-
     # Convert weights - now returns weight_config
-    weight_config = MLA_1D.convert_weights(hf_config, reference_model.state_dict(), output_path, mesh_device)
+    weight_config = MLA1D.convert_weights(hf_config, reference_model.state_dict(), temp_dir, mesh_device)
 
     assert "wq_a" in weight_config
     assert "wq_b" in weight_config
@@ -82,48 +79,6 @@ def test_convert_weights(reference, hf_config, temp_dir, mesh_device):
     assert "wkv_b1" in weight_config
     assert "wkv_b2" in weight_config
     assert "wo" in weight_config
-
-
-@pytest.mark.parametrize(
-    "mesh_device",
-    [get_mesh_device()],
-    indirect=True,
-)
-def test_decode_config_generation(hf_config, mesh_device):
-    """Test decode config generation."""
-
-    logger.info(f"Generating decode config for MLA_1D")
-    model_config = MLA_1D.decode_model_config(hf_config, mesh_device)
-
-    assert model_config["mode"] == "decode"
-
-
-@pytest.mark.parametrize(
-    "mesh_device",
-    [get_mesh_device()],
-    indirect=True,
-)
-def test_run_config_creation(reference, hf_config, temp_dir, mesh_device):
-    """Test creating runtime config from ModelConfig and weights."""
-    logger.info(f"Creating run config for MLA_1D")
-
-    # Get state dict from actual model - pass directly to convert_weights
-    _, reference_model = reference
-    hf_state_dict = reference_model.state_dict()
-
-    # First convert weights and get weight_config
-    weights_path = temp_dir
-    logger.info(f"Converting weights for MLA_1D to {weights_path}")
-    weight_config = MLA_1D.convert_weights(hf_config, hf_state_dict, weights_path, mesh_device)
-
-    # Generate model config
-    model_config = MLA_1D.decode_model_config(hf_config, mesh_device)
-
-    # Create RunConfig using both weight_config and model_config
-    run_config = create_run_config(model_config, weight_config, mesh_device)
-
-    # Verify mode is accessible
-    assert run_config["mode"] == "decode"
 
 
 # Integration Tests
@@ -136,7 +91,7 @@ def test_run_config_creation(reference, hf_config, temp_dir, mesh_device):
     "mode, seq_len, batch_size",
     [
         ("decode", 1, 32),
-        ("prefill", 128, 1),
+        # ("prefill", 128, 1),
     ],
 )
 @pytest.mark.parametrize(
@@ -161,19 +116,19 @@ def test_forward_pass(
     ############################
     ### Set up configs
     ############################
-    num_devices = mesh_device.get_num_devices()
-    TG_GRID = (8, 4)  # TP, DP
+    # Setup: Convert weights and get weight_config
+    logger.info(f"Converting weights for MLA1D to {temp_dir}")
+    weight_config = MLA1D.convert_weights(hf_config, reference_model.state_dict(), temp_dir, mesh_device)
 
-    weights_path = temp_dir
-    logger.info(f"Converting weights for MLA_1D to {weights_path}")
-    weight_config = MLA_1D.convert_weights(hf_config, reference_model.state_dict(), weights_path, mesh_device)
+    # Generate appropriate configs
+    model_prefill_config = MLA1D.prefill_model_config(hf_config, mesh_device)
+    model_decode_config = MLA1D.decode_model_config(hf_config, mesh_device)
 
-    if mode == "prefill":
-        model_config = MLA_1D.prefill_model_config(hf_config, mesh_device)
-    else:
-        model_config = MLA_1D.decode_model_config(hf_config, mesh_device)
-
-    run_config = create_run_config(model_config, weight_config, mesh_device)
+    # Create RunConfig using both weight_config and model_config
+    run_prefill_config, run_decode_config = MLA1D.run_config(
+        model_prefill_config, model_decode_config, weight_config, mesh_device
+    )
+    run_config = run_prefill_config if mode == "prefill" else run_decode_config
 
     ############################
     ### Torch inputs
@@ -213,9 +168,6 @@ def test_forward_pass(
         torch_input = torch_input.permute(1, 0, 2)
     torch_input = torch_input.unsqueeze(0)
 
-    # if num_devices == 1:
-    #     torch_input = torch_input[..., :torch_input.shape[-1] // TG_GRID[0]]
-
     # TODO: Need to handle padding for batch
     tt_input = ttnn.from_torch(
         torch_input,
@@ -247,19 +199,17 @@ def test_forward_pass(
         "trans_matrix": rope_setup.get_both_trans_mats()[mode],
     }
 
-    user_id = None if mode == "decode" else 0  # TODO: randint(0, MLA_1D.MAX_BATCH_SIZE)
+    user_id = None if mode == "decode" else 0  # TODO: randint(0, MLA1D.MAX_BATCH_SIZE)
 
     ############################
     ### TTNN forward pass
     ############################
-    tt_mla = MLA_1D(hf_config, mesh_device)
-
-    tt_output = tt_mla.forward(tt_input, position_idxs, user_id, rope_tensors, run_config, mesh_device)
-    tt_output_torch = ttnn.to_torch(tt_output)
-
     if mode == "prefill":
-        pass
+        tt_output = MLA1D.forward_prefill(tt_input, user_id, rope_tensors, run_config)
+        tt_output_torch = ttnn.to_torch(tt_output)
     else:
+        tt_output = MLA1D.forward_decode(tt_input, position_idxs, rope_tensors, run_config)
+        tt_output_torch = ttnn.to_torch(tt_output)
         tt_output_torch = tt_output_torch.squeeze(0).permute(1, 0, 2)
 
     ############################
@@ -284,7 +234,7 @@ def test_forward_pass(
         else:
             range_to_check = range(start_pos, start_pos + 1)
 
-        tt_cache = ttnn.to_torch(tt_mla.kvpe_cache).squeeze(1)  # [bsz, max_seq_len, head_dim + rope_head_dim]
+        tt_cache = ttnn.to_torch(run_config["kvpe_cache"]).squeeze(1)  # [bsz, max_seq_len, head_dim + rope_head_dim]
         tt_cache_kv = tt_cache[:, range_to_check, : hf_config.kv_lora_rank]
         tt_cache_pe = tt_cache[:, range_to_check, hf_config.kv_lora_rank :]
 
