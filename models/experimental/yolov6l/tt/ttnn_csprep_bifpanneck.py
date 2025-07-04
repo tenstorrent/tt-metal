@@ -16,8 +16,8 @@ class TtCSPRepBiFPANNeck:
             device=device,
             conv=model_params.reduce_layer0.block.conv,
             conv_pth=parameters.reduce_layer0.block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            # shard_layout=None,
+            # auto_shard=True,
             activation="relu",
             reshape=True,
         )
@@ -28,8 +28,8 @@ class TtCSPRepBiFPANNeck:
             device=device,
             conv=model_params.reduce_layer1.block.conv,
             conv_pth=parameters.reduce_layer1.block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            # shard_layout=None,
+            # auto_shard=True,
             activation="relu",
             reshape=True,
         )
@@ -40,8 +40,8 @@ class TtCSPRepBiFPANNeck:
             device=device,
             conv=model_params.downsample2.block.conv,
             conv_pth=parameters.downsample2.block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            # shard_layout=None,
+            # auto_shard=True,
             activation="relu",
             reshape=True,
         )
@@ -51,8 +51,8 @@ class TtCSPRepBiFPANNeck:
             device=device,
             conv=model_params.downsample1.block.conv,
             conv_pth=parameters.downsample1.block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            # shard_layout=None,
+            # auto_shard=True,
             activation="relu",
             reshape=True,
         )
