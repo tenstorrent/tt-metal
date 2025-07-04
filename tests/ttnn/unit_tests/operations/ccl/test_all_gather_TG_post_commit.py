@@ -12,7 +12,7 @@ from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
-NUM_BUFFERS = 8
+NUM_BUFFERS = 16
 
 
 def report_mismatches(golden, actual, max_printable=None):
@@ -75,7 +75,7 @@ def run_with_trace(
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             topology=all_gather_topology,
-            multi_device_global_semaphore=ccl_semaphore_handles[0]
+            multi_device_global_semaphore=[ccl_semaphore_handles[0], ccl_semaphore_handles[1]]
             if type(ccl_semaphore_handles) == list
             else ccl_semaphore_handles,
             persistent_output_tensor=persistent_output_tensor,
@@ -108,7 +108,10 @@ def run_with_trace(
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
                     topology=all_gather_topology,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS]
+                    multi_device_global_semaphore=[
+                        ccl_semaphore_handles[i % NUM_BUFFERS],
+                        ccl_semaphore_handles[(i + 1) % NUM_BUFFERS],
+                    ]
                     if type(ccl_semaphore_handles) == list
                     else ccl_semaphore_handles,
                     persistent_output_tensor=persistent_output_tensor,
