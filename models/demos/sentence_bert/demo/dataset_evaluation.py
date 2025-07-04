@@ -16,7 +16,6 @@ from scipy.stats import pearsonr, spearmanr
 from tqdm import tqdm
 
 import ttnn
-from models.demos.sentence_bert.demo.demo import mean_pooling
 from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
 from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
 
@@ -67,22 +66,25 @@ def test_sentence_bert_eval(device, model_name, sequence_length, batch_size, num
         extended_mask = custom_extended_mask(attention_mask, dtype=torch.bfloat16)
         token_type_ids = encoded_input["token_type_ids"]
         position_ids = torch.arange(0, input_ids.shape[-1], dtype=torch.int64).unsqueeze(dim=0)
-        reference_out = reference_module(
-            input_ids, attention_mask=extended_mask, token_type_ids=token_type_ids, position_ids=position_ids
-        )
+        reference_sentence_embeddings = reference_module(
+            input_ids,
+            extended_attention_mask=extended_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+        ).post_processed_output
         if ttnn_module is None:
             ttnn_module = SentenceBERTPerformantRunner(
                 device=device,
                 input_ids=input_ids,
                 extended_mask=extended_mask,
+                attention_mask=attention_mask,
                 token_type_ids=token_type_ids,
                 position_ids=position_ids,
             )
             ttnn_module._capture_sentencebert_trace_2cqs()
-        ttnn_out = ttnn_module.run(input_ids, token_type_ids, position_ids, extended_mask)
-        ttnn_out = ttnn.to_torch(ttnn_out).squeeze(dim=1)
-        reference_sentence_embeddings = mean_pooling(reference_out[0], attention_mask)
-        ttnn_sentence_embeddings = mean_pooling(ttnn_out, attention_mask)
+        ttnn_out = ttnn_module.run(input_ids, token_type_ids, position_ids, extended_mask, attention_mask)
+        ttnn_sentence_embeddings = ttnn.to_torch(ttnn_out, dtype=torch.float32)
         sim1 = F.cosine_similarity(reference_sentence_embeddings[:1], reference_sentence_embeddings[-1:]).item()
         sim2 = F.cosine_similarity(ttnn_sentence_embeddings[:1], ttnn_sentence_embeddings[-1:]).item()
         ref_pred_score, ttnn_pred_score = (sim1 + 1) * 2.5, (sim2 + 1) * 2.5  # scale from [-1, 1] to [0, 5]

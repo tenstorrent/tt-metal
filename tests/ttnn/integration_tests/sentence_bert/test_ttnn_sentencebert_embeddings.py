@@ -36,8 +36,8 @@ def test_ttnn_sentence_bert_Embeddings(device, inputs):
         device=device,
     )
     ttnn_module = TtnnSentenceBertEmbeddings(parameters, config)
-    ttnn_input_ids, ttnn_token_type_ids, ttnn_position_ids, _ = preprocess_inputs(
-        input_ids, token_type_ids, position_ids, attention_mask, device
+    ttnn_input_ids, ttnn_token_type_ids, ttnn_position_ids, _, _ = preprocess_inputs(
+        input_ids=input_ids, token_type_ids=token_type_ids, position_ids=position_ids, device=device
     )
     ttnn_out = ttnn_module(
         input_ids=ttnn_input_ids, token_type_ids=ttnn_token_type_ids, position_ids=ttnn_position_ids, device=device
