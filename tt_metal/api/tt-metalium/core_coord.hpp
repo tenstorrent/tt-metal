@@ -221,6 +221,9 @@ std::vector<CoreCoord> corerange_to_cores(
 CoreRangeSet select_from_corerange(
     const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise = false);
 
+std::optional<CoreRange> select_contiguous_range_from_corerange(
+    const CoreRangeSet& crs, uint32_t x, uint32_t y, bool row_wise = false);
+
 bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b);
 
 template <>
