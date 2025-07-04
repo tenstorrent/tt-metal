@@ -270,7 +270,6 @@ class VideoProcessor(VideoProcessorBase):
         return av.VideoFrame.from_ndarray(image_final, format="bgr24")
 
 
-# Streamlit UI for compression settings
 st.title("YOLOv9c Segmentation Demo")
 
 webrtc_streamer(
