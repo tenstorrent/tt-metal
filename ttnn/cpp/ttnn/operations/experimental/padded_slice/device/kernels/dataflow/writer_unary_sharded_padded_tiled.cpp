@@ -18,7 +18,6 @@ uint32_t round_down(uint32_t value, uint32_t multiple) {
     return value;
 }
 
-#define CB_BUFFERING_SIZE 4
 void kernel_main() {
     const uint32_t total_num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t num_tiles_per_read = get_arg_val<uint32_t>(1);
@@ -83,11 +82,7 @@ void kernel_main() {
         noc_read_addr += read_start_offset * block_row_size;
 
         noc_async_read(noc_read_addr, write_addr, read_rows_size * block_row_size);
-        row_count++;
-        if (row_count == CB_BUFFERING_SIZE) {
-            noc_async_read_barrier();
-            row_count = 0;
-        }
+        noc_async_read_barrier();
 
         write_addr += read_rows_size * block_row_size;
         cb_pop_front(cb_untilized_id, num_tiles_per_read);
