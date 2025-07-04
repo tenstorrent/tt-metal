@@ -257,6 +257,9 @@ constexpr auto rsub_ = ttnn::register_operation<
 constexpr auto bias_gelu_ = ttnn::register_operation<
     "ttnn::bias_gelu_",
     operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::BIAS_GELU>>();
+constexpr auto logical_right_shift = ttnn::register_operation<
+    "ttnn::logical_right_shift",
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_RIGHT_SHIFT>>();
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor& lhs, InputBType rhs) {
