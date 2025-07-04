@@ -5,6 +5,7 @@
 #include "reports.hpp"
 
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 #include "ttnn/reports.hpp"
 #include <tt-metalium/allocator.hpp>
