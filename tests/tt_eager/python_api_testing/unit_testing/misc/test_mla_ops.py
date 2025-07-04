@@ -7,6 +7,8 @@ import math
 import json
 import torch
 import numpy as np
+import tempfile
+from pathlib import Path
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
@@ -16,8 +18,8 @@ from loguru import logger
 import pytest
 
 from models.demos.deepseek_v3.tt.rope import RotarySetup
+from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as ReferenceRMSNorm
-from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.demos.deepseek_v3_impl.model import (
     precompute_freqs_cis,
     apply_rotary_emb,
@@ -29,6 +31,13 @@ from types import SimpleNamespace
 
 TP = 8
 DP = 4
+
+
+@pytest.fixture
+def temp_dir():
+    """Create a temporary directory for test outputs."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yield Path(tmpdir)
 
 
 class DecodeModelConfig:
@@ -193,11 +202,13 @@ class DecodeModelConfig:
         self.configs["QNORM_SHAPE"] = (1, 1, self.bsz // DP, self.args.q_lora_rank)
         self.configs["QNORM_DTYPE"] = ttnn.bfloat16
         self.configs["QNORM_MEM_CFG"] = ttnn.DRAM_MEMORY_CONFIG
+        self.configs["QNORM_CATEGORY"] = "q_norm"
 
         # k_norm
         self.configs["KNORM_SHAPE"] = (1, 1, self.bsz // DP // TP, self.args.kv_lora_rank + self.args.qk_rope_head_dim)
         self.configs["KNORM_DTYPE"] = ttnn.bfloat16
         self.configs["KNORM_MEM_CFG"] = ttnn.DRAM_MEMORY_CONFIG
+        self.configs["KNORM_CATEGORY"] = "k_norm"
         # # TODO: Debug, gives bad PCC
         # knorm_num_cores = min(np.prod(self.grid_size), math.ceil(self.configs["KNORM_SHAPE"][3] / ttnn.TILE_SIZE))
         # knorm_core_grid = ttnn.num_cores_to_corerangeset(knorm_num_cores, self.grid_size, row_wise=True)
@@ -348,6 +359,23 @@ class PrefillModelConfig:
         self.configs["KVPE_DTYPE"] = ttnn.bfloat8_b
         self.configs["KVPE_MEM_CFG"] = ttnn.DRAM_MEMORY_CONFIG
         self.configs["KVPE_CACHE_DTYPE"] = ttnn.bfloat8_b
+
+        # q_norm
+        self.configs["QNORM_SHAPE"] = lambda seq_len: (1, 1, seq_len, self.args.q_lora_rank)
+        self.configs["QNORM_DTYPE"] = ttnn.bfloat16
+        self.configs["QNORM_MEM_CFG"] = ttnn.DRAM_MEMORY_CONFIG
+        self.configs["QNORM_CATEGORY"] = "q_norm"
+
+        # k_norm
+        self.configs["KNORM_SHAPE"] = lambda seq_len: (
+            1,
+            1,
+            seq_len,
+            self.args.kv_lora_rank + self.args.qk_rope_head_dim,
+        )
+        self.configs["KNORM_DTYPE"] = ttnn.bfloat16
+        self.configs["KNORM_MEM_CFG"] = ttnn.DRAM_MEMORY_CONFIG
+        self.configs["KNORM_CATEGORY"] = "k_norm"
 
 
 hugging_face_config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
@@ -691,18 +719,29 @@ def run_rmsnorm_impl(
     shape,
     dtype,
     mem_config,
+    norm_category,
+    temp_dir,
+    seq_len=None,
 ):
     layout = ttnn.TILE_LAYOUT
+    hf_config = hugging_face_config
+
+    if seq_len is not None:  # Prefill
+        # Check that the shape is a function
+        assert callable(shape), "Shape must be callable for prefill tests with variable sequence length."
+        input_shape = shape(seq_len)
+    else:  # Decode
+        input_shape = shape
 
     logger.info("Running RMSNorm with the following configurations:")
-    logger.info(f"Shape: {shape}, Dtype: {dtype}, Memory Config: {mem_config}")
+    logger.info(f"Shape: {input_shape}, Dtype: {dtype}, Memory Config: {mem_config}")
 
-    _, bsz, nh, head_dim = shape
+    head_dim = input_shape[-1]
 
     #################
     ### Torch
     #################
-    input_torch = torch.randn(shape).float()
+    input_torch = torch.randn(input_shape).float()
     rms_norm = ReferenceRMSNorm(head_dim, eps=1e-5)
     out_torch = rms_norm(input_torch)
 
@@ -717,18 +756,20 @@ def run_rmsnorm_impl(
         layout=layout,
     )
 
-    state_dict = {
-        "rms_norm_weight.weight": rms_norm.weight.unsqueeze(0),
-    }
-    tt_rms_norm = RMSNorm(
-        device=device,
-        dim=head_dim,
-        eps=1e-5,
-        weight_key="rms_norm_weight",
-        state_dict=state_dict,
+    # Setup: Convert weights and get weight_config
+    state_dict = {"weight": rms_norm.weight.unsqueeze(0)}
+    weight_config = RMSNorm.convert_weights(hf_config, state_dict, temp_dir, device, norm_category=norm_category)
+
+    # Generate appropriate config
+    model_decode_config = RMSNorm.decode_model_config(hf_config, device, norm_category=norm_category)
+    model_prefill_config = RMSNorm.prefill_model_config(hf_config, device, norm_category=norm_category)
+
+    # Create RunConfig using both weight_config and model_config
+    run_prefill_config, run_decode_config = RMSNorm.run_config(
+        model_prefill_config, model_decode_config, weight_config, device
     )
 
-    tt_out = tt_rms_norm(tt_input, mode="decode")
+    tt_out = RMSNorm.forward_decode(tt_input, run_decode_config, None)
     tt_out_torch = ttnn.to_torch(tt_out)
 
     #################
@@ -1076,17 +1117,19 @@ def test_fill_caches(
 
 
 @pytest.mark.parametrize(
-    "shape, dtype, mem_config",
+    "shape, dtype, mem_config, norm_category",
     [
         (
             decode_cfg.configs["QNORM_SHAPE"],
             decode_cfg.configs["QNORM_DTYPE"],
             decode_cfg.configs["QNORM_MEM_CFG"],
+            decode_cfg.configs["QNORM_CATEGORY"],
         ),
         (
             decode_cfg.configs["KNORM_SHAPE"],
             decode_cfg.configs["KNORM_DTYPE"],
             decode_cfg.configs["KNORM_MEM_CFG"],
+            decode_cfg.configs["KNORM_CATEGORY"],
         ),
     ],
     ids=["q_norm", "k_norm"],
@@ -1096,6 +1139,8 @@ def test_decode_rmsnorms(
     shape,
     dtype,
     mem_config,
+    norm_category,
+    temp_dir,
     function_level_defaults,
     reset_seeds,
 ):
@@ -1104,4 +1149,50 @@ def test_decode_rmsnorms(
         shape=shape,
         dtype=dtype,
         mem_config=mem_config,
+        norm_category=norm_category,
+        temp_dir=temp_dir,
+    )
+
+
+@pytest.mark.parametrize(
+    "seq_len",
+    [128, 1024, 8096],
+)
+@pytest.mark.parametrize(
+    "shape, dtype, mem_config, norm_category",
+    [
+        (
+            prefill_cfg.configs["QNORM_SHAPE"],
+            prefill_cfg.configs["QNORM_DTYPE"],
+            prefill_cfg.configs["QNORM_MEM_CFG"],
+            prefill_cfg.configs["QNORM_CATEGORY"],
+        ),
+        (
+            prefill_cfg.configs["KNORM_SHAPE"],
+            prefill_cfg.configs["KNORM_DTYPE"],
+            prefill_cfg.configs["KNORM_MEM_CFG"],
+            prefill_cfg.configs["KNORM_CATEGORY"],
+        ),
+    ],
+    ids=["q_norm", "k_norm"],
+)
+def test_prefill_rmsnorms(
+    device,
+    shape,
+    dtype,
+    mem_config,
+    norm_category,
+    temp_dir,
+    seq_len,
+    function_level_defaults,
+    reset_seeds,
+):
+    run_rmsnorm_impl(
+        device,
+        shape=shape,
+        dtype=dtype,
+        mem_config=mem_config,
+        norm_category=norm_category,
+        temp_dir=temp_dir,
+        seq_len=seq_len,
     )

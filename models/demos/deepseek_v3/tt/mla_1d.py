@@ -10,6 +10,7 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     FromWeightConfig,
@@ -216,6 +217,17 @@ class MLA1D(AbstractModule):
             ),
         )
 
+        # Norm weights
+        q_norm_state_dict = {"weight": state_dict["q_norm.weight"]}
+        weight_config["q_norm"] = RMSNorm.convert_weights(
+            hf_config, q_norm_state_dict, output_path, mesh_device, norm_category="q_norm"
+        )
+
+        kv_norm_state_dict = {"weight": state_dict["kv_norm.weight"]}
+        weight_config["kv_norm"] = RMSNorm.convert_weights(
+            hf_config, kv_norm_state_dict, output_path, mesh_device, norm_category="k_norm"
+        )
+
         return weight_config
 
     @classmethod
@@ -315,6 +327,10 @@ class MLA1D(AbstractModule):
             "attn_mask": None,
             "is_causal": True,
         }
+
+        # Norms
+        config["q_norm"] = RMSNorm.prefill_model_config(hf_config, mesh_device, norm_category="q_norm")
+        config["kv_norm"] = RMSNorm.prefill_model_config(hf_config, mesh_device, norm_category="k_norm")
 
         return config
 
@@ -495,6 +511,10 @@ class MLA1D(AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        # Norms
+        config["q_norm"] = RMSNorm.decode_model_config(hf_config, mesh_device, norm_category="q_norm")
+        config["kv_norm"] = RMSNorm.decode_model_config(hf_config, mesh_device, norm_category="k_norm")
+
         return config
 
     @classmethod
@@ -556,7 +576,7 @@ class MLA1D(AbstractModule):
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
-        # TODO: Add norm
+        tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"], None)
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
 
         # TODO: Use local heads here
@@ -591,6 +611,9 @@ class MLA1D(AbstractModule):
         tt_kv_rope = ttnn.slice(tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, bsz, kv_lora_rank + qk_rope_head_dim])
         ttnn.deallocate(tt_kv)
 
+        # KV Norm
+        tt_kv_nope = RMSNorm.forward_decode(tt_kv_nope, cfg["kv_norm"], None)
+
         # KV RoPE
         tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, bsz, 1, qk_rope_head_dim]
         tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_reshard"])
@@ -605,7 +628,6 @@ class MLA1D(AbstractModule):
         tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, 1, bsz, qk_rope_head_dim]
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
-        # TODO: Add Norm here for KVPE
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz, 1, kv_lora_rank + qk_rope_head_dim]
         tt_kvpe = ttnn.to_memory_config(tt_kvpe, **cfg["kvpe_reshard"])
         ttnn.deallocate(tt_kv_nope)
