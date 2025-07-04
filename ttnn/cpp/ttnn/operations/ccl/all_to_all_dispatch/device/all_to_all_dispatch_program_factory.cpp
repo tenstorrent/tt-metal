@@ -304,8 +304,10 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     uint32_t mapping_tensor_cb_id = tt::CBIndex::c_2;
     // client interface
     uint32_t packet_header_cb_id = tt::CBIndex::c_3;
-    // metadata buffer
+    // book-keeping buffer to avoid sending the same token multiple times
     uint32_t send_preparation_buffer_id = tt::CBIndex::c_4;
+    // metadata buffer
+    uint32_t metadata_buffer_id = tt::CBIndex::c_5;
 
     uint32_t aligned_input_page_size = detail::get_aligned_page_size(input_tensor);
     log_debug(
@@ -372,6 +374,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             tokens_per_device * num_devices * sizeof(uint8_t), {{send_preparation_buffer_id, tt::DataFormat::UInt8}})
             .set_page_size(send_preparation_buffer_id, tokens_per_device * sizeof(uint8_t));
 
+    tt::tt_metal::CircularBufferConfig cb_metadata_buffer_config =
+        tt::tt_metal::CircularBufferConfig(
+            tokens_per_device * dispatch_devices * aligned_indices_page_size,
+            {{metadata_buffer_id, mapping_data_format}})
+            .set_page_size(metadata_buffer_id, aligned_indices_page_size);
+
     static constexpr auto num_packet_headers_storable = 8;
     static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig packet_header_cb_config =
@@ -406,6 +414,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto packet_header_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, packet_header_cb_config);
     auto send_preparation_buffer_cb =
         tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_send_preparation_buffer_config);
+    auto metadata_buffer_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_metadata_buffer_config);
 
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {
@@ -467,6 +476,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         aligned_metadata_page_size,
 
         (uint32_t)fabric_max_packet_size,
+        metadata_buffer_id,
     };
 
     const auto& writer_compile_time_args = reader_compile_time_args;
