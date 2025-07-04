@@ -1449,6 +1449,7 @@ void Matmul::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+    log_debug(tt::LogAlways, "matmul validate");
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& a_shape = input_tensor_a.logical_shape();

@@ -610,17 +610,20 @@ public:
                const OptionalConstTensors& optional_input_tensors,
                const OptionalTensors& optional_output_tensors) -> void {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
+                log_debug(tt::LogAlways, "&&& ooo 1");
                 if constexpr (
                     (detail::implements_validate<T>() or
                      detail::implements_validate_with_optional_input_tensors<T>()) and
                     (detail::implements_validate_with_output_tensors<T>() or
                      detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>())) {
+                    log_debug(tt::LogAlways, "&&& oooo 1");
                     static_assert(
                         tt::stl::concepts::always_false_v<T>,
                         "You cannot implement both validate and validate_with_output_tensors");
                 } else if constexpr (
                     detail::implements_validate<T>() and
                     not(detail::implements_create_program<T>() || detail::implements_create_mesh_workload<T>())) {
+                    log_debug(tt::LogAlways, "&&& oooo 2");
                     static_assert(
                         tt::stl::concepts::always_false_v<T>,
                         "Operation doesn't implement both the validate and the correct create_program or "
@@ -629,32 +632,44 @@ public:
                     detail::implements_validate_with_optional_input_tensors<T>() and
                     not(detail::implements_create_program_with_optional_input_tensors<T>() ||
                         detail::implements_create_mesh_workload_with_optional_input_tensors<T>())) {
+                    log_debug(tt::LogAlways, "&&& oooo 3");
                     static_assert(
                         tt::stl::concepts::always_false_v<T>,
                         "Operation doesn't implement both the validate and the correct create_program or "
                         "create_mesh_workload methods with the "
                         "optional input tensors");
                 }
+                log_debug(tt::LogAlways, "&&& ooo 2");
 
                 if constexpr (detail::implements_validate<T>()) {
+                    log_debug(tt::LogAlways, "&&& oooo A");
                     TT_FATAL(optional_input_tensors.empty(), "Optional input tensors not allowed");
                     operation.validate(input_tensors);
+                    log_debug(tt::LogAlways, "&&& oooo A1");
                 } else if constexpr (detail::implements_validate_with_optional_input_tensors<T>()) {
+                    log_debug(tt::LogAlways, "&&& oooo B");
                     TT_FATAL(not optional_input_tensors.empty(), "Optional input tensors are expected");
                     operation.validate(input_tensors, optional_input_tensors);
+                    log_debug(tt::LogAlways, "&&& oooo B1");
                 } else if constexpr (detail::implements_validate_with_output_tensors<T>()) {
+                    log_debug(tt::LogAlways, "&&& oooo C");
                     TT_FATAL(optional_input_tensors.empty(), "Optional input tensors not allowed");
                     // TT_FATAL(not optional_output_tensors.empty(), "Error");
                     operation.validate_with_output_tensors(input_tensors, optional_output_tensors);
+                    log_debug(tt::LogAlways, "&&& oooo C1");
                 } else if constexpr (detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>()) {
+                    log_debug(tt::LogAlways, "&&& oooo D");
                     TT_FATAL(not optional_input_tensors.empty(), "Optional input tensors are expected");
                     TT_FATAL(not optional_output_tensors.empty(), "Optional output tensors are expected");
                     operation.validate_with_output_tensors(
                         input_tensors, optional_input_tensors, optional_output_tensors);
+                    log_debug(tt::LogAlways, "&&& oooo D1");
                 } else {
+                    log_debug(tt::LogAlways, "&&& oooo E");
                     static_assert(
                         tt::stl::concepts::always_false_v<T>,
                         "Operation must implement either validate or validate_with_output_tensors");
+                    log_debug(tt::LogAlways, "&&& oooo E1");
                 }
             }},
         compute_output_specs_impl_{

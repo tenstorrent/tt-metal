@@ -278,8 +278,10 @@ void launch_on_worker_thread(
     }
 
     log_operation<device_operation_t>(device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
+    log_debug(tt::LogAlways, "reflection");
 
     tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
+    log_debug(tt::LogAlways, "reflection done");
 
     if (program_cache_hit) {
         ZoneScopedN("Validate on Program Cache Hit");
@@ -445,6 +447,7 @@ void create_and_cache_mesh_workload(
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
     ZoneScopedN("Handle Mesh Adapter Cache Miss");
+    // log_info(tt::LogAlways, "@@@ validate attribute {}", operation_attributes);
     mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
 
     auto program_factory = mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args);
@@ -526,16 +529,21 @@ void launch_operation_with_adapter(
 
     log_operation<mesh_device_operation_t>(
         mesh_device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
+    log_debug(tt::LogAlways, "reflection 2");
 
     tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
+    log_debug(tt::LogAlways, "reflection 2 done");
 
     if (program_cache_hit) {
+        log_info(tt::LogAlways, "@@@ program cache hit");
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
             cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
     } else {
+        log_info(tt::LogAlways, "@@@ program cache miss");
         create_and_cache_mesh_workload<mesh_device_operation_t>(
             cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
     }
+    log_info(tt::LogAlways, "launch_operation_with_adapter done");
 }
 
 template <DeviceOperationConcept device_operation_t>
