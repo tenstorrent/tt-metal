@@ -131,9 +131,9 @@ jobs:
               # Try to get the PR number from the commit message
               pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
               if [ -n "$pr_number" ]; then
-                COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | [#$pr_number](https://github.com/tenstorrent/tt_llk/pull/$pr_number) |"$'\n'
+                COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $message | $author | [#$pr_number](https://github.com/tenstorrent/tt-llk/pull/$pr_number) |"$'\n'
               else
-                COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | - |"$'\n'
+                COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $message | $author | - |"$'\n'
               fi
             done < <(git log --pretty=tformat:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA})
           else
@@ -186,6 +186,8 @@ jobs:
           # Get the changed files again for the updated body
           cd ${{ env.SUBMODULE_PATH }}
           CHANGED_FILES=$(git diff --name-only ${OLD_SHA}..${NEW_SHA})
+          COMMIT_COUNT=$(git log --oneline ${OLD_SHA}..${NEW_SHA} | wc -l)
+          FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l)
 
           # Generate updated PR body with PR link (use commits table from step output)
           cat > ../../../updated_llk_commit_log.txt << EOF
@@ -197,12 +199,12 @@ jobs:
           ### 🔗 Commit Range
           | Previous Commit | New Commit | Compare |
           |----------------|------------|---------|
-          | [\`$OLD_SHA\`](https://github.com/tenstorrent/tt_llk/commit/$OLD_SHA) | [\`$NEW_SHA\`](https://github.com/tenstorrent/tt_llk/commit/$NEW_SHA) | [View Changes](https://github.com/tenstorrent/tt_llk/compare/$OLD_SHA...$NEW_SHA) |
+          | [\`$OLD_SHA\`](https://github.com/tenstorrent/tt-llk/commit/$OLD_SHA) | [\`$NEW_SHA\`](https://github.com/tenstorrent/tt-llk/commit/$NEW_SHA) | [View Changes](https://github.com/tenstorrent/tt-llk/compare/$OLD_SHA...$NEW_SHA) |
 
-          ### 📝 Commits Uplifted
+          ### 📝 Commits Uplifted ($COMMIT_COUNT commits)
           ${{ steps.analyze-changes.outputs.commits-table }}
 
-          ### 📁 Files Changed ($(echo "$CHANGED_FILES" | wc -l) files)
+          ### 📁 Files Changed ($FILE_COUNT files)
           <details>
           <summary>Click to expand file list</summary>
 
