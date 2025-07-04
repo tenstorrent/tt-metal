@@ -4,7 +4,10 @@
 
 #pragma once
 
-namespace tt::tt_metal {
+#include <cstdint>
+
+namespace tt {
+namespace tt_metal {
 
 enum class TensorMemoryLayout {
     INTERLEAVED = 0,
@@ -31,4 +34,5 @@ enum class BufferType {
     TRACE,
 };
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt

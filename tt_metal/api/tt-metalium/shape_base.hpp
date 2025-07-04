@@ -14,7 +14,6 @@ namespace tt::tt_metal {
 // Container wrapper that allows negative indexing
 class ShapeBase {
 public:
-    using coord_type = uint32_t;
     using Container = tt::stl::SmallVector<uint32_t>;
 
     ShapeBase() { init(); };
