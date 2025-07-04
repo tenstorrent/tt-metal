@@ -185,6 +185,8 @@ class CMakeBuild(build_ext):
             if "CIBUILDWHEEL" in os.environ:
                 cmake_args = [
                     "cmake",
+                    "--trace",
+                    "--trace-expand",
                     "-B",
                     build_dir,
                     "-G",
