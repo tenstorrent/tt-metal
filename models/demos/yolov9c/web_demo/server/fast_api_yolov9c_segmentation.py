@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import base64
+import gzip
 import logging
 import os
 import time
@@ -8,7 +10,7 @@ from io import BytesIO
 
 import numpy as np
 import torch
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Query, UploadFile
 from PIL import Image
 
 import ttnn
@@ -72,8 +74,80 @@ async def shutdown():
     model.release()
 
 
-def process_segmentation_output(output, image_shape):
-    """Process segmentation output to extract masks and bounding boxes"""
+def compress_mask_binary(mask_data, threshold=0.5):
+    """Convert mask to binary format and compress"""
+    # Ensure mask_data is a numpy array
+    mask_data = np.array(mask_data)
+
+    # Ensure mask is 2D by squeezing extra dimensions
+    if mask_data.ndim > 2:
+        mask_data = mask_data.squeeze()
+    elif mask_data.ndim == 1:
+        # If 1D, try to reshape to square (this is a fallback)
+        size = int(np.sqrt(mask_data.size))
+        if size * size == mask_data.size:
+            mask_data = mask_data.reshape(size, size)
+        else:
+            raise ValueError(f"Cannot reshape 1D mask of size {mask_data.size} to 2D")
+
+    # Convert to binary mask
+    binary_mask = (mask_data > threshold).astype(np.uint8)
+
+    # Pack binary data (8 pixels per byte)
+    height, width = binary_mask.shape
+    packed_data = np.packbits(binary_mask.flatten())
+
+    # Compress with gzip
+    compressed_data = gzip.compress(packed_data.tobytes())
+
+    # Encode as base64 for JSON transmission
+    encoded_data = base64.b64encode(compressed_data).decode("utf-8")
+
+    return {"data": encoded_data, "shape": [height, width], "format": "binary_compressed"}
+
+
+def compress_mask_rle(mask_data, threshold=0.5):
+    """Compress mask using Run-Length Encoding"""
+    # Ensure mask_data is a numpy array
+    mask_data = np.array(mask_data)
+
+    # Ensure mask is 2D by squeezing extra dimensions
+    if mask_data.ndim > 2:
+        mask_data = mask_data.squeeze()
+    elif mask_data.ndim == 1:
+        # If 1D, try to reshape to square (this is a fallback)
+        size = int(np.sqrt(mask_data.size))
+        if size * size == mask_data.size:
+            mask_data = mask_data.reshape(size, size)
+        else:
+            raise ValueError(f"Cannot reshape 1D mask of size {mask_data.size} to 2D")
+
+    # Convert to binary mask
+    binary_mask = (mask_data > threshold).astype(np.uint8)
+
+    # Flatten the mask
+    flat_mask = binary_mask.flatten()
+
+    # Run-length encoding
+    rle = []
+    count = 1
+    current_val = flat_mask[0]
+
+    for val in flat_mask[1:]:
+        if val == current_val:
+            count += 1
+        else:
+            rle.append(count)
+            count = 1
+            current_val = val
+
+    rle.append(count)  # Add the last run
+
+    return {"data": rle, "shape": list(binary_mask.shape), "format": "rle"}
+
+
+def process_segmentation_output(output, image_shape, compression="binary"):
+    """Process segmentation output to extract masks and bounding boxes with compression options"""
     # Extract detection outputs
     detect1_out, detect2_out, detect3_out = [ttnn.to_torch(tensor, dtype=torch.float32) for tensor in output[1][0]]
     mask = ttnn.to_torch(output[1][1], dtype=torch.float32)
@@ -95,19 +169,34 @@ def process_segmentation_output(output, image_shape):
         if result.masks is not None and len(result.masks) > 0:
             for i in range(len(result.masks)):
                 mask_data = result.masks[i].data.cpu().numpy()
-                masks.append(mask_data.tolist())
 
-        return {
-            "masks": masks,
-        }
+                # Debug: Log mask information
+                logging.info(f"Mask {i}: type={type(mask_data)}, shape={mask_data.shape}, dtype={mask_data.dtype}")
 
-    return {
-        "masks": [],
-    }
+                # Apply compression based on method
+                if compression == "binary":
+                    compressed_mask = compress_mask_binary(mask_data)
+                elif compression == "rle":
+                    compressed_mask = compress_mask_rle(mask_data)
+                elif compression == "none":
+                    # Original format (for backward compatibility)
+                    compressed_mask = {"data": mask_data.tolist(), "format": "raw"}
+                else:
+                    # Default to binary compression
+                    compressed_mask = compress_mask_binary(mask_data)
+
+                masks.append(compressed_mask)
+
+        return {"masks": masks, "compression": compression, "downsample_factor": 1}  # Fixed at 1 for best performance
+
+    return {"masks": [], "compression": compression, "downsample_factor": 1}  # Fixed at 1 for best performance
 
 
 @app.post("/segmentation")
-async def segmentation(file: UploadFile = File(...)):
+async def segmentation(
+    file: UploadFile = File(...),
+    compression: str = Query("binary", description="Compression method: 'binary', 'rle', or 'none'"),
+):
     contents = await file.read()
     # Load and convert the image to RGB
     image = Image.open(BytesIO(contents)).convert("RGB")
@@ -126,9 +215,14 @@ async def segmentation(file: UploadFile = File(...)):
     t2 = time.time()
     logging.info("The inference on the server side took: %.3f seconds", t2 - t1)
 
-    # Process segmentation output
-    result = process_segmentation_output(response, image1.shape)
+    # Process segmentation output with compression (no downsampling)
+    result = process_segmentation_output(response, image1.shape, compression)
     t3 = time.time()
     logging.info("The post-processing took: %.3f seconds", t3 - t2)
+
+    # Log compression statistics
+    if result["masks"]:
+        original_size = sum(len(str(mask.get("data", []))) for mask in result["masks"])
+        logging.info(f"Compression: {compression}, Masks: {len(result['masks'])}")
 
     return result

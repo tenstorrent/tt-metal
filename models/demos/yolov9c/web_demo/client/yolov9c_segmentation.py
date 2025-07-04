@@ -13,6 +13,9 @@ import numpy as np
 import orjson
 import requests
 import streamlit as st
+
+# Import the mask decoder
+from mask_decoder import decode_mask
 from streamlit_webrtc import VideoProcessorBase, webrtc_streamer
 
 # Configure the logger
@@ -24,6 +27,8 @@ logging.basicConfig(
 class VideoProcessor(VideoProcessorBase):
     def __init__(self):
         self.frame_count = 0
+        # Default compression settings - can be overridden via UI
+        self.compression = "binary"
 
     def load_class_names(self, namesfile):
         class_names = []
@@ -60,7 +65,7 @@ class VideoProcessor(VideoProcessorBase):
         ]
         return colors[index % len(colors)]
 
-    def plot_boxes_and_masks_cv2(self, bgr_img, boxes, masks, savename=None, class_names=None):
+    def plot_boxes_and_masks_cv2(self, bgr_img, masks, savename=None, class_names=None):
         """Plot bounding boxes and segmentation masks on the image"""
         img = np.copy(bgr_img)
         width = img.shape[1]
@@ -71,11 +76,8 @@ class VideoProcessor(VideoProcessorBase):
 
         # Process masks first (so they appear behind boxes)
         if masks and len(masks) > 0:
-            for i, mask_data in enumerate(masks):
+            for i, mask in enumerate(masks):
                 try:
-                    # Convert mask to numpy array
-                    mask = np.array(mask_data)
-
                     # Validate mask dimensions
                     if mask.size == 0:
                         print(f"Warning: Empty mask at index {i}, skipping...")
@@ -99,8 +101,8 @@ class VideoProcessor(VideoProcessorBase):
                             print(f"Mask shape: {mask.shape}, Target shape: ({height}, {width})")
                             continue
 
-                    # Threshold mask to binary
-                    mask_binary = (mask > 0.5).astype(np.uint8)
+                    # Threshold mask to binary (masks are already binary from decoder)
+                    mask_binary = mask.astype(np.uint8)
 
                     # Get color for this mask
                     color_tuple = self.get_consistent_color(i)
@@ -130,6 +132,79 @@ class VideoProcessor(VideoProcessorBase):
             cv2.imwrite(savename, img)
         return img
 
+    def handle_response_formats(self, output):
+        """Handle both old (raw) and new (compressed) response formats"""
+        try:
+            # Check if this is the new compressed format
+            if isinstance(output, dict) and "masks" in output and "compression" in output:
+                # New format: compressed masks
+                try:
+                    masks = []
+                    for mask_info in output["masks"]:
+                        if isinstance(mask_info, dict) and "format" in mask_info:
+                            # New compressed format - decode the mask
+                            decoded_mask = decode_mask(mask_info)
+                            masks.append(decoded_mask)
+                        else:
+                            # Old format - mask is already a list/numpy array
+                            if isinstance(mask_info, list):
+                                mask_array = np.array(mask_info)
+                            else:
+                                mask_array = mask_info
+                            masks.append(mask_array)
+
+                    logging.info(
+                        f"Successfully decoded {len(masks)} masks with {output.get('compression', 'unknown')} compression"
+                    )
+                    return masks
+                except Exception as e:
+                    logging.error(f"Failed to decode compressed masks: {e}")
+                    return []
+
+            # Check if this is the old raw format (direct list of masks)
+            elif isinstance(output, list):
+                # Old format: raw mask data
+                logging.info(f"Received old format: {len(output)} raw masks")
+                masks = []
+                for mask_data in output:
+                    try:
+                        mask = np.array(mask_data, dtype=np.float32)
+                        # Convert to binary
+                        mask_binary = (mask > 0.5).astype(np.uint8)
+                        masks.append(mask_binary)
+                    except Exception as e:
+                        logging.error(f"Failed to process raw mask: {e}")
+                        continue
+                return masks
+
+            # Check if this is a dict with raw masks (another old format)
+            elif isinstance(output, dict) and "masks" in output:
+                masks_data = output["masks"]
+                if isinstance(masks_data, list):
+                    logging.info(f"Received dict format with {len(masks_data)} raw masks")
+                    masks = []
+                    for mask_data in masks_data:
+                        try:
+                            mask = np.array(mask_data, dtype=np.float32)
+                            # Convert to binary
+                            mask_binary = (mask > 0.5).astype(np.uint8)
+                            masks.append(mask_binary)
+                        except Exception as e:
+                            logging.error(f"Failed to process raw mask: {e}")
+                            continue
+                    return masks
+
+            # Unknown format
+            else:
+                logging.error(f"Unknown response format: {type(output)}")
+                if isinstance(output, dict):
+                    logging.error(f"Response keys: {list(output.keys())}")
+                return []
+
+        except Exception as e:
+            logging.error(f"Error handling response formats: {e}")
+            return []
+
     def recv(self, frame):
         t0 = time.time()
 
@@ -151,18 +226,24 @@ class VideoProcessor(VideoProcessorBase):
             args = parser.parse_args()
             self.api_url = args.api_url
 
+        # Build URL with compression parameters (no downsampling)
         url = f"{self.api_url}/segmentation"
+        params = {"compression": self.compression}
 
         try:
             # Use a persistent session for multiple requests
             with requests.Session() as session:
-                # Post request with a timeout
-                response = session.post(url, files=file, timeout=5)
+                # Post request with compression parameters and timeout
+                response = session.post(url, files=file, params=params, timeout=5)
 
                 # Check if response is successful
                 if response.status_code == 200:
                     # Parse JSON response
                     output = orjson.loads(response.content)
+
+                    # Handle both old and new response formats
+                    decoded_masks = self.handle_response_formats(output)
+
                 else:
                     print(f"Request failed with status code {response.status_code}")
                     return None
@@ -178,12 +259,8 @@ class VideoProcessor(VideoProcessorBase):
         namesfile = "../../../../experimental/yolo_common/yolo_web_demo/coco.names"
         class_names = self.load_class_names(namesfile)
 
-        # Extract boxes and masks from response
-        boxes = output.get("boxes", [])
-        masks = output.get("masks", [])
-
-        # Plot boxes and masks
-        image_final = self.plot_boxes_and_masks_cv2(bgr_image, boxes, masks, None, class_names)
+        # Plot decoded masks
+        image_final = self.plot_boxes_and_masks_cv2(bgr_image, decoded_masks, None, class_names)
 
         t4 = time.time()
         logging.info(
@@ -193,6 +270,7 @@ class VideoProcessor(VideoProcessorBase):
         return av.VideoFrame.from_ndarray(image_final, format="bgr24")
 
 
+# Streamlit UI for compression settings
 st.title("YOLOv9c Segmentation Demo")
 
 webrtc_streamer(
