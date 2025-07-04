@@ -22,6 +22,7 @@
 
 #include "distributed/distributed_tensor_config.hpp"
 #include "tensor/tensor_spec.hpp"
+#include "tt-metalium/distributed_host_buffer.hpp"
 #include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -167,7 +168,7 @@ struct DistributedStorage {
 
 template <typename T>
 DistributedStorage load_multi_device_host_storage(
-    FILE* input_file, DataType data_type, Layout layout, MeshDevice* mesh_device) {
+    FILE* input_file, DataType data_type, Layout layout, const MeshDevice& mesh_device) {
     uint64_t num_buffers = 0;
     DistributedTensorConfig strategy;
     safe_fread(&num_buffers, sizeof(num_buffers), 1, input_file);
@@ -186,11 +187,9 @@ DistributedStorage load_multi_device_host_storage(
         buffers.push_back(std::move(buffer));
         ignore_spec(load_tensor_spec(input_file));
 
-        auto num_devices = mesh_device ? mesh_device->num_devices() : 1;
-        for (std::size_t i = 1; i < num_devices; ++i) {
+        for (std::size_t i = 1; i < mesh_device.num_devices(); ++i) {
             buffers.push_back(buffers[0]);
         }
-
     } else {
         for (std::size_t i = 0; i < num_buffers; ++i) {
             uint64_t size = 0;
@@ -205,7 +204,23 @@ DistributedStorage load_multi_device_host_storage(
         }
     }
 
-    return {MultiDeviceHostStorage{std::move(buffers)}, strategy};
+    // Create a distributed host buffer with the same shape as the mesh device.
+    auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device.shape());
+    const auto dst_range = [&mesh_device, &strategy]() {
+        if (auto* shard2d_strategy = std::get_if<ShardTensor2D>(&strategy)) {
+            distributed::MeshShape distribution_shape(shard2d_strategy->shard_mesh.y, shard2d_strategy->shard_mesh.x);
+            return distributed::MeshCoordinateRange(distribution_shape);
+        } else {
+            return distributed::MeshCoordinateRange(mesh_device.shape());
+        }
+    }();
+
+    auto dst_coord_it = dst_range.begin();
+    for (int i = 0; i < buffers.size(); ++i, ++dst_coord_it) {
+        distributed_host_buffer.emplace_shard(*dst_coord_it, [b = buffers[i]]() { return b; });
+    }
+
+    return {MultiDeviceHostStorage{std::move(distributed_host_buffer)}, strategy};
 }
 
 HostStorage load_host_storage(FILE* input_file, DataType data_type) {
@@ -233,7 +248,7 @@ HostStorage load_host_storage(FILE* input_file, DataType data_type) {
 }
 
 DistributedStorage load_multi_device_host_storage(
-    FILE* input_file, DataType data_type, Layout layout, MeshDevice* mesh_device) {
+    FILE* input_file, DataType data_type, Layout layout, const MeshDevice& mesh_device) {
     if (data_type == DataType::UINT32 or data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
         using T = std::uint32_t;
         return load_multi_device_host_storage<T>(input_file, data_type, layout, mesh_device);
@@ -254,7 +269,10 @@ DistributedStorage load_multi_device_host_storage(
 DistributedStorage load_storage(
     FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, MeshDevice* device) {
     if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::DEVICE) {
-        return load_multi_device_host_storage(input_file, data_type, layout, device);
+        // TODO: #22262 - Migrate to the new serialization format that embeds the required information into the tensor
+        // file.
+        TT_FATAL(device != nullptr, "MeshDevice is required for loading multi-device host storage");
+        return load_multi_device_host_storage(input_file, data_type, layout, *device);
     }
     return DistributedStorage{load_host_storage(input_file, data_type), ReplicateTensor{}};
 }
