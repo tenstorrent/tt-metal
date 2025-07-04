@@ -587,6 +587,12 @@ jobs:
             --body "$COMMENT_BODY" \
             --repo "${{ github.repository }}"
 
+          # Exit with failure if tests are still failing
+          if [ "$ALL_PASSED" != "true" ]; then
+            echo "❌ Exiting with failure because some tests are still failing"
+            exit 1
+          fi
+
   finalize:
     needs: [llk-submodule-uplift, trigger-and-monitor-workflows, recheck-tests]
     if: |
