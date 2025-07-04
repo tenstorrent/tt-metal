@@ -293,6 +293,10 @@ def map_vision_meta_to_hf_keys(loaded_weights):
         "vision_tower.transformer.layers.{layer}.feed_forward.down_proj.weight": "vision_tower.transformer.layers.{layer}.feed_forward.w3.weight",
         "vision_tower.transformer.layers.{layer}.feed_forward.down_proj.bias": "vision_tower.transformer.layers.{layer}.feed_forward.w3.bias",
     }
+    # key new key
+    # key tensor
+
+    # new key tensor
     print("loaded_weights ", loaded_weights.keys())
     hf_state_dict = {}
     for key, tensor in loaded_weights.items():
@@ -438,10 +442,9 @@ def map_vision_hf_to_meta_keys(loaded_weights):
         "visual.blocks.{layer}.attn.qkv.bias": "visual.blocks.{layer}.attn.qkv.bias",
         "visual.blocks.{layer}.attn.proj.bias": "visual.blocks.{layer}.attn.proj.bias",
         # Mistral-Small-3.1-24B-Base-2503
-        "vision_tower.transformer.layers.{layer}.norm1.weight": "vision_tower.transformer.layers.{layer}.attention_norm.weight",
-        "vision_tower.transformer.layers.{layer}.norm1.bias": "vision_tower.transformer.layers.{layer}.attention_norm.bias",
-        "vision_tower.transformer.layers.{layer}.norm2.weight": "vision_tower.transformer.layers.{layer}.ffn_norm.weight",
-        "vision_tower.transformer.layers.{layer}.norm2.bias": "vision_tower.transformer.layers.{layer}.ffn_norm.bias",
+        "vision_tower.patch_conv.weight": "vision_tower.patch_conv._linear.weight",
+        "vision_tower.transformer.layers.{layer}.attention_norm.weight": "vision_tower.transformer.layers.{layer}.attention_norm.weight",
+        "vision_tower.transformer.layers.{layer}.ffn_norm.weight": "vision_tower.transformer.layers.{layer}.ffn_norm.weight",
         "vision_tower.transformer.layers.{layer}.feed_forward.gate_proj.weight": "vision_tower.transformer.layers.{layer}.feed_forward.gate_proj.weight",
         "vision_tower.transformer.layers.{layer}.feed_forward.gate_proj.bias": "vision_tower.transformer.layers.{layer}.feed_forward.gate_proj.bias",
         "vision_tower.transformer.layers.{layer}.feed_forward.up_proj.weight": "vision_tower.transformer.layers.{layer}.feed_forward.up_proj.weight",

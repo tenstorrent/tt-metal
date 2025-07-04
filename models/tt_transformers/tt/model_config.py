@@ -2382,6 +2382,20 @@ class ModelArgs:
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
+    def reference_vision_rms(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.transformer.layers[0].attention_norm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_conv2d_patch(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.patch_conv
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
     def reference_siglip_patch_embed(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.vision_model.embeddings.patch_embedding
