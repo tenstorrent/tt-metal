@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,9 +11,9 @@ import torch
 from tqdm import tqdm
 
 import ttnn
-from models.experimental.functional_vanilla_unet.demo import demo_utils
-from models.experimental.functional_vanilla_unet.reference.unet import UNet
-from models.experimental.functional_vanilla_unet.ttnn.ttnn_unet import TtUnet
+from models.experimental.vanilla_unet.demo import demo_utils
+from models.experimental.vanilla_unet.reference.unet import UNet
+from models.experimental.vanilla_unet.ttnn.ttnn_unet import TtUnet
 from models.utility_functions import run_for_wormhole_b0
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, preprocess_model_parameters
 
@@ -75,7 +75,7 @@ def create_custom_preprocessor(device):
                     torch.reshape(getattr(model, f"upconv{i}").bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
                 )
 
-            for i in range(4, 0, -1):
+            for i in range(4, 1, -1):
                 parameters[f"decoder{i}"] = {}
                 parameters[f"decoder{i}"][0] = {}
                 conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
@@ -103,6 +103,64 @@ def create_custom_preprocessor(device):
                     dtype=ttnn.bfloat16,
                 )
 
+            parameters[f"decoder1"] = {}
+            parameters[f"decoder1"][0] = {}
+            parameters[f"decoder1"][0]["weight"] = ttnn.from_torch(model.decoder1[0].weight, dtype=ttnn.bfloat16)
+            parameters[f"decoder1"][0]["bias"] = None
+
+            bn_layer = model.decoder1[1]  # BatchNorm2d layer
+            channel_size = bn_layer.num_features
+
+            # Extract PyTorch tensors
+            weight_torch = bn_layer.weight if bn_layer.affine else None
+            bias_torch = bn_layer.bias if bn_layer.affine else None
+            batch_mean_torch = bn_layer.running_mean
+            batch_var_torch = bn_layer.running_var
+
+            # Reshape for broadcast compatibility (1, C, 1, 1)
+            batch_mean_torch = batch_mean_torch.view(1, channel_size, 1, 1)
+            batch_var_torch = batch_var_torch.view(1, channel_size, 1, 1)
+            weight_torch = weight_torch.view(1, channel_size, 1, 1) if weight_torch is not None else None
+            bias_torch = bias_torch.view(1, channel_size, 1, 1) if bias_torch is not None else None
+
+            parameters["decoder1"]["bn"] = {}
+            weight = (
+                ttnn.from_torch(weight_torch, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+                if weight_torch is not None
+                else None
+            )
+            parameters["decoder1"]["bn"]["weight"] = ttnn.to_device(weight, device)
+
+            bias = (
+                ttnn.from_torch(bias_torch, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+                if bias_torch is not None
+                else None
+            )
+            parameters["decoder1"]["bn"]["bias"] = ttnn.to_device(bias, device)
+
+            running_mean = ttnn.from_torch(
+                batch_mean_torch, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
+            )
+            parameters["decoder1"]["bn"]["running_mean"] = ttnn.to_device(running_mean, device)
+
+            running_var = ttnn.from_torch(batch_var_torch, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+            parameters["decoder1"]["bn"]["running_var"] = ttnn.to_device(running_var, device)
+
+            parameters["decoder1"]["bn"]["eps"] = bn_layer.eps  # scalar, used directly in ops
+
+            parameters[f"decoder1"][1] = {}
+            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
+                getattr(model, f"decoder1")[3], getattr(model, f"decoder1")[4]
+            )
+            parameters[f"decoder1"][1]["weight"] = ttnn.from_torch(
+                conv_weight,
+                dtype=ttnn.bfloat16,
+            )
+            parameters[f"decoder1"][1]["bias"] = ttnn.from_torch(
+                torch.reshape(conv_bias, (1, 1, 1, -1)),
+                dtype=ttnn.bfloat16,
+            )
+
             parameters["conv"] = {}
             parameters["conv"]["weight"] = ttnn.from_torch(
                 model.conv.weight,
@@ -117,15 +175,18 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": (7 * 8192) + 1730}], indirect=True)
 @pytest.mark.parametrize("use_torch_model", [False])
 @run_for_wormhole_b0()
 def test_unet_demo_single_image(device, reset_seeds, model_location_generator, use_torch_model):
-    weights_path = "models/experimental/functional_vanilla_unet/unet.pt"
-    if not os.path.exists(weights_path):
-        os.system("bash models/experimental/functional_vanilla_unet/weights_download.sh")
+    # https://github.com/tenstorrent/tt-metal/issues/23269
+    device.disable_and_clear_program_cache()
 
-    pred_dir = "models/experimental/functional_vanilla_unet/demo/pred"
+    weights_path = "models/experimental/vanilla_unet/unet.pt"
+    if not os.path.exists(weights_path):
+        os.system("bash models/experimental/vanilla_unet/weights_download.sh")
+
+    pred_dir = "models/experimental/vanilla_unet/demo/pred"
     # Create the directory if it doesn't exist
     if not os.path.exists(pred_dir):
         os.makedirs(pred_dir)
@@ -133,17 +194,17 @@ def test_unet_demo_single_image(device, reset_seeds, model_location_generator, u
     args = argparse.Namespace(
         device="cpu",  # Choose "cpu" or "cuda:0" based on your setup
         batch_size=1,
-        weights="models/experimental/functional_vanilla_unet/unet.pt",  # Path to the pre-trained model weights
-        image="models/experimental/functional_vanilla_unet/demo/images/TCGA_CS_4944_20010208_1.tif",  # Path to your input image
-        mask="models/experimental/functional_vanilla_unet/demo/images/TCGA_CS_4944_20010208_1_mask.tif",  # Path to your input mask
+        weights="models/experimental/vanilla_unet/unet.pt",  # Path to the pre-trained model weights
+        image="models/experimental/vanilla_unet/demo/images/TCGA_CS_4944_20010208_1.tif",  # Path to your input image
+        mask="models/experimental/vanilla_unet/demo/images/TCGA_CS_4944_20010208_1_mask.tif",  # Path to your input mask
         image_size=(480, 640),  # Resize input image to this size
-        predictions="models/experimental/functional_vanilla_unet/demo/pred",  # Directory to save prediction results
+        predictions="models/experimental/vanilla_unet/demo/pred",  # Directory to save prediction results
     )
 
     loader = demo_utils.data_loader(args)  # loader will load just a single image
 
     state_dict = torch.load(
-        "models/experimental/functional_vanilla_unet/unet.pt",
+        "models/experimental/vanilla_unet/unet.pt",
         map_location=torch.device("cpu"),
     )
     ds_state_dict = {k: v for k, v in state_dict.items()}
@@ -169,16 +230,27 @@ def test_unet_demo_single_image(device, reset_seeds, model_location_generator, u
         else:
             parameters = preprocess_model_parameters(
                 initialize_model=lambda: reference_model,
-                custom_preprocessor=create_custom_preprocessor(None),
+                custom_preprocessor=create_custom_preprocessor(device),
                 device=None,
             )
             ttnn_model = TtUnet(device=device, parameters=parameters, model=reference_model)
-
-            ttnn_input_tensor = ttnn.from_torch(
-                x.permute(0, 2, 3, 1), device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+            n, c, h, w = x.shape
+            if c == 3:
+                c = 16
+            input_mem_config = ttnn.create_sharded_memory_config(
+                [n, c, 640, w],
+                ttnn.CoreGrid(x=8, y=8),
+                ttnn.ShardStrategy.HEIGHT,
+            )
+            ttnn_input_host = ttnn.from_torch(
+                x,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=input_mem_config,
             )
 
-            y_pred = ttnn_model(device, ttnn_input_tensor)
+            y_pred = ttnn_model(device, ttnn_input_host)
             y_pred = ttnn.to_torch(y_pred)
             y_pred = y_pred.permute(0, 3, 1, 2)
             y_pred = y_pred.reshape(1, 1, 480, 640)
@@ -200,14 +272,14 @@ def test_unet_demo_single_image(device, reset_seeds, model_location_generator, u
     print("Prediction saved to:", filepath)
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": (7 * 8192) + 1730}], indirect=True)
 @pytest.mark.parametrize("use_torch_model", [False])
 @run_for_wormhole_b0()
 def test_unet_demo_imageset(device, reset_seeds, model_location_generator, use_torch_model):
-    weights_path = "models/experimental/functional_vanilla_unet/unet.pt"
+    weights_path = "models/experimental/vanilla_unet/unet.pt"
     if not os.path.exists(weights_path):
-        os.system("bash models/experimental/functional_vanilla_unet/weights_download.sh")
-    pred_dir = "models/experimental/functional_vanilla_unet/demo/pred_image_set"
+        os.system("bash models/experimental/vanilla_unet/weights_download.sh")
+    pred_dir = "models/experimental/vanilla_unet/demo/pred_image_set"
     # Create the directory if it doesn't exist
     if not os.path.exists(pred_dir):
         os.makedirs(pred_dir)
@@ -215,15 +287,15 @@ def test_unet_demo_imageset(device, reset_seeds, model_location_generator, use_t
     args = argparse.Namespace(
         device="cpu",  # Choose "cpu" or "cuda:0" based on your setup
         batch_size=1,
-        weights="models/experimental/functional_vanilla_unet/unet.pt",  # Path to the pre-trained model weights
-        images="models/experimental/functional_vanilla_unet/demo/imageset",  # Path to your input image
+        weights="models/experimental/vanilla_unet/unet.pt",  # Path to the pre-trained model weights
+        images="models/experimental/vanilla_unet/demo/imageset",  # Path to your input image
         image_size=(480, 640),  # Resize input image to this size
-        predictions="models/experimental/functional_vanilla_unet/demo/pred_image_set",  # Directory to save prediction results
+        predictions="models/experimental/vanilla_unet/demo/pred_image_set",  # Directory to save prediction results
     )
 
     loader = demo_utils.data_loader_imageset(args)
     state_dict = torch.load(
-        "models/experimental/functional_vanilla_unet/unet.pt",
+        "models/experimental/vanilla_unet/unet.pt",
         map_location=torch.device("cpu"),
     )
     ds_state_dict = {k: v for k, v in state_dict.items()}
@@ -242,7 +314,9 @@ def test_unet_demo_imageset(device, reset_seeds, model_location_generator, use_t
     unet = reference_model
     if not use_torch_model:
         parameters = preprocess_model_parameters(
-            initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(None), device=None
+            initialize_model=lambda: reference_model,
+            custom_preprocessor=create_custom_preprocessor(device),
+            device=None,
         )
         ttnn_model = TtUnet(device=device, parameters=parameters, model=reference_model)
 
@@ -256,10 +330,22 @@ def test_unet_demo_imageset(device, reset_seeds, model_location_generator, use_t
         if use_torch_model:
             y_pred = unet(x)
         else:
-            ttnn_input_tensor = ttnn.from_torch(
-                x.permute(0, 2, 3, 1), device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+            n, c, h, w = x.shape
+            if c == 3:
+                c = 16
+            input_mem_config = ttnn.create_sharded_memory_config(
+                [n, c, 640, w],
+                ttnn.CoreGrid(x=8, y=8),
+                ttnn.ShardStrategy.HEIGHT,
             )
-            y_pred = ttnn_model(device, ttnn_input_tensor)
+            ttnn_input_host = ttnn.from_torch(
+                x,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=input_mem_config,
+            )
+            y_pred = ttnn_model(device, ttnn_input_host)
             y_pred = ttnn.to_torch(y_pred)
             y_pred = y_pred.permute(0, 3, 1, 2)
             y_pred = y_pred.reshape(1, 1, 480, 640)
