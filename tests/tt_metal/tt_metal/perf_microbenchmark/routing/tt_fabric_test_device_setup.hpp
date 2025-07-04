@@ -66,12 +66,13 @@ struct TestSender : TestWorker {
 public:
     TestSender(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void add_config(TestTrafficSenderConfig config);
+    void add_sync_config(TestTrafficSenderConfig sync_config);
     void connect_to_fabric_router();
 
     TestWorkerMemoryMap memory_map_;
 
-    // global line sync config
-    TestTrafficSenderConfig global_line_sync_configs_;
+    // global line sync configs - stores sync traffic configs with their fabric connection indices
+    std::vector<std::pair<TestTrafficSenderConfig, uint32_t>> global_line_sync_configs_;
 
     // stores traffic config and the correspoding fabric_connection idx to use
     std::vector<std::pair<TestTrafficSenderConfig, uint32_t>> configs_;
@@ -79,6 +80,10 @@ public:
     // book-keeping for all the fabric connections needed for this sender
     // [RoutingDirection][link_idx]
     std::vector<std::pair<RoutingDirection, uint32_t>> fabric_connections_;
+
+    // book-keeping for sync-specific fabric connections
+    // [RoutingDirection][link_idx]
+    std::vector<std::pair<RoutingDirection, uint32_t>> sync_fabric_connections_;
 };
 
 struct TestReceiver : TestWorker {
@@ -106,6 +111,7 @@ public:
     const FabricNodeId& get_node_id();
     uint32_t add_fabric_connection(RoutingDirection direction, const std::vector<uint32_t>& link_indices);
     void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
+    void add_sender_sync_config(CoreCoord logical_core, TestTrafficSenderConfig sync_config);
     void add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config);
     void create_kernels();
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
@@ -116,6 +122,8 @@ public:
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
     std::vector<uint32_t> get_fabric_connection_args(CoreCoord core, RoutingDirection direction, uint32_t link_idx);
+    std::vector<uint32_t> generate_fabric_connection_args(
+        CoreCoord core, const std::vector<std::pair<RoutingDirection, uint32_t>>& fabric_connections);
     void create_sender_kernels();
     void create_receiver_kernels();
 
@@ -236,6 +244,40 @@ inline void TestSender::add_config(TestTrafficSenderConfig config) {
     this->configs_.emplace_back(std::move(config), fabric_connection_idx.value());
 }
 
+inline void TestSender::add_sync_config(TestTrafficSenderConfig sync_config) {
+    // Similar to add_config but for sync patterns - uses separate sync fabric connections
+    std::optional<RoutingDirection> outgoing_direction;
+    std::vector<uint32_t> outgoing_link_indices;
+
+    // Sync configs should always have hops specified (multicast pattern)
+    outgoing_direction = this->test_device_ptr_->get_forwarding_direction(sync_config.hops);
+    outgoing_link_indices =
+        this->test_device_ptr_->get_forwarding_link_indices_in_direction(outgoing_direction.value());
+
+    std::optional<uint32_t> sync_fabric_connection_idx;
+    // Try to re-use existing sync fabric connection first
+    for (const auto& idx : outgoing_link_indices) {
+        auto it = std::find(
+            this->sync_fabric_connections_.begin(),
+            this->sync_fabric_connections_.end(),
+            std::make_pair(outgoing_direction.value(), idx));
+        if (it != this->sync_fabric_connections_.end()) {
+            sync_fabric_connection_idx = std::distance(this->sync_fabric_connections_.begin(), it);
+            break;
+        }
+    }
+
+    if (!sync_fabric_connection_idx.has_value()) {
+        // Add new sync fabric connection
+        auto new_link_idx =
+            this->test_device_ptr_->add_fabric_connection(outgoing_direction.value(), outgoing_link_indices);
+        this->sync_fabric_connections_.emplace_back(outgoing_direction.value(), new_link_idx);
+        sync_fabric_connection_idx = this->sync_fabric_connections_.size() - 1;
+    }
+
+    this->global_line_sync_configs_.emplace_back(std::move(sync_config), sync_fabric_connection_idx.value());
+}
+
 inline void TestSender::connect_to_fabric_router() {}
 
 /* **********************
@@ -335,6 +377,16 @@ inline std::vector<uint32_t> TestDevice::get_fabric_connection_args(
     return fabric_connection_args;
 }
 
+inline std::vector<uint32_t> TestDevice::generate_fabric_connection_args(
+    CoreCoord core, const std::vector<std::pair<RoutingDirection, uint32_t>>& fabric_connections) {
+    std::vector<uint32_t> fabric_connection_args;
+    for (const auto& [direction, link_idx] : fabric_connections) {
+        const auto& args = get_fabric_connection_args(core, direction, link_idx);
+        fabric_connection_args.insert(fabric_connection_args.end(), args.begin(), args.end());
+    }
+    return fabric_connection_args;
+}
+
 inline void TestDevice::create_sender_kernels() {
     // TODO: fetch these dynamically
     const bool is_2d_fabric = this->device_info_provider_->is_2d_fabric();
@@ -358,7 +410,8 @@ inline void TestDevice::create_sender_kernels() {
             benchmark_mode_ ? 1u : 0u,     /* benchmark mode */
             line_sync_ ? 1u : 0u,          /* line sync */
             is_master_sync_core ? 1u : 0u, /* master sync core */
-            num_local_sync_cores /* num local sync cores */};
+            num_local_sync_cores,          /* num local sync cores */
+            sender.global_line_sync_configs_.size() /* num sync fabric connections */};
 
         // memory map args
         // TODO: move to the right place
@@ -370,16 +423,59 @@ inline void TestDevice::create_sender_kernels() {
 
         std::vector<uint32_t> fabric_connection_args;
         if (!sender.fabric_connections_.empty()) {
-            const auto& first_args = get_fabric_connection_args(
-                core, sender.fabric_connections_[0].first, sender.fabric_connections_[0].second);
-            fabric_connection_args.reserve(sender.fabric_connections_.size() * first_args.size());
-            fabric_connection_args.insert(fabric_connection_args.end(), first_args.begin(), first_args.end());
+            fabric_connection_args = generate_fabric_connection_args(core, sender.fabric_connections_);
+        }
 
-            for (size_t i = 1; i < sender.fabric_connections_.size(); ++i) {
-                const auto& args = get_fabric_connection_args(
-                    core, sender.fabric_connections_[i].first, sender.fabric_connections_[i].second);
-                fabric_connection_args.insert(fabric_connection_args.end(), args.begin(), args.end());
+        // Add sync fabric connection args
+        std::vector<uint32_t> sync_fabric_connection_args;
+        if (!sender.sync_fabric_connections_.empty()) {
+            sync_fabric_connection_args = generate_fabric_connection_args(core, sender.sync_fabric_connections_);
+        }
+
+        // Add line sync runtime args if line sync is enabled
+        std::vector<uint32_t> line_sync_args;
+        if (line_sync_) {
+            log_info(
+                tt::LogTest,
+                "Adding line sync args for sender on core {} - {} sync configs",
+                core,
+                sender.global_line_sync_configs_.size());
+
+            if (sender.global_line_sync_configs_.empty()) {
+                log_info(tt::LogTest, "No sync configs for core {} - sync may not be needed on this sender", core);
             }
+
+            // For each sync config, add line sync configuration runtime args
+            for (size_t i = 0; i < sender.global_line_sync_configs_.size(); ++i) {
+                const auto& [sync_config, fabric_conn_idx] = sender.global_line_sync_configs_[i];
+
+                // Add sync value and routing args for this sync config
+                line_sync_args.push_back(1);  // line_sync_val
+                log_info(tt::LogTest, "Sync config {} (fabric connection {}) has sync config", i, fabric_conn_idx);
+
+                // Add sync routing args (chip send type + routing info)
+                auto sync_traffic_args = sync_config.get_args();
+                // Extract only the routing part (skip metadata)
+                // Traffic config args format: [metadata][chip_send_type][routing][noc_fields]
+                // We need: [chip_send_type][routing][noc_fields] for sync
+                size_t metadata_size = 3;  // num_packets, seed, payload_buffer_size
+                line_sync_args.insert(
+                    line_sync_args.end(), sync_traffic_args.begin() + metadata_size, sync_traffic_args.end());
+            }
+
+            // Add local sync configuration args
+            uint32_t local_sync_address = 0x60000;           // Fixed local sync address
+            uint32_t local_sync_val = num_local_sync_cores;  // Expected sync value
+            line_sync_args.push_back(local_sync_address);
+            line_sync_args.push_back(local_sync_val);
+
+            // Add core coordinates for local sync
+            for (const auto& [sender_core, _] : this->senders_) {
+                line_sync_args.push_back(sender_core.x);
+                line_sync_args.push_back(sender_core.y);
+            }
+
+            log_info(tt::LogTest, "Generated {} line sync runtime args for core {}", line_sync_args.size(), core);
         }
 
         // TODO: handle this properly when adding configs for the sender
@@ -403,10 +499,12 @@ inline void TestDevice::create_sender_kernels() {
 
         std::vector<uint32_t> rt_args;
         rt_args.reserve(
-            memory_allocator_args.size() + fabric_connection_args.size() +
-            traffic_config_to_fabric_connection_args.size() + traffic_config_args.size());
+            memory_allocator_args.size() + fabric_connection_args.size() + sync_fabric_connection_args.size() +
+            line_sync_args.size() + traffic_config_to_fabric_connection_args.size() + traffic_config_args.size());
         rt_args.insert(rt_args.end(), memory_allocator_args.begin(), memory_allocator_args.end());
         rt_args.insert(rt_args.end(), fabric_connection_args.begin(), fabric_connection_args.end());
+        rt_args.insert(rt_args.end(), sync_fabric_connection_args.begin(), sync_fabric_connection_args.end());
+        rt_args.insert(rt_args.end(), line_sync_args.begin(), line_sync_args.end());
         rt_args.insert(
             rt_args.end(),
             traffic_config_to_fabric_connection_args.begin(),
@@ -467,6 +565,15 @@ inline void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTr
         this->add_worker(TestWorkerType::SENDER, logical_core);
     }
     this->senders_.at(logical_core).add_config(std::move(config));
+}
+
+inline void TestDevice::add_sender_sync_config(CoreCoord logical_core, TestTrafficSenderConfig sync_config) {
+    TT_FATAL(
+        this->senders_.find(logical_core) != this->senders_.end(),
+        "Sync config can only be added to existing sender cores. Core {} not found on device {}",
+        logical_core,
+        this->fabric_node_id_);
+    this->senders_.at(logical_core).add_sync_config(std::move(sync_config));
 }
 
 inline RoutingDirection TestDevice::get_forwarding_direction(

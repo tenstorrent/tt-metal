@@ -784,6 +784,11 @@ private:
 
             iteration_test.seed = std::uniform_int_distribution<uint32_t>()(this->gen_);
 
+            // Add line sync pattern expansion if enabled
+            if (iteration_test.line_sync) {
+                expand_line_sync_patterns(iteration_test);
+            }
+
             if (p_config.patterns.has_value()) {
                 if (!p_config.senders.empty()) {
                     TT_FATAL(
@@ -936,6 +941,39 @@ private:
             sender.device);
     }
 
+    void validate_line_sync_pattern(
+        const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) const {
+        TT_FATAL(
+            pattern.ftype.has_value() && pattern.ftype.value() == ChipSendType::CHIP_MULTICAST,
+            "Test '{}': Line sync pattern for sender on device {} must use CHIP_MULTICAST.",
+            test.name,
+            sender.device);
+
+        TT_FATAL(
+            pattern.ntype.has_value() && pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC,
+            "Test '{}': Line sync pattern for sender on device {} must use NOC_UNICAST_ATOMIC_INC.",
+            test.name,
+            sender.device);
+
+        TT_FATAL(
+            pattern.destination.has_value() && pattern.destination->hops.has_value(),
+            "Test '{}': Line sync pattern for sender on device {} must have destination specified by 'hops'.",
+            test.name,
+            sender.device);
+
+        TT_FATAL(
+            pattern.size.has_value() && pattern.size.value() == 0,
+            "Test '{}': Line sync pattern for sender on device {} must have size 0 (no payload).",
+            test.name,
+            sender.device);
+
+        TT_FATAL(
+            pattern.num_packets.has_value() && pattern.num_packets.value() == 1,
+            "Test '{}': Line sync pattern for sender on device {} must have num_packets 1.",
+            test.name,
+            sender.device);
+    }
+
     void validate_test(const TestConfig& test) const {
         for (const auto& sender : test.senders) {
             for (const auto& pattern : sender.patterns) {
@@ -945,6 +983,15 @@ private:
                     validate_chip_unicast(pattern, sender, test);
                 } else if (pattern.ftype.value() == ChipSendType::CHIP_MULTICAST) {
                     validate_chip_multicast(pattern, sender, test);
+                }
+            }
+        }
+
+        // Validate line sync patterns if present
+        if (test.line_sync) {
+            for (const auto& sync_sender : test.global_line_sync_configs) {
+                for (const auto& sync_pattern : sync_sender.patterns) {
+                    validate_line_sync_pattern(sync_pattern, sync_sender, test);
                 }
             }
         }
@@ -1092,6 +1139,57 @@ private:
                 test.senders.push_back(SenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
         }
+    }
+
+    void expand_line_sync_patterns(TestConfig& test) {
+        log_info(
+            LogTest,
+            "Expanding line sync patterns for test: {} with topology: {}",
+            test.name,
+            static_cast<int>(test.fabric_setup.topology));
+
+        std::vector<FabricNodeId> all_devices = device_info_provider_.get_all_node_ids();
+        TT_FATAL(!all_devices.empty(), "Cannot expand line sync patterns because no devices were found.");
+
+        // Create sync pattern based on topology
+        for (const auto& src_device : all_devices) {
+            TrafficPatternConfig sync_pattern =
+                create_sync_pattern_for_topology(src_device, test.fabric_setup.topology);
+
+            SenderConfig sync_sender = {.device = src_device, .patterns = {sync_pattern}};
+
+            test.global_line_sync_configs.push_back(sync_sender);
+        }
+
+        log_info(LogTest, "Generated {} line sync configurations", test.global_line_sync_configs.size());
+    }
+
+    TrafficPatternConfig create_sync_pattern_for_topology(FabricNodeId src_device, tt::tt_fabric::Topology topology) {
+        TrafficPatternConfig sync_pattern;
+
+        // Common sync pattern characteristics
+        sync_pattern.ftype = ChipSendType::CHIP_MULTICAST;         // Global sync across devices
+        sync_pattern.ntype = NocSendType::NOC_UNICAST_ATOMIC_INC;  // Sync signal via atomic increment
+        sync_pattern.size = 0;                                     // No payload, just sync signal
+        sync_pattern.num_packets = 1;                              // Single sync signal
+        sync_pattern.atomic_inc_val = 1;                           // Increment by 1
+        sync_pattern.atomic_inc_wrap = 0xFFFF;                     // Large wrap value
+
+        // Topology-specific routing
+        std::unordered_map<RoutingDirection, uint32_t> sync_hops;
+
+        switch (topology) {
+            case tt::tt_fabric::Topology::Ring: sync_hops = this->route_manager_.get_full_mcast_hops(src_device); break;
+            case tt::tt_fabric::Topology::Linear:
+                sync_hops = this->route_manager_.get_full_mcast_hops(src_device);
+                break;
+            case tt::tt_fabric::Topology::Mesh: sync_hops = this->route_manager_.get_full_mcast_hops(src_device); break;
+            default: TT_FATAL(false, "Unsupported topology for line sync: {}", static_cast<int>(topology));
+        }
+
+        sync_pattern.destination = DestinationConfig{.hops = sync_hops};
+
+        return sync_pattern;
     }
 
     void add_senders_from_pairs(
@@ -1438,6 +1536,17 @@ private:
             to_yaml(out, sender);
         }
         out << YAML::EndSeq;
+
+        // Add line sync configurations if present
+        if (!config.global_line_sync_configs.empty()) {
+            out << YAML::Key << "global_line_sync_configs";
+            out << YAML::Value;
+            out << YAML::BeginSeq;
+            for (const auto& sync_sender : config.global_line_sync_configs) {
+                to_yaml(out, sync_sender);
+            }
+            out << YAML::EndSeq;
+        }
 
         out << YAML::EndMap;
     }

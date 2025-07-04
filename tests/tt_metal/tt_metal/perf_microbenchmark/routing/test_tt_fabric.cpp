@@ -60,6 +60,7 @@ public:
     void setup_devices();
     void reset_devices();
     void process_traffic_config(TestConfig& config);
+    void process_line_sync_config(TestConfig& config);
     void open_devices(Topology topology, RoutingType routing_type);
     void compile_programs();
     void launch_programs();
@@ -216,6 +217,98 @@ void TestContext::process_traffic_config(TestConfig& config) {
     }
 }
 
+void TestContext::process_line_sync_config(TestConfig& config) {
+    if (!config.line_sync || config.global_line_sync_configs.empty()) {
+        return;  // No line sync configs to process
+    }
+
+    log_info(tt::LogTest, "Processing line sync configurations");
+
+    // Track master senders for each device to avoid adding sync to all senders
+    std::unordered_map<FabricNodeId, CoreCoord> device_master_senders;
+
+    // Find the master sender for each device (first sender in the device)
+    for (const auto& coord : this->fixture_->get_available_device_coordinates()) {
+        auto& test_device = this->test_devices_.at(coord);
+        auto& device_id = test_device.get_node_id();
+
+        // Find the first sender core for this device (will be the master)
+        for (const auto& sender : config.senders) {
+            if (sender.device == device_id && sender.core.has_value()) {
+                device_master_senders[device_id] = sender.core.value();
+                break;
+            }
+        }
+    }
+
+    // Process each sync sender config
+    for (const auto& sync_sender : config.global_line_sync_configs) {
+        // Only process sync for devices that have a master sender
+        if (device_master_senders.find(sync_sender.device) == device_master_senders.end()) {
+            log_warning(
+                tt::LogTest, "Skipping sync config for device {} - no master sender found", sync_sender.device.chip_id);
+            continue;
+        }
+
+        CoreCoord master_core = device_master_senders[sync_sender.device];
+        const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
+
+        // Process each sync pattern for this device
+        for (const auto& sync_pattern : sync_sender.patterns) {
+            // Convert sync pattern to TestTrafficSenderConfig format
+            const auto& dest = sync_pattern.destination.value();
+
+            // Split multi-directional sync hops into single-direction hops
+            const auto& original_hops = dest.hops.value();
+            auto split_hops_vec = this->fixture_->split_multicast_hops(original_hops);
+
+            log_info(
+                tt::LogTest,
+                "Splitting sync pattern for device {} from {} to {} directional configs",
+                sync_sender.device.chip_id,
+                1,
+                split_hops_vec.size());
+
+            // Create separate sync config for each direction
+            for (const auto& split_hops : split_hops_vec) {
+                TrafficParameters sync_traffic_parameters = {
+                    .chip_send_type = sync_pattern.ftype.value(),
+                    .noc_send_type = sync_pattern.ntype.value(),
+                    .payload_size_bytes = sync_pattern.size.value(),
+                    .num_packets = sync_pattern.num_packets.value(),
+                    .atomic_inc_val = sync_pattern.atomic_inc_val,
+                    .atomic_inc_wrap = sync_pattern.atomic_inc_wrap,
+                    .mcast_start_hops = sync_pattern.mcast_start_hops,
+                    .seed = config.seed,
+                    .topology = config.fabric_setup.topology,
+                    .mesh_shape = this->fixture_->get_mesh_shape(),
+                };
+
+                // For sync patterns, we use a dummy destination core and address
+                // The actual sync will be handled by atomic operations
+                CoreCoord dummy_dst_core = {0, 0};  // Sync doesn't need specific dst core
+                uint32_t sync_address = 0x50000;    // Fixed sync address
+                uint32_t dst_noc_encoding = 0;      // Will be filled by device setup
+
+                TestTrafficSenderConfig sync_config = {
+                    .parameters = sync_traffic_parameters,
+                    .src_node_id = sync_sender.device,
+                    .dst_node_ids = {},  // Empty for multicast sync
+                    .hops = split_hops,  // Use single-direction hops
+                    .dst_logical_core = dummy_dst_core,
+                    .target_address = sync_address,
+                    .atomic_inc_address = sync_address,
+                    .dst_noc_encoding = dst_noc_encoding};
+
+                // Add sync config to the master sender on this device
+                this->test_devices_.at(device_coord).add_sender_sync_config(master_core, std::move(sync_config));
+            }
+        }
+    }
+
+    log_info(tt::LogTest, "Line sync configuration processing complete");
+}
+
 int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
@@ -302,6 +395,9 @@ int main(int argc, char** argv) {
 
             test_context.process_traffic_config(built_test);
             log_info(tt::LogTest, "Traffic config processed");
+
+            test_context.process_line_sync_config(built_test);
+            log_info(tt::LogTest, "Line sync config processed");
 
             if (dump_built_tests) {
                 YamlTestConfigSerializer::dump({built_test}, output_stream);

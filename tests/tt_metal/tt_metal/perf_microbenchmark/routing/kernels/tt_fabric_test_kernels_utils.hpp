@@ -797,6 +797,7 @@ private:
 */
 template <
     uint8_t NUM_FABRIC_CONNECTIONS,
+    uint8_t NUM_SYNC_FABRIC_CONNECTIONS,
     uint8_t NUM_TRAFFIC_CONFIGS,
     bool IS_2D_FABRIC,
     bool USE_DYNAMIC_ROUTING,
@@ -814,10 +815,10 @@ struct SenderKernelConfig {
 
     void global_sync() {
         if constexpr (LINE_SYNC && MASTER_SYNC_CORE) {
-            for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
-                fabric_connections()[i].open();
+            for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+                sync_fabric_connections()[i].open();
                 line_sync_configs()[i].global_sync();
-                fabric_connections()[i].close();
+                sync_fabric_connections()[i].close();
             }
         }
     }
@@ -837,7 +838,10 @@ struct SenderKernelConfig {
     SenderKernelMemoryAllocator memory_allocator;
     alignas(WorkerToFabricEdmSender)
         std::array<char, NUM_FABRIC_CONNECTIONS * sizeof(WorkerToFabricEdmSender)> fabric_connections_storage;
-    alignas(LineSyncConfig) std::array<char, NUM_FABRIC_CONNECTIONS * sizeof(LineSyncConfig)> line_sync_configs_storage;
+    alignas(WorkerToFabricEdmSender)
+        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(WorkerToFabricEdmSender)> sync_fabric_connections_storage;
+    alignas(LineSyncConfig)
+        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(LineSyncConfig)> line_sync_configs_storage;
     alignas(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)
         std::array<char, sizeof(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
     std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_to_fabric_connection_map;
@@ -848,6 +852,9 @@ struct SenderKernelConfig {
     // Helper accessors
     WorkerToFabricEdmSender* fabric_connections() {
         return reinterpret_cast<WorkerToFabricEdmSender*>(fabric_connections_storage.data());
+    }
+    WorkerToFabricEdmSender* sync_fabric_connections() {
+        return reinterpret_cast<WorkerToFabricEdmSender*>(sync_fabric_connections_storage.data());
     }
     LineSyncConfig* line_sync_configs() { return reinterpret_cast<LineSyncConfig*>(line_sync_configs_storage.data()); }
     LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>& local_sync_config() {
@@ -870,15 +877,21 @@ private:
             new (&fabric_connections()[i]) WorkerToFabricEdmSender(connection);
         }
 
+        // Initialize sync fabric connections using placement new
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            auto sync_connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+            new (&sync_fabric_connections()[i]) WorkerToFabricEdmSender(sync_connection);
+        }
+
         // add line sync initializations here, for each fabric connection, ex, forward and backward connection, run line
         // sync for all.
         if constexpr (LINE_SYNC) {
-            for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
+            for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
                 uint32_t packet_header_address = this->memory_allocator.get_packet_header_address();
                 uint32_t line_sync_val = get_arg_val<uint32_t>(arg_idx++);
 
                 new (&line_sync_configs()[i])
-                    LineSyncConfig(&fabric_connections()[i], packet_header_address, line_sync_val);
+                    LineSyncConfig(&sync_fabric_connections()[i], packet_header_address, line_sync_val);
 
                 // setup packet header fields
                 line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(

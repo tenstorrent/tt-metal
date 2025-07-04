@@ -78,6 +78,9 @@ struct TestConfig {
     std::optional<ParametrizationOptionsMap> parametrization_params;
     // A test can be defined by either a concrete list of senders or a high-level pattern.
     std::optional<std::vector<HighLevelPatternConfig>> patterns;
+    // add line sync sender configs here, each config contains current device, and the patterns (does the patterns need
+    // to be split?)
+    std::vector<SenderConfig> global_line_sync_configs;
     std::vector<SenderConfig> senders;
     std::optional<std::string> bw_calc_func;
     bool benchmark_mode = false;  // Enable benchmark mode for performance testing
