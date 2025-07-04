@@ -256,7 +256,7 @@ void kernel_main() {
 
                 {
                     // Read V chunk in row major order, write in row-major order
-                    cb_reserve_back(cb_v_in, k_chunk_tiles);
+                    cb_reserve_back(cb_v_in, v_chunk_tiles);
                     uint32_t v_write_ptr = get_write_ptr(cb_v_in);
                     barrier_count = 0;
 
@@ -277,7 +277,7 @@ void kernel_main() {
                         }
                     }
                     noc_async_read_barrier();
-                    cb_push_back(cb_v_in, k_chunk_tiles);
+                    cb_push_back(cb_v_in, v_chunk_tiles);
                 }
 
             }

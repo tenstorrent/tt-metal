@@ -327,7 +327,8 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     }
 }
 
-void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+template <bool pop_in_cb>
+void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Precondition: out_cb has num_tiles free
     // Postcondition: in_cb has num_tiles consumed
@@ -346,7 +347,9 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
         cb_push_back(out_cb, 1);
         release_dst();
     }
-    cb_pop_front(in_cb, num_tiles);
+    if (pop_in_cb) {
+        cb_pop_front(in_cb, num_tiles);
+    }
 }
 
 ALWI void cb_matmul_blocks(
