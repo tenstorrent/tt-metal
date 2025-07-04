@@ -51,20 +51,19 @@ void kernel_main() {
     uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t compile_arg_idx = 11;
+    constexpr uint32_t ct_idx = 11;
 
 #ifdef INPUT_IS_SHARDED
-    constexpr uint32_t input_addrgen_compile_arg_offset = 7;
+    constexpr uint32_t ct_offset = 7;
 
     using input_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(compile_arg_idx),       // Memory layout
-        get_compile_time_arg_val(compile_arg_idx + 1),   // The number of sharding cores
-        get_compile_time_arg_val(compile_arg_idx + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(compile_arg_idx + 3),   // The number of pages in each sharding row not including
-                                                         // padding pages
-        get_compile_time_arg_val(compile_arg_idx + 4),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(compile_arg_idx + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(compile_arg_idx + 6)>;  // pages_per_shard_y
+        get_compile_time_arg_val(ct_idx),       // Memory layout
+        get_compile_time_arg_val(ct_idx + 1),   // The number of sharding cores
+        get_compile_time_arg_val(ct_idx + 2),   // The page size we offset each write to
+        get_compile_time_arg_val(ct_idx + 3),   // The number of pages in each sharding row not including padding pages
+        get_compile_time_arg_val(ct_idx + 4),   // This defines times when contiguous pages can't be calculated
+        get_compile_time_arg_val(ct_idx + 5),   // pages_per_shard_x
+        get_compile_time_arg_val(ct_idx + 6)>;  // pages_per_shard_y
 
     const auto [input_mapping_table, input_rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<input_tensor_shard_info>(get_arg_addr(arg_idx));
@@ -73,7 +72,7 @@ void kernel_main() {
 
     arg_idx += input_rt_increment;
 #else
-    constexpr uint32_t input_addrgen_compile_arg_offset = 0;
+    constexpr uint32_t ct_offset = 0;
 
     constexpr bool input_tensor_is_dram = input_buffer_type == tt::tt_metal::BufferType::DRAM;
     const InterleavedAddrGenFast<input_tensor_is_dram> input_tensor_addrgen = {
@@ -84,19 +83,15 @@ void kernel_main() {
 
 #ifdef OUTPUT_IS_SHARDED
     using output_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(compile_arg_idx + input_addrgen_compile_arg_offset),       // Memory layout
-        get_compile_time_arg_val(compile_arg_idx + input_addrgen_compile_arg_offset + 1),   // The number of sharding
-                                                                                            // cores
-        get_compile_time_arg_val(compile_arg_idx + input_addrgen_compile_arg_offset + 2),   // The page size we offset
-                                                                                            // each write to
-        get_compile_time_arg_val(compile_arg_idx + input_addrgen_compile_arg_offset + 3),   // The number of pages in
-                                                                                            // each sharding row not
-                                                                                            // including padding pages
-        get_compile_time_arg_val(compile_arg_idx + input_addrgen_compile_arg_offset + 4),   // This defines times when
-                                                                                            // contiguous pages can't be
-                                                                                            // calculated
-        get_compile_time_arg_val(compile_arg_idx + input_addrgen_compile_arg_offset + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(compile_arg_idx + input_addrgen_compile_arg_offset + 6)>;  // pages_per_shard_y
+        get_compile_time_arg_val(ct_idx + ct_offset),       // Memory layout
+        get_compile_time_arg_val(ct_idx + ct_offset + 1),   // The number of sharding cores
+        get_compile_time_arg_val(ct_idx + ct_offset + 2),   // The page size we offset each write to
+        get_compile_time_arg_val(ct_idx + ct_offset + 3),   // The number of pages in each sharding row not including
+                                                            // padding pages
+        get_compile_time_arg_val(ct_idx + ct_offset + 4),   // This defines times when contiguous pages can't be
+                                                            // calculated
+        get_compile_time_arg_val(ct_idx + ct_offset + 5),   // pages_per_shard_x
+        get_compile_time_arg_val(ct_idx + ct_offset + 6)>;  // pages_per_shard_y
 
     const auto [output_mapping_table, output_rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<output_tensor_shard_info>(get_arg_addr(arg_idx));
