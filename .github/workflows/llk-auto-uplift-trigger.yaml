@@ -14,6 +14,11 @@ on:
         required: false
         type: boolean
         default: false
+      recheck_tests:
+        description: 'Re-check latest test runs (for when tests were manually rerun)'
+        required: false
+        type: boolean
+        default: false
   repository_dispatch:
     types: [trigger-llk-update]
   schedule:
@@ -32,6 +37,7 @@ permissions:
 
 jobs:
   llk-submodule-uplift:
+    if: inputs.recheck_tests != true
     runs-on: ubuntu-latest
     outputs:
       pr-number: ${{ steps.create-pr.outputs.pull-request-number }}
@@ -242,7 +248,13 @@ jobs:
 
   trigger-and-monitor-workflows:
     needs: [llk-submodule-uplift]
-    if: needs.llk-submodule-uplift.outputs.has-changes == 'true' && (needs.llk-submodule-uplift.outputs.should-run-wormhole == 'true' || needs.llk-submodule-uplift.outputs.should-run-blackhole == 'true')
+    if: |
+      inputs.recheck_tests != true &&
+      needs.llk-submodule-uplift.outputs.has-changes == 'true' &&
+      (
+        needs.llk-submodule-uplift.outputs.should-run-wormhole == 'true' ||
+        needs.llk-submodule-uplift.outputs.should-run-blackhole == 'true'
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Checkout for GitHub CLI
@@ -400,9 +412,143 @@ jobs:
             exit 1
           fi
 
+  recheck-tests:
+    if: inputs.recheck_tests == true
+    runs-on: ubuntu-latest
+    outputs:
+      tests-passed: ${{ steps.check-latest.outputs.tests-passed }}
+    steps:
+      - name: Check latest test runs
+        id: check-latest
+        env:
+          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+        run: |
+          # Find the LLK PR number
+          PR_NUMBER=$(gh pr list --head "${{ env.BRANCH_NAME }}" --json number --jq '.[0].number // empty')
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "❌ No LLK PR found on branch ${{ env.BRANCH_NAME }}"
+            exit 1
+          fi
+
+          echo "🔍 Found LLK PR #$PR_NUMBER, determining which workflows should have run..."
+
+          # Determine which workflows should have been triggered by analyzing the LLK changes
+          cd ${{ env.SUBMODULE_PATH }}
+
+          # Get the LLK commit range from the PR (find the merge commit and its parents)
+          MERGE_COMMIT=$(gh pr view "$PR_NUMBER" --json mergeCommit --jq '.mergeCommit.oid // empty' --repo "${{ github.repository }}")
+          if [ -n "$MERGE_COMMIT" ]; then
+            # PR is merged, get the range from merge commit
+            PARENT_COMMITS=$(git log --pretty=format:"%H" -n 2 "$MERGE_COMMIT")
+            OLD_SHA=$(echo "$PARENT_COMMITS" | tail -n 1 | cut -c1-7)
+            NEW_SHA=$(echo "$PARENT_COMMITS" | head -n 1 | cut -c1-7)
+          else
+            # PR is not merged, get range from PR branch vs main
+            git fetch origin main
+            OLD_SHA=$(git merge-base HEAD origin/main | cut -c1-7)
+            NEW_SHA=$(git rev-parse HEAD | cut -c1-7)
+          fi
+
+          echo "🔍 Analyzing LLK changes: $OLD_SHA -> $NEW_SHA"
+          CHANGED_FILES=$(git diff --name-only ${OLD_SHA}..${NEW_SHA})
+
+          # Determine which workflows should run based on changes
+          SHOULD_RUN_WORMHOLE=false
+          SHOULD_RUN_BLACKHOLE=false
+
+          if echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/"; then
+            SHOULD_RUN_WORMHOLE=true
+            echo "✅ Wormhole changes detected - should check all-post-commit-workflows"
+          fi
+
+          if echo "$CHANGED_FILES" | grep -q "^tt_llk_blackhole/"; then
+            SHOULD_RUN_BLACKHOLE=true
+            echo "✅ Blackhole changes detected - should check blackhole-post-commit"
+          fi
+
+          if [ "$SHOULD_RUN_WORMHOLE" = false ] && [ "$SHOULD_RUN_BLACKHOLE" = false ]; then
+            echo "ℹ️ No architecture-specific changes detected, checking both workflows"
+            SHOULD_RUN_WORMHOLE=true
+            SHOULD_RUN_BLACKHOLE=true
+          fi
+
+          cd - > /dev/null
+
+          # Check latest runs for workflows that should have been triggered
+          ALL_PASSED=true
+          CHECKED_WORKFLOWS=0
+
+          if [ "$SHOULD_RUN_WORMHOLE" = true ]; then
+            echo "🔍 Checking latest All Post Commit Workflows run..."
+            LATEST_RUN=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json conclusion --jq '.[0].conclusion // "none"')
+            if [ "$LATEST_RUN" != "none" ]; then
+              CHECKED_WORKFLOWS=$((CHECKED_WORKFLOWS + 1))
+              if [ "$LATEST_RUN" != "success" ]; then
+                echo "❌ All Post Commit Workflows latest run: $LATEST_RUN"
+                ALL_PASSED=false
+              else
+                echo "✅ All Post Commit Workflows latest run: success"
+              fi
+            else
+              echo "❌ All Post Commit Workflows should have run but no runs found on this branch"
+              ALL_PASSED=false
+            fi
+          fi
+
+          if [ "$SHOULD_RUN_BLACKHOLE" = true ]; then
+            echo "🔍 Checking latest Blackhole Post Commit run..."
+            LATEST_RUN=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json conclusion --jq '.[0].conclusion // "none"')
+            if [ "$LATEST_RUN" != "none" ]; then
+              CHECKED_WORKFLOWS=$((CHECKED_WORKFLOWS + 1))
+              if [ "$LATEST_RUN" != "success" ]; then
+                echo "❌ Blackhole Post Commit latest run: $LATEST_RUN"
+                ALL_PASSED=false
+              else
+                echo "✅ Blackhole Post Commit latest run: success"
+              fi
+            else
+              echo "❌ Blackhole Post Commit should have run but no runs found on this branch"
+              ALL_PASSED=false
+            fi
+          fi
+
+          if [ "$CHECKED_WORKFLOWS" -eq 0 ]; then
+            echo "❌ No workflows were expected to run - this shouldn't happen"
+            ALL_PASSED=false
+          fi
+
+          echo "tests-passed=$ALL_PASSED" >> $GITHUB_OUTPUT
+
+          if [ "$ALL_PASSED" == "true" ]; then
+            echo "🎉 All required test runs passed!"
+            gh pr comment "$PR_NUMBER" \
+              --body "✅ **Test Re-check Successful**: All required workflow runs have passed after manual rerun." \
+              --repo "${{ github.repository }}"
+          else
+            echo "❌ Some required test runs still failing"
+            gh pr comment "$PR_NUMBER" \
+              --body "❌ **Test Re-check Failed**: Some required workflows are still failing. Please check the latest runs." \
+              --repo "${{ github.repository }}"
+          fi
+
   finalize:
-    needs: [llk-submodule-uplift, trigger-and-monitor-workflows]
-    if: always() && needs.llk-submodule-uplift.outputs.has-changes == 'true' && needs.llk-submodule-uplift.result == 'success' && (needs.trigger-and-monitor-workflows.result == 'success' || needs.trigger-and-monitor-workflows.result == 'skipped')
+    needs: [llk-submodule-uplift, trigger-and-monitor-workflows, recheck-tests]
+    if: |
+      always() && (
+        (
+          inputs.recheck_tests != true &&
+          needs.llk-submodule-uplift.outputs.has-changes == 'true' &&
+          needs.llk-submodule-uplift.result == 'success' &&
+          (
+            needs.trigger-and-monitor-workflows.result == 'success' ||
+            needs.trigger-and-monitor-workflows.result == 'skipped'
+          )
+        ) || (
+          inputs.recheck_tests == true &&
+          needs.recheck-tests.outputs.tests-passed == 'true'
+        )
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Auto-merge PR
