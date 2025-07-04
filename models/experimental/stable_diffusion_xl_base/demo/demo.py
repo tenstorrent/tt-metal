@@ -324,7 +324,7 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "prompt",
-    (["Dragon", "Dog", "Cat", "Mouse"],),
+    (("An astronaut riding a green horse"),),
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
