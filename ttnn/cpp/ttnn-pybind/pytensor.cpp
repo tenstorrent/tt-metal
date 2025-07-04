@@ -169,11 +169,7 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
         py::object contiguous_py_tensor = py_tensor.attr("contiguous")();
         DataType data_type = DataType::INVALID;
 
-        // Override the data type if there is a user-provided one
-        // Otherwise, figure it out from torch dtype
-        if (optional_data_type.has_value()) {
-            data_type = optional_data_type.value();
-        } else if (py_dtype.equal(torch.attr("float32"))) {
+        if (py_dtype.equal(torch.attr("float32"))) {
             data_type = DataType::FLOAT32;
         } else if (py_dtype.equal(torch.attr("float16"))) {
             data_type = DataType::BFLOAT16;
@@ -189,41 +185,6 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
             data_type = DataType::UINT8;
         } else {
             TT_THROW("Unsupported DataType: {}", std::string(py::repr(py_dtype)));
-        }
-
-        auto maybe_convert_pytorch_tensor = [&contiguous_py_tensor, &py_dtype, &torch](const char* target_py_dtype) {
-            if (not py_dtype.equal(torch.attr(target_py_dtype))) {
-                contiguous_py_tensor = contiguous_py_tensor.attr("to")(torch.attr(target_py_dtype));
-            }
-        };
-        switch (data_type) {
-            case DataType::UINT8: {
-                maybe_convert_pytorch_tensor("uint8");
-                break;
-            }
-            case DataType::UINT16: {
-                maybe_convert_pytorch_tensor("int16");
-                break;
-            }
-            case DataType::INT32:
-            case DataType::UINT32: {
-                maybe_convert_pytorch_tensor("int32");
-                break;
-            }
-            case DataType::BFLOAT4_B:
-            case DataType::BFLOAT8_B:
-            case DataType::FLOAT32: {
-                maybe_convert_pytorch_tensor("float32");
-                break;
-            }
-            case DataType::BFLOAT16: {
-                maybe_convert_pytorch_tensor("bfloat16");
-                break;
-            }
-            default: {
-                TT_THROW("Unsupported DataType: {}", data_type);
-                break;
-            }
         }
 
         return PreprocessedPyTensor{
