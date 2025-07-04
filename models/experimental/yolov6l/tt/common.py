@@ -103,7 +103,6 @@ class Yolov6l_Conv2D:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=self.activation_dtype,
         )
 
