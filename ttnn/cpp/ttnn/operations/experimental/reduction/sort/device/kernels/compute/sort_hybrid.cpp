@@ -83,10 +83,7 @@ void MAIN {
         cb_wait_front(index_tensor_transposed_cb_index, number_of_tiles_per_core);
 
         // Sort and merge step of bitonic merge sort
-        uint32_t stages = 0;
-        for (uint32_t i = Wt; i > 1; i >>= 1) {
-            stages++;
-        }
+        uint32_t stages = ilog2(Wt);
         for (uint32_t stage = 2; stage <= stages; stage++) {
             const uint32_t m_iter = stage - 1;
 
