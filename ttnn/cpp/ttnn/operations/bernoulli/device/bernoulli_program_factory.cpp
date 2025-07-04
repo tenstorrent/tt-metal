@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#include <string>
+
 #include "bernoulli_device_operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -70,7 +73,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
     const std::vector<uint32_t> writer_compile_time_args{in_cb_id, intermed_cb_id, intermed1_cb_id, output_is_dram};
     const std::string writer_file_path = kernels_dir_path + "writer_bernoulli.cpp";
 
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     switch (input.dtype()) {
         case DataType::BFLOAT16: writer_defines["INPUT_DTYPE_BFLOAT16"] = "1"; break;
         case DataType::FLOAT32: writer_defines["INPUT_DTYPE_FLOAT32"] = "1"; break;

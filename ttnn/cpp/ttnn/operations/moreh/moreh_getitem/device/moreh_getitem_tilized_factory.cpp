@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <iostream>
 
 #include "moreh_getitem_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -158,8 +157,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         auto src_is_dram = is_dram(input);
         auto dst_is_dram = is_dram(output);
 
-        std::map<string, string> reader_defines;
-        std::map<string, string> writer_defines;
+        std::map<std::string, std::string> reader_defines;
+        std::map<std::string, std::string> writer_defines;
 
         if (is_row_major_index) {
             reader_defines["ROW_MAJOR_INDEX"] = 1;
@@ -388,8 +387,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         auto src_is_dram = is_dram(input);
         auto dst_is_dram = is_dram(output);
 
-        std::map<string, string> reader_defines;
-        std::map<string, string> writer_defines;
+        std::map<std::string, std::string> reader_defines;
+        std::map<std::string, std::string> writer_defines;
 
         if (is_row_major_index) {
             reader_defines["ROW_MAJOR_INDEX"] = 1;

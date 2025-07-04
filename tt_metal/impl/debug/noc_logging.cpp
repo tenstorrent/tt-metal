@@ -8,8 +8,6 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
-// #include <iomanip>
-#include <set>
 #include <string>
 
 #include "assert.hpp"
@@ -20,7 +18,6 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/tt_soc_descriptor.h>
-#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -30,8 +27,8 @@ using noc_data_t = std::array<uint64_t, NOC_DATA_SIZE>;
 
 namespace tt {
 
-static string logfile_path = "generated/noc_data/";
-void PrintNocData(noc_data_t noc_data, const string& file_name) {
+static std::string logfile_path = "generated/noc_data/";
+void PrintNocData(noc_data_t noc_data, const std::string& file_name) {
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     std::filesystem::path output_dir(rtoptions.get_root_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);

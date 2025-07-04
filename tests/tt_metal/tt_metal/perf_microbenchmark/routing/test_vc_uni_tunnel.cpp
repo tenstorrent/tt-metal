@@ -18,8 +18,6 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <string_view>
-#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -34,7 +32,6 @@
 #include "impl/context/metal_context.hpp"
 #include "test_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 
 int main(int argc, char **argv) {
@@ -178,7 +175,7 @@ int main(int argc, char **argv) {
 
     bool pass = true;
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
     };
 

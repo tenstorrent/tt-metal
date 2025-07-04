@@ -11,6 +11,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <optional>
+#include <string>
 #include <variant>
 
 using uint32_t = std::uint32_t;
@@ -182,7 +183,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
                                                       (std::uint32_t)writer_block_size};
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
 
     if (is_rmsnorm) {
         compute_defines["RMSNORM"] = "1";

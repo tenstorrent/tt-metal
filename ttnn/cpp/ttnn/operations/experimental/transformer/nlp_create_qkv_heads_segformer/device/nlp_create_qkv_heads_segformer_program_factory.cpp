@@ -93,8 +93,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
 
     ///////////// K transpose ////////////////////
     const bool transpose_k_heads = false;
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
     //////////////////////////////////////////////
     auto reader_kernel_id = tt_metal::CreateKernel(

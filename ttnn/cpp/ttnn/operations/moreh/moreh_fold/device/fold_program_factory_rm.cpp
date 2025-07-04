@@ -86,8 +86,8 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     ////////////////////////////////////////////////////////////////////////////
     //                         Kernels defines
     ////////////////////////////////////////////////////////////////////////////
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
     switch (input.dtype()) {
         case DataType::BFLOAT16: reader_defines["DTYPE_BFLOAT16"] = "1"; break;

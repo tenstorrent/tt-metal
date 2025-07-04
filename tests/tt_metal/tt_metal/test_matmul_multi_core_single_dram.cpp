@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <functional>
-#include <random>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -39,7 +37,7 @@ std::vector<std::uint32_t> transpose_tiles(
     return result;
 }
 
-void print_faces(std::vector<bfloat16> data, string name) {
+void print_faces(std::vector<bfloat16> data, std::string name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
 

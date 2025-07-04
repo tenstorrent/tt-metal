@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include "moreh_sum_device_operation.hpp"
@@ -96,7 +97,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input))};
-    std::map<string, string> reader_defines{};
+    std::map<std::string, std::string> reader_defines{};
     if (do_mask_w) {
         reader_defines["DO_MASK_W"] = "1";
     }
@@ -117,7 +118,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
         Wt,                         // Wt
         origin_W};
 
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }

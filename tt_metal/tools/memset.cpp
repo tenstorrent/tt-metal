@@ -16,7 +16,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include <umd/device/tt_core_coordinates.h>
-#include "utils.hpp"
 
 void memset_l1(tt::stl::Span<const uint32_t> mem_vec, uint32_t chip_id, uint32_t start_addr) {
     // Utility function that writes a memory vector to L1 for all cores at a specific start address.
@@ -51,7 +50,7 @@ int main(int argc, char* argv[]) {
         "If you don't want to launch from memset.py, the order of arguments supplied is specified by the command list "
         "in memset.py.");
 
-    string mem_type = argv[1];
+    std::string mem_type = argv[1];
     uint32_t chip_id = std::stoi(argv[2]);
     uint32_t start_addr = std::stoi(argv[3]);
     uint32_t size = std::stoi(argv[4]);

@@ -413,9 +413,9 @@ process_mcast_in0_program_and_create_override_variables(
         (std::uint32_t)B  // batch
     };
 
-    std::map<string, string> mm_kernel_defines;
-    std::map<string, string> mm_kernel_in0_sender_writer_defines;
-    std::map<string, string> mm_kernel_in1_sender_writer_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
+    std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
     if (bias_buffer != nullptr) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
@@ -1193,10 +1193,10 @@ process_mcast_in1_program_and_create_override_variables(
     }
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
 
-    std::map<string, string> mm_kernel_defines;
-    std::map<string, string> mm_kernel_in0_sender_defines;
-    std::map<string, string> mm_kernel_in1_sender_writer_defines;
-    std::map<string, string> mm_kernel_in1_receiver_writer_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_in0_sender_defines;
+    std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+    std::map<std::string, std::string> mm_kernel_in1_receiver_writer_defines;
     if (bias_buffer != nullptr) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
@@ -1955,8 +1955,8 @@ process_gather_in0_program_and_create_override_variables(
     }
 
     /* Kernel defines */
-    std::map<string, string> mm_in1_kernel_defines;
-    std::map<string, string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_in1_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
 
     if (use_global_cb) {
         mm_in1_kernel_defines["ENABLE_GLOBAL_CB"] = "1";

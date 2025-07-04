@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include "ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
@@ -64,8 +66,8 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
     bool src_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
     auto reader_kernel_id = CreateReadKernel(
         program,
@@ -87,7 +89,7 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
     auto dim_size = shape[dim];
     auto inner_size = outer_stride / dim_size;
 
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["SOFTMAX"] = "1";
     } else {

@@ -11,7 +11,6 @@
 #include <map>
 #include <string>
 #include <variant>
-#include <vector>
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -24,7 +23,7 @@
 
 using namespace tt;
 
-void measure_latency(const string& kernel_name) {
+void measure_latency(const std::string& kernel_name) {
     const int device_id = 0;
     tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
@@ -42,7 +41,7 @@ void measure_latency(const string& kernel_name) {
 
     auto first_worker_physical_core = device->worker_core_from_logical_core({0, 0});
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"WORKER_NOC_X", std::to_string(first_worker_physical_core.x)},
         {"WORKER_NOC_Y", std::to_string(first_worker_physical_core.y)},
     };

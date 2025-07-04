@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-
 #include "tanh_accurate_pgm_factory.hpp"
 
 #include <tt-metalium/work_split.hpp>
@@ -140,7 +138,7 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
     }
 
     bool math_approx_mode = false;
-    std::map<string, string> unary_defines;
+    std::map<std::string, std::string> unary_defines;
     auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(

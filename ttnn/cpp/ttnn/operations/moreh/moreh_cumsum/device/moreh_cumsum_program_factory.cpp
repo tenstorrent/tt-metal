@@ -105,7 +105,7 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
-    std::map<string, string> compute_defines;  // = {{"TRISC_MATH", "1"}};
+    std::map<std::string, std::string> compute_defines;  // = {{"TRISC_MATH", "1"}};
 
     bool isSFPU = (input_data_format == tt::DataFormat::UInt32 || input_data_format == tt::DataFormat::Int32);
     fp32_dest_acc_en |= isSFPU;

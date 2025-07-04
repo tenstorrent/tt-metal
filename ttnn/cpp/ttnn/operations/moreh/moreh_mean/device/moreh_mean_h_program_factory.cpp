@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -82,7 +83,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     std::vector<uint32_t> reader_compile_time_args = {
         static_cast<uint32_t>(is_dram(input)), Ht, Wt, HtWt, packed_scaler_value};
 
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     reader_defines["REDUCE_SCALER"] = "1";
     if (do_mask_h) {
         reader_defines["DO_MASK_H"] = "1";
@@ -106,10 +107,10 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ///////////////////////////////////////////////////////////////////////////
-    string compute_kernel_name = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp";
+    std::string compute_kernel_name = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp";
     auto reduce_op = ReduceOpMath::SUM;
     auto reduce_dim = ReduceOpDim::H;
-    std::map<string, string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
+    std::map<std::string, std::string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = 1;
