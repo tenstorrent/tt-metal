@@ -208,8 +208,10 @@ RunTimeOptions::RunTimeOptions() {
         this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
     }
 
-    if (getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
-        this->erisc_iram_enabled = true;
+    if (auto str = getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
+        bool disabled = str[0] == '0';
+        this->erisc_iram_enabled = !disabled;
+        this->erisc_iram_enabled_env_var = !disabled;
     }
     this->fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
 
