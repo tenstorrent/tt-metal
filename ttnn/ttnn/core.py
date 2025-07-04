@@ -102,7 +102,7 @@ def dump_stack_trace_on_segfault():
 
 def create_sharded_memory_config(
     shape: Union[ttnn.Shape, Tuple[int, ...], List[int]],
-    core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange],
+    core_grid: Union[ttnn.CoreGrid, ttnn.CoreRangeSet],
     strategy: ShardStrategy,
     orientation: Optional[ShardOrientation] = None,
     use_height_and_width_as_shard_shape: bool = False,
