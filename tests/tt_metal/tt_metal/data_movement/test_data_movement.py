@@ -751,11 +751,13 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
 
 def export_dm_stats_to_csv(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement"):
     os.makedirs(output_dir, exist_ok=True)
+    agg_stats = aggregate_performance(dm_stats)
+
     # Group by test id
     test_ids = set()
-    for riscv in dm_stats.keys():
-        for attributes in dm_stats[riscv]["attributes"].values():
-            test_ids.add(attributes["Test id"])
+    for riscv in agg_stats.keys():
+        for test_run in agg_stats[riscv].values():
+            test_ids.add(test_run["attributes"]["Test id"])
     test_ids = sorted(test_ids)
 
     for test_id in test_ids:
@@ -773,17 +775,16 @@ def export_dm_stats_to_csv(dm_stats, output_dir="tests/tt_metal/tt_metal/data_mo
                     "Bandwidth (bytes/cycle)",
                 ]
             )
-            for kernel in dm_stats.keys():
-                kernel_series = dm_stats[kernel]["analysis"]["series"]
-                for entry in kernel_series:
-                    run_host_id = entry["duration_type"][0]["run_host_id"]
-                    attributes = dm_stats[kernel]["attributes"].get(run_host_id, {})
+            for kernel in agg_stats.keys():
+                for run_host_id, run_stats in agg_stats[kernel].items():
+                    # run_host_id = entry["duration_type"][0]["run_host_id"]
+                    attributes = run_stats["attributes"]
                     if attributes.get("Test id") != test_id:
                         continue
                     transaction_size = attributes.get("Transaction size in bytes", 0)
                     num_transactions = attributes.get("Number of transactions", 0)
-                    duration_cycles = entry["duration_cycles"]
-                    bandwidth = (num_transactions * transaction_size) / duration_cycles if duration_cycles else 0
+                    duration_cycles = run_stats["duration_cycles"]
+                    bandwidth = run_stats["bandwidth"]
                     writer.writerow(
                         [
                             "Receiver" if kernel == "riscv_1" else "Sender",
