@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import logging
 import torch.nn as nn
 import timm
@@ -61,7 +62,7 @@ config = dict(
 blocks_dict = {"BASIC": TtBasicBlock, "BOTTLENECK": TtBottleneck}
 
 
-class TtHighResolutionNet(nn.Module):
+class TtHighResolutionNet(LightweightModule):
     def __init__(self, state_dict, device, multi_scale_output=True):
         super(TtHighResolutionNet, self).__init__()
         self.cfg = config

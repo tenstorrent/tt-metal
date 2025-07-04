@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional
 import torch
 import torch.nn as nn
@@ -13,7 +14,7 @@ from models.utility_functions import (
 import ttnn
 
 
-class TtDistilBert_Embeddings(nn.Module):
+class TtDistilBert_Embeddings(LightweightModule):
     def __init__(self, config, state_dict=None, base_address="", device=None):
         super().__init__()
         self.config = config

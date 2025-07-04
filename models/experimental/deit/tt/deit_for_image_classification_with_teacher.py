@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from torch import nn
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Union
 from transformers import DeiTForImageClassificationWithTeacher
 
@@ -18,7 +18,7 @@ from models.utility_functions import (
 )
 
 
-class TtDeiTForImageClassificationWithTeacher(nn.Module):
+class TtDeiTForImageClassificationWithTeacher(LightweightModule):
     def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
         super().__init__()
         self.device = device

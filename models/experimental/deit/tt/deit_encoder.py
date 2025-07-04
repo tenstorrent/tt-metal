@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Union
 
 from torch import nn
@@ -11,7 +12,7 @@ from models.experimental.deit.tt.deit_config import DeiTConfig
 from models.experimental.deit.tt.deit_layer import TtDeiTLayer
 
 
-class TtDeiTEncoder(nn.Module):
+class TtDeiTEncoder(LightweightModule):
     def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
         super().__init__()
         self.config = config

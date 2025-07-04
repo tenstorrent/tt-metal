@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Tuple, List
 import torch
-import torch.nn as nn
 
 from models.utility_functions import (
     tt_to_torch_tensor,
@@ -15,7 +15,7 @@ import tt_lib.fallback_ops as fallback_ops
 from models.helper_funcs import Linear as TtLinear
 
 
-class TtMultiHeadSelfAttention(nn.Module):
+class TtMultiHeadSelfAttention(LightweightModule):
     def __init__(self, config, state_dict=None, base_address="", device=None):
         super().__init__()
         self.n_heads = config.n_heads

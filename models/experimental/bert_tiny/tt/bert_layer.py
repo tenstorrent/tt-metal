@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 from typing import Optional
 from models.experimental.bert_tiny.tt.bert_attention import TtBertattention
@@ -10,7 +10,7 @@ from models.experimental.bert_tiny.tt.bert_output import TtBertoutput
 from models.experimental.bert_tiny.tt.bert_intermediate import TtBertintermediate
 
 
-class TtBertlayer(nn.Module):
+class TtBertlayer(LightweightModule):
     def __init__(
         self,
         config,
