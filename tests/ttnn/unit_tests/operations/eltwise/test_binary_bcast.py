@@ -289,7 +289,7 @@ def test_unequal_ranks(a_shape, b_shape, device):
 
     torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
 
-    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
@@ -859,7 +859,7 @@ def test_inplace_binary_ops_with_tensor(a_shape, b_shape, ttnn_fn, activations, 
         input_tensor_a_activations=lhs,
         input_tensor_b_activations=rhs,
         activations=post,
-        use_legacy=None,
+        use_legacy=False,
     )
     output_tensor = ttnn.to_torch(input_tensor_a)
     assert output_tensor.shape == torch_output_tensor.shape
@@ -1083,7 +1083,7 @@ def test_binary_opt_output_invalid_bcast(a_shape, b_shape, out_shape, ttnn_fn, d
         RuntimeError, match=r"Shape of Output tensor.+ provided does not match the broadcasted output shape .+"
     ):
         cq_id = 0
-        ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=None)
+        ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
 
 
 @pytest.mark.parametrize(
