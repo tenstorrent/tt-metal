@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 
 
-class TtYolov5Concat(torch.nn.Module):
+class TtYolov5Concat(LightweightModule):
     # Concatenate a list of tensors along dimension
     def __init__(self, state_dict, base_address, device, dimension=1):
         super().__init__()

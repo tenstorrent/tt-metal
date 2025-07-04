@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import ttnn
 import math
@@ -20,7 +21,7 @@ def gelu_new(x, device):
     return x
 
 
-class TtT5DenseGatedActDense(torch.nn.Module):
+class TtT5DenseGatedActDense(LightweightModule):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
 

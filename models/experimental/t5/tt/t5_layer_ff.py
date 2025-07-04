@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import ttnn
 
@@ -10,7 +11,7 @@ from models.experimental.t5.tt.t5_dense_act_dense import TtT5DenseActDense
 from models.experimental.t5.tt.t5_dense_gated_act_dense import TtT5DenseGatedActDense
 
 
-class TtT5LayerFF(torch.nn.Module):
+class TtT5LayerFF(LightweightModule):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
 

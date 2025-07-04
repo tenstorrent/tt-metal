@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 from torch.nn import CrossEntropyLoss
 import copy
 from typing import Optional, Tuple, Union
@@ -15,7 +15,7 @@ from models.helper_funcs import Linear
 
 
 @dataclass
-class TtCausalLMOutputWithCrossAttentions(nn.Module):
+class TtCausalLMOutputWithCrossAttentions(LightweightModule):
     loss: Optional[ttnn.Tensor] = None
     logits: ttnn.Tensor = None
     past_key_values: Optional[Tuple[Tuple[ttnn.Tensor]]] = None
@@ -24,7 +24,7 @@ class TtCausalLMOutputWithCrossAttentions(nn.Module):
     cross_attentions: Optional[Tuple[ttnn.Tensor]] = None
 
 
-class TtTrOCRForCausalLM(nn.Module):
+class TtTrOCRForCausalLM(LightweightModule):
     def __init__(
         self,
         config,

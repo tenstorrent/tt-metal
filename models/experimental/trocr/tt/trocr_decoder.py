@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import torch.nn as nn
 import math
@@ -35,7 +36,7 @@ class TtBaseModelOutputWithPastAndCrossAttentions:
     cross_attentions: Optional[Tuple[ttnn.Tensor]] = None
 
 
-class TtTrOCRDecoder(nn.Module):
+class TtTrOCRDecoder(LightweightModule):
     def __init__(
         self,
         config: TtTrOCRConfig,

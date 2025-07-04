@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 
 from models.experimental.t5.tt.t5_attention import TtT5Attention
 from models.experimental.t5.tt.t5_layer_norm import TtT5LayerNorm
 
 
-class TtT5LayerSelfAttention(torch.nn.Module):
+class TtT5LayerSelfAttention(LightweightModule):
     def __init__(
         self,
         config,

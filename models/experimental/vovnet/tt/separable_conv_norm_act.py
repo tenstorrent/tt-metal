@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 
 import ttnn
 
@@ -14,7 +14,7 @@ from models.utility_functions import (
 from models.experimental.vovnet.vovnet_utils import create_batchnorm
 
 
-class TtSeparableConvNormAct(nn.Module):
+class TtSeparableConvNormAct(LightweightModule):
     def __init__(
         self,
         in_channels: int = 64,
