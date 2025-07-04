@@ -90,11 +90,9 @@ void append_fabric_connection_rt_args(
     CoreType core_type) {
     TT_FATAL(
         src_fabric_node_id != dst_fabric_node_id,
-        "Expected different src and dst chip ids but got same, src:  (M {} D {}), dst:  (M {} D {})",
-        src_fabric_node_id.mesh_id,
-        src_fabric_node_id.chip_id,
-        dst_fabric_node_id.mesh_id,
-        dst_fabric_node_id.chip_id);
+        "Expected different src and dst chip ids but got same, Src: {}, Dst: {}",
+        src_fabric_node_id,
+        dst_fabric_node_id);
 
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -107,9 +105,9 @@ void append_fabric_connection_rt_args(
     if (!is_2d_fabric && !is_TG_gateway_connection(src_fabric_node_id, dst_fabric_node_id)) {
         TT_FATAL(
             src_fabric_node_id.mesh_id == dst_fabric_node_id.mesh_id,
-            "Currently only the chips on the same mesh are supported for 1D fabric. Src mesh id: {}, Dst mesh id: {}",
-            src_fabric_node_id.mesh_id,
-            dst_fabric_node_id.mesh_id);
+            "Currently only the chips on the same mesh are supported for 1D fabric. Src: {}, Dst: {}",
+            src_fabric_node_id,
+            dst_fabric_node_id);
     }
 
     // get the direction in which the data will be forwarded from the src_fabric_node_id
@@ -138,30 +136,29 @@ void append_fabric_connection_rt_args(
     }
     TT_FATAL(
         forwarding_direction.has_value(),
-        "Could not find any forwarding direction from src  (M {} D {}) to dst  (M {} D {})",
-        src_fabric_node_id.mesh_id,
-        src_fabric_node_id.chip_id,
-        dst_fabric_node_id.mesh_id,
-        dst_fabric_node_id.chip_id);
+        "Could not find any forwarding direction from src {} to dst {}",
+        src_fabric_node_id,
+        dst_fabric_node_id);
 
     const auto candidate_eth_chans =
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
     TT_FATAL(
         link_idx < candidate_eth_chans.size(),
-        "requested link idx {}, out of bounds, max available {}",
+        "Requested link index {} is out of bounds. {} ethernet channels available to forward b/w src {} and dst {}",
         link_idx,
-        candidate_eth_chans.size());
+        candidate_eth_chans.size(),
+        src_fabric_node_id,
+        dst_fabric_node_id);
 
     const auto forwarding_links =
         get_forwarding_link_indices_in_direction(src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
     TT_FATAL(
         std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
-        "requested link idx {}, cannot be used for forwarding b/w src (M {} D {}) and dst  (M {} D {})",
+        "Requested link index {} cannot be used for forwarding b/w src {} and dst {}. Valid forwarding links are {}",
         link_idx,
-        src_fabric_node_id.mesh_id,
-        src_fabric_node_id.chip_id,
-        dst_fabric_node_id.mesh_id,
-        dst_fabric_node_id.chip_id);
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        forwarding_links);
 
     const auto fabric_router_channel = candidate_eth_chans[link_idx];
     const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
@@ -196,6 +193,20 @@ void append_fabric_connection_rt_args(
         worker_teardown_semaphore_id,
         worker_buffer_index_semaphore_id,
         worker_args);
+}
+
+std::vector<uint32_t> get_forwarding_link_indices(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // find the forwarding direction b/w src and dest chip
+    const auto& forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    if (!forwarding_direction.has_value()) {
+        return {};
+    }
+
+    return get_forwarding_link_indices_in_direction(
+        src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
 }
 
 namespace experimental {

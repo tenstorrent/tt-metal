@@ -98,6 +98,15 @@ static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mappe
     {"ExhaustFirst", CoreAllocationPolicy::ExhaustFirst},
 });
 
+static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_pattern_mapper({
+    {"all_to_all_unicast", HighLevelTrafficPattern::AllToAllUnicast},
+    {"full_device_random_pairing", HighLevelTrafficPattern::FullDeviceRandomPairing},
+    {"all_to_all_multicast", HighLevelTrafficPattern::AllToAllMulticast},
+    {"unidirectional_linear_multicast", HighLevelTrafficPattern::UnidirectionalLinearMulticast},
+    {"full_ring_multicast", HighLevelTrafficPattern::FullRingMulticast},
+    {"half_ring_multicast", HighLevelTrafficPattern::HalfRingMulticast},
+});
+
 }  // namespace detail
 
 struct ParsedYamlConfig {
@@ -201,7 +210,12 @@ private:
 const std::string no_default_test_yaml_config = "";
 
 const std::vector<std::string> supported_high_level_patterns = {
-    "all_to_all_unicast", "full_device_random_pairing", "all_to_all_multicast"};
+    "all_to_all_unicast",
+    "full_device_random_pairing",
+    "all_to_all_multicast",
+    "unidirectional_linear_multicast",
+    "full_ring_multicast",
+    "half_ring_multicast"};
 
 inline ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_path) {
     std::ifstream yaml_config(yaml_config_path);
@@ -958,6 +972,12 @@ private:
                 expand_full_device_random_pairing(test, defaults);
             } else if (pattern.type == "all_to_all_multicast") {
                 expand_all_to_all_multicast(test, defaults);
+            } else if (pattern.type == "unidirectional_linear_multicast") {
+                expand_unidirectional_linear_multicast(test, defaults);
+            } else if (pattern.type == "full_ring_multicast" || pattern.type == "half_ring_multicast") {
+                HighLevelTrafficPattern pattern_type =
+                    detail::high_level_traffic_pattern_mapper.from_string(pattern.type, "HighLevelTrafficPattern");
+                expand_full_or_half_ring_multicast(test, defaults, pattern_type);
             } else {
                 TT_THROW("Unsupported pattern type: {}", pattern.type);
             }
@@ -983,6 +1003,71 @@ private:
 
         for (const auto& src_node : devices) {
             auto hops = this->route_manager_.get_full_mcast_hops(src_node);
+
+            TrafficPatternConfig specific_pattern;
+            specific_pattern.destination = DestinationConfig{.hops = hops};
+            specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
+
+            auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
+
+            auto it = std::find_if(
+                test.senders.begin(), test.senders.end(), [&](const SenderConfig& s) { return s.device == src_node; });
+
+            if (it != test.senders.end()) {
+                it->patterns.push_back(merged_pattern);
+            } else {
+                test.senders.push_back(SenderConfig{.device = src_node, .patterns = {merged_pattern}});
+            }
+        }
+    }
+
+    void expand_unidirectional_linear_multicast(TestConfig& test, const TrafficPatternConfig& base_pattern) {
+        log_info(LogTest, "Expanding unidirectional_linear_multicast pattern for test: {}", test.name);
+        std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
+        TT_FATAL(!devices.empty(), "Cannot expand unidirectional_linear_multicast because no devices were found.");
+
+        for (const auto& src_node : devices) {
+            // instantiate N/S E/W traffic on seperate senders to avoid bottlnecking on sender.
+            for (uint32_t dim = 0; dim < this->route_manager_.get_num_mesh_dims(); ++dim) {
+                // Skip dimensions with only one device
+                if (this->route_manager_.get_mesh_shape()[dim] < 2) {
+                    continue;
+                }
+
+                auto hops = this->route_manager_.get_unidirectional_linear_mcast_hops(src_node, dim);
+
+                TrafficPatternConfig specific_pattern;
+                specific_pattern.destination = DestinationConfig{.hops = hops};
+                specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
+
+                auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
+                test.senders.push_back(SenderConfig{.device = src_node, .patterns = {merged_pattern}});
+            }
+        }
+    }
+
+    void expand_full_or_half_ring_multicast(
+        TestConfig& test, const TrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
+        log_info(LogTest, "Expanding full_or_half_ring_multicast pattern for test: {}", test.name);
+        std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
+        TT_FATAL(!devices.empty(), "Cannot expand full_or_half_ring_multicast because no devices were found.");
+
+        for (const auto& src_node : devices) {
+            // Get ring neighbors - returns nullopt for non-perimeter devices
+            auto ring_neighbors = this->route_manager_.get_wrap_around_mesh_ring_neighbors(src_node, devices);
+
+            // Check if the result is valid (has value)
+            if (!ring_neighbors.has_value()) {
+                // Skip this device as it's not on the perimeter and can't participate in ring multicast
+                log_info(LogTest, "Skipping device {} as it's not on the perimeter ring", src_node.chip_id);
+                continue;
+            }
+
+            // Extract the valid ring neighbors
+            auto [dst_node_forward, dst_node_backward] = ring_neighbors.value();
+
+            auto hops = this->route_manager_.get_full_or_half_ring_mcast_hops(
+                src_node, dst_node_forward, dst_node_backward, pattern_type);
 
             TrafficPatternConfig specific_pattern;
             specific_pattern.destination = DestinationConfig{.hops = hops};

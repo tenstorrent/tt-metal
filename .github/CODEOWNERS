@@ -201,12 +201,13 @@ ttnn/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 
 # models
-/models/ @uaydonat
+/models/ @uaydonat @yieldthought @cglagovichTT
 /models/*/**
 /**/functional_*/ @uaydonat @esmalTT
 models/common @yieldthought @mtairum @uaydonat
+models/utility_functions.py @yieldthought @mtairum @uaydonat
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat
-models/demos @uaydonat
+models/demos @uaydonat @yieldthought @cglagovichTT
 models/**/bert*/ @TT-BrianLiu @uaydonat
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/*/convnet_mnist/ @sjameelTT @uaydonat
@@ -216,8 +217,8 @@ models/*/roberta/ @sraizada-tt @uaydonat
 models/*/squeezebert/ @cfjchu @uaydonat
 models/demos/ttnn_falcon7b @cfjchu @uaydonat
 models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT
-models/demos/wormhole @uaydonat
-models/demos/t3000 @uaydonat
+models/demos/wormhole @uaydonat @yieldthought @cglagovichTT
+models/demos/t3000 @uaydonat @yieldthought @cglagovichTT
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
 models/demos/llama3_subdevices @johanna-rock-tt @kpaigwar @avoraTT @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT
 models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @uaydonat
@@ -234,7 +235,7 @@ models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/whisper @skhorasganiTT @uaydonat
-models/demos/grayskull @uaydonat
+models/demos/grayskull @uaydonat @yieldthought @cglagovichTT
 models/demos/yolov4 @dvartaniansTT @mbahnasTT @rdraskicTT @mbezuljTT @tenstorrent/metalium-developers-convolutions
 models/demos/**/*resnet* @tenstorrent/metalium-developers-convolutions @mradosavljevicTT
 models/experimental/ @sminakov-tt @dgomezTT @jmalone-tt @ayerofieiev-tt @uaydonat
@@ -248,7 +249,7 @@ models/experimental/grok @yieldthought @uaydonat
 models/demos/wormhole/vit @tenstorrent/cse-developer-ttnn @uaydonat
 models/demos/vit  @tenstorrent/cse-developer-ttnn @uaydonat
 models/experimental/*yolo*/ @tenstorrent/cse-developer-ttnn @uaydonat
-models/experimental/yolo_evaluation @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-convolutions
+models/experimental/yolo_eval @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-convolutions
 models/demos/segformer @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/metalium-developers-convolutions
 models/perf/ @yieldthought @uaydonat
 models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat
@@ -264,6 +265,9 @@ models/experimental/stable_diffusion_35_large/ @jonathansuTT @cglagovichTT @tens
 models/experimental/swin_s @tenstorrent/cse-developer-ttnn
 models/demos/yolov7 @tenstorrent/cse-developer-ttnn
 models/experimental/classification_eval @tenstorrent/cse-developer-ttnn
+models/experimental/yolov11 @tenstorrent/cse-developer-ttnn
+models/experimental/segmentation_evaluation @tenstorrent/cse-developer-ttnn
+models/experimental/yolov6l @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra

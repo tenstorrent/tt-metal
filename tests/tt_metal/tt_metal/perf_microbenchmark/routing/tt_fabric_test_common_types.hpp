@@ -51,6 +51,15 @@ enum class RoutingType {
     Dynamic,
 };
 
+enum class HighLevelTrafficPattern {
+    AllToAllUnicast,
+    FullDeviceRandomPairing,
+    AllToAllMulticast,
+    UnidirectionalLinearMulticast,
+    FullRingMulticast,
+    HalfRingMulticast,
+};
+
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology;
     std::optional<RoutingType> routing_type;
