@@ -73,7 +73,6 @@ def test_conv2d_inference(
     #     bias=bias,
     # )
     reference_model = model_args.reference_conv2d_patch()
-    print("reference_model state_dict keys:", reference_model)
     reference_model.load_state_dict(partial_state_dict)
     reference_output = reference_model(input_tensor)
 
@@ -96,8 +95,6 @@ def test_conv2d_inference(
 
     # Only select output from one device
     tt_output_torch = tt_output_torch[0, ..., :out_channels]
-
-    print("Reference output shape:", reference_output.shape)
 
     # 1. Restore batch dim
     tt_output_torch = tt_output_torch.unsqueeze(0)
