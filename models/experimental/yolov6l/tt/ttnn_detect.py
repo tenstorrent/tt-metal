@@ -219,14 +219,10 @@ class TtDetect:
         cls_output_1 = ttnn.sigmoid_accurate(cls_output_1)
         cls_output_2 = ttnn.sigmoid_accurate(cls_output_2)
 
-        cls_output_0 = ttnn.permute(cls_output_0, (0, 3, 1, 2))
-        cls_output_0 = ttnn.reshape(cls_output_0, (1, 80, cls_output_0.shape[2] * cls_output_0.shape[3]))
-
-        cls_output_1 = ttnn.permute(cls_output_1, (0, 3, 1, 2))
-        cls_output_1 = ttnn.reshape(cls_output_1, (1, 80, cls_output_1.shape[2] * cls_output_1.shape[3]))
-
-        cls_output_2 = ttnn.permute(cls_output_2, (0, 3, 1, 2))
-        cls_output_2 = ttnn.reshape(cls_output_2, (1, 80, cls_output_2.shape[2] * cls_output_2.shape[3]))
+        # Since self.nc=80 we have eliminated permute before reshape
+        cls_output_0 = ttnn.reshape(cls_output_0, (1, cls_output_0.shape[1] * cls_output_0.shape[2], 80))
+        cls_output_1 = ttnn.reshape(cls_output_1, (1, cls_output_1.shape[1] * cls_output_1.shape[2], 80))
+        cls_output_2 = ttnn.reshape(cls_output_2, (1, cls_output_2.shape[1] * cls_output_2.shape[2], 80))
 
         reg_output_0 = ttnn.permute(reg_output_0, (0, 3, 1, 2))
         reg_output_0 = ttnn.reshape(reg_output_0, (1, 4, reg_output_0.shape[3]))
@@ -237,8 +233,7 @@ class TtDetect:
         reg_output_2 = ttnn.permute(reg_output_2, (0, 3, 1, 2))
         reg_output_2 = ttnn.reshape(reg_output_2, (1, 4, reg_output_2.shape[3]))
 
-        cls_score_list = ttnn.concat([cls_output_0, cls_output_1, cls_output_2], dim=-1)
-        cls_score_list = ttnn.permute(cls_score_list, (0, 2, 1))
+        cls_score_list = ttnn.concat([cls_output_0, cls_output_1, cls_output_2], dim=1)
 
         reg_dist_list = ttnn.concat([reg_output_0, reg_output_1, reg_output_2], dim=-1)
         reg_dist_list = ttnn.permute(reg_dist_list, (0, 2, 1))
