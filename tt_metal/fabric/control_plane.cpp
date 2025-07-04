@@ -15,15 +15,14 @@
 #include <ostream>
 #include <queue>
 #include <set>
-#include <sstream>
 #include <string>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
-
 #include "assert.hpp"
+
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "fabric_host_interface.h"
@@ -41,13 +40,15 @@
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "fabric_host_utils.hpp"
 
-namespace tt::tt_fabric {
-
+// Mesh topology constants
 constexpr size_t CORNER_ADJACENT_CHIPS = 2;     // Corner chips have 2 adjacent neighbors
 constexpr size_t EDGE_ADJACENT_CHIPS = 3;       // Edge chips have 3 adjacent neighbors
 constexpr size_t INTERIOR_ADJACENT_CHIPS = 4;   // Interior chips have 4 adjacent neighbors
 constexpr size_t CORNER_1D_ADJACENT_CHIPS = 1;  // 1D mesh corner chips have 1 adjacent neighbor (endpoints)
+
+namespace tt::tt_fabric {
 
 namespace {
 
@@ -94,267 +95,10 @@ static void build_golden_link_counts(
     }
 }
 
-// Helper: BFS distance map from a start chip to all reachable chips using the
-// provided adjacency map. Returned distances are expressed in hop count.
-std::unordered_map<chip_id_t, std::uint32_t> compute_distances(
-    chip_id_t start_chip, const std::unordered_map<chip_id_t, std::vector<chip_id_t>>& adjacency_map) {
-    std::unordered_map<chip_id_t, std::uint32_t> dist;
-    std::queue<chip_id_t> q;
-    dist[start_chip] = 0;
-    q.push(start_chip);
-
-    while (!q.empty()) {
-        auto cur = q.front();
-        q.pop();
-
-        auto it = adjacency_map.find(cur);
-        if (it != adjacency_map.end()) {
-            for (auto nbr : it->second) {
-                if (dist.find(nbr) == dist.end()) {
-                    dist[nbr] = dist.at(cur) + 1;
-                    q.push(nbr);
-                }
-            }
-        }
-    }
-    return dist;
-}
-
-// Helper: Build adjacency map and discover corners/edges using BFS
-struct MeshTopologyInfo {
-    std::unordered_map<chip_id_t, std::vector<chip_id_t>> adjacency_map;
-    std::vector<chip_id_t> corners;
-    std::vector<chip_id_t> edges;
-    std::unordered_set<chip_id_t> visited_chips;
-};
-
-MeshTopologyInfo build_mesh_topology(
-    const std::set<chip_id_t>& user_chip_ids,
-    const tt::tt_metal::distributed::MeshShape& mesh_shape,
-    std::uint32_t num_ports_per_side,
-    const std::function<std::vector<chip_id_t>(chip_id_t, std::uint32_t)>& get_adjacent_chips_func) {
-    MeshTopologyInfo topology_info;
-
-    // Determine the starting chip ID for BFS (use first chip from mesh container)
-    chip_id_t chip_0 = *user_chip_ids.begin();
-
-    // BFS to populate mesh of chips based on adjacency from chip 0
-    std::queue<chip_id_t> chip_queue;
-    chip_queue.push(chip_0);
-    topology_info.visited_chips.insert(chip_0);
-
-    bool is_1d_mesh = (mesh_shape[0] == 1) || (mesh_shape[1] == 1);
-
-    while (!chip_queue.empty()) {
-        chip_id_t current_chip = chip_queue.front();
-        chip_queue.pop();
-
-        // Get adjacent chips
-        auto adjacent_chips = get_adjacent_chips_func(current_chip, num_ports_per_side);
-
-        // Count neighbours: CORNER_ADJACENT_CHIPS → corner, EDGE_ADJACENT_CHIPS → edge, INTERIOR_ADJACENT_CHIPS →
-        // interior (we treat only links with ≥ num_ports_per_side lanes as neighbours)
-        bool is_corner = false;
-
-        if (is_1d_mesh) {
-            // For 1D meshes, corners have exactly 1 adjacent chip (endpoints)
-            is_corner = (adjacent_chips.size() == CORNER_1D_ADJACENT_CHIPS);
-        } else {
-            // For 2D meshes, corners have exactly 2 adjacent chips
-            is_corner = (adjacent_chips.size() == CORNER_ADJACENT_CHIPS);
-        }
-
-        if (is_corner) {
-            // NOTE: First one added is the corner closest to chip 0
-            //       this will be the pinned nw corner
-            topology_info.corners.push_back(current_chip);
-        } else if (adjacent_chips.size() == EDGE_ADJACENT_CHIPS) {
-            topology_info.edges.push_back(current_chip);
-        }
-
-        for (const auto& adjacent_chip : adjacent_chips) {
-            // Add chip to adjacent chips map
-            topology_info.adjacency_map[current_chip].push_back(adjacent_chip);
-
-            if (topology_info.visited_chips.find(adjacent_chip) != topology_info.visited_chips.end()) {
-                continue;
-            }
-
-            // Add chip to queue and visited next set
-            chip_queue.push(adjacent_chip);
-            topology_info.visited_chips.insert(adjacent_chip);
-        }
-    }
-
-    return topology_info;
-}
-
-// Helper: Handle 1D mesh embedding
-std::vector<chip_id_t> embed_1d_mesh(
-    const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container, const MeshTopologyInfo& topology_info) {
-    // For 1D meshes, we expect exactly 2 corners (the endpoints)
-    TT_FATAL(
-        topology_info.corners.size() == 2, "Expected 2 corners for 1D mesh, got {}.", topology_info.corners.size());
-
-    std::vector<chip_id_t> physical_chip_ids(mesh_container.shape().mesh_size());
-    std::fill(physical_chip_ids.begin(), physical_chip_ids.end(), static_cast<chip_id_t>(-1));
-
-    // Place the first corner (closest to chip 0) at index 0
-    chip_id_t first_corner = topology_info.corners[0];
-    physical_chip_ids[0] = first_corner;
-
-    // Place the second corner at the last index
-    chip_id_t second_corner = topology_info.corners[1];
-    physical_chip_ids[physical_chip_ids.size() - 1] = second_corner;
-
-    // Fill in the middle chips using BFS distances
-    auto dist_from_first = compute_distances(first_corner, topology_info.adjacency_map);
-
-    for (const auto& [chip, distance] : dist_from_first) {
-        if (chip != first_corner && chip != second_corner) {
-            // For 1D mesh, distance directly corresponds to the index
-            size_t idx = static_cast<size_t>(distance);
-            TT_FATAL(idx < physical_chip_ids.size(), "Index {} out of bounds for 1D mesh.", idx);
-            TT_FATAL(physical_chip_ids[idx] == static_cast<chip_id_t>(-1), "Duplicate mapping at index {}.", idx);
-            physical_chip_ids[idx] = chip;
-        }
-    }
-
-    // Verify all chips are mapped
-    for (std::uint32_t i = 0; i < physical_chip_ids.size(); ++i) {
-        TT_FATAL(physical_chip_ids[i] != static_cast<chip_id_t>(-1), "1D mesh embedding incomplete at index {}.", i);
-    }
-
-    return physical_chip_ids;
-}
-
-// Helper: Handle 2D mesh embedding
-std::vector<chip_id_t> embed_2d_mesh(
-    const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container,
-    const MeshTopologyInfo& topology_info,
-    const std::set<chip_id_t>& user_chip_ids,
-    std::optional<chip_id_t> nw_corner_chip_id) {
-    // Check number of corners for 2D meshes
-    TT_FATAL(
-        topology_info.corners.size() == 4, "Expected 4 corners for 2D mesh, got {}.", topology_info.corners.size());
-
-    // Determine the northwest corner
-    chip_id_t nw_corner;
-    if (nw_corner_chip_id.has_value()) {
-        // Use the provided northwest corner chip ID if it's valid
-        nw_corner = nw_corner_chip_id.value();
-        TT_FATAL(
-            user_chip_ids.find(nw_corner) != user_chip_ids.end(),
-            "Provided northwest corner chip ID {} not found in mesh container",
-            nw_corner);
-        // Verify that the provided chip is actually a corner
-        TT_FATAL(
-            std::find(topology_info.corners.begin(), topology_info.corners.end(), nw_corner) !=
-                topology_info.corners.end(),
-            "Provided chip ID {} is not a corner chip. Expected one of: {}",
-            nw_corner,
-            [&topology_info]() {
-                std::string result;
-                for (size_t i = 0; i < topology_info.corners.size(); ++i) {
-                    if (i > 0) {
-                        result += ", ";
-                    }
-                    result += std::to_string(topology_info.corners[i]);
-                }
-                return result;
-            }());
-    } else {
-        // Default behavior: use the first corner found (closest to chip 0)
-        nw_corner = topology_info.corners[0];
-    }
-
-    std::vector<chip_id_t> physical_chip_ids(mesh_container.shape().mesh_size());
-
-    // Place northwest corner at (0, 0)
-    physical_chip_ids[0] = nw_corner;
-
-    // -----------------------------------------------------------------------------
-    // Corner discovery complete: we now have four corners, NW is fixed at index 0
-    // -----------------------------------------------------------------------------
-
-    // Step 1: BFS from the NW corner to get Manhattan distances dNW[chip].
-
-    // Pre-compute signed mesh dimensions once to avoid repetitive casts.
-    const int mesh_cols = static_cast<int>(mesh_container.shape()[1]);
-    const int mesh_rows = static_cast<int>(mesh_container.shape()[0]);
-
-    // 1) Distances from NW corner.
-    auto dist_from_nw = compute_distances(nw_corner, topology_info.adjacency_map);
-
-    // 2) Identify the NE corner (distance of mesh_ew_size-1 from NW) and run a second
-    //    BFS from it to obtain dNE[chip].
-    chip_id_t ne_corner = nw_corner;  // initialise
-    bool ne_found = false;
-    for (auto corner : topology_info.corners) {
-        if (corner == nw_corner) {
-            continue;
-        }
-        auto it = dist_from_nw.find(corner);
-        if (it != dist_from_nw.end() && it->second == mesh_container.shape()[1] - 1) {
-            ne_corner = corner;
-            ne_found = true;
-            break;
-        }
-    }
-    if (!ne_found) {
-        // Fall back: pick any other corner; grid may be square so distance == mesh_ew_size-1 may not hold.
-        for (auto corner : topology_info.corners) {
-            if (corner != nw_corner) {
-                ne_corner = corner;
-                ne_found = true;
-                break;
-            }
-        }
-    }
-    TT_FATAL(
-        ne_found,
-        "Ethernet mesh discovered does not match expected shape {}x{}.",
-        mesh_container.shape()[1],
-        mesh_container.shape()[0]);
-
-    // BFS from NE corner.
-    auto dist_from_ne = compute_distances(ne_corner, topology_info.adjacency_map);
-
-    // Step 3: compute (row, col) for every chip using the distance formulas
-    std::fill(physical_chip_ids.begin(), physical_chip_ids.end(), static_cast<chip_id_t>(-1));
-
-    for (const auto& [chip, d_nw] : dist_from_nw) {
-        TT_FATAL(dist_from_ne.count(chip), "Mesh disconnected: chip {} missing in NE BFS.", chip);
-        int d_ne = static_cast<int>(dist_from_ne.at(chip));
-        int d_nw_int = static_cast<int>(d_nw);
-        // Solve the 2-equation system:
-        //   dNW = row + col
-        //   dNE = row + (mesh_cols-1 - col)
-        int col = (mesh_cols - 1 + d_nw_int - d_ne) / 2;
-        int row = d_nw_int - col;
-
-        TT_FATAL(row >= 0 && row < mesh_rows, "Row {} out of bounds.", row);
-        TT_FATAL(col >= 0 && col < mesh_cols, "Col {} out of bounds.", col);
-
-        size_t idx = static_cast<size_t>(row) * static_cast<size_t>(mesh_cols) + static_cast<size_t>(col);
-        TT_FATAL(physical_chip_ids[idx] == static_cast<chip_id_t>(-1), "Duplicate mapping at index {}.", idx);
-        physical_chip_ids[idx] = chip;
-    }
-
-    TT_FATAL(physical_chip_ids[0] == nw_corner, "NW corner not at index 0 after embedding.");
-
-    for (std::uint32_t i = 0; i < physical_chip_ids.size(); ++i) {
-        TT_FATAL(physical_chip_ids[i] != static_cast<chip_id_t>(-1), "Mesh embedding incomplete at index {}.", i);
-    }
-
-    return physical_chip_ids;
-}
-
-}  // namespace
-
-std::vector<chip_id_t> ControlPlane::get_adjacent_chips(chip_id_t chip_id, std::uint32_t num_ports_per_side) const {
+std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
+    chip_id_t chip_id, std::uint32_t num_ports_per_side) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto eth_links = get_ethernet_cores_grouped_by_connected_chips(chip_id);
+    auto eth_links = cluster.get_ethernet_cores_grouped_by_connected_chips(chip_id);
     bool is_ubb = cluster.get_board_type(chip_id) == BoardType::UBB;
     std::vector<chip_id_t> adjacent_chips;
 
@@ -371,10 +115,7 @@ std::vector<chip_id_t> ControlPlane::get_adjacent_chips(chip_id_t chip_id, std::
     return adjacent_chips;
 }
 
-std::set<chip_id_t> ControlPlane::get_user_exposed_chip_ids() const {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    return cluster.user_exposed_chip_ids();
-}
+}  // namespace
 
 void ControlPlane::initialize_dynamic_routing_plane_counts(
     const IntraMeshConnectivity& intra_mesh_connectivity,
@@ -660,36 +401,35 @@ void ControlPlane::validate_mesh_connections() const {
 std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container,
     std::optional<chip_id_t> nw_corner_chip_id) const {
-    std::uint32_t num_ports_per_side =
-        routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
-
     // Convert the coordinate range to a set of chip IDs using MeshContainer iterator
     std::set<chip_id_t> user_chip_ids;
     for (const auto& [coord, chip_id] : mesh_container) {
         user_chip_ids.insert(chip_id);
     }
 
-    // Build mesh topology using BFS
-    auto topology_info = build_mesh_topology(
-        user_chip_ids, mesh_container.shape(), num_ports_per_side, [this](chip_id_t chip_id, std::uint32_t num_ports) {
-            return this->get_adjacent_chips(chip_id, num_ports);
-        });
-
     // Special case for 1x1 mesh
-    if (mesh_container.shape()[0] == 1 && mesh_container.shape()[1] == 1) {
+    if (mesh_container.shape() == tt::tt_metal::distributed::MeshShape(1, 1)) {
         std::vector<chip_id_t> physical_chip_ids(1);
         physical_chip_ids[0] = *user_chip_ids.begin();
         return physical_chip_ids;
     }
 
+    // Build mesh adjacency map using BFS
+    std::uint32_t num_ports_per_side =
+        routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
+    auto topology_info =
+        build_mesh_adjacency_map(user_chip_ids, mesh_container.shape(), [num_ports_per_side](chip_id_t chip_id) {
+            return get_adjacent_chips_from_ethernet_connections(chip_id, num_ports_per_side);
+        });
+
     // Handle 1D meshes (1xN or Nx1)
-    bool is_1d_mesh = (mesh_container.shape()[0] == 1) || (mesh_container.shape()[1] == 1);
+    bool is_1d_mesh = (topology_info.ns_size == 1) || (topology_info.ew_size == 1);
     if (is_1d_mesh) {
-        return embed_1d_mesh(mesh_container, topology_info);
+        return convert_1d_mesh_adjacency_to_row_major_vector(topology_info);
     }
 
     // Handle 2D meshes
-    return embed_2d_mesh(mesh_container, topology_info, user_chip_ids, nw_corner_chip_id);
+    return convert_2d_mesh_adjacency_to_row_major_vector(topology_info, nw_corner_chip_id);
 }
 
 std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chip_mapping(
@@ -1582,7 +1322,7 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
 // TODO: remove this after TG is deprecated
 std::vector<MeshId> ControlPlane::get_user_physical_mesh_ids() const {
     std::vector<MeshId> physical_mesh_ids;
-    const auto user_chips = this->get_user_exposed_chip_ids();
+    const auto user_chips = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
     for (const auto& [fabric_node_id, physical_chip_id] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
         if (user_chips.find(physical_chip_id) != user_chips.end() and
             std::find(physical_mesh_ids.begin(), physical_mesh_ids.end(), fabric_node_id.mesh_id) ==
@@ -1881,7 +1621,7 @@ void ControlPlane::generate_local_intermesh_link_table() {
     intermesh_link_table_.local_mesh_id = MeshId{0};
     const uint32_t remote_config_base_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO);
-    for (const auto& chip_id : this->get_user_exposed_chip_ids()) {
+    for (const auto& chip_id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
         if (this->has_intermesh_links(chip_id)) {
             for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
                 if (not this->is_intermesh_eth_link_trained(chip_id, eth_core)) {

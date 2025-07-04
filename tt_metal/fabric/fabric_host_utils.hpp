@@ -13,7 +13,11 @@
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <set>
 #include <vector>
-
+#include <unordered_map>
+#include <queue>
+#include <functional>
+#include <unordered_set>
+#include <optional>
 namespace tt::tt_fabric {
 
 class FabricNodeId;
@@ -36,5 +40,34 @@ void get_optimal_noc_for_edm(
     FabricEriscDatamoverBuilder& edm_builder2,
     uint32_t num_links,
     Topology topology);
+
+// Helper: BFS distance map from a start chip to all reachable chips using the
+// provided adjacency map. Returned distances are expressed in hop count.
+std::unordered_map<chip_id_t, std::uint32_t> compute_distances(
+    chip_id_t start_chip, const std::unordered_map<chip_id_t, std::vector<chip_id_t>>& adjacency_map);
+
+// Helper: Build adjacency map and discover corners/edges using BFS
+struct IntraMeshAdjacencyMap {
+    std::unordered_map<chip_id_t, std::vector<chip_id_t>> adjacency_map;
+    std::vector<chip_id_t> corners;
+    std::vector<chip_id_t> edges;
+    std::uint32_t ns_size;  // North-South size (rows)
+    std::uint32_t ew_size;  // East-West size (columns)
+};
+
+IntraMeshAdjacencyMap build_mesh_adjacency_map(
+    const std::set<chip_id_t>& user_chip_ids,
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    std::function<std::vector<chip_id_t>(chip_id_t)> get_adjacent_chips_func);
+
+// Helper: Convert 1D mesh adjacency map to row-major vector representation
+std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(const IntraMeshAdjacencyMap& topology_info);
+
+// Helper: Convert 2D mesh adjacency map to row-major vector representation
+std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
+    const IntraMeshAdjacencyMap& topology_info, std::optional<chip_id_t> nw_corner_chip_id);
+
+// Overload for default behavior (no custom northwest corner)
+std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(const IntraMeshAdjacencyMap& topology_info);
 
 }  // namespace tt::tt_fabric
