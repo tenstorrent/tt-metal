@@ -1,9 +1,8 @@
-# models/demos/deepseek_v3/tests/test_mlp.py
+# models/demos/deepseek_v3/tests/test_expert.py
 # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import os
 import tempfile
 from pathlib import Path
 
@@ -19,7 +18,7 @@ from models.demos.deepseek_v3.tt.moe import Expert as TTExpert
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3_impl.model import Expert as ReferenceExpert
 from models.demos.deepseek_v3_impl.model import ModelArgs
-from models.utility_functions import comp_pcc
+from models.utility_functions import comp_pcc, get_mesh_device
 
 
 @pytest.fixture
@@ -29,31 +28,19 @@ def temp_dir():
         yield Path(tmpdir)
 
 
-# Unit Tests
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
-        )
-    ],
+    [get_mesh_device()],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "mode, seq_len",
+    "mode, seq_len, batch_size",
     [
-        ("decode", 32),
+        ("decode", 1024, 32),
     ],
 )
-def test_forward_pass(
-    mode,
-    seq_len,
-    mesh_device,
-    temp_dir: Path,
-):
+def test_forward_pass(mode, seq_len, mesh_device, temp_dir, batch_size):
     """Test forward pass against reference model."""
-
-    batch_size = 1
 
     hf_config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
     hf_config.num_hidden_layers = 1  # Reduce layers for testing
@@ -66,12 +53,9 @@ def test_forward_pass(
 
     logger.info("Loading reference model expert")
 
-    #
-    # hf_config.hidden_size    7168
-    # hf_config.moe_intermediate_size 2048
-
     reference_model = ReferenceExpert(hf_config.hidden_size, hf_config.moe_intermediate_size)
-    # reference_model.init_weights_with_random()
+    reference_model.init_weights_with_random()
+    reference_model.eval()
 
     hf_state_dict = reference_model.state_dict()
     logger.info("Loading reference model state dict..done")
@@ -81,13 +65,15 @@ def test_forward_pass(
     # Generate appropriate config
     if mode == "prefill":
         model_config = TTExpert.prefill_model_config(hf_config, mesh_device)
-    else:
+    elif mode == "decode":
         model_config = TTExpert.decode_model_config(hf_config, mesh_device)
+    else:
+        raise ValueError(f"Unsupported mode: {mode}")
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, mesh_device)
 
-    # Instantiate the model to get dynamic program configs for prefill
+    # Instantiate the model
     tt_expert = TTExpert(hf_config, mesh_device)
 
     # Create input tensor
@@ -113,7 +99,7 @@ def test_forward_pass(
     tt_output_torch = ttnn.to_torch(tt_output)
 
     # Compare outputs
-    pcc_required = 0.99  # Slightly lower due to bfloat conversions
+    pcc_required = 0.9990
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(f"Mode: {mode}, Seq len: {seq_len}")

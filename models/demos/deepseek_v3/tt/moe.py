@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-# SPDX-License-Identifier: Apache-2.0
-
 from pathlib import Path
 
 import torch
@@ -9,17 +6,11 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import LinearConfig, MulConfig
-from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_HIFI2_FP16, save_and_get_path
 
 
 class Expert(AbstractModule):
     """
     Expert layer for Mixture-of-Experts (MoE) models.
-
-    Attributes:
-        w1 (nn.Module): Linear layer for input-to-hidden transformation.
-        w2 (nn.Module): Linear layer for hidden-to-output transformation.
-        w3 (nn.Module): Additional linear layer for feature transformation.
     """
 
     @classmethod
@@ -30,8 +21,8 @@ class Expert(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ):
-        """DRAM-sharded weights split 1D across all wormholes
-
+        """
+        MOE expert layer running on 1 device.
         Args:
             hf_config: HuggingFace model configuration object
             state_dict: PyTorch state dict for this layer
@@ -43,50 +34,71 @@ class Expert(AbstractModule):
         """
 
         # Get the weights of exerpt from the state dict
+        torch_weight_w1 = state_dict["w1.weight"]
+        torch_weight_w2 = state_dict["w2.weight"]
+        torch_weight_w3 = state_dict["w3.weight"]
 
-        """
-        torch_weight_gate_proj = state_dict["gate_proj"]
-        torch_weight_up_proj = state_dict["up_proj"]
-        torch_weight_down_proj = state_dict["down_proj"]
-        """
+        torch_weight_w1 = torch_weight_w1.transpose(-2, -1)
+        torch_weight_w2 = torch_weight_w2.transpose(-2, -1)
+        torch_weight_w3 = torch_weight_w3.transpose(-2, -1)
 
-        torch_weight_gate_proj = state_dict["w1.weight"]
-        torch_weight_up_proj = state_dict["w2.weight"]
-        torch_weight_down_proj = state_dict["w3.weight"]
+        weight_config = {}
 
-        # Convert to TTNN tensor with 1D sharding across final dimension
-        ttnn_weight_gate_proj = ttnn.as_tensor(
-            torch_weight_gate_proj,
+        def add_weight_config(
+            torch_weight,
+            our_name,
+            kwarg_name,
+            dtype,
+            mem_config,
+            layout,
+            mesh_mapper=None,
+        ):
+            ttnn_weight = ttnn.as_tensor(
+                torch_weight,
+                dtype=dtype,
+                device=mesh_device,
+                mesh_mapper=mesh_mapper,
+                layout=layout,
+                memory_config=mem_config,
+            )
+            weight_file_path = output_path / f"{our_name}.{kwarg_name}.weight"
+            ttnn.dump_tensor(weight_file_path, ttnn_weight)
+            ttnn.deallocate(ttnn_weight)
+
+            # Add to weight config
+            weight_config[our_name] = {kwarg_name: str(weight_file_path)}
+
+        add_weight_config(
+            torch_weight_w1,
+            "w1",
+            "input_tensor_b",
             dtype=ttnn.bfloat8_b,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=[-2, -1], mesh_shape=list(mesh_device.shape)),
+            mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-        ttnn_weight_up_proj = ttnn.as_tensor(
-            torch_weight_up_proj,
+        add_weight_config(
+            torch_weight_w2,
+            "w2",
+            "input_tensor_b",
             dtype=ttnn.bfloat8_b,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=[-2, -1], mesh_shape=list(mesh_device.shape)),
+            mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-        ttnn_weight_down_proj = ttnn.as_tensor(
-            torch_weight_down_proj,
+        add_weight_config(
+            torch_weight_w3,
+            "w3",
+            "input_tensor_b",
             dtype=ttnn.bfloat8_b,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=[-2, -1], mesh_shape=list(mesh_device.shape)),
+            mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-        return {
-            "gate_proj": save_and_get_path(output_path / "gate_proj.weight", ttnn_weight_gate_proj),
-            "up_proj": save_and_get_path(output_path / "up_proj.weight", ttnn_weight_up_proj),
-            "down_proj": save_and_get_path(output_path / "down_proj.weight", ttnn_weight_down_proj),
-        }
+        return weight_config
 
     @staticmethod
     def prefill_model_config(hf_config, mesh_device):
@@ -117,19 +129,19 @@ class Expert(AbstractModule):
         """
         config = {"mode": "decode"}
         # Expert configuration for decode mode
-        config["gate_proj"] = LinearConfig(
+        config["w1"] = LinearConfig(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
+            program_config=None,
         )
 
-        config["up_proj"] = LinearConfig(
+        config["w2"] = LinearConfig(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
+            program_config=None,
         )
 
-        config["down_proj"] = LinearConfig(
+        config["w3"] = LinearConfig(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
+            program_config=None,
         )
 
         config["mul"] = MulConfig(
@@ -137,24 +149,14 @@ class Expert(AbstractModule):
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
         )
 
+        print(f"Decode config: {config}")
         return config
 
     def __init__(self, hf_config, mesh_device):
         """
         Initializes the Expert layer.
+        """
 
-        Args:
-            dim (int): Input and output dimensionality.
-            inter_dim (int): Hidden layer dimensionality.
-        """
-        """
-        Ref:
-        super().__init__()
-        self.w1 = Linear(dim, inter_dim)
-        self.w2 = Linear(inter_dim, dim)
-        self.w3 = Linear(dim, inter_dim)
-
-        """
         super().__init__(hf_config, mesh_device)
         self.hf_config = hf_config
         self.mesh_device = mesh_device
@@ -162,21 +164,12 @@ class Expert(AbstractModule):
     def forward(self, x, cfg, mesh_device):
         """
         Forward pass for the Expert layer.
-        Decode is very straightforward but prefill reshapes and has dynamic program configs
-        so we implement forward as two functions for clarity.
 
         Args:
             x (torch.Tensor): Input tensor.
 
         Returns:
             torch.Tensor: Output tensor after expert computation.
-
-        DeepseekV3MLP(
-              (gate_proj): Linear(in_features=7168, out_features=2048, bias=False)
-              (up_proj): Linear(in_features=7168, out_features=2048, bias=False)
-              (down_proj): Linear(in_features=2048, out_features=7168, bias=False)
-              (act_fn): SiLU()
-            )
         """
 
         if cfg["mode"] == "decode":
@@ -188,36 +181,17 @@ class Expert(AbstractModule):
     def _forward_decode(self, x, cfg, mesh_device):
         print("Forward Decode")
 
-        """
-         return self.w2(F.silu(self.w1(x)) * self.w3(x))
-         return self.w2(F.silu(w1_out) * self.w3(x))
-
-        w1_out = w1(x)
-        w1_silu = silu(w1_out)
-        w3_out = w3(x)
-        output = w2(w1_silu * w3_out)
-
-        """
-        print(f"x = {x.shape}")
-        gate_proj_out = ttnn.linear(x, **cfg["gate_proj"])
-        up_proj_out = ttnn.linear(x, **cfg["up_proj"])
+        w1_out = ttnn.linear(x, **cfg["w1"])
+        w3_out = ttnn.linear(x, **cfg["w3"])
         ttnn.deallocate(x)
 
-        print(f"gate_proj_out = {gate_proj_out.shape}")
-        print(f"up_proj_out = {up_proj_out.shape}")
-
         # Apply activation and multiply
-        activated = ttnn.mul(gate_proj_out, up_proj_out, **cfg["mul"])
-        ttnn.deallocate(gate_proj_out)
-        ttnn.deallocate(up_proj_out)
-
-        print(f"activated = {activated.shape}")
-
+        activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
+        ttnn.deallocate(w1_out)
+        ttnn.deallocate(w3_out)
         # Down projection
-        output = ttnn.linear(activated, **cfg["down_proj"])
+        output = ttnn.linear(activated, **cfg["w2"])
         ttnn.deallocate(activated)
-
-        print(f"output = {output.shape}")
 
         return output
 
