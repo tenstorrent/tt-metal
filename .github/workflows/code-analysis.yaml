@@ -134,9 +134,9 @@ jobs:
               clean_message=$(echo "$message" | sed 's/ *(#[0-9]\+) *$//')
 
               if [ -n "$pr_number" ]; then
-                COMMITS_TABLE_CONTENT+="| [`$short_hash`](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | [#$pr_number](https://github.com/tenstorrent/tt-llk/pull/$pr_number) |"$'\n'
+                COMMITS_TABLE_CONTENT+="| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | [#$pr_number](https://github.com/tenstorrent/tt-llk/pull/$pr_number) |"$'\n'
               else
-                COMMITS_TABLE_CONTENT+="| [`$short_hash`](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | - |"$'\n'
+                COMMITS_TABLE_CONTENT+="| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | - |"$'\n'
               fi
             done < <(git log --pretty=tformat:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA})
           else
