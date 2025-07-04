@@ -18,11 +18,7 @@ def main():
     torch.manual_seed(0)
 
     device_id = 0
-    device = ttnn.open_device(
-        device_id=device_id,
-        l1_small_size=8192,
-        dispatch_core_config=ttnn.device.DispatchCoreConfig(ttnn.device.DispatchCoreType.ETH),
-    )
+    device = ttnn.open_device(device_id=device_id)
 
     device.enable_program_cache()
 
