@@ -502,6 +502,7 @@ def save_and_get_path(path, tensor):
     ttnn.deallocate(tensor)
     return str(path)
 
+
 def round_to_nearest_tile_size(value):
     """Round a value to the nearest multiple of TILE_SIZE."""
     return math.ceil(value / TILE_SIZE) * TILE_SIZE
