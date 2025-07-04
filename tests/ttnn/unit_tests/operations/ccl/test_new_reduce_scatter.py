@@ -209,8 +209,9 @@ def run_reduce_scatter_impl(
         (8, 1, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, 1, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, 1, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, 1, [1, 1, 32, 8192], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),  # use batching when fused
     ],
-    ids=["batch_8", "batch_4", "batch_2", "batch_1"],
+    ids=["batch_8", "batch_4", "batch_2", "batch_1_one", "batch_1_two"],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_rs",
