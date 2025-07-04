@@ -333,6 +333,7 @@ def test_demo_text(
     pcc_decode_len,
     reset_seeds,
     request,
+    galaxy_type,
 ):
     """
     Simple demo with limited dependence on reference code.
@@ -345,6 +346,19 @@ def test_demo_text(
     prefill_enable_trace = True  # repeat_batches > 1
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 80 and instruct  # if using instruct weights it must be full model
+    input_lenghts = (
+        [
+            534,
+            1008,
+            1111 * 4,
+            3333 * 4,
+        ]
+        * 8
+        if batch_size == 32
+        else [15384 * 8]
+    )
+    if galaxy_type == "6U" and any(s > 34740 for s in input_lenghts):  # 8k tokens
+        pytest.skip("Skipping test as persistent buffers for ring ccl ops are stored only for seqlens up to 8k")
 
     # Creat batch output file
     benchmark_data = BenchmarkData()
@@ -395,15 +409,7 @@ def test_demo_text(
     profiler.start("loading_inputs")
     input_prompts = load_inputs(
         input_prompts,
-        [
-            534,
-            1008,
-            1111 * 4,
-            3333 * 4,
-        ]
-        * 8
-        if batch_size == 32
-        else [15384 * 8],
+        input_lenghts,
         input_prompts,
     )
     profiler.end("loading_inputs")
@@ -424,7 +430,7 @@ def test_demo_text(
                     )
                 else:
                     f.seek(0)
-                    loaded_json = json.load(f)
+                    loaded_json = json.load(f)[galaxy_type]
                     if isinstance(loaded_json, list) and all(isinstance(item, str) for item in loaded_json):
                         expected_outputs_data = loaded_json
                         logger.info(
