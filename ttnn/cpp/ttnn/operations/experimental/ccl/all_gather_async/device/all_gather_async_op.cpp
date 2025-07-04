@@ -11,7 +11,6 @@
 
 namespace ttnn {
 
-// TODO: (GR) Gonna need to completely redo this
 void AllGatherAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
@@ -33,7 +32,7 @@ void AllGatherAsync::validate_with_output_tensors(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-        "Unsupported memory layout {}.",
+        "Unsupported input tensor memory layout {}.",
         input_tensor.memory_config().memory_layout());
 
     if (output_tensors.size() > 0 and output_tensors[0].has_value()) {
@@ -63,6 +62,14 @@ void AllGatherAsync::validate_with_output_tensors(
             "Error, Output tensor memory config should be same as output_mem_config but has {}",
             output_tensor.value().memory_config());
 
+        TT_FATAL(
+            output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+                output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+                output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+                output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "Unsupported output tensor memory layout {}.",
+            output_tensor.value().memory_config().memory_layout());
+
         // check the output tensor size
         auto output_shape = output_tensor.value().padded_shape();
         auto input_shape = input_tensor.padded_shape();
@@ -88,11 +95,33 @@ void AllGatherAsync::validate_with_output_tensors(
             }
         }
 
-        // check memory layout
-        TT_FATAL(
-            output_tensor.value().memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
-            "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
-            output_tensor.value().memory_config().memory_layout());
+        if (layout == tt::tt_metal::Layout::TILE && semaphore.size() == 2) {
+            // Checks specific to the MINIMAL_DEFAULT case
+
+            // Don't support output DRAM block sharding
+            if (output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+                TT_FATAL(
+                    output_tensor.value().memory_config().buffer_type() == BufferType::L1,
+                    "We don't support output DRAM block sharding");
+            }
+        } else {
+            // Checks specific to cases that are not MINIMAL_DEFAULT
+
+            TT_FATAL(
+                output_tensor.value().memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
+                "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
+                output_tensor.value().memory_config().memory_layout());
+        }
+    }
+
+    // Checks specific to the MINIMAL_DEFAULT case
+    if (layout == tt::tt_metal::Layout::TILE && semaphore.size() == 2) {
+        // Don't support input DRAM block sharding
+        if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+            TT_FATAL(
+                input_tensor.memory_config().buffer_type() == BufferType::L1,
+                "We don't support input DRAM block sharding");
+        }
     }
 }
 
