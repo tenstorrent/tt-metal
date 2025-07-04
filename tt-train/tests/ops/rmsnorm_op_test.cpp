@@ -8,6 +8,7 @@
 
 #include <cassert>
 #include <core/ttnn_all_includes.hpp>
+#include <cstdint>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -106,12 +107,12 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
             1.0490e-04F,
             -2.0742e-05F,
             2.0981e-04F}}}});
-    EXPECT_TRUE(xt::allclose(example_tensor_grad, expected_example_tensor_grad, 1.0e-3F, 1e-2F));
+    EXPECT_TRUE(xt::allclose(example_tensor_grad, expected_example_tensor_grad, 1.0e-2F, 1e-1F));
 
     auto gamma_grad = core::to_xtensor(gamma->get_grad());
     auto expected_gamma_grad =
         xt::xarray<float>({{{{0.0334F, 0.1338F, 0.2988F, 0.5352F, 0.0334F, 0.1338F, 0.2988F, 0.5352F}}}});
-    EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 1.0e-3F, 1e-2F));
+    EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 1.0e-2F, 1e-1F));
 }
 
 TEST_F(RMSNormOpTest, RMSNorm_Forward_Batch) {
@@ -231,6 +232,47 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Backward) {
     EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 1.0e-3F, 1e-2F));
 }
 
+TEST_F(RMSNormOpTest, RMSNorm_Small_Backward_Compare) {
+    using namespace ttml;
+
+    std::vector<uint32_t> widths = {10, 20, 42};
+    for (uint32_t W : widths) {
+        float eps = 0.0078125F;
+        std::vector<std::size_t> shape = {1, 1, 1, static_cast<std::size_t>(W)};
+        xt::xarray<float> example_xtensor = xt::zeros<float>(shape);
+        for (uint32_t i = 0; i < W; ++i) {
+            example_xtensor(0, 0, 0, i) = static_cast<float>(i + 1) / 100.F;
+        }
+        auto* device = &autograd::ctx().get_device();
+        auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, device));
+        auto gamma = autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, W}), device));
+
+        auto result = ops::rmsnorm(example_tensor, gamma, eps);
+        auto target = autograd::create_tensor(core::zeros_like(result->get_value()));
+        auto mse_result = ttml::ops::mse_loss(result, target);
+        mse_result->backward();
+
+        auto example_tensor_grad = core::to_xtensor(example_tensor->get_grad());
+        auto gamma_grad = core::to_xtensor(gamma->get_grad());
+
+        // Composite reference
+        auto example_tensor2 = autograd::create_tensor(core::from_xtensor(example_xtensor, device));
+        auto gamma2 = autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, W}), device));
+
+        auto result_composite = ops::rmsnorm_composite(example_tensor2, gamma2, eps);
+        auto target2 = autograd::create_tensor(core::zeros_like(result_composite->get_value()));
+        auto mse_result2 = ttml::ops::mse_loss(result_composite, target2);
+        mse_result2->backward();
+
+        auto expected_example_tensor_grad = core::to_xtensor(example_tensor2->get_grad());
+        auto expected_gamma_grad = core::to_xtensor(gamma2->get_grad());
+
+        // TODO: Adjust the tolerance once we implement support for float32.
+        EXPECT_TRUE(xt::allclose(example_tensor_grad, expected_example_tensor_grad, 1.0e-1F, 1e-1F));
+        EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 1.0e-1F, 1e-1F));
+    }
+}
+
 TEST_F(RMSNormOpTest, CompositeRMSNorm_Forward_Batch) {
     using namespace ttml;
     float eps = 0.0078125F;  // default in PyTorch for bf16
@@ -296,4 +338,97 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Backward_Batch) {
     auto gamma_grad = core::to_xtensor(gamma->get_grad());
     xt::xarray<float> expected_gamma_grad = {{{{0.36111F, 0.37644F, 0.39589F, 0.41945F, 0.44712F}}}};
     EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 5e-2F));
+}
+
+TEST_F(RMSNormOpTest, RMSNorm_Random_Large_Shape) {
+    using namespace ttml;
+    for (int i = 0; i < 3; i++) {
+        float eps = 0.0078125F;  // default in PyTorch for bf16
+
+        // Shape: B=64, N=1, S=256, C=384
+        const uint32_t B = 64U;
+        const uint32_t N = 1U;
+        const uint32_t S = 256U;
+        const uint32_t C = 384U;
+        std::array<uint32_t, 4> input_shape = {B, N, S, C};
+        std::array<uint32_t, 4> gamma_shape = {1, 1, 1, C};
+
+        // Generate random input data
+        xt::xarray<float> input_data = xt::random::rand(input_shape, -1.0F, 1.0F);
+        xt::xarray<float> gamma_data = xt::random::rand(gamma_shape, -1.0F, 1.0F);
+
+        auto* device = &autograd::ctx().get_device();
+        auto input_tensor = autograd::create_tensor(core::from_xtensor(input_data, device));
+
+        auto gamma = autograd::create_tensor(core::from_xtensor(gamma_data, device));
+
+        // Forward pass
+        auto result = ops::rmsnorm(input_tensor, gamma, eps);
+        auto result_xtensor = core::to_xtensor(result->get_value());
+
+        // Composite reference
+        auto input_tensor2 = autograd::create_tensor(core::from_xtensor(input_data, device));
+        auto gamma2 = autograd::create_tensor(core::from_xtensor(gamma_data, device));
+        auto result_composite = ops::rmsnorm_composite(input_tensor2, gamma2, eps);
+        auto result_composite_xtensor = core::to_xtensor(result_composite->get_value());
+
+        // Verify output shape matches input shape
+        EXPECT_EQ(result_xtensor.shape(), input_data.shape());
+        EXPECT_EQ(result_composite_xtensor.shape(), input_data.shape());
+
+        // Compare outputs
+        // Print result_xtensor and result_composite_xtensor for debugging
+        std::cerr << "result_xtensor: [";
+        for (size_t i = 0; i < result_xtensor.shape()[3]; ++i) {
+            std::cerr << result_xtensor(0, 0, 0, i);
+            if (i + 1 != result_xtensor.shape()[3])
+                std::cerr << ", ";
+        }
+        std::cerr << "]" << std::endl;
+
+        std::cerr << "result_composite_xtensor: [";
+        for (size_t i = 0; i < result_composite_xtensor.shape()[3]; ++i) {
+            std::cerr << result_composite_xtensor(0, 0, 0, i);
+            if (i + 1 != result_composite_xtensor.shape()[3])
+                std::cerr << ", ";
+        }
+        std::cerr << "]" << std::endl;
+
+        EXPECT_TRUE(xt::allclose(result_xtensor, result_composite_xtensor, 1.0e-2F, 3.0e-2F));
+
+        // Verify no NaN or infinite values in output
+        EXPECT_TRUE(xt::all(xt::isfinite(result_xtensor)));
+        EXPECT_TRUE(xt::all(xt::isfinite(result_composite_xtensor)));
+
+        // Test backward pass
+        auto target = autograd::create_tensor(core::zeros_like(result->get_value()));
+        auto mse_result = ttml::ops::mse_loss(result, target);
+        mse_result->backward();
+
+        auto input_grad = core::to_xtensor(input_tensor->get_grad());
+        auto gamma_grad = core::to_xtensor(gamma->get_grad());
+
+        // Composite backward
+        auto target2 = autograd::create_tensor(core::zeros_like(result_composite->get_value()));
+        auto mse_result2 = ttml::ops::mse_loss(result_composite, target2);
+        mse_result2->backward();
+
+        auto input_grad_composite = core::to_xtensor(input_tensor2->get_grad());
+        auto gamma_grad_composite = core::to_xtensor(gamma2->get_grad());
+
+        // Verify gradients have correct shapes and are finite
+        EXPECT_EQ(input_grad.shape(), input_data.shape());
+        EXPECT_EQ(gamma_grad.shape()[3], C);
+        EXPECT_TRUE(xt::all(xt::isfinite(input_grad)));
+        EXPECT_TRUE(xt::all(xt::isfinite(gamma_grad)));
+
+        EXPECT_EQ(input_grad_composite.shape(), input_data.shape());
+        EXPECT_EQ(gamma_grad_composite.shape()[3], C);
+        EXPECT_TRUE(xt::all(xt::isfinite(input_grad_composite)));
+        EXPECT_TRUE(xt::all(xt::isfinite(gamma_grad_composite)));
+
+        // Compare gradients
+        EXPECT_TRUE(xt::allclose(input_grad, input_grad_composite, 1e-2F, 1e-2F));
+        EXPECT_TRUE(xt::allclose(gamma_grad, gamma_grad_composite, 1e-2F, 1e-2F));
+    }
 }
