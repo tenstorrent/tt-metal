@@ -93,12 +93,12 @@ void MAIN {
                 for (uint32_t i = 0; i < Wt; i++) {
                     uint32_t j = i ^ sub_dist;
 
-                    sync_packer_unpacker(packer_unpacker_sync_cb_index);
-
                     // Tile i not on this core - nothing to do
                     if (i < global_tile_start || i >= global_tile_end) {
                         continue;
                     }
+
+                    sync_packer_unpacker(packer_unpacker_sync_cb_index);
 
                     // Determine direction for this comparison block
                     const bool ascending_block = ((i >> stage) & 1) == 0;
@@ -246,8 +246,6 @@ void MAIN {
                         pack_tile<true>(value_output_tile, input_tensor_transposed_cb_index, tile_id);
 
                         tile_regs_release();
-
-                        sync_packer_unpacker(packer_unpacker_sync_cb_index);
                     }
                 }  // Wt loop
             }  // sub loop
