@@ -1,5 +1,5 @@
-# models/demos/deepseek_v3/tests/test_embedding_1d.py
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -12,8 +12,6 @@ from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
-
-# Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
 from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.config_helpers import NORM_CATEGORIES, round_to_nearest_tile_size
