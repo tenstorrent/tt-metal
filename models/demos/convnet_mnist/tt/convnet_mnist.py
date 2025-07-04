@@ -69,6 +69,7 @@ def convnet_mnist(
             input_memory_config=x.memory_config(),
             input_layout=x.get_layout(),
             **conv_kwargs,
+            input_dtype=ttnn.bfloat16,
         )
         tt_bias = ttnn.to_device(tt_bias, device)
 
