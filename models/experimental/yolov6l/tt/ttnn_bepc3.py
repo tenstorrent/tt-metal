@@ -26,7 +26,6 @@ class TtBepC3:
             # shard_layout=None,
             # auto_shard=True,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
         )
         self.cv2 = Yolov6l_Conv2D(
@@ -37,7 +36,6 @@ class TtBepC3:
             # auto_shard=True,
             shard_layout=shard_layout_cv2,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
         )
         self.cv3 = Yolov6l_Conv2D(
@@ -48,7 +46,6 @@ class TtBepC3:
             # auto_shard=True,
             activation="silu",
             shard_layout=shard_layout_cv2,
-            is_nhwc=True,
             reshape=True,
         )
         self.repblock = TtRepBlock(

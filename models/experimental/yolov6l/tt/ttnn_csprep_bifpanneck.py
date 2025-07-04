@@ -19,7 +19,6 @@ class TtCSPRepBiFPANNeck:
             shard_layout=None,
             auto_shard=True,
             activation="relu",
-            is_nhwc=True,
             reshape=True,
         )
         self.Bifusion0 = TtBiFusion(device, parameters.Bifusion0, model_params.Bifusion0)
@@ -32,7 +31,6 @@ class TtCSPRepBiFPANNeck:
             shard_layout=None,
             auto_shard=True,
             activation="relu",
-            is_nhwc=True,
             reshape=True,
         )
         self.Bifusion1 = TtBiFusion(device, parameters.Bifusion1, model_params.Bifusion1)
@@ -45,7 +43,6 @@ class TtCSPRepBiFPANNeck:
             shard_layout=None,
             auto_shard=True,
             activation="relu",
-            is_nhwc=True,
             reshape=True,
         )
         self.Rep_n3 = TtBepC3(device, parameters.Rep_n3, model_params.Rep_n3, n=12)
@@ -57,7 +54,6 @@ class TtCSPRepBiFPANNeck:
             shard_layout=None,
             auto_shard=True,
             activation="relu",
-            is_nhwc=True,
             reshape=True,
         )
         self.Rep_n4 = TtBepC3(device, parameters.Rep_n4, model_params.Rep_n4, n=12)

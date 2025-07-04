@@ -17,7 +17,6 @@ class TtSppf:
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             # auto_shard=True,
             activation="silu",
-            is_nhwc=True,
         )
         self.cv2 = Yolov6l_Conv2D(
             device=device,
@@ -27,7 +26,6 @@ class TtSppf:
             # shard_layout=None,
             # auto_shard=True,
             activation="silu",
-            is_nhwc=True,
         )
 
     def __call__(self, x):
