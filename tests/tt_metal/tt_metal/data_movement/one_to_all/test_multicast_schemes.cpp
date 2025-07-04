@@ -30,11 +30,11 @@ enum class MulticastSchemeType {
     SenderInGridBottomLeft,
     SenderInGridTopLeft,
     // Sender is NOT in the grid
-    SenderInGridStartingColumnNotRow,
     SenderInGridStartingRowNotColumn,
+    SenderInGridStartingColumnNotRow,
     SenderNotInGridStartingColumnOrRow,
-    SenderInGridEndingColumnNotRow,
     SenderInGridEndingRowNotColumn,
+    SenderInGridEndingColumnNotRow,
     SenderNotInGridEndingColumnOrRow,
     End
 };
@@ -64,11 +64,11 @@ std::pair<CoreCoord, CoreCoord> get_coordinates(uint32_t sub_grid_dimension_size
             break;
 
         // Sender is NOT in the grid
-        case MulticastSchemeType::SenderInGridStartingColumnNotRow:
+        case MulticastSchemeType::SenderInGridStartingRowNotColumn:
             mst_core_coord = {0, 1};
             sub_start_core_coord = {1, 1};
             break;
-        case MulticastSchemeType::SenderInGridStartingRowNotColumn:
+        case MulticastSchemeType::SenderInGridStartingColumnNotRow:
             mst_core_coord = {1, 0};
             sub_start_core_coord = {1, 1};
             break;
@@ -76,11 +76,11 @@ std::pair<CoreCoord, CoreCoord> get_coordinates(uint32_t sub_grid_dimension_size
             mst_core_coord = {0, 0};
             sub_start_core_coord = {1, 1};
             break;
-        case MulticastSchemeType::SenderInGridEndingColumnNotRow:
+        case MulticastSchemeType::SenderInGridEndingRowNotColumn:
             mst_core_coord = {sub_grid_dimension_size, sub_grid_dimension_size - 1};
             sub_start_core_coord = {0, 0};
             break;
-        case MulticastSchemeType::SenderInGridEndingRowNotColumn:
+        case MulticastSchemeType::SenderInGridEndingColumnNotRow:
             mst_core_coord = {sub_grid_dimension_size - 1, sub_grid_dimension_size};
             sub_start_core_coord = {0, 0};
             break;
@@ -197,12 +197,12 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback) {
         2. Sender in grid bottom right
         3. Sender in grid bottom left
         4. Sender in grid top left
-        5. Sender out grid starting column not row
-        6. Sender out grid starting row not column
-        7. Sender out grid starting not column not row
-        8. Sender out grid ending column not row
-        9. Sender out grid ending row not column
-        10. Sender out grid ending not column not row
+        5. Sender out grid starting row not column
+        6. Sender out grid starting column not row
+        7. Sender out grid starting not row not column
+        8. Sender out grid ending row not column
+        9. Sender out grid ending column not row
+        10. Sender out grid ending not row not column
 */
 
 TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastSchemeSingle) {
