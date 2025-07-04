@@ -19,7 +19,6 @@ class TtBottleRep:
             # shard_layout=None,
             shard_layout=shard_layout,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
             activation_dtype=ttnn.bfloat16,
         )
@@ -33,7 +32,6 @@ class TtBottleRep:
             # shard_layout=None,
             # auto_shard=True,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
             deallocate_activation=True,
         )

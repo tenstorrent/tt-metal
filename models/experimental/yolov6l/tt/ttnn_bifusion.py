@@ -17,7 +17,6 @@ class TtBiFusion:
             shard_layout=None,
             auto_shard=True,
             activation="relu",
-            is_nhwc=True,
             reshape=True,
         )
         self.cv2 = Yolov6l_Conv2D(
@@ -27,7 +26,6 @@ class TtBiFusion:
             shard_layout=None,
             auto_shard=True,
             activation="relu",
-            is_nhwc=True,
             reshape=True,
         )
         self.cv3 = Yolov6l_Conv2D(
@@ -37,7 +35,6 @@ class TtBiFusion:
             shard_layout=None,
             auto_shard=True,
             activation="relu",
-            is_nhwc=True,
             reshape=True,
         )
         self.upsample = Yolov6x_Conv_T_2D(
@@ -54,7 +51,6 @@ class TtBiFusion:
             shard_layout=None,
             auto_shard=True,
             activation="relu",
-            is_nhwc=True,
             reshape=True,
         )
 

@@ -17,7 +17,6 @@ class TtDetect:
             shard_layout=None,
             auto_shard=True,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
         )
         self.stem_1 = Yolov6l_Conv2D(
@@ -27,7 +26,6 @@ class TtDetect:
             shard_layout=None,
             auto_shard=True,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
         )
         self.stem_2 = Yolov6l_Conv2D(
@@ -37,7 +35,6 @@ class TtDetect:
             shard_layout=None,
             auto_shard=True,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
         )
 
@@ -48,7 +45,7 @@ class TtDetect:
             shard_layout=None,
             auto_shard=True,
             activation="silu",
-            is_nhwc=True,
+            # is_nhwc=True,
             reshape=True,
         )
         self.cls_convs_1 = Yolov6l_Conv2D(
@@ -58,7 +55,6 @@ class TtDetect:
             shard_layout=None,
             auto_shard=True,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
         )
         self.cls_convs_2 = Yolov6l_Conv2D(
@@ -68,7 +64,6 @@ class TtDetect:
             shard_layout=None,
             auto_shard=True,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
         )
 
@@ -79,7 +74,6 @@ class TtDetect:
             shard_layout=None,
             auto_shard=True,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
         )
         self.reg_convs_1 = Yolov6l_Conv2D(
@@ -89,7 +83,6 @@ class TtDetect:
             shard_layout=None,
             auto_shard=True,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
         )
         self.reg_convs_2 = Yolov6l_Conv2D(
@@ -99,7 +92,6 @@ class TtDetect:
             shard_layout=None,
             auto_shard=True,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
         )
 
@@ -109,7 +101,6 @@ class TtDetect:
             conv_pth=parameters.cls_preds[0],
             shard_layout=None,
             auto_shard=True,
-            is_nhwc=True,
             reshape=True,
         )
         self.cls_preds_1 = Yolov6l_Conv2D(
@@ -118,7 +109,6 @@ class TtDetect:
             conv_pth=parameters.cls_preds[1],
             shard_layout=None,
             auto_shard=True,
-            is_nhwc=True,
             reshape=True,
         )
         self.cls_preds_2 = Yolov6l_Conv2D(
@@ -127,7 +117,6 @@ class TtDetect:
             conv_pth=parameters.cls_preds[2],
             shard_layout=None,
             auto_shard=True,
-            is_nhwc=True,
             reshape=True,
         )
 
@@ -137,7 +126,6 @@ class TtDetect:
             conv_pth=parameters.reg_preds[0],
             shard_layout=None,
             auto_shard=True,
-            is_nhwc=True,
             reshape=True,
         )
         self.reg_preds_1 = Yolov6l_Conv2D(
@@ -146,7 +134,6 @@ class TtDetect:
             conv_pth=parameters.reg_preds[1],
             shard_layout=None,
             auto_shard=True,
-            is_nhwc=True,
             reshape=True,
         )
         self.reg_preds_2 = Yolov6l_Conv2D(
@@ -155,7 +142,6 @@ class TtDetect:
             conv_pth=parameters.reg_preds[2],
             shard_layout=None,
             auto_shard=True,
-            is_nhwc=True,
             reshape=True,
         )
         self.proj_conv = Yolov6l_Conv2D(
@@ -164,7 +150,6 @@ class TtDetect:
             conv_pth=parameters.proj_conv,
             shard_layout=None,
             auto_shard=True,
-            is_nhwc=True,
             reshape=True,
         )
 

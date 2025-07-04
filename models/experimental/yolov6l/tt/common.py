@@ -24,15 +24,14 @@ class Yolov6l_Conv2D:
         use_shallow_conv_variant=False,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         auto_shard=False,
-        is_nhw_c=False,
-        is_nhwc=False,
+        # is_nhw_c=False,
+        # is_nhwc=False,
         reshape=False,
         deallocate_activation=False,
         act_blocks=False,
         act_block_h=None,
+        batch_size=1,
     ):
-        self.is_nhw_c = is_nhw_c
-        self.is_nhwc = is_nhwc
         self.conv = conv
         self.device = device
         self.in_channels = conv.in_channels
@@ -51,6 +50,7 @@ class Yolov6l_Conv2D:
             packer_l1_acc=True,
             math_approx_mode=True,
         )
+        self.batch_size = batch_size
 
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
@@ -78,18 +78,12 @@ class Yolov6l_Conv2D:
         self.weight = weight
 
     def __call__(self, x):
-        if self.is_nhw_c:
-            input_height = int(math.sqrt(x.shape[2]))
-            input_width = int(math.sqrt(x.shape[2]))
-            batch_size = x.shape[0]
-        elif self.is_nhwc:
+        if x.shape[1] != 1:
             input_height = x.shape[1]
             input_width = x.shape[2]
-            batch_size = x.shape[0]
         else:
-            batch_size = x.shape[0]
-            input_height = self.conv.input_height
-            input_width = self.conv.input_width
+            input_height = int(math.sqrt(x.shape[2]) // self.batch_size)
+            input_width = int(math.sqrt(x.shape[2]) // self.batch_size)
 
         [output, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
@@ -100,7 +94,7 @@ class Yolov6l_Conv2D:
             out_channels=self.out_channels,
             input_height=input_height,
             input_width=input_width,
-            batch_size=batch_size,
+            batch_size=self.batch_size,
             kernel_size=self.kernel_size,
             stride=self.stride,
             padding=self.padding,

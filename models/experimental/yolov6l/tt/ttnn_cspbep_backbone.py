@@ -20,7 +20,6 @@ class TtCSPBepBackbone:
             # auto_shard=True,
             activation="silu",
             activation_dtype=ttnn.bfloat16,
-            is_nhwc=True,
             reshape=True,
             deallocate_activation=True,
         )
@@ -31,7 +30,6 @@ class TtCSPBepBackbone:
             # shard_layout=None,
             # auto_shard=True,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
         )
         self.erblock2_1 = TtBepC3(device, parameters.ERBlock_2[1], model_params.ERBlock_2[1], n=6)
@@ -43,7 +41,6 @@ class TtCSPBepBackbone:
             # shard_layout=None,
             # auto_shard=True,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
         )
         self.erblock3_1 = TtBepC3(device, parameters.ERBlock_3[1], model_params.ERBlock_3[1], n=12)
@@ -58,7 +55,6 @@ class TtCSPBepBackbone:
             # shard_layout=None,
             # auto_shard=True,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
         )
         self.erblock4_1 = TtBepC3(device, parameters.ERBlock_4[1], model_params.ERBlock_4[1], n=18)
@@ -71,7 +67,6 @@ class TtCSPBepBackbone:
             # shard_layout=None,
             # auto_shard=True,
             activation="silu",
-            is_nhwc=True,
             reshape=True,
         )
         self.erblock5_1 = TtBepC3(
