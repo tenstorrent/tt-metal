@@ -1,0 +1,22 @@
+name: "(TG) TG op perf tests"
+on:
+  workflow_dispatch:
+
+jobs:
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      tracy: true
+      build-wheel: true
+      version: 22.04
+  tg-op-perf-tests:
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/tg-op-perf-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
