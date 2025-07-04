@@ -198,7 +198,7 @@ void kernel_main() {
 
             // Round robin self-mcast and receive tilized act matrix in cb_id_act
             // Compute should function like regular mm
-
+#ifndef SKIP_MCAST
             uint32_t act_w_outer_i = 0;
 
             uint32_t sender_noc_x = 0;
@@ -276,6 +276,7 @@ void kernel_main() {
 
             }  // num_input_cores
             cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
+#endif
         }
     }
     noc_async_read_barrier();
