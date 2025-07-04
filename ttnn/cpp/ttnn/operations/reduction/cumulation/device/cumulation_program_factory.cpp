@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cumprod_device_operation.hpp"
+#include "cumulation_device_operation.hpp"
+
 #include "tt-metalium/base_types.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/constants.hpp"
@@ -12,11 +13,10 @@
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/work_split.hpp>
 
-namespace ttnn::operations::reduction {
+namespace ttnn::operations::reduction::cumulation {
 
-// calculate the offset between consecutive tiles between cumprod and last dimension
-uint32_t CumprodDeviceOperation::MultiCoreCumprodProgramFactory::calc_input_tile_offset(
-    const Shape& input_shape, const int32_t& dim) {
+// calculate the offset between consecutive tiles between cumulation axis and last dimension
+uint32_t CumulationProgramFactory::calc_input_tile_offset(const Shape& input_shape, const int32_t& dim) {
     uint32_t input_tile_offset{1};
     for (int32_t i = dim + 1; i < input_shape.rank() - 2; ++i) {
         input_tile_offset *= input_shape[i];
@@ -31,8 +31,7 @@ uint32_t CumprodDeviceOperation::MultiCoreCumprodProgramFactory::calc_input_tile
     return input_tile_offset;
 }
 
-CumprodDeviceOperation::MultiCoreCumprodProgramFactory::cached_program_t
-CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create(
+CumulationProgramFactory::cached_program_t CumulationProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -54,8 +53,6 @@ CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create(
     const bool fp32_dest_acc_en{
         (dst_cb_data_format == DataFormat::Float32) || (dst_cb_data_format == DataFormat::Int32) ||
         (dst_cb_data_format == DataFormat::UInt32)};
-    const uint32_t height_tiles{input_shape[2] / constants::TILE_HEIGHT};
-    const uint32_t width_tiles{input_shape[3] / constants::TILE_WIDTH};
 
     const uint32_t input_rank{input_tensor.padded_shape().rank()};
 
@@ -65,43 +62,54 @@ CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create(
     const int32_t dim{
         (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
 
-    // how many tiles along cumprod row
+    const auto& tile = input_tensor.tensor_spec().tile();
+    // how many tiles along cumulation axis
     const uint32_t tiles_per_row{input_tensor.padded_shape()[dim]};
-    // all work units (product of all row lengths besides the cumprod row)
-    const uint32_t num_rows_total{input_tensor.physical_volume() / tt::constants::TILE_HW / tiles_per_row};
-    // tiles between consecutive tiles along cumprod row
+    // all work units (product of all row lengths besides the cumulation row)
+    const uint32_t num_rows_total{input_tensor.physical_volume() / tile.get_tile_hw() / tiles_per_row};
+    // tiles between consecutive tiles along cumulation row
     const uint32_t input_tile_offset{calc_input_tile_offset(input_shape, dim)};
 
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(grid, num_rows_total);
 
-    constexpr uint32_t in_tiles = 1;
-    constexpr uint32_t one_tiles = 1;
-    constexpr uint32_t intermed_tiles = 1;
-    constexpr uint32_t out_tiles = 1;
+    constexpr uint32_t in_tiles = 4;
+    constexpr uint32_t op_tiles = 4;
+    constexpr uint32_t start_tiles = 4;
+    constexpr uint32_t out_tiles = 4;
 
-    auto cb_src{create_cb(program, input_tensor.dtype(), CumprodCB::SRC, all_cores, in_tiles)};
-    auto cb_acc{create_cb(program, input_tensor.dtype(), CumprodCB::ACC, all_cores, one_tiles)};
-    auto cb_one{create_cb(program, input_tensor.dtype(), CumprodCB::ONE, all_cores, intermed_tiles)};
-    auto cb_dst{create_cb(program, input_tensor.dtype(), CumprodCB::DST, all_cores, out_tiles)};
+    auto cb_src{create_cb(program, input_tensor.dtype(), CumulationCB::SRC, all_cores, in_tiles)};
+    auto cb_acc{create_cb(program, output_tensor.dtype(), CumulationCB::ACC, all_cores, op_tiles)};
+    auto cb_start{create_cb(program, output_tensor.dtype(), CumulationCB::START, all_cores, start_tiles)};
+    auto cb_dst{create_cb(program, output_tensor.dtype(), CumulationCB::DST, all_cores, out_tiles)};
 
     const uint32_t src_is_dram{src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
     const uint32_t dst_is_dram{dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
+    const DataFormat out_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
+    std::map<std::string, std::string> defines_kernel_args = {};
+    if (is_integer_format(out_data_format)) {
+        // Used to switch to add_tile_int32() instead of add_tiles()
+        defines_kernel_args["CUMSUM_USE_INT32"] = "1";
+    }
 
     const ReaderDataMovementConfig reader_config{{src_is_dram}};
     const ComputeConfig compute_config{
-        .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false, .compile_args = {}};
+        .math_fidelity = MathFidelity::HiFi4,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_approx_mode = false,
+        .compile_args = {},
+        .defines = defines_kernel_args};
     const WriterDataMovementConfig writer_config{{dst_is_dram}};
 
-    auto cumprod_reader_kernel_id{create_kernel(program, KERNEL_PATHS[0], all_cores, reader_config)};
-    auto cumprod_compute_sc_kernel_id{create_kernel(program, KERNEL_PATHS[1], core_group_1, compute_config)};
+    auto cumulation_reader_kernel_id{create_kernel(program, KERNEL_PATHS[0], all_cores, reader_config)};
+    auto cumulation_compute_kernel_id{create_kernel(program, KERNEL_PATHS[1], core_group_1, compute_config)};
     std::optional<KernelHandle> compute_kernel_2_id{std::nullopt};
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
         compute_kernel_2_id = create_kernel(program, KERNEL_PATHS[1], core_group_2, compute_config);
     }
-    auto cumprod_writer_kernel_id{create_kernel(program, KERNEL_PATHS[2], all_cores, writer_config)};
+    auto cumulation_writer_kernel_id{create_kernel(program, KERNEL_PATHS[2], all_cores, writer_config)};
 
     for (uint32_t i{0}, tile_offset = 0; i < num_cores; ++i) {
         CoreCoord core{i / num_cores_y, i % num_cores_y};
@@ -117,7 +125,7 @@ CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create(
 
         SetRuntimeArgs(
             program,
-            cumprod_reader_kernel_id,
+            cumulation_reader_kernel_id,
             core,
             {src_buffer->address(),
              num_tiles_per_core,
@@ -125,11 +133,13 @@ CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create(
              input_tile_offset,
              tile_offset,
              tile_offset / input_tile_offset,
-             tile_offset % input_tile_offset});
+             tile_offset % input_tile_offset,
+             static_cast<uint32_t>(operation_attributes.flip),
+             static_cast<uint32_t>(operation_attributes.op)});
 
         SetRuntimeArgs(
             program,
-            cumprod_writer_kernel_id,
+            cumulation_writer_kernel_id,
             core,
             {dst_buffer->address(),
              num_tiles_per_core,
@@ -137,13 +147,22 @@ CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create(
              input_tile_offset,
              tile_offset,
              tile_offset / input_tile_offset,
-             tile_offset % input_tile_offset});
+             tile_offset % input_tile_offset,
+             static_cast<uint32_t>(operation_attributes.flip)});
 
         if (core_group_1.contains(core)) {
-            SetRuntimeArgs(program, cumprod_compute_sc_kernel_id, core, {num_tiles_per_core, tiles_per_row});
+            SetRuntimeArgs(
+                program,
+                cumulation_compute_kernel_id,
+                core,
+                {num_tiles_per_core, tiles_per_row, static_cast<uint32_t>(operation_attributes.op)});
         } else if (core_group_2.contains(core)) {
             TT_ASSERT(compute_kernel_2_id.has_value());
-            SetRuntimeArgs(program, compute_kernel_2_id.value(), core, {num_tiles_per_core, tiles_per_row});
+            SetRuntimeArgs(
+                program,
+                compute_kernel_2_id.value(),
+                core,
+                {num_tiles_per_core, tiles_per_row, static_cast<uint32_t>(operation_attributes.op)});
         } else {
             TT_THROW("Core not in any predefined core range.");
         }
@@ -154,20 +173,21 @@ CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create(
     auto cores = grid_to_cores(num_cores, grid.x, grid.y);
     return {
         std::move(program),
-        {.cumprod_reader_kernel_id = cumprod_reader_kernel_id,
-         .cumprod_compute_kernel_id = cumprod_compute_sc_kernel_id,
-         .cumprod_writer_kernel_id = cumprod_writer_kernel_id,
+        {.cumulation_reader_kernel_id = cumulation_reader_kernel_id,
+         .cumulation_compute_kernel_id = cumulation_compute_kernel_id,
+         .cumulation_compute_kernel_id_2 = compute_kernel_2_id,
+         .cumulation_writer_kernel_id = cumulation_writer_kernel_id,
          .cores = cores}};
 }
 
-void CumprodDeviceOperation::MultiCoreCumprodProgramFactory::override_runtime_arguments(
+void CumulationProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& program = cached_program.program;
-    const auto& reader_kernel_id = cached_program.shared_variables.cumprod_reader_kernel_id;
-    const auto& writer_kernel_id = cached_program.shared_variables.cumprod_writer_kernel_id;
+    const auto& reader_kernel_id = cached_program.shared_variables.cumulation_reader_kernel_id;
+    const auto& writer_kernel_id = cached_program.shared_variables.cumulation_writer_kernel_id;
     const auto& cores = cached_program.shared_variables.cores;
 
     auto input_buffer_address = tensor_args.input_tensor.buffer()->address();
@@ -180,14 +200,14 @@ void CumprodDeviceOperation::MultiCoreCumprodProgramFactory::override_runtime_ar
     }
 }
 
-CBHandle CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create_cb(
+CBHandle CumulationProgramFactory::create_cb(
     Program& program,
     const DataType& dtype,
-    const CumprodCB& cumprod_cb,
+    const CumulationCB& cumulation_cb,
     const CoreRangeSet& core_range_set,
     const uint32_t& num_tiles) {
     using tt::tt_metal::detail::TileSize;
-    const uint32_t cb_id{static_cast<uint32_t>(cumprod_cb)};
+    const uint32_t cb_id{static_cast<uint32_t>(cumulation_cb)};
     const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
     const uint32_t single_tile_size{TileSize(cb_data_format)};
     const auto cb_config{CircularBufferConfig{num_tiles * single_tile_size, {{cb_id, cb_data_format}}}.set_page_size(
@@ -195,7 +215,7 @@ CBHandle CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create_cb(
     return CreateCircularBuffer(program, core_range_set, cb_config);
 }
 
-KernelHandle CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create_kernel(
+KernelHandle CumulationProgramFactory::create_kernel(
     Program& program,
     const char* kernel_path,
     const CoreRangeSet& core_range_set,
@@ -208,4 +228,4 @@ KernelHandle CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create_kern
     return kernel_id;
 }
 
-}  // namespace ttnn::operations::reduction
+}  // namespace ttnn::operations::reduction::cumulation

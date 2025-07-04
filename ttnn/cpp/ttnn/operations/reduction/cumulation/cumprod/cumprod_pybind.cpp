@@ -11,11 +11,11 @@
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
-#include "ttnn/operations/reduction/cumprod/cumprod.hpp"
+#include "ttnn/operations/reduction/cumulation/cumprod/cumprod.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/common/queue_id.hpp"
 
-namespace ttnn::operations::reduction::detail {
+namespace ttnn::operations::reduction::cumulation::detail {
 void bind_reduction_cumprod_operation(py::module& module) {
     auto doc =
         R"doc(
@@ -81,4 +81,4 @@ void bind_reduction_cumprod_operation(py::module& module) {
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::reduction::detail
+}  // namespace ttnn::operations::reduction::cumulation::detail

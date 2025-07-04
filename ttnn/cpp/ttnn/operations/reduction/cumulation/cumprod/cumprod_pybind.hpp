@@ -6,8 +6,8 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace ttnn::operations::reduction::detail {
+namespace ttnn::operations::reduction::cumulation::detail {
 namespace py = pybind11;
 void bind_reduction_cumprod_operation(py::module& module);
 
-}  // namespace ttnn::operations::reduction::detail
+}  // namespace ttnn::operations::reduction::cumulation::detail

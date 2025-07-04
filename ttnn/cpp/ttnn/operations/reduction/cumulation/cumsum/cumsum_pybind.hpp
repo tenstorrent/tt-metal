@@ -6,11 +6,11 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace ttnn::operations::reduction::detail {
+namespace ttnn::operations::reduction::cumulation::detail {
 namespace py = pybind11;
 
 void bind_cumsum_operation(py::module& module);
 
 void bind_cumsum_backward_operation(py::module& module);
 
-}  // namespace ttnn::operations::reduction::detail
+}  // namespace ttnn::operations::reduction::cumulation::detail

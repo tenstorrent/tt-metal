@@ -2,7 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/reduction/cumsum/cumsum.hpp"
+#include "../device/cumulation_device_operation_types.hpp"
+#include "../device/cumulation_device_operation.hpp"
+
+#include "cumsum.hpp"
+
 #include <algorithm>
 #include <iterator>
 #include <tt-logger/tt-logger.hpp>
@@ -14,13 +18,12 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/reduction/cumsum/device/cumsum_device_operation.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::reduction {
+namespace ttnn::operations::reduction::cumulation {
 
 uint64_t compute_padded_volume(const Shape& logical_shape, const tt::tt_metal::Tile& tile) {
     unsigned tile_width = tile.get_width();
@@ -53,13 +56,13 @@ uint64_t compute_padded_volume(const Shape& logical_shape, const tt::tt_metal::T
     return volume;
 }
 
-Tensor CumSumOperation::invoke(
+Tensor CumsumOperation::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
     int64_t dim,
     std::optional<ttnn::DataType> dtype,
     std::optional<Tensor> optional_output_tensor,
-    bool flip,
+    const bool& flip,
     const std::optional<MemoryConfig>& memory_config) {
     const auto& input_shape = input_tensor.logical_shape();
     int tensor_rank = input_shape.rank();
@@ -83,35 +86,38 @@ Tensor CumSumOperation::invoke(
         adjusted_input_tensor = converted_tensor;
     }
 
-    if (tensor_rank == 0 || adjusted_input_tensor.logical_volume() == 0) {  // empty input tensor => nothing to do
+    constexpr uint32_t FOUR_DIMENSIONS{4};
+    constexpr uint32_t FIRST_DIMENSION{0};
 
+    if (tensor_rank == 0 || adjusted_input_tensor.logical_volume() == 0) {  // empty input tensor => nothing to do
         return adjusted_input_tensor;
     }
 
     // Normalize negative dim
-    if (dim < 0) {
-        dim += tensor_rank;
+    int32_t cum_axis{dim};
+    if (cum_axis < 0) {
+        cum_axis += tensor_rank;
     }
 
     // If dim is x or y axis (last or second last dimension)
-    if (dim == tensor_rank - 1 || dim == tensor_rank - 2) {
+    if (tensor_rank - cum_axis < FOUR_DIMENSIONS) {
         auto opt_output = optional_output_tensor;
 
         int initial_tensor_rank = tensor_rank;
-        if (initial_tensor_rank <= 2) {  // 1D or 2D tensor
-            // reshape tensor => make 3D or 4D (do not permutate/transpose => memory footprint should be comparable)
-            ttnn::SmallVector<uint32_t> new_dims = {1, 1};
+
+        if (initial_tensor_rank < FOUR_DIMENSIONS) {
+            ttnn::SmallVector<uint32_t> new_dims = {};
+            for (int i{initial_tensor_rank}; i < FOUR_DIMENSIONS; ++i) {
+                new_dims.push_back(1);
+            }
             new_dims.insert(new_dims.end(), input_shape.cbegin(), input_shape.cend());
             ttnn::Shape new_shape(new_dims);
 
             adjusted_input_tensor = ttnn::reshape(adjusted_input_tensor, new_shape);
 
-            if (opt_output.has_value()) {
-                opt_output = ttnn::reshape(optional_output_tensor.value(), new_shape);
-            }
-
-            tensor_rank += 2;
-            dim += 2;  // update dim parameter to target updated axis
+            // Update params
+            tensor_rank = FOUR_DIMENSIONS;
+            cum_axis += (FOUR_DIMENSIONS - initial_tensor_rank);
         }
 
         // For now, the cumsum does not support `dim` == x or y-axis.
@@ -130,7 +136,7 @@ Tensor CumSumOperation::invoke(
         const uint64_t old_volume = adjusted_input_tensor.physical_volume();
 
         ttnn::SmallVector<uint32_t> new_dims(tensor_shape.cbegin(), tensor_shape.cend());
-        std::swap(new_dims[0], new_dims[dim]);
+        std::swap(new_dims[0], new_dims[cum_axis]);
         const Shape new_shape(new_dims);
 
         const uint64_t new_volume = compute_padded_volume(new_shape, adjusted_input_tensor.tensor_spec().tile());
@@ -165,25 +171,21 @@ Tensor CumSumOperation::invoke(
 
         // Create permutation that just swaps dim with dim=0
         ttnn::SmallVector<int64_t> permutation(tensor_rank);
-        std::iota(permutation.begin(), permutation.end(), 0);  // Initialize to [0,1,2,...]
-        permutation[0] = dim;                                  // Swap dim with dim=0
-        permutation[dim] = 0;
+        std::iota(permutation.begin(), permutation.end(), FIRST_DIMENSION);  // Initialize to [0,1,2,...]
+        permutation[FIRST_DIMENSION] = cum_axis;                             // Swap dim with dim=0
+        permutation[cum_axis] = FIRST_DIMENSION;
 
         Tensor permuted_tensor =
             ttnn::permute(adjusted_input_tensor, permutation, adjusted_input_tensor.memory_config());
 
-        if (opt_output.has_value()) {
-            opt_output = ttnn::permute(opt_output.value(), permutation, opt_output->memory_config());
-        }
-
         // Compute cumsum on permuted tensor (now accumulation is on dim=0)
-        Tensor output_tensor = ttnn::prim::cumsum(queue_id, permuted_tensor, 0, dtype, opt_output, flip);
+        Tensor output_tensor = ttnn::prim::cumulation(
+            queue_id, permuted_tensor, FIRST_DIMENSION, dtype, std::nullopt, memory_config, flip, CumulationOp::CUMSUM);
 
         // Apply backward permutation to restore initial shape
         output_tensor = ttnn::permute(output_tensor, permutation, output_tensor.memory_config());
 
-        // if initial input tensor was 1D or 2D, then also reshape output to 1D or 2D
-        if (initial_tensor_rank <= 2) {
+        if (initial_tensor_rank < FOUR_DIMENSIONS) {
             output_tensor = ttnn::reshape(output_tensor, input_shape);
         }
 
@@ -196,17 +198,25 @@ Tensor CumSumOperation::invoke(
     }
 
     // For other dimensions, proceed with original cumsum
-    return ttnn::prim::cumsum(queue_id, adjusted_input_tensor, dim, dtype, optional_output_tensor, flip);
+    return ttnn::prim::cumulation(
+        queue_id,
+        adjusted_input_tensor,
+        cum_axis,
+        dtype,
+        optional_output_tensor,
+        memory_config ? memory_config : adjusted_input_tensor.memory_config(),
+        flip,
+        CumulationOp::CUMSUM);
 }
 
-Tensor CumSumBackwardOperation::invoke(
+Tensor CumsumBackwardOperation::invoke(
     QueueId queue_id,
     const Tensor& input,
     int64_t dim,
     std::optional<ttnn::DataType> dtype,
     std::optional<Tensor> optional_output_tensor,
     const std::optional<MemoryConfig>& memory_config) {
-    return CumSumOperation::invoke(queue_id, input, dim, dtype, optional_output_tensor, true, memory_config);
+    return CumsumOperation::invoke(queue_id, input, dim, dtype, optional_output_tensor, true, memory_config);
 }
 
-}  // namespace ttnn::operations::reduction
+}  // namespace ttnn::operations::reduction::cumulation

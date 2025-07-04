@@ -199,6 +199,7 @@ def test_moreh_cumsum_callback(input_shape, dim, device):
 
             passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
+
 @pytest.mark.parametrize(
     "input_shape",
     (
@@ -264,73 +265,6 @@ def test_moreh_cumsum_backward(input_shape, dim, device):
         ([4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1]),
     ),
     ids=[
-        "[]",
-        "TILE_WIDTH - 1",
-        "TILE_HEIGHT, TILE_WIDTH + 1",
-        "10, TILE_HEIGHT, TILE_WIDTH + 1",
-        "10, 10, TILE_HEIGHT - 1, TILE_WIDTH",
-        "10, 10, 5, TILE_HEIGHT - 1, TILE_WIDTH - 1",
-        "10, 10, 5, 5, TILE_HEIGHT + 1, TILE_WIDTH - 1",
-        "1, 1, TILE_HEIGHT-1,TILE_WIDTH - 1",
-        "4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1",
-    ],
-)
-@pytest.mark.parametrize(
-    "dim",
-    (
-        0,
-        1,
-    ),
-    ids=["0", "1"],
-)
-def test_moreh_cumsum_callback(input_shape, dim, device):
-    if dim < len(input_shape):
-        output_shape = input_shape.copy()
-
-        (tt_input, tt_output, torch_input) = get_tensors(input_shape, output_shape, device)
-
-        torch_output = torch.cumsum(torch_input, dim)
-
-        cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-
-        # test for equivalance
-        rtol = atol = 0.1
-
-        for i in range(2):
-            tt_output_cpu = (
-                ttnn.operations.moreh.cumsum(tt_input, dim)
-                .cpu()
-                .to(cpu_layout)
-                .unpad_from_tile(output_shape)
-                .to_torch()
-            )
-
-            logger.debug(f"torch_output.shape == {torch_output.shape}, tt_output_cpu == {tt_output_cpu.shape}")
-
-            passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
-
-            logger.debug(f"Out passing={passing}")
-            logger.debug(f"Output pcc={output_pcc}")
-
-            assert passing
-    assert device.num_program_cache_entries() >= 1
-
-
-@pytest.mark.parametrize(
-    "input_shape",
-    (
-        ([]),
-        ([TILE_WIDTH - 1]),
-        ([TILE_HEIGHT, TILE_WIDTH + 1]),
-        ([10, TILE_HEIGHT, TILE_WIDTH + 1]),
-        ([10, 10, TILE_HEIGHT - 1, TILE_WIDTH]),
-        ([10, 10, 5, TILE_HEIGHT - 1, TILE_WIDTH - 1]),
-        ([10, 10, 5, 5, TILE_HEIGHT + 1, TILE_WIDTH - 1]),
-        ([1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1]),
-        ([4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1]),
-    ),
-    ids=[
-        "[]",
         "[]",
         "TILE_WIDTH - 1",
         "TILE_HEIGHT, TILE_WIDTH + 1",
