@@ -369,7 +369,13 @@ jobs:
             CCACHE_TEMPDIR=/tmp/ccache
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
-          CIBW_BEFORE_BUILD: mkdir -p /tmp/ccache && ccache -z && ccache -p
+          CIBW_BEFORE_BUILD: |
+            echo "Python 3.12 installation check:"
+            ls -la /opt/python/cp312-cp312/
+            ls -la /opt/python/cp312-cp312/include/ || echo "No include directory"
+            ls -la /opt/python/cp312-cp312/lib/ || echo "No lib directory"
+            /opt/python/cp312-cp312/bin/python -c "import sysconfig; print(sysconfig.get_path('include'))"
+            mkdir -p /tmp/ccache && ccache -z && ccache -p
           CIBW_BEFORE_TEST: ccache -s
           CIBW_TEST_COMMAND: ${{ env.CIBW_TEST_CMD }}
           CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
