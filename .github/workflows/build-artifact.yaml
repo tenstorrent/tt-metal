@@ -370,6 +370,13 @@ jobs:
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
           CIBW_BEFORE_BUILD: |
+            echo "=== pybind11 Debug ==="
+            python -c "import pybind11; print('pybind11 location:', pybind11.__file__)"
+            python -c "import pybind11; print('pybind11 version:', pybind11.__version__)"
+            echo "=== Python Library Check ==="
+            ls -la /opt/_internal/cpython-3.12.11/lib/libpython3.12.*
+            echo "=== CMake Python Test ==="
+            cmake --find-package -DNAME=Python -DCOMPILER_ID=GNU -DLANGUAGE=C -DMODE=EXIST
             echo "=== CMake Version Check ==="
             cmake --version
             echo "=== Detailed Python Environment Debug ==="
@@ -387,8 +394,6 @@ jobs:
             echo "=== File System Check ==="
             ls -la $(python -c "import sysconfig; print(sysconfig.get_path('include'))")
             find $(python -c "import sysconfig; print(sysconfig.get_path('include'))") -name "*.h" | head -5
-            echo "=== CMake Version Check ==="
-            cmake --version
             export PYTHON_EXECUTABLE=$(which python)
             export Python_EXECUTABLE=$PYTHON_EXECUTABLE
             export Python3_EXECUTABLE=$PYTHON_EXECUTABLE
