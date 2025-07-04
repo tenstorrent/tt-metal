@@ -7,6 +7,7 @@
 #include <memory>
 
 #include <tt_stl/overloaded.hpp>
+#include "distributed/types.hpp"
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/distributed_host_buffer.hpp"
 #include "tt-metalium/mesh_coord.hpp"
@@ -132,11 +133,33 @@ Tensor aggregate_as_tensor(
     }
 }
 
-Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
-    TT_ASSERT(tensor_shards.size() > 0, "At least one tensor shard must be provided");
+Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShape& mesh_shape) {
+    TT_FATAL(tensor_shards.size() == mesh_shape.mesh_size(), "Number of tensor shards must match mesh size");
     const auto& reference_shard = tensor_shards.at(0);
     for (const auto& shard : tensor_shards) {
-        TT_FATAL(shard.storage_type() == StorageType::DEVICE, "All tensor shards must have the same storage type");
+        TT_FATAL(shard.storage_type() == StorageType::HOST, "All tensor shards must be on host");
+        TT_FATAL(
+            shard.tensor_spec() == reference_shard.tensor_spec(), "All tensor shards must have the same tensor spec");
+    }
+
+    auto distributed_host_buffer = DistributedHostBuffer::create(mesh_shape);
+    auto shard_it = tensor_shards.begin();
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_shape)) {
+        HostBuffer buffer = std::get<HostStorage>((shard_it++)->get_storage()).buffer;
+        distributed_host_buffer.emplace_shard(coord, [&]() { return std::move(buffer); });
+    }
+
+    return Tensor(
+        MultiDeviceHostStorage{std::move(distributed_host_buffer)},
+        reference_shard.get_tensor_spec(),
+        AllGatherTensor{});
+}
+
+Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
+    TT_FATAL(!tensor_shards.empty(), "At least one tensor shard must be provided");
+    const auto& reference_shard = tensor_shards.at(0);
+    for (const auto& shard : tensor_shards) {
+        TT_FATAL(shard.storage_type() == StorageType::DEVICE, "All tensor shards must be on device");
         TT_FATAL(
             shard.get_tensor_spec() == reference_shard.get_tensor_spec(),
             "All tensor shards must have the same tensor spec");
