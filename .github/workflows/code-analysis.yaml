@@ -215,8 +215,8 @@ jobs:
           </details>
 
           ### 🏗️ Architecture Impact
-          $(if echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/"; then echo "- ⚠️ **Wormhole B0** changes detected - will trigger post-commit tests"; fi)
-          $(if echo "$CHANGED_FILES" | grep -q "^tt_llk_blackhole/"; then echo "- ⚠️ **Blackhole** changes detected - will trigger post-commit tests"; fi)
+          $(if echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/"; then echo "- ⚠️ **Wormhole** changes detected - will trigger all-post-commit tests"; fi)
+          $(if echo "$CHANGED_FILES" | grep -q "^tt_llk_blackhole/"; then echo "- ⚠️ **Blackhole** changes detected - will trigger blackhole-post-commit tests"; fi)
           $(if ! echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/\|^tt_llk_blackhole/"; then echo "- ℹ️ No architecture-specific changes detected"; fi)
 
           ### 🤖 Automation Status
