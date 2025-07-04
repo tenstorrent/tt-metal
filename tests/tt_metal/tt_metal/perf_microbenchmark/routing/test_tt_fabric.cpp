@@ -289,7 +289,8 @@ void TestContext::process_line_sync_config(TestConfig& config) {
                 // The actual sync will be handled by atomic operations
                 CoreCoord dummy_dst_core = {0, 0};  // Sync doesn't need specific dst core
                 uint32_t sync_address = 0x50000;    // Fixed sync address
-                uint32_t dst_noc_encoding = 0;      // Will be filled by device setup
+                uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(
+                    sync_sender.device, master_core);  // populate the master coord
 
                 TestTrafficSenderConfig sync_config = {
                     .parameters = sync_traffic_parameters,

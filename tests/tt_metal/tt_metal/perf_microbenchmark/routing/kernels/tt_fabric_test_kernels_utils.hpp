@@ -353,6 +353,8 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, false, USE_DYNAMIC_ROUT
         volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
         WorkerToFabricEdmSender* fabric_connection_handle) {
         const auto mcast_fields = ChipMulticastFields1D::build_from_args(arg_idx);
+        // DPRINT << "mcast_start_hops " << mcast_fields.mcast_start_hops << " num_hops " << mcast_fields.num_hops
+        // <<ENDL();
         packet_header->to_chip_multicast(MulticastRoutingCommandHeader{
             static_cast<uint8_t>(mcast_fields.mcast_start_hops), static_cast<uint8_t>(mcast_fields.num_hops)});
     }
@@ -425,21 +427,36 @@ struct LineSyncConfig {
 
         // set the addr to 0
         line_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fields.dst_address);
-        line_sync_ptr[0] = 0;
+        // line_sync_ptr[0] = 0;
+
+        // DPRINT << "dst_noc_encoding " << fields.dst_noc_encoding << " dst_address " << fields.dst_address <<ENDL();
+        // DPRINT << "atomic_inc_val " << fields.atomic_inc_val << " atomic_inc_wrap " << fields.atomic_inc_wrap
+        // <<ENDL();
 
         uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
         packet_header->to_noc_unicast_atomic_inc(
             NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.atomic_inc_wrap});
     }
 
-    void global_sync() {
+    void global_sync_start() {
         // send packet to remote devices
         fabric_connection_handle->wait_for_empty_write_slot();
         fabric_connection_handle->send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 
-        // sync
-        while (line_sync_ptr[0] != line_sync_val);
+        // DPRINT << "start global sync" <<ENDL();
+    }
+
+    void global_sync_finish() {
+        // sync wait
+        // DPRINT << "finishing global sync" <<ENDL();
+
+        while (line_sync_ptr[0] != line_sync_val) {
+            DPRINT << "line_sync_ptr " << (uint)line_sync_ptr[0] << ENDL();
+            for (int i = 0; i < 10000000; ++i) {
+                asm volatile("nop");
+            }
+        }
     }
 
 private:
@@ -816,9 +833,15 @@ struct SenderKernelConfig {
     void global_sync() {
         if constexpr (LINE_SYNC && MASTER_SYNC_CORE) {
             for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-                // sync_fabric_connections()[i].open();
-                // line_sync_configs()[i].global_sync();
-                // sync_fabric_connections()[i].close();
+                sync_fabric_connections()[i].open();
+            }
+            for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+                line_sync_configs()[i].global_sync_start();
+            }
+            // only need one of the cofig to check for the acks
+            line_sync_configs()[0].global_sync_finish();
+            for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+                sync_fabric_connections()[i].close();
             }
         }
     }
@@ -886,10 +909,9 @@ private:
         // add line sync initializations here, for each fabric connection, ex, forward and backward connection, run line
         // sync for all.
         if constexpr (LINE_SYNC) {
+            uint32_t line_sync_val = get_arg_val<uint32_t>(arg_idx++);
             for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
                 uint32_t packet_header_address = this->memory_allocator.get_packet_header_address();
-                uint32_t line_sync_val = get_arg_val<uint32_t>(arg_idx++);
-
                 new (&line_sync_configs()[i])
                     LineSyncConfig(&sync_fabric_connections()[i], packet_header_address, line_sync_val);
 

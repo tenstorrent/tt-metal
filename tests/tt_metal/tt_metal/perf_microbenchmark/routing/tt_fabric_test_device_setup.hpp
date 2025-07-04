@@ -447,27 +447,24 @@ inline void TestDevice::create_sender_kernels() {
                 sender.global_line_sync_configs_.size());
 
             // For each sync config, add line sync configuration runtime args
+            // add line_sync_val, what is the expected value for linear/ring/mesh??
+            line_sync_args.push_back(8);
             for (size_t i = 0; i < sender.global_line_sync_configs_.size(); ++i) {
                 const auto& [sync_config, fabric_conn_idx] = sender.global_line_sync_configs_[i];
 
-                // Add sync value and routing args for this sync config
-                line_sync_args.push_back(1);  // line_sync_val
+                // Add routing args for this sync config
+
+                // Add sync routing args (chip send type + routing info)
+                auto sync_traffic_args = sync_config.get_args(true);
                 log_info(
                     tt::LogTest,
-                    "fabric connection {} has sync config src_node_id: {} dst_node_ids {} hops {} ",
+                    "fabric connection {} has sync config src_node_id: {} dst_node_ids {} hops {} mcast_start_hops {} ",
                     fabric_conn_idx,
                     sync_config.src_node_id,
                     sync_config.dst_node_ids,
-                    sync_config.hops);
-
-                // Add sync routing args (chip send type + routing info)
-                auto sync_traffic_args = sync_config.get_args();
-                // Extract only the routing part (skip metadata)
-                // Traffic config args format: [metadata][chip_send_type][noc_send_type][noc_fields]
-                // We need: [noc_fields] for sync only
-                size_t metadata_size = 5;  // num_packets, seed, payload_buffer_size, chip_send_type, noc_send_type
-                line_sync_args.insert(
-                    line_sync_args.end(), sync_traffic_args.begin() + metadata_size, sync_traffic_args.end());
+                    sync_config.hops,
+                    sync_config.parameters.mcast_start_hops);
+                line_sync_args.insert(line_sync_args.end(), sync_traffic_args.begin(), sync_traffic_args.end());
             }
 
             // Add local sync configuration args
