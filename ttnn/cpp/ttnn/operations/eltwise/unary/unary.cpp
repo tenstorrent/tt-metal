@@ -32,12 +32,7 @@ inline Tensor unary_impl(
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
                             input_dtype == DataType::UINT32 or input_dtype == DataType::INT32;
     bool bfp8_pack_precise = (op_chain[0].op_type == UnaryOpType::TYPECAST && output_dtype == DataType::BFLOAT8_B);
-    if (op_chain.size() == 3 && op_chain[0].op_type == UnaryOpType::TYPECAST &&
-        op_chain[1].op_type == UnaryOpType::IDENTITY && op_chain[2].op_type == UnaryOpType::TYPECAST &&
-        input_dtype == DataType::UINT8) {
-        output_dtype = DataType::UINT8;
-        preserve_fp32_precision = true;
-    }
+
     auto output_memory_config = optional_output_tensor.has_value()
                                     ? optional_output_tensor.value().memory_config()
                                     : memory_config.value_or(input_tensor.memory_config());
@@ -323,16 +318,7 @@ Tensor Identity::invoke(
         return detail::unary_impl(
             queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
     } else {
-        DataType output_dtype = DataType::UINT32;
-        return detail::unary_impl(
-            queue_id,
-            input_tensor,
-            {UnaryWithParam{UnaryOpType::TYPECAST, {static_cast<float>(input_dtype), static_cast<float>(output_dtype)}},
-             UnaryWithParam{op_type},
-             UnaryWithParam{
-                 UnaryOpType::TYPECAST, {static_cast<float>(output_dtype), static_cast<float>(input_dtype)}}},
-            memory_config,
-            optional_output_tensor);
+        TT_THROW("ttnn.identity doesn't support uint8 datatype");
     }
 }
 
