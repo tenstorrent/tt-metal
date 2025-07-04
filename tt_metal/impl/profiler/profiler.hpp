@@ -13,7 +13,6 @@
 #include <set>
 #include <string>
 #include <string_view>
-#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -66,13 +65,56 @@ struct DisptachMetaData {
 };
 
 struct ZoneDetails {
+    enum class ZoneNameKeyword : uint16_t {
+        BRISC_FW,
+        ERISC_FW,
+        SYNC_ZONE,
+        PROFILER,
+        DISPATCH,
+        PROCESS_CMD,
+        RUNTIME_HOST_ID_DISPATCH,
+        PACKED_DATA_DISPATCH,
+        PACKED_LARGE_DATA_DISPATCH,
+        COUNT
+    };
+
+    static inline std::unordered_map<std::string, ZoneNameKeyword> zone_name_keywords_map = {
+        {"BRISC-FW", ZoneNameKeyword::BRISC_FW},
+        {"ERISC-FW", ZoneNameKeyword::ERISC_FW},
+        {"SYNC-ZONE", ZoneNameKeyword::SYNC_ZONE},
+        {"PROFILER", ZoneNameKeyword::PROFILER},
+        {"DISPATCH", ZoneNameKeyword::DISPATCH},
+        {"process_cmd", ZoneNameKeyword::PROCESS_CMD},
+        {"runtime_host_id_dispatch", ZoneNameKeyword::RUNTIME_HOST_ID_DISPATCH},
+        {"packed_data_dispatch", ZoneNameKeyword::PACKED_DATA_DISPATCH},
+        {"packed_large_data_dispatch", ZoneNameKeyword::PACKED_LARGE_DATA_DISPATCH},
+    };
+
     std::string zone_name;
     std::string source_file;
     uint64_t source_line_num;
-    bool is_zone_in_brisc_or_erisc;
+    std::array<bool, static_cast<uint16_t>(ZoneNameKeyword::COUNT)> zone_name_keyword_flags;
+
+    ZoneDetails(const std::string& zone_name, const std::string& source_file, uint64_t source_line_num) :
+        zone_name(zone_name), source_file(source_file), source_line_num(source_line_num) {
+        for (const auto& [keyword_str, keyword] : zone_name_keywords_map) {
+            zone_name_keyword_flags[static_cast<uint16_t>(keyword)] = zone_name.find(keyword_str) != std::string::npos;
+        }
+    }
 };
 
-const ZoneDetails UnidentifiedZoneDetails = ZoneDetails{"", "", 0, false};
+const ZoneDetails UnidentifiedZoneDetails = ZoneDetails("", "", 0);
+
+struct SyncInfo {
+    double cpu_time = 0.0;
+    double device_time = 0.0;
+    double frequency = 0.0;
+
+    SyncInfo(double cpu_time, double device_time, double frequency) :
+        cpu_time(cpu_time), device_time(device_time), frequency(frequency) {}
+
+    SyncInfo() : SyncInfo(0.0, 0.0, 0.0) {}
+};
 
 class DeviceProfiler {
 private:
@@ -105,10 +147,16 @@ private:
     DisptachMetaData current_dispatch_meta_data;
 
     // (cpu time, device time, frequency) for sync propagated from root device
-    std::tuple<double, double, double> device_sync_info;
+    SyncInfo device_sync_info;
 
     // Per-core sync info used to make tracy context
-    std::map<CoreCoord, std::tuple<double, double, double>> core_sync_info;
+    std::unordered_map<CoreCoord, SyncInfo> core_sync_info;
+
+    // (Device ID, Core Coord) pairs that keep track of cores which need to have their Tracy contexts updated
+    std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores;
+
+    // Storage for all core's control buffers
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffers;
 
     // 32bit FNV-1a hashing
     uint32_t hash32CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261));
@@ -132,16 +180,50 @@ private:
     // translates potentially-virtual coordinates recorded on Device into physical coordinates
     CoreCoord getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const;
 
-    ZoneDetails getZoneDetails(uint16_t timer_id) const;
-
-    // Storage for all core's control buffers
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffers;
-
     // Read all control buffers
-    void readControlBuffers(IDevice* device, const CoreCoord& worker_core, ProfilerDumpState state);
+    void readControlBuffers(
+        IDevice* device, const std::vector<CoreCoord>& virtual_cores, ProfilerDumpState state);
 
-    // reset control buffers
-    void resetControlBuffers(IDevice* device, const CoreCoord& worker_core, ProfilerDumpState state);
+    // Read control buffer for a single core
+    void readControlBufferForCore(IDevice* device, const CoreCoord& virtual_core, ProfilerDumpState state);
+
+    // Reset all control buffers
+    void resetControlBuffers(
+        IDevice* device, const std::vector<CoreCoord>& virtual_cores, ProfilerDumpState state);
+
+    // Reset control buffer for a single core
+    void resetControlBufferForCore(IDevice* device, const CoreCoord& virtual_core, ProfilerDumpState state);
+
+    // Read all L1 data buffers
+    void readL1DataBuffers(
+        IDevice* device,
+        const std::vector<CoreCoord>& virtual_cores,
+        ProfilerDumpState state,
+        std::unordered_map<CoreCoord, std::vector<uint32_t>>& core_l1_data_buffers);
+
+    // Read L1 data buffer for a single core
+    void readL1DataBufferForCore(
+        IDevice* device,
+        const CoreCoord& virtual_core,
+        ProfilerDumpState state,
+        std::vector<uint32_t>& core_l1_data_buffer);
+
+    // Read device profiler buffer
+    void readProfilerBuffer(IDevice* device, ProfilerDumpState state);
+
+    // Read data from profiler buffer using fast dispatch
+    void issueFastDispatchReadFromProfilerBuffer(IDevice* device);
+
+    // Read data from profiler buffer using slow dispatch
+    void issueSlowDispatchReadFromProfilerBuffer(IDevice* device);
+
+    // Read data from L1 data buffer using fast dispatch
+    void issueFastDispatchReadFromL1DataBuffer(
+        IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
+
+    // Read data from L1 data buffer using slow dispatch
+    void issueSlowDispatchReadFromL1DataBuffer(
+        IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
 
     // Dumping profile result to file
     void logPacketData(
@@ -151,7 +233,6 @@ private:
         const std::string& opname,
         chip_id_t device_id,
         CoreCoord core,
-        int core_flat,
         int risc_num,
         uint64_t stat_value,
         uint32_t timer_id,
@@ -168,7 +249,6 @@ private:
         uint64_t timestamp,
         uint64_t data,
         uint32_t run_host_id,
-        std::string_view opname,
         std::string_view zone_name,
         kernel_profiler::PacketTypes packet_type,
         uint64_t source_line,
@@ -182,15 +262,12 @@ private:
         int core_x,
         int core_y,
         std::string_view risc_name,
-        uint32_t timer_id,
         uint64_t timestamp,
         uint64_t data,
         uint32_t run_host_id,
         std::string_view opname,
         std::string_view zone_name,
-        kernel_profiler::PacketTypes packet_type,
-        uint64_t source_line,
-        std::string_view source_file);
+        kernel_profiler::PacketTypes packet_type);
 
     // Helper function for reading risc profile results
     void readRiscProfilerResults(
@@ -217,16 +294,13 @@ public:
     ~DeviceProfiler();
 
     // Device-core Syncdata
-    std::map<CoreCoord, std::tuple<double, double, double>> device_core_sync_info;
+    std::map<CoreCoord, SyncInfo> device_core_sync_info;
 
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;
 
     // Number of bytes reserved in each DRAM bank for storing device profiling data
     uint32_t profile_buffer_bank_size_bytes;
-
-    // (Device ID, Core Coord) pairs that keep track of cores which need to have their Tracy contexts updated
-    std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores;
 
     // Device events
     std::unordered_set<tracy::TTDeviceEvent> device_events;
@@ -239,7 +313,7 @@ public:
     int64_t shift = 0;
 
     // frequency scale
-    double freqScale = 1.0;
+    double freq_scale = 1.0;
 
     // Freshen device logs
     void freshDeviceLog();
@@ -253,7 +327,7 @@ public:
     // Traverse all cores on the device and dump the device profile results
     void dumpResults(
         IDevice* device,
-        const std::vector<CoreCoord>& worker_cores,
+        const std::vector<CoreCoord>& virtual_cores,
         ProfilerDumpState state = ProfilerDumpState::NORMAL,
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
@@ -262,31 +336,22 @@ public:
     void pushTracyDeviceResults();
 
     // Update sync info for this device
-    void setSyncInfo(const std::tuple<double, double, double>& sync_info);
+    void setSyncInfo(const SyncInfo& sync_info);
 
-    // Read data from profiler buffer using fast dispatch
-    void issueFastDispatchReadFromProfilerBuffer(IDevice* device);
-
-    // Read data from profiler buffer using slow dispatch
-    void issueSlowDispatchReadFromProfilerBuffer(IDevice* device);
-
-    // Read data from L1 data buffer using fast dispatch
-    std::vector<uint32_t> issueFastDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core);
-
-    // Read data from L1 data buffer using slow dispatch
-    std::vector<uint32_t> issueSlowDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core);
+    // Get zone details for the zone corresponding to the given timer id
+    ZoneDetails getZoneDetails(uint16_t timer_id) const;
 };
 
-void write_control_buffer_to_core(
-    IDevice* device,
-    const CoreCoord& core,
-    HalProgrammableCoreType core_type,
-    ProfilerDumpState state,
-    const std::vector<uint32_t>& control_buffer);
+bool useFastDispatchForControlBuffers(const IDevice* device, ProfilerDumpState state);
+
+void writeToCoreControlBuffer(
+    IDevice* device, const CoreCoord& virtual_core, ProfilerDumpState state, const std::vector<uint32_t>& data);
 
 bool onlyProfileDispatchCores(ProfilerDumpState state);
 
 bool isGalaxyMMIODevice(const IDevice* device);
+
+void waitForDeviceCommandsToFinish(IDevice* device);
 
 }  // namespace tt_metal
 
