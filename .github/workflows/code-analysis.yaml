@@ -47,7 +47,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
 
       - name: Configure git
         run: |
@@ -164,7 +164,7 @@ jobs:
         if: steps.update-submodule.outputs.has-changes == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
           commit-message: "chore: update LLK submodule to ${{ steps.update-submodule.outputs.new-sha }}"
           title: "chore: update LLK submodule to ${{ steps.update-submodule.outputs.new-sha }}"
           branch: ${{ env.BRANCH_NAME }}
@@ -180,7 +180,7 @@ jobs:
       - name: Update PR body with changes information
         if: steps.update-submodule.outputs.has-changes == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
         run: |
           PR_NUMBER="${{ steps.create-pr.outputs.pull-request-number }}"
           PR_URL="https://github.com/${{ github.repository }}/pull/$PR_NUMBER"
@@ -229,7 +229,7 @@ jobs:
 
       - name: Trigger and monitor workflows
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           TIMEOUT_MINUTES=${{ inputs.workflow_timeout }}
@@ -369,7 +369,7 @@ jobs:
     steps:
       - name: Auto-merge PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
         run: |
           echo "🚀 Finalizing PR merge..."
 
