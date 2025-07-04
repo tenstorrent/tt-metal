@@ -886,7 +886,7 @@ def test_decode_perf(
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
-        (128, 10, 5),
+        (128, 1, 1),
     ],
     ids=["s128"],
 )

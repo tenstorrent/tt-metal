@@ -56,10 +56,11 @@ inline void dispatch_metadata_remote_device(
     uint32_t mesh_rows,
     uint32_t token_indices_address,
     uint64_t metadata_write_addr,
-    uint32_t metadata_page_size,
     uint64_t global_noc_semaphore_address,
-    volatile PACKET_HEADER_TYPE* metadata_packet_header,
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections) {
+    int size,
+    uint32_t fabric_max_packet_size,
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* metadata_packet_header) {
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
@@ -71,20 +72,32 @@ inline void dispatch_metadata_remote_device(
         dest_mesh_id,
         mesh_cols);
 
-    // Fill header for fused unicast + atomic increment command
-    metadata_packet_header->to_noc_fused_unicast_write_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
-            metadata_write_addr, global_noc_semaphore_address, 1, 32, true),
-        metadata_page_size);
+    while (size > 0) {
+        uint32_t curr_packet_size = std::min(fabric_max_packet_size, (uint32_t)size);
 
-    // Send payload followed by header over the fabric.
-    fabric_connections[route].wait_for_empty_write_slot();
+        if ((uint32_t)size == curr_packet_size) {
+            // Fill header for fused unicast + atomic increment command when it is the last packet
+            metadata_packet_header->to_noc_fused_unicast_write_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+                    metadata_write_addr, global_noc_semaphore_address, 1, 32, true),
+                curr_packet_size);
+        } else {
+            // Fill header for fused unicast + atomic increment command when it is not the last packet
+            metadata_packet_header->to_noc_unicast_write(
+                tt::tt_fabric::NocUnicastCommandHeader{metadata_write_addr}, curr_packet_size);
+        }
 
-    fabric_connections[route].send_payload_without_header_non_blocking_from_address(
-        token_indices_address, metadata_page_size);
+        // Send payload followed by header over the fabric.
+        fabric_connections[route].wait_for_empty_write_slot();
+        fabric_connections[route].send_payload_without_header_non_blocking_from_address(
+            token_indices_address, curr_packet_size);
+        fabric_connections[route].send_payload_flush_blocking_from_address(
+            (uint32_t)metadata_packet_header, sizeof(PACKET_HEADER_TYPE));
 
-    fabric_connections[route].send_payload_flush_blocking_from_address(
-        (uint32_t)metadata_packet_header, sizeof(PACKET_HEADER_TYPE));
+        token_indices_address += curr_packet_size;
+        metadata_write_addr += curr_packet_size;
+        size -= curr_packet_size;
+    }
 }
 
 inline void dispatch_input_local_device(
@@ -191,6 +204,11 @@ void kernel_main() {
     constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(36);
 
     constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(37);
+    constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(38);
+
+    // TODO: if the extra CB occupies too much L1, we can switch to writing page by page – keep code for now but
+    // implement the dynamic switch later
+    constexpr bool write_page_by_page = false;
 
     size_t rt_args_idx = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -300,34 +318,73 @@ void kernel_main() {
     // Send our selected experts tensor to all other devices and signal that we are done dispatching the input tokens
     // with a semaphore
     uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
-    for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
-        uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
-        uint64_t metadata_write_addr = get_noc_addr(global_token, metadata_addr_gen);
-        uint32_t token_indices_address = base_indices_addr + (local_token * aligned_indices_page_size);
 
-        // dispatch the metadata to all other devices
+    // two modes: send pages directly to the output buffer or send pages to the intermediate buffer and then write to
+    // the output buffer latter is slower but is less L1 intensive
+    if constexpr (write_page_by_page) {
+        for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
+            uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
+            uint64_t metadata_write_addr = get_noc_addr(global_token, metadata_addr_gen);
+            uint32_t token_indices_address = base_indices_addr + (local_token * aligned_indices_page_size);
+
+            // dispatch the metadata to all other devices
+            for (uint32_t d = 0; d < num_devices; d++) {
+                if (dest_chip_ids[d] == src_chip_id) {
+                    // dispatch the metadata to the current device and increment the local copy of the semaphore
+                    dispatch_metadata_local_device(
+                        token_indices_address, metadata_write_addr, metadata_page_size, global_noc_semaphore_address);
+                } else if (is_configured_target<mesh_cols, mesh_rows, axis>(src_chip_id, dest_chip_ids[d])) {
+                    // dispatch the metadata to the remote device and increment the remote device's copy of the
+                    // semaphore
+                    dispatch_metadata_remote_device(
+                        src_chip_id,
+                        dest_chip_ids[d],
+                        dest_mesh_ids[d],
+                        mesh_cols,
+                        mesh_rows,
+                        token_indices_address,
+                        metadata_write_addr,
+                        global_noc_semaphore_address,
+                        (int)metadata_page_size,
+                        fabric_max_packet_size,
+                        fabric_connections,
+                        metadata_packet_header);
+                }
+            }
+        }
+    } else {
+        uint32_t indices_size = aligned_indices_page_size * tokens_per_device;
+
+        // dispatch the metadata to the current device
+        uint32_t dispatched_devices = 0;
+        uint64_t intermediate_metadata_write_addr = get_noc_addr(get_read_ptr(metadata_buffer_id));
         for (uint32_t d = 0; d < num_devices; d++) {
             if (dest_chip_ids[d] == src_chip_id) {
-                // dispatch the metadata to the current device and increment the local copy of the semaphore
                 dispatch_metadata_local_device(
-                    token_indices_address, metadata_write_addr, metadata_page_size, global_noc_semaphore_address);
+                    base_indices_addr,
+                    intermediate_metadata_write_addr + (dispatch_index * indices_size),
+                    indices_size,
+                    global_noc_semaphore_address);
+                dispatched_devices++;
             } else if (is_configured_target<mesh_cols, mesh_rows, axis>(src_chip_id, dest_chip_ids[d])) {
-                // dispatch the metadata to the remote device and increment the remote device's copy of the semaphore
                 dispatch_metadata_remote_device(
                     src_chip_id,
                     dest_chip_ids[d],
                     dest_mesh_ids[d],
                     mesh_cols,
                     mesh_rows,
-                    token_indices_address,
-                    metadata_write_addr,
-                    metadata_page_size,
+                    base_indices_addr,
+                    intermediate_metadata_write_addr + (dispatch_index * indices_size),
                     global_noc_semaphore_address,
-                    metadata_packet_header,
-                    fabric_connections);
+                    (int)indices_size,
+                    fabric_max_packet_size,
+                    fabric_connections,
+                    metadata_packet_header);
+                dispatched_devices++;
             }
         }
     }
+
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
     for (uint32_t i = 0; i < directions.size(); i++) {
