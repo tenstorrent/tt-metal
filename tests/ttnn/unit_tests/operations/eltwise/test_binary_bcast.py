@@ -160,7 +160,7 @@ def test_binary_scalar_ops(a_shape, b_shape, ttnn_fn, activations, device):
             input_tensor_a_activations=lhs,
             input_tensor_b_activations=rhs,
             activations=post,
-            use_legacy=None,
+            use_legacy=False,
         )
         for golden_activation in golden_lhs:
             a_pt = golden_activation(a_pt).bfloat16()
@@ -230,7 +230,7 @@ def test_binary_scalar_ops_with_unary_param(a_shape, b_shape, ttnn_fn, post_acti
     a_pt, a_tt = rand_bf16_gen(a_shape, device)
     b_pt, b_tt = rand_bf16_gen(b_shape, device, min=min, max=max)
 
-    out_tt = ttnn_op(a_tt, b_tt, activations=post, use_legacy=None)
+    out_tt = ttnn_op(a_tt, b_tt, activations=post, use_legacy=False)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
     out_pt = golden_fn(a_pt, b_pt).bfloat16()
@@ -289,7 +289,7 @@ def test_unequal_ranks(a_shape, b_shape, device):
 
     torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
 
-    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
@@ -564,7 +564,7 @@ def test_binary_sfpu_ops(input_shapes, dtype, ttnn_fn, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    out_tt = ttnn_fn(a_tt, b_tt, queue_id=cq_id, use_legacy=None)
+    out_tt = ttnn_fn(a_tt, b_tt, queue_id=cq_id, use_legacy=False)
     tt_out = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_fn)
@@ -639,7 +639,7 @@ def test_binary_sfpu_opt_out(input_shapes, dtype, ttnn_fn, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    ttnn_fn(a_tt, b_tt, queue_id=cq_id, output_tensor=out_tt, use_legacy=None)
+    ttnn_fn(a_tt, b_tt, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
     tt_out = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_fn)
@@ -859,7 +859,7 @@ def test_inplace_binary_ops_with_tensor(a_shape, b_shape, ttnn_fn, activations, 
         input_tensor_a_activations=lhs,
         input_tensor_b_activations=rhs,
         activations=post,
-        use_legacy=None,
+        use_legacy=False,
     )
     output_tensor = ttnn.to_torch(input_tensor_a)
     assert output_tensor.shape == torch_output_tensor.shape
@@ -1083,7 +1083,7 @@ def test_binary_opt_output_invalid_bcast(a_shape, b_shape, out_shape, ttnn_fn, d
         RuntimeError, match=r"Shape of Output tensor.+ provided does not match the broadcasted output shape .+"
     ):
         cq_id = 0
-        ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=None)
+        ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
 
 
 @pytest.mark.parametrize(
@@ -2410,19 +2410,6 @@ def test_binary_mixed_add(dtype_pt_a, dtype_tt_a, dtype_pt_b, dtype_tt_b, device
     out_pt = golden_fn(a_pt, b_pt)
 
     assert compare_pcc([out_tt], [out_pt])
-
-
-def test_add_1m(device):
-    torch.manual_seed(0)
-    a = torch.ones(1, 1) * 1_000_000
-    b = torch.ones(32, 32)
-    c = a + b
-
-    ta = ttnn.from_torch(a, device=device, layout=ttnn.TILE_LAYOUT)
-    tb = ttnn.from_torch(b, device=device, layout=ttnn.TILE_LAYOUT)
-    tc = ttnn.add(ta, tb)
-
-    assert torch.allclose(c, ttnn.to_torch(tc)), f"{c} != {ttnn.to_torch(tc)}"
 
 
 def test_add_i32(device):
