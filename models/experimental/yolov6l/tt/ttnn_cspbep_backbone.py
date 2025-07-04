@@ -22,6 +22,7 @@ class TtCSPBepBackbone:
             activation_dtype=ttnn.bfloat16,
             is_nhwc=True,
             reshape=True,
+            deallocate_activation=True,
         )
         self.erblock2_0 = Yolov6l_Conv2D(
             device=device,

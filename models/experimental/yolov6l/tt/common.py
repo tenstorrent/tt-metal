@@ -60,6 +60,8 @@ class Yolov6l_Conv2D:
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
         )
+        if self.in_channels == 3:
+            self.conv_config.act_block_h_override = 64
         self.reshape = reshape
         config_override = None
         if config_override and "act_block_h" in config_override and not auto_shard:
