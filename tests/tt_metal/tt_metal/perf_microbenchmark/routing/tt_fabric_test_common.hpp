@@ -692,6 +692,22 @@ public:
         return std::make_pair(dst_node_forward, dst_node_backward);
     }
 
+    uint32_t get_linear_topology_num_sync_devices() const override {
+        uint32_t num_devices = mesh_shape_[NS_DIM] + mesh_shape_[EW_DIM] - 1;
+        return num_devices;
+    }
+
+    uint32_t get_wrap_around_mesh_ring_topology_num_sync_devices() const override {
+        // sync using full ring mcast, ie, mcast on both forward/backward path.
+        uint32_t num_devices = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1);
+        return num_devices;
+    }
+
+    uint32_t get_mesh_topology_num_sync_devices() const override {
+        uint32_t num_devices = mesh_shape_[NS_DIM] * mesh_shape_[EW_DIM];
+        return num_devices;
+    }
+
     std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(
         const FabricNodeId& src_node_id,
         const FabricNodeId& dst_node_forward_id,

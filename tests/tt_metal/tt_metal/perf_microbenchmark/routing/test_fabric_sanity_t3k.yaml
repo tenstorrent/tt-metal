@@ -1,6 +1,23 @@
 Tests:
+  - name: "LinearMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: unidirectional_linear_multicast
+
+
   - name: "FullRingMulticast"
     benchmark_mode: true
+    sync: true
     fabric_setup:
       topology: Ring
 
@@ -15,6 +32,7 @@ Tests:
 
   - name: "HalfRingMulticast"
     benchmark_mode: true
+    sync: false
     fabric_setup:
       topology: Ring
 

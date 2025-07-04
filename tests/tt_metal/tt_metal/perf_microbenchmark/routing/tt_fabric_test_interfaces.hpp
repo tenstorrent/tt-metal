@@ -78,6 +78,9 @@ public:
         const FabricNodeId& src_node_id, uint32_t dim) const = 0;
     virtual std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
         const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const = 0;
+    virtual uint32_t get_linear_topology_num_sync_devices() const = 0;
+    virtual uint32_t get_wrap_around_mesh_ring_topology_num_sync_devices() const = 0;
+    virtual uint32_t get_mesh_topology_num_sync_devices() const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(
         const FabricNodeId& src_node_id,
         const FabricNodeId& dst_node_forward_id,
