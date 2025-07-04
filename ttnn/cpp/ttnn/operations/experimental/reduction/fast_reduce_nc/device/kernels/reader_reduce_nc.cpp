@@ -13,11 +13,14 @@ void kernel_main() {
     // compile-time args
     constexpr bool input_is_dram = (get_compile_time_arg_val(0) == 1);
     constexpr uint32_t input_granularity = get_compile_time_arg_val(1);
+    constexpr uint32_t shard_factor = get_compile_time_arg_val(2);
+    constexpr uint32_t num_cores_to_be_used = get_compile_time_arg_val(3);
+    constexpr uint32_t outer_id_increment = shard_factor * num_cores_to_be_used;
 
     // runtime args
     const auto input_addr = get_arg_val<uint32_t>(0);
     const auto num_input_tiles = get_arg_val<uint32_t>(1);
-    const auto num_output_tiles = get_arg_val<uint32_t>(2);
+    const auto id_range_length = get_arg_val<uint32_t>(2);
     const auto start_id = get_arg_val<uint32_t>(3);
     const auto dim = get_arg_val<uint32_t>(4);
     const auto reduce_tile_size = get_arg_val<uint32_t>(5);
@@ -37,21 +40,24 @@ void kernel_main() {
         .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
     uint32_t input_granularity_index = 0;
 
-    for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
-        auto read_tile_id = (dim == 0) ? (i) : (get_read_tile_id(i, reduce_tile_size, inner_tile_size));
-        for (uint32_t j = 0; j < num_input_tiles; ++j) {
-            if (input_granularity_index == 0) {
-                cb_reserve_back(cb_id_in0, input_granularity);
-                l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-            }
-            noc_async_read_tile(read_tile_id, input_addrg, l1_write_addr_in0);
-            l1_write_addr_in0 += input_tile_bytes;  // correctness error
-            read_tile_id += inner_tile_size;
-            input_granularity_index++;
-            if (input_granularity_index == input_granularity) {
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in0, input_granularity);
-                input_granularity_index = 0;
+    for (uint32_t outer_id = start_id; outer_id < start_id + id_range_length; outer_id += outer_id_increment) {
+        for (uint32_t id_offset = 0; id_offset < shard_factor; id_offset++) {
+            uint32_t i = outer_id + id_offset;
+            auto read_tile_id = (dim == 0) ? (i) : (get_read_tile_id(i, reduce_tile_size, inner_tile_size));
+            for (uint32_t j = 0; j < num_input_tiles; ++j) {
+                if (input_granularity_index == 0) {
+                    cb_reserve_back(cb_id_in0, input_granularity);
+                    l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+                }
+                noc_async_read_tile(read_tile_id, input_addrg, l1_write_addr_in0);
+                l1_write_addr_in0 += input_tile_bytes;  // correctness error
+                read_tile_id += inner_tile_size;
+                input_granularity_index++;
+                if (input_granularity_index == input_granularity) {
+                    noc_async_read_barrier();
+                    cb_push_back(cb_id_in0, input_granularity);
+                    input_granularity_index = 0;
+                }
             }
         }
     }
