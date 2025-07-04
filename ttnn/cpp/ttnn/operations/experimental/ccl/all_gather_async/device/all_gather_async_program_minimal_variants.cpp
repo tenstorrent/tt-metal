@@ -215,11 +215,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     bool output_is_sharded = output_tensor.is_sharded();
 
     std::map<string, string> reader_compute_defines;
+    std::map<string, string> writer_compute_defines;
+
     if (input_is_sharded) {
         reader_compute_defines["INPUT_IS_SHARDED"] = "1";
     }
-
-    std::map<string, string> writer_compute_defines;
     if (output_is_sharded) {
         reader_compute_defines["OUTPUT_IS_SHARDED"] = "1";
         writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
