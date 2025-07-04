@@ -210,6 +210,7 @@ jobs:
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
     with:
+      arch: ${{ matrix.test-group.arch }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
