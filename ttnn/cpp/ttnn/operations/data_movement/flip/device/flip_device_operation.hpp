@@ -23,44 +23,86 @@ struct FlipDeviceOperation {
         const MemoryConfig output_mem_config;
     };
 
-    // Implementation for a row major tensor where the row dimension is not moved in the permutation
-    struct MultiCoreRowInvariant {};
+    struct tensor_args_t {
+        const Tensor& input_tensor;
+        std::optional<Tensor> optional_output_tensor;
+    };
 
-    // Implementation for a row major tensor where the row dimension is moved in the permutation
-    struct MultiCoreBlockedGeneric {};
+    using spec_return_value_t = ttnn::TensorSpec;
+    using tensor_return_value_t = Tensor;
 
-    // Implementation for when the tile is not broken apart
-    struct MultiCoreTileInvariant {};
+    // Implementation for row major tensors - optimized for simple dimension flips
+    struct MultiCoreRowMajor {
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::CoreRangeSet core_range;
+        };
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    // Implemention for when only one of the height dimension (rank - 2) and the width dimension is swapped with another
-    // dimension
-    struct MultiCoreTileRowInvariant {};
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
 
-    // Implementation for when both the height and width dimension is swapped around in the permutation
-    struct MultiCoreTiledGeneric {};
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
 
-    using program_factory_t = std::variant<
-        MultiCoreRowInvariant,
-        MultiCoreBlockedGeneric,
-        MultiCoreTileInvariant,
-        MultiCoreTileRowInvariant,
-        MultiCoreTiledGeneric>;
+    // Implementation for tiled tensors - handles tile-aligned flips efficiently
+    struct MultiCoreTiled {
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id;
+            CoreRangeSet core_range;
+        };
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    // Generic implementation for complex flip patterns
+    struct MultiCoreGeneric {
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id;
+            CoreRangeSet core_range;
+        };
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    using program_factory_t = std::variant<MultiCoreRowMajor, MultiCoreTiled, MultiCoreGeneric>;
 
     // Mandatory methods
-
-    // Select the program factory based on the operation attributes and tensor args
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
-    // Validate the operation when it creates a program.
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-
-    // Empty as there doesn't seem to be any complicated hashing requirement
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-
-    // Compute the output shapes based on the operation attributes and tensor args
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
-
-    // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     // API call to map user arguments to operation attributes and tensor args.

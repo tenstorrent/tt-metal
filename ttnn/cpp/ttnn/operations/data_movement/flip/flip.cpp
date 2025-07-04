@@ -35,17 +35,17 @@ ttnn::Tensor flip_launch(
     return flip_impl(a, dims, output_mem_config);
 }
 
-
-// Check if flip is a no-op (flipping dimensions of size 1)
-bool is_flip_nop(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<uint32_t>& dims) {
-    const auto& shape = input_tensor.logical_shape();
+bool is_flip_nop(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int64_t>& dims) {
+    const auto& shape = input_tensor.get_logical_shape();
 
     for (auto dim : dims) {
         auto normalized_dim = shape.get_normalized_index(dim);
+        if (shape[normalized_dim] > 1) {
+            return false;
+        }
     }
 
-    // All flip dimensions have size 1, so it's a no-op
-    return true;
+    return true;  // All flip dimensions have size 1, so it's a no-op
 }
 
 } // namespace detail
@@ -63,15 +63,15 @@ ttnn::Tensor ExecuteFlip::invoke(
     return output_tensor;
 }
 
-ttnn::Tensor invoke(
+ttnn::Tensor ExecuteFlip::invoke(
     const ttnn::Tensor& input_tensor,
     const SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
     return invoke(DefaultQueueId, input_tensor, dims, memory_config);
 }
 
-ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const SmallVector<int64_t>& dims) {
-    return invoke(input_tenstor, dims, std::nullopt);
+ttnn::Tensor ExecuteFlip::invoke(const ttnn::Tensor& input_tensor, const SmallVector<int64_t>& dims) {
+    return invoke(input_tensor, dims, std::nullopt);
 }
 
 } // namespace ttnn::operations::data_movement
