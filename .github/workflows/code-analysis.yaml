@@ -2,6 +2,22 @@ name: Uplift LLK Submodule
 
 on:
   workflow_dispatch:
+    inputs:
+      workflow_timeout:
+        description: 'Timeout for workflows in minutes'
+        required: false
+        type: number
+        default: 180
+      skip_draft:
+        description: 'Skip creating PR as draft'
+        required: false
+        type: boolean
+        default: false
+      recheck_tests:
+        description: 'Re-check latest test runs (for when tests were manually rerun)'
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       workflow_timeout:
