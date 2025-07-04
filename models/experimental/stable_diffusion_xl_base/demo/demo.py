@@ -103,6 +103,17 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         for prompt in prompts
     ]
 
+    # Reorder all_embeds to prepare for splitting across devices
+    items_per_core = len(all_embeds) // batch_size  # this will always be a multiple of batch_size because of padding
+
+    if batch_size > 1:  # If batch_size is 1, no need to reorder
+        reordered = []
+        for i in range(batch_size):
+            for j in range(items_per_core):
+                index = i + j * batch_size
+                reordered.append(all_embeds[index])
+        all_embeds = reordered
+
     prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = zip(*all_embeds)
 
     prompt_embeds_torch = torch.cat(prompt_embeds, dim=0)
