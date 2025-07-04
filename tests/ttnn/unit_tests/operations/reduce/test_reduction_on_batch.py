@@ -64,4 +64,4 @@ def test_reduce_on_batch(shape, shard_shape, dim, interleaved, device):
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=True, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.995)

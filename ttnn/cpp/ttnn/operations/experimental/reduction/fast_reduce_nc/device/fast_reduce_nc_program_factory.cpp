@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 
 namespace ttnn::operations::experimental::reduction::detail {
 
@@ -147,10 +148,14 @@ operation::ProgramWithCallbacks reduce_nc_factory(
         input_granularity,
         shard_factor,
         num_cores_to_be_used};
+    TensorAccessorArgs(*input.buffer()).append_args(reader_compile_time_args);
+
     std::vector<std::uint32_t> writer_compile_time_args = {
         static_cast<std::uint32_t>(output.memory_config().buffer_type() == BufferType::DRAM),
         shard_factor,
         num_cores_to_be_used};
+    TensorAccessorArgs(*output.buffer()).append_args(writer_compile_time_args);
+
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
     const auto writer_kernel_file =
@@ -203,21 +208,6 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    log_debug(
-        tt::LogOp,
-        "Wt {} Ht {} its {} rts {} nrit {} not {} input_granularity {} ncotbu {} ncpcg1 {} ncpcg2 {} shard_factor {}",
-        Wt,
-        Ht,
-        inner_tile_size,
-        reduce_tile_size,
-        num_reduce_input_tile,
-        num_output_tiles,
-        input_granularity,
-        num_cores_to_be_used,
-        num_cols_per_core_group_1,
-        num_cols_per_core_group_2,
-        shard_factor);
-
     for (std::uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -235,8 +225,6 @@ operation::ProgramWithCallbacks reduce_nc_factory(
             num_tiles_per_core,
             shard_factor);
 
-        log_debug(
-            tt::LogOp, "i {} num_cores_y {} core {} num_tiles_per_core {}", i, num_cores_y, core, num_tiles_per_core);
         tt_metal::SetRuntimeArgs(
             program,
             reader_kernel_id,
