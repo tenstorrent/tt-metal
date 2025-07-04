@@ -180,11 +180,11 @@ constexpr auto eq =
 constexpr auto ne =
     ttnn::register_operation<"ttnn::ne", operations::binary::RelationalBinary<operations::binary::BinaryOpType::NE>>();
 constexpr auto ge =
-    ttnn::register_operation<"ttnn::ge", operations::binary::RelationalBinary<operations::binary::BinaryOpType::GTE>>();
+    ttnn::register_operation<"ttnn::ge", operations::binary::RelationalBinary<operations::binary::BinaryOpType::GE>>();
 constexpr auto gt =
     ttnn::register_operation<"ttnn::gt", operations::binary::RelationalBinary<operations::binary::BinaryOpType::GT>>();
 constexpr auto le =
-    ttnn::register_operation<"ttnn::le", operations::binary::RelationalBinary<operations::binary::BinaryOpType::LTE>>();
+    ttnn::register_operation<"ttnn::le", operations::binary::RelationalBinary<operations::binary::BinaryOpType::LE>>();
 constexpr auto lt =
     ttnn::register_operation<"ttnn::lt", operations::binary::RelationalBinary<operations::binary::BinaryOpType::LT>>();
 constexpr auto logical_and = ttnn::register_operation<
@@ -229,10 +229,10 @@ constexpr auto gt_ = ttnn::register_operation<
     operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::GT>>();
 constexpr auto ge_ = ttnn::register_operation<
     "ttnn::ge_",
-    operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::GTE>>();
+    operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::GE>>();
 constexpr auto le_ = ttnn::register_operation<
     "ttnn::le_",
-    operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::LTE>>();
+    operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::LE>>();
 constexpr auto lt_ = ttnn::register_operation<
     "ttnn::lt_",
     operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::LT>>();
