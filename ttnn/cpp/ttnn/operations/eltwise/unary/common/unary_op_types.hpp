@@ -72,7 +72,6 @@ enum class UnaryOpType {
     SUB_UNARY_SFPU,
     MUL_UNARY_SFPU,
     DIV_UNARY_SFPU,
-    IDENTITY_UINT32,
     UNARY_NE,
     UNARY_EQ,
     UNARY_GT,
