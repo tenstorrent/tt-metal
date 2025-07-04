@@ -160,7 +160,7 @@ def test_binary_scalar_ops(a_shape, b_shape, ttnn_fn, activations, device):
             input_tensor_a_activations=lhs,
             input_tensor_b_activations=rhs,
             activations=post,
-            use_legacy=None,
+            use_legacy=False,
         )
         for golden_activation in golden_lhs:
             a_pt = golden_activation(a_pt).bfloat16()
@@ -230,7 +230,7 @@ def test_binary_scalar_ops_with_unary_param(a_shape, b_shape, ttnn_fn, post_acti
     a_pt, a_tt = rand_bf16_gen(a_shape, device)
     b_pt, b_tt = rand_bf16_gen(b_shape, device, min=min, max=max)
 
-    out_tt = ttnn_op(a_tt, b_tt, activations=post, use_legacy=None)
+    out_tt = ttnn_op(a_tt, b_tt, activations=post, use_legacy=False)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
     out_pt = golden_fn(a_pt, b_pt).bfloat16()
