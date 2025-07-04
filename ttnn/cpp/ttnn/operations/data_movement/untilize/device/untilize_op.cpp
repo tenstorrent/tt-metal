@@ -152,42 +152,8 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> Untilize
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    if (input_tensor.storage_type() != StorageType::DEVICE) {
-        log_warning(tt::LogOp, "Input tensor not on DEVICE?!");
-    }
-    const auto& input_shape = input_tensor.logical_shape();
-    auto element_size_bytes = input_tensor.element_size();
-    uint32_t input_size_bytes = input_tensor.physical_volume() * element_size_bytes;
-
-    // input is tiled
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    uint32_t input_transaction_size = single_tile_size;
-    uint32_t num_read_transactions = std::ceil((float)input_size_bytes / (float)input_transaction_size);
-    bool is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
-    auto arch = input_tensor.device()->arch();
-    const int num_cores = (arch == tt::ARCH::WORMHOLE_B0) ? 64 : 108;
-    uint32_t total_read_cycles =
-        get_cycles_for_read_transaction_size(input_transaction_size, is_dram, false, num_read_transactions, num_cores);
-
     const auto& output_tensor = output_tensors.at(0);
-    if (output_tensor.storage_type() != StorageType::DEVICE) {
-        log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
-    }
-    const auto& output_shape = output_tensor.logical_shape();
-    uint32_t output_size_bytes = output_tensor.physical_volume() * element_size_bytes;
-    bool is_sharded = output_tensor.is_sharded();
-    const auto& row_size = output_tensor.logical_shape()[-1] * element_size_bytes;
-    uint32_t output_transaction_size =
-        is_sharded ? row_size : output_tensor.memory_config().shard_spec().value().shape[-1] * element_size_bytes;
-    uint32_t num_write_transactions = std::ceil((float)output_size_bytes / (float)output_transaction_size);
-    uint32_t total_write_cycles = get_cycles_for_write_transaction_size(
-        output_transaction_size, is_dram, false, num_write_transactions, num_cores);
-
-    // do we just add cycles for read and write?
-    int ideal_dev_clock_cycles = total_read_cycles + total_write_cycles;
-
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
     tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
         input_tensors, output_tensors, ideal_dev_clock_cycles);
     return result;
