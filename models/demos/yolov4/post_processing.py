@@ -8,7 +8,8 @@ import time
 import cv2
 import numpy as np
 import torch
-from torch import nn
+
+from models.common.lightweightmodule import LightweightModule
 
 
 def nms_cpu(boxes, confs, nms_thresh=0.5, min_mode=False):
@@ -187,7 +188,7 @@ def load_class_names(namesfile):
     return class_names
 
 
-class YoloLayer(nn.Module):
+class YoloLayer(LightweightModule):
     """Yolo layer
     model_out: while inference,is post-processing inside or outside the model
         true:outside
