@@ -2492,9 +2492,10 @@ TEST(Test1, Test) {
                 auto dst_id = tt_fabric::get_fabric_node_id_from_physical_chip_id(chip_in_tunnel);
 
                 auto route = control_plane.get_fabric_route(mmio_fabric_id, dst_id, first_chan.first);
-                log_info(tt::LogTest, " Route to Chip ID {}: {}", chip_in_tunnel, route);
+                TT_FATAL(mmio_fabric_id == dst_id || !route.empty(), "No routes from {} to {}", mmio_fabric_id, dst_id);
+                log_info(tt::LogTest, "  Route to Chip ID {}", chip_in_tunnel);
                 for (auto route_node : route) {
-                    log_info(tt::LogTest, "  Fabric Route = {} {}", route_node.first, (uint32_t)route_node.second);
+                    log_info(tt::LogTest, "    Fabric Route = {} {}", route_node.first, (uint32_t)route_node.second);
                 }
             }
         }
@@ -2505,7 +2506,7 @@ TEST(Test1, Test) {
         for (std::vector<int> tunnels :
              MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_chip_id)) {
             log_info(tt::LogTest, "Testing Tunnel {}. Devices = {}", index++, tunnels);
-            std::reverse(tunnels.begin(), tunnels.end());
+            // std::reverse(tunnels.begin(), tunnels.end());
             for (auto chip_id_in_tunnel : tunnels) {
                 if (chip_id_in_tunnel < 4) {
                     continue;  // Skip non-MMIO devices
