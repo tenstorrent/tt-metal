@@ -81,7 +81,7 @@ jobs:
             fi
             matrix='["BH-LLMBox"]'
           else
-            matrix='["P100", "P150"]'
+            matrix='["${{ inputs.runner-label }}"]'
           fi
           echo "matrix=$matrix" >> $GITHUB_OUTPUT
 
