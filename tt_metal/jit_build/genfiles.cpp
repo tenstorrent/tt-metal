@@ -397,12 +397,22 @@ static void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
     ofstream file_stream;
 
     file_stream.open(dst_accum_format_descriptor);
+    
+    file_stream << "#pragma once" << endl;
+    file_stream << "#include \"llk_param_structs.h\"" << endl << endl;
 
+    file_stream << "#ifndef DST_ACCUM_MODE" << endl;
     if (options.fp32_dest_acc_en == 0) {
-        file_stream << "constexpr bool DST_ACCUM_MODE = false;" << endl;
+        file_stream << "constexpr DestAccumulation DST_ACCUM_MODE = DestAccumulation::Disable;" << endl;
     } else {
-        file_stream << "constexpr bool DST_ACCUM_MODE = true;" << endl;
+        file_stream << "constexpr DestAccumulation DST_ACCUM_MODE = DestAccumulation::Enable;" << endl;
     }
+    file_stream << "#else" << endl;
+    file_stream << "// DST_ACCUM_MODE is already defined as a macro, create enum value from it" << endl;
+    file_stream << "constexpr DestAccumulation DST_ACCUM_MODE_ENUM = (DST_ACCUM_MODE) ? DestAccumulation::Enable : DestAccumulation::Disable;" << endl;
+    file_stream << "#undef DST_ACCUM_MODE" << endl;
+    file_stream << "#define DST_ACCUM_MODE DST_ACCUM_MODE_ENUM" << endl;
+    file_stream << "#endif" << endl;
 
     file_stream.close();
 }

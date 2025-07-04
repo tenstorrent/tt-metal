@@ -6,6 +6,16 @@
 
 #include <cstdint>
 
+// Enum class for destination accumulation control - replaces boolean template parameter is_fp32_dest_acc_en
+enum class DestAccumulation {
+    Disable = 0,
+    Enable = 1
+};
+
+// Convenience constants for backward compatibility and readability
+constexpr DestAccumulation DestAccumulation_Disable = DestAccumulation::Disable;
+constexpr DestAccumulation DestAccumulation_Enable = DestAccumulation::Enable;
+
 //***
 //  Unpack LLK param structs
 //***
