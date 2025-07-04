@@ -200,9 +200,9 @@ jobs:
           This PR updates the LLK submodule to the latest version from the main branch.
 
           ### 🔗 Commit Range
-          | Previous Commit | New Commit | Compare |
-          |----------------|------------|---------|
-          | [\`$OLD_SHA\`](https://github.com/tenstorrent/tt-llk/commit/$OLD_SHA) | [\`$NEW_SHA\`](https://github.com/tenstorrent/tt-llk/commit/$NEW_SHA) | [View Changes](https://github.com/tenstorrent/tt-llk/compare/$OLD_SHA...$NEW_SHA) |
+          | Package | Update |
+          |---------|---------|
+          | tt-llk | [\`$OLD_SHA\`](https://github.com/tenstorrent/tt-llk/commit/$OLD_SHA) [->](https://github.com/tenstorrent/tt-llk/compare/$OLD_SHA...$NEW_SHA) [\`$NEW_SHA\`](https://github.com/tenstorrent/tt-llk/commit/$NEW_SHA) |
 
           ### 📝 Commits Uplifted ($COMMIT_COUNT commits)
           ${{ steps.analyze-changes.outputs.commits-table }}
