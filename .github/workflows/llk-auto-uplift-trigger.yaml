@@ -151,7 +151,7 @@ jobs:
 
           # Generate simple initial PR body (will be updated later with full details)
           cat > ../../../llk_commit_log.txt << EOF
-          ## 🔄 LLK Submodule Update
+          ## ⬆️ LLK Submodule Update
 
           Updating LLK submodule from \`$OLD_SHA\` to \`$NEW_SHA\`.
 
@@ -194,7 +194,7 @@ jobs:
 
           # Generate updated PR body with PR link (use commits table from step output)
           cat > ../../../updated_llk_commit_log.txt << EOF
-          ## 🔄 LLK Submodule Update
+          ## ⬆️ LLK Submodule Update
 
           ### 📋 Summary
           This PR updates the LLK submodule to the latest version from the main branch.
@@ -318,7 +318,7 @@ jobs:
                 RUN_URL="https://github.com/${{ github.repository }}/actions/runs/$RUN_ID"
                 WORKFLOW_DISPLAY_NAME=$(echo "$workflow" | sed 's/\.yaml$//' | sed 's/-/ /g' | sed 's/\b\w/\U&/g')
                 gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
-                  --body "🔄 **$WORKFLOW_DISPLAY_NAME** triggered: [View run]($RUN_URL)" \
+                  --body "🚀 **$WORKFLOW_DISPLAY_NAME** triggered: [View run]($RUN_URL)" \
                   --repo "${{ github.repository }}"
               fi
             else
