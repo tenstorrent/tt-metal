@@ -1361,6 +1361,13 @@ class ModelArgs:
         else:
             return ""
 
+    def _set_model_specific_params(self):
+        # Gemma3 specific params
+        is_gemma3 = "gemma-3" in self.base_model_name.lower()
+        self.rms_norm_add_unit_offset = is_gemma3
+        if is_gemma3:
+            self.mlp_activation_type = ttnn.UnaryOpType.GELU
+
     def _set_params_from_dict(self, config, is_hf=False):
         # Try to get text_config, if it doesn't exist everything is text config
         text_config = config.get("text_config", config)
@@ -1467,6 +1474,8 @@ class ModelArgs:
         self.vision_in_channels = 3
 
         self.state_dict_text_prefix = self._get_text_prefix()
+
+        self._set_model_specific_params()
 
     @property
     def use_scaled_rope(self):
