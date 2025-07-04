@@ -87,169 +87,203 @@ std::pair<float, uint32_t> get_transaction_bw(uint32_t transaction_size, const s
     return {0.0f, 0};
 }
 */
-float interpolate_transaction_bw(uint32_t transaction_size, const std::map<uint32_t, float>& dict) {
+float interpolate_transaction_bw(
+    uint32_t transaction_size, const std::map<uint32_t, std::array<float, 2>>& dict, int index) {
     auto it = dict.lower_bound(transaction_size);
     if (it == dict.begin()) {
-        return it->second;
+        return it->second[index];
     }
     if (it == dict.end()) {
-        return std::prev(it)->second;
+        return std::prev(it)->second[index];
     }
     if (it->first == transaction_size) {
-        return it->second;
+        return it->second[index];
     }
     auto upper = it;
     auto lower = std::prev(it);
-    float bw = lower->second + (upper->second - lower->second) *
-                                   (float(transaction_size - lower->first) / float(upper->first - lower->first));
+    float bw = lower->second[index] + (upper->second[index] - lower->second[index]) *
+                                          (float(transaction_size - lower->first) / float(upper->first - lower->first));
     return bw;
 }
 
-uint32_t get_cycles_for_read_transaction_size(
-    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions, uint32_t num_cores) {
+uint32_t get_cycles_for_transaction_size(
+    uint32_t transaction_size,
+    bool is_dram,
+    bool is_local,
+    uint32_t num_transactions,
+    uint32_t num_cores,
+    int index,
+    bool is_read) {
     // for wh, add for other machines
-    std::map<uint32_t, float> dram_bw = {
-        {16, 0.436},
-        {32, 0.868},
-        {64, 1.736},
-        {128, 3.489},
-        {256, 6.975},
-        {512, 13.889},
-        {1024, 27.891},
-        {2048, 28.411},
-        {4096, 28.227},
-        {8192, 28.537},
-        {16384, 27.831},
-        {32768, 27.758},
-        {65536, 28.694}};
 
-    std::map<uint32_t, float> l1_read_far_bw = {
-        {16, 0.868},
-        {32, 1.724},
-        {64, 3.477},
-        {128, 6.885},
-        {256, 13.794},
-        {512, 27.143},
-        {1024, 28.976},
-        {2048, 29.742},
-        {4096, 29.544},
-        {8192, 28.728},
-        {16384, 28.7},
-        {32768, 28.618},
-        {65536, 28.7}};
-    std::map<uint32_t, float> l1_read_local_bw = {
-        {16, 0.868},
-        {32, 1.724},
-        {64, 3.477},
-        {128, 6.899},
-        {256, 13.791},
-        {512, 27.594},
-        {1024, 27.696},
-        {2048, 27.911},
-        {4096, 27.811},
-        {8192, 27.808},
-        {16384, 27.814},
-        {32768, 27.805},
-        {65536, 27.84}};
-    auto transaction_type = is_local ? l1_read_local_bw : l1_read_far_bw;
+    std::map<uint32_t, std::array<float, 2>> dram_bw = {
+        {16, {0.436, 0.651}},
+        {32, {0.868, 1.295}},
+        {64, {1.736, 2.591}},
+        {128, {3.489, 5.182}},
+        {256, {6.975, 10.366}},
+        {512, {13.889, 20.723}},
+        {1024, {27.891, 32.65}},
+        {2048, {28.411, 33.587}},
+        {4096, {28.227, 32.686}},
+        {8192, {28.537, 24.456}},
+        {16384, {27.831, 23.934}},
+        {32768, {27.758, 23.702}},
+        {65536, {28.694, 26.328}}};
+
+    std::map<uint32_t, std::array<float, 2>> l1_read_far_bw = {
+        {16, {0.868, 1.176}},
+        {32, {1.724, 2.319}},
+        {64, {3.477, 4.649}},
+        {128, {6.885, 9.275}},
+        {256, {13.794, 18.623}},
+        {512, {27.143, 34.602}},
+        {1024, {28.976, 35.935}},
+        {2048, {29.742, 35.95}},
+        {4096, {29.544, 35.646}},
+        {8192, {28.728, 34.447}},
+        {16384, {28.7, 34.456}},
+        {32768, {28.618, 34.456}},
+        {65536, {28.7, 34.452}}};
+
+    std::map<uint32_t, std::array<float, 2>> l1_write_far_bw = {
+        {16, {0.681, 0.897}},
+        {32, {1.254, 1.781}},
+        {64, {2.709, 3.553}},
+        {128, {5.417, 7.12}},
+        {256, {10.823, 14.25}},
+        {512, {21.668, 28.488}},
+        {1024, {27.837, 33.509}},
+        {2048, {27.811, 33.505}},
+        {4096, {27.811, 33.505}},
+        {8192, {27.808, 33.505}},
+        {16384, {27.808, 33.505}},
+        {32768, {27.811, 33.501}},
+        {65536, {28.808, 33.505}}};
+
+    std::map<uint32_t, std::array<float, 2>> l1_local_bw = {
+        {16, {0.868, 1.174}},
+        {32, {1.724, 2.326}},
+        {64, {3.477, 4.704}},
+        {128, {6.899, 9.413}},
+        {256, {13.791, 18.565}},
+        {512, {27.594, 31.737}},
+        {1024, {27.696, 33.505}},
+        {2048, {27.911, 33.501}},
+        {4096, {27.811, 33.484}},
+        {8192, {27.808, 33.514}},
+        {16384, {27.814, 33.505}},
+        {32768, {27.805, 33.398}},
+        {65536, {27.84, 33.497}}};
+
+    auto transaction_type = is_local ? l1_local_bw : (is_read ? l1_read_far_bw : l1_write_far_bw);
     if (is_dram) {
         transaction_type = dram_bw;
     }
     printf("transaction size: %u\n", transaction_size);
-    auto transaction_bw = interpolate_transaction_bw(transaction_size, transaction_type);
+    auto transaction_bw = interpolate_transaction_bw(transaction_size, transaction_type, index);
     // auto result = get_transaction_bw(transaction_size, transaction_type);
     // float transaction_bw = result.first;
     // uint32_t transaction_size_mul_32 = result.second;
     //  double check  this value
-    float device_frequency_hz = 1e9;  // 1 GHz
+    float device_frequency_hz = index == 0 ? 1e9 : 1.2e9;
     printf("num transactions: %u\n", num_transactions);
     printf("transaction bw: %f\n", transaction_bw);
     uint32_t cycles = 1;
     if (is_dram) {
         cycles = std::ceil(
             (float)(num_transactions * transaction_size * device_frequency_hz) /
-            (float)(transaction_bw * 1e9 * std::sqrt(num_cores)));
+            (float)(transaction_bw * 1e9 * num_cores));
     } else {
         cycles = std::ceil(
             (float)(num_transactions * transaction_size * device_frequency_hz) /
-            (float)(transaction_bw * 1e9 * std::sqrt(num_cores)));
+            (float)(transaction_bw * 1e9 * num_cores));
     }
 
     return cycles;
 }
 
-uint32_t get_cycles_for_write_transaction_size(
-    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions, uint32_t num_cores) {
-    // for wh, add for other machines
-    std::map<uint32_t, float> dram_bw = {
-        {16, 0.436},
-        {32, 0.868},
-        {64, 1.736},
-        {128, 3.489},
-        {256, 6.975},
-        {512, 13.889},
-        {1024, 27.891},
-        {2048, 28.411},
-        {4096, 28.227},
-        {8192, 28.537},
-        {16384, 27.831},
-        {32768, 27.758},
-        {65536, 28.694}};
+int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor) {
+    printf("In common tm bw model\n");
+    if (input_tensor.storage_type() != StorageType::DEVICE) {
+        log_warning(tt::LogOp, "Input tensor not on DEVICE?!");
+    }
+    const auto& input_shape = input_tensor.padded_shape();
+    auto element_size_bytes = input_tensor.element_size();
+    printf("element size bytes: %u\n", element_size_bytes);
+    uint32_t input_size_bytes = input_shape.volume() * element_size_bytes;
+    printf("input size bytes: %u\n", input_size_bytes);
+    bool is_sharded = input_tensor.memory_config().shard_spec().has_value();
+    printf("is sharded: %s\n", is_sharded ? "true" : "false");
 
-    std::map<uint32_t, float> l1_write_far_bw = {
-        {16, 0.681},
-        {32, 1.254},
-        {64, 2.709},
-        {128, 5.417},
-        {256, 10.823},
-        {512, 21.668},
-        {1024, 27.837},
-        {2048, 27.811},
-        {4096, 27.811},
-        {8192, 27.808},
-        {16384, 27.808},
-        {32768, 27.811},
-        {65536, 28.808}};
-    // assume read local l1 and write local l1 are the same
-    std::map<uint32_t, float> l1_write_local_bw = {
-        {16, 0.868},
-        {32, 1.724},
-        {64, 3.477},
-        {128, 6.899},
-        {256, 13.791},
-        {512, 27.594},
-        {1024, 27.696},
-        {2048, 27.911},
-        {4096, 27.811},
-        {8192, 27.808},
-        {16384, 27.814},
-        {32768, 27.805},
-        {65536, 27.84}};
-    auto transaction_type = is_local ? l1_write_local_bw : l1_write_far_bw;
-    if (is_dram) {
-        transaction_type = dram_bw;
+    bool is_tiled = input_tensor.layout() == Layout::TILE;
+    printf("is tiled: %s\n", is_tiled ? "true" : "false");
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    printf("single tile size: %u\n", single_tile_size);
+    uint32_t input_transaction_size = is_tiled ? single_tile_size : input_shape[-1] * element_size_bytes;
+    if (is_sharded) {
+        const auto& input_shard_shape = input_tensor.memory_config().shard_spec().value().shape;
+        printf("input shard shape: %u %u\n", input_shard_shape[0], input_shard_shape[1]);
+        input_transaction_size = is_tiled ? single_tile_size : input_shard_shape[-1] * element_size_bytes;
     }
-    // auto result = get_transaction_bw(transaction_size, transaction_type);
-    // float transaction_bw = result.first;
-    // uint32_t transaction_size_mul_32 = result.second;
-    auto transaction_bw = interpolate_transaction_bw(transaction_size, transaction_type);
-    // double check  this value
-    float device_frequency_hz = 1e9;  // 1 GHz
-    printf("num transactions: %u\n", num_transactions);
-    printf("transaction bw: %f\n", transaction_bw);
-    uint32_t cycles = 1;
-    if (is_dram) {
-        cycles = std::ceil(
-            (float)(num_transactions * transaction_size * device_frequency_hz) /
-            (float)(transaction_bw * 1e9 * std::sqrt(num_cores) * 12));
-    } else {
-        cycles = std::ceil(
-            (float)(num_transactions * transaction_size * device_frequency_hz) /
-            (float)(transaction_bw * 1e9 * std::sqrt(num_cores) * 2));
+    printf("input transaction size: %u\n", input_transaction_size);
+    uint32_t num_read_transactions = std::ceil((float)input_size_bytes / (float)input_transaction_size);
+    printf("num read transactions: %u\n", num_read_transactions);
+    bool is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    printf("is dram: %s\n", is_dram ? "true" : "false");
+    // How to check if one DRAM or all DRAMs are used?
+    //  for now assuming we are using all cores, different DRAM channels might be used
+    auto arch = input_tensor.device()->arch();
+    int num_cores = (arch == tt::ARCH::WORMHOLE_B0) ? 64 : 108;
+    int index = (arch == tt::ARCH::WORMHOLE_B0) ? 0 : 1;
+
+    auto is_local = false;
+    if (is_sharded) {
+        auto input_num_cores = input_tensor.memory_config().shard_spec().value().grid.num_cores();
+        auto output_num_cores = output_tensor.memory_config().shard_spec().value().grid.num_cores();
+        printf("input num cores: %u\n", input_num_cores);
+        printf("output num cores: %u\n", output_num_cores);
+        num_cores = std::max(input_num_cores, output_num_cores);
+
+        if (input_num_cores > output_num_cores) {
+            is_local = true;
+        }
     }
-    return cycles;
+    printf("num cores: %d\n", num_cores);
+    auto total_read_cycles = get_cycles_for_transaction_size(
+        input_transaction_size, is_dram, is_local, num_read_transactions, num_cores, index, true);
+
+    if (output_tensor.storage_type() != StorageType::DEVICE) {
+        log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
+    }
+    const auto& output_shape = output_tensor.padded_shape();
+    uint32_t output_size_bytes = output_shape.volume() * element_size_bytes;
+    printf("output size bytes: %u\n", output_size_bytes);
+    uint32_t output_transaction_size = is_tiled ? single_tile_size : output_shape[-1] * element_size_bytes;
+    printf("output transaction size: %u\n", output_transaction_size);
+    if (is_sharded) {
+        const auto& output_shard_shape = output_tensor.memory_config().shard_spec().value().shape;
+        printf("output shard shape: %u %u\n", output_shard_shape[0], output_shard_shape[1]);
+        output_transaction_size = is_tiled ? single_tile_size : output_shard_shape[-1] * element_size_bytes;
+    }
+
+    uint32_t num_write_transactions = std::ceil((float)output_size_bytes / (float)output_transaction_size);
+    printf("num write transactions: %u\n", num_write_transactions);
+
+    bool w_local = false;
+    if (is_sharded) {
+        w_local = !is_local;
+    }
+    uint32_t total_write_cycles = get_cycles_for_transaction_size(
+        output_transaction_size, is_dram, w_local, num_write_transactions, num_cores, index, false);
+
+    printf("total write cycles: %u\n", total_write_cycles);
+
+    // do we just add cycles for read and write?
+    int ideal_dev_clock_cycles = total_read_cycles + total_write_cycles;
+    return ideal_dev_clock_cycles;
 }
-
 uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,
     const uint32_t input_single_tile_size,
