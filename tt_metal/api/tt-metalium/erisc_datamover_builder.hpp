@@ -319,7 +319,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
 // TODO: will be deprecated
 void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
-    const chip_id_t chip_id,
+    chip_id_t chip_id,
     const CoreRangeSet& worker_cores,
     size_t sender_worker_flow_control_semaphore_id,
     size_t sender_worker_teardown_semaphore_id,
