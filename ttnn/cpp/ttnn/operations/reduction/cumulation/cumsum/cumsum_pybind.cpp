@@ -11,12 +11,11 @@
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/reduction/cumsum/device/cumsum_device_operation.hpp"
-#include "ttnn/operations/reduction/cumsum/cumsum.hpp"
+#include "ttnn/operations/reduction/cumulation/cumsum/cumsum.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::reduction::detail {
+namespace ttnn::operations::reduction::cumulation::detail {
 namespace py = pybind11;
 
 void bind_cumsum_operation(py::module& module) {
@@ -101,7 +100,7 @@ void bind_cumsum_operation(py::module& module) {
 }
 
 void bind_cumsum_backward_operation(py::module& module) {
-    auto docstring = "Returns backward cumulative sum of `input` along dimension `dim`";
+    auto docstring = "Returns backward cumulative sum of `input` along dimension `dim` (read help(ttnn.cumsum))";
 
     using OperationType = decltype(ttnn::cumsum_backward);
     bind_registered_operation(
@@ -127,4 +126,4 @@ void bind_cumsum_backward_operation(py::module& module) {
             py::arg("queueId") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::reduction::detail
+}  // namespace ttnn::operations::reduction::cumulation::detail
