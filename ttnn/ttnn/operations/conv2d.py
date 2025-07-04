@@ -48,6 +48,8 @@ def prepare_conv_transpose2d_weights(*args, **kwargs):
     :param tuple[int, int] dilation: spacing between kernel elements.
     :param bool has_bias:  whether the convolution has a bias term.
     :param int groups:  number of blocked connections from input channels to output channels.
+    :param ttnn.DataType input_dtype: the data type of the input tensor.
+    :param ttnn.DataType, None output_dtype: the data type of the output tensor. Default None (uses input_dtype)
     :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. Default: None
     :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
 
@@ -77,6 +79,8 @@ def prepare_conv_transpose2d_bias(*args, **kwargs):
     :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
     :param tuple[int, int] dilation: spacing between kernel elements.
     :param ttnn.IDevice device:  the device to use.
+    :param ttnn.DataType input_dtype: the data type of the input tensor.
+    :param ttnn.DataType, None output_dtype: the data type of the output tensor. Default None (uses input_dtype)
     :param int groups:  number of blocked connections from input channels to output channels.
     :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. This config must have weights_dtype set to the same dtype as the processed weights tensor. Default: None
     :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
@@ -110,6 +114,8 @@ def prepare_conv_weights(*args, **kwargs):
     :param tuple[int, int] dilation: spacing between kernel elements.
     :param bool has_bias:  whether the convolution has a bias term.
     :param int groups:  number of blocked connections from input channels to output channels.
+    :param ttnn.DataType input_dtype: the data type of the input tensor.
+    :param ttnn.DataType, None output_dtype: the data type of the output tensor. Default None (uses input_dtype)
     :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. Default: None
     :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
 
@@ -139,6 +145,8 @@ def prepare_conv_bias(*args, **kwargs):
     :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
     :param tuple[int, int] dilation: spacing between kernel elements.
     :param ttnn.IDevice device:  the device to use.
+    :param ttnn.DataType input_dtype: the data type of the input tensor.
+    :param ttnn.DataType, None output_dtype: the data type of the output tensor. Default None (uses input_dtype)
     :param int groups:  number of blocked connections from input channels to output channels.
     :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. This config must have weights_dtype set to the same dtype as the processed weights tensor. Default: None
     :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None

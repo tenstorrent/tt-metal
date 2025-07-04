@@ -239,7 +239,6 @@ class transformer_2d_model:
             }
         )
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -277,12 +276,14 @@ class transformer_2d_model:
                 input_layout=hidden_states.get_layout(),
                 has_bias=True,
                 **conv_kwargs,
+                input_dtype=ttnn.bfloat8_b,
             )
             self.proj_in_conv_bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.proj_in_conv_bias,
                 input_memory_config=hidden_states.memory_config(),
                 input_layout=hidden_states.get_layout(),
                 **conv_kwargs,
+                input_dtype=ttnn.bfloat8_b,
             )
             self.proj_in_conv_weights = ttnn.to_device(self.proj_in_conv_weights, self.device)
             self.proj_in_conv_bias = ttnn.to_device(self.proj_in_conv_bias, self.device)
@@ -295,6 +296,7 @@ class transformer_2d_model:
             compute_config=compute_config,
             return_output_dim=False,
             return_weights_and_bias=False,
+            dtype=ttnn.bfloat8_b,
         )
 
         inner_dim = hidden_states.shape[-1]
@@ -322,7 +324,6 @@ class transformer_2d_model:
         if is_input_continuous:
             if not use_linear_projection:
                 conv_config = ttnn.Conv2dConfig(
-                    dtype=ttnn.bfloat8_b,
                     weights_dtype=ttnn.bfloat8_b,
                     activation="",
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -356,12 +357,14 @@ class transformer_2d_model:
                         input_layout=hidden_states.get_layout(),
                         has_bias=True,
                         **conv_kwargs_1,
+                        input_dtype=ttnn.bfloat8_b,
                     )
                     self.proj_out_conv_bias = ttnn.prepare_conv_bias(
                         bias_tensor=self.proj_out_conv_bias,
                         input_memory_config=hidden_states.memory_config(),
                         input_layout=hidden_states.get_layout(),
                         **conv_kwargs_1,
+                        input_dtype=ttnn.bfloat8_b,
                     )
                     self.proj_out_conv_weights = ttnn.to_device(self.proj_out_conv_weights, self.device)
                     self.proj_out_conv_bias = ttnn.to_device(self.proj_out_conv_bias, self.device)
@@ -378,6 +381,7 @@ class transformer_2d_model:
                     compute_config=compute_config,
                     return_output_dim=True,
                     return_weights_and_bias=True,
+                    dtype=ttnn.bfloat8_b,
                 )
 
                 if output_bfloat16:

@@ -5,6 +5,7 @@
 #pragma once
 #include <optional>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -79,6 +80,8 @@ ttnn::Tensor prepare_conv_weights(
     bool has_bias,
     uint32_t groups,
     T* device,
+    DataType input_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
@@ -99,6 +102,8 @@ ttnn::Tensor prepare_conv_bias(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     T* device,
+    DataType input_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
