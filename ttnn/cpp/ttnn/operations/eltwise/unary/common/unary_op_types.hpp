@@ -87,6 +87,7 @@ enum class UnaryOpType {
     FLOOR,
     CEIL,
     TRUNC,
+    FRAC,
     ROUND,
     LEFT_SHIFT,
     REMAINDER,
