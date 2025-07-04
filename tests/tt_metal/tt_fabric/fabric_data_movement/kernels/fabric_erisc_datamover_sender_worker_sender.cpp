@@ -67,9 +67,10 @@ void kernel_main() {
     size_t edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
     size_t edm_buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     size_t dest_addr = get_arg_val<uint32_t>(arg_idx++);
+    // For global semaphore, we get the address directly (not a semaphore ID)
     volatile uint32_t* const last_message_semaphore_address =
-        reinterpret_cast<volatile uint32_t* const>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
-    *last_message_semaphore_address = 0;
+        reinterpret_cast<volatile uint32_t* const>(get_arg_val<uint32_t>(arg_idx++));
+    // Note: Semaphore initialization moved to receiver kernel
     auto worker_buffer_index_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     // TODO: move to semaphore
@@ -87,6 +88,10 @@ void kernel_main() {
     } else {
         config.unicast.distance = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
     }
+
+    // Get receiver NOC coordinates for global semaphore signaling
+    const uint32_t receiver_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t receiver_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
     const InterleavedAddrGen<dest_is_dram> dest_addr_gen = {
         .bank_base_address = dest_addr, .page_size = page_size};
@@ -172,16 +177,17 @@ void kernel_main() {
     if constexpr (!mcast_mode) {
         sender.wait_for_empty_write_slot();
 
-        ASSERT(*last_message_semaphore_address == 0);
+        // Send completion signal to receiver on remote device
+        // Note: We no longer initialize or wait for the semaphore here
+        // The receiver will initialize and wait for it
+        // Compute the NOC address of the global semaphore on the receiver device
         uint64_t last_message_semaphore_noc0_addr =
-            safe_get_noc_addr(my_x[0], my_y[0], (uint32_t)last_message_semaphore_address, 0);
-        packet_header->to_chip_unicast(2);
+            safe_get_noc_addr(receiver_noc_x, receiver_noc_y, (uint32_t)last_message_semaphore_address, 0);
+        packet_header->to_chip_unicast(config.unicast.distance);
         packet_header->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader(last_message_semaphore_noc0_addr, 1, 32));
 
         sender.send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-
-        noc_semaphore_wait(last_message_semaphore_address, 1);
     }
 
     sender.close();

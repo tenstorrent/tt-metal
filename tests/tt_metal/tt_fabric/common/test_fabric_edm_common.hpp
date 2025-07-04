@@ -80,8 +80,12 @@ protected:
     MeshShape GetDeterminedMeshShape() const {
         if (num_devices_ == TG_NUM_DEVICES || num_devices_ == GALAXY_6U_NUM_DEVICES) {
             return MeshShape{8, 4};
-        } else {
+        } else if (num_devices_ >= 8) {
             return MeshShape{2, 4};
+        } else if (num_devices_ == 2) {
+            return MeshShape{1, 2};
+        } else {
+            TT_THROW("Invalid number of devices: {}", num_devices_);
         }
     }
 
@@ -95,9 +99,9 @@ protected:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
 
-        if (!(num_devices_ >= 8 &&
+        if (!(num_devices_ >= 2 ||
               (tt::tt_metal::GetNumPCIeDevices() == 4 || tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
-            TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
+            TT_THROW("This suite can only be run on 2+ device systems");
         }
     }
 
@@ -461,9 +465,9 @@ struct mcast_send {
 using mode_variant_t = std::variant<mcast_send, unicast_send>;
 
 static constexpr size_t PACKET_HEADER_SIZE_BYTES = sizeof(tt::tt_fabric::PacketHeader);
-static void generate_sender_worker_kernels(
-    Program& program,
-    IDevice* device,
+static void generate_fabric_test_kernels(
+    Program& sender_program,
+    IDevice* sender_device,
     const CoreCoord& worker_core,
     const tt::tt_fabric::SenderWorkerAdapterSpec& worker_fabric_connection,
     const mode_variant_t& mode,
@@ -479,7 +483,28 @@ static void generate_sender_worker_kernels(
     uint32_t dram_output_buffer_base_addr,
     bool dest_is_dram,
     uint32_t worker_buffer_index_semaphore_id,
-    uint32_t packet_header_buffer_cb_id) {
+    uint32_t packet_header_buffer_cb_id,
+    Program& receiver_program,
+    IDevice* receiver_device,
+    const CoreCoord& receiver_worker_core) {
+    // Create global semaphore and receiver kernel if needed
+    uint32_t receiver_noc_x = 0;
+    uint32_t receiver_noc_y = 0;
+    TT_FATAL(receiver_device != nullptr, "receiver_device must not be null");
+
+    // Create global semaphore on receiver device
+    auto global_semaphore = tt::tt_metal::CreateGlobalSemaphore(
+        receiver_device,
+        receiver_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::SubDeviceId{0}),
+        0,  // initial value
+        tt::tt_metal::BufferType::L1);
+    uint32_t global_completion_semaphore_addr = global_semaphore.address();
+
+    // Calculate receiver NOC coordinates
+    auto receiver_noc_coord = receiver_device->worker_core_from_logical_core(receiver_worker_core);
+    receiver_noc_x = receiver_noc_coord.x;
+    receiver_noc_y = receiver_noc_coord.y;
+
     const auto& edm_noc_core = CoreCoord(worker_fabric_connection.edm_noc_x, worker_fabric_connection.edm_noc_y);
     std::vector<uint32_t> sender_worker_reader_compile_args{
         src_is_dram,      //
@@ -522,7 +547,8 @@ static void generate_sender_worker_kernels(
         worker_fabric_connection.edm_worker_location_info_addr,
         edm_buffer_size_no_header,
         dram_output_buffer_base_addr,
-        local_worker_last_message_semaphore_id,
+        global_completion_semaphore_addr != 0 ? global_completion_semaphore_addr
+                                              : local_worker_last_message_semaphore_id,
         worker_buffer_index_semaphore_id,
         worker_fabric_connection.buffer_index_semaphore_id,
         packet_header_buffer_cb_id};
@@ -533,6 +559,10 @@ static void generate_sender_worker_kernels(
     } else {
         sender_worker_writer_runtime_args.push_back(std::get<unicast_send>(mode).distance);
     }
+
+    // Add receiver NOC coordinates
+    sender_worker_writer_runtime_args.push_back(receiver_noc_x);
+    sender_worker_writer_runtime_args.push_back(receiver_noc_y);
 
     uint32_t src0_cb_index = CBIndex::c_0;
     log_trace(tt::LogTest, "\tSenderWriter CT Args");
@@ -551,9 +581,9 @@ static void generate_sender_worker_kernels(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_size);
-    CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_core, cb_src0_config);
+    CBHandle sender_workers_cb = CreateCircularBuffer(sender_program, worker_core, cb_src0_config);
     auto sender_worker_reader_kernel = tt_metal::CreateKernel(
-        program,
+        sender_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_erisc_datamover_sender_worker_reader.cpp",
         worker_core,
         tt_metal::DataMovementConfig{
@@ -561,15 +591,32 @@ static void generate_sender_worker_kernels(
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = sender_worker_reader_compile_args});
     auto sender_worker_writer_kernel = tt_metal::CreateKernel(
-        program,
+        sender_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_erisc_datamover_sender_worker_sender.cpp",
         worker_core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = sender_worker_writer_compile_args});
-    tt_metal::SetRuntimeArgs(program, sender_worker_reader_kernel, worker_core, sender_worker_reader_runtime_args);
-    tt_metal::SetRuntimeArgs(program, sender_worker_writer_kernel, worker_core, sender_worker_writer_runtime_args);
+    tt_metal::SetRuntimeArgs(
+        sender_program, sender_worker_reader_kernel, worker_core, sender_worker_reader_runtime_args);
+    tt_metal::SetRuntimeArgs(
+        sender_program, sender_worker_writer_kernel, worker_core, sender_worker_writer_runtime_args);
+
+    // Create receiver kernel if needed (for both unicast and multicast)
+
+    auto receiver_kernel = tt_metal::CreateKernel(
+        receiver_program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_erisc_datamover_receiver_worker_signal_wait.cpp",
+        receiver_worker_core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+
+    std::vector<uint32_t> receiver_rt_args = {
+        global_completion_semaphore_addr,  // global semaphore address
+        1                                  // expected number of signals
+    };
+    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_worker_core, receiver_rt_args);
 }
 
 static bool RunLoopbackTest(
@@ -587,6 +634,9 @@ static bool RunLoopbackTest(
     tt::tt_fabric::FabricEriscDatamoverBuilder& chip_0_edm_builder,
     std::optional<SubdeviceInfo>& subdevice_managers) {
     auto& sender_program = programs.at(0);
+    // Add receiver program
+    programs.push_back(Program());
+    auto& receiver_program = programs.at(1);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
     std::vector<CoreCoord> worker_cores = {CoreCoord(0, 0)};
@@ -595,6 +645,9 @@ static bool RunLoopbackTest(
     auto local_worker_teardown_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, worker_cores.at(0), 0);
     auto local_worker_last_message_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, worker_cores.at(0), 0);
     auto worker_buffer_index_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, worker_cores.at(0), 0);
+
+    // Receiver kernel core on different device
+    CoreCoord receiver_worker_core = {0, 1};  // Different core from sender
 
     // Generate inputs
     ////////////////////////////////////////////////////////////////////////////
@@ -612,8 +665,9 @@ static bool RunLoopbackTest(
     auto [local_input_buffer, inputs] = build_input_buffer(sender_device, tensor_size_bytes, test_config);
 
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
+    // Output buffer is now on the receiver device
     auto local_output_buffer = CreateBuffer(InterleavedBufferConfig{
-        sender_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
+        receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
 
     uint32_t packet_header_buffer_cb_id = tt::CBIndex::c_1;
     // allocate a circular buffer of size 8k
@@ -645,7 +699,7 @@ static bool RunLoopbackTest(
     const auto& worker_core = worker_cores.at(0);
     log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
-    generate_sender_worker_kernels(
+    generate_fabric_test_kernels(
         sender_program,
         sender_device,
         worker_core,
@@ -663,12 +717,15 @@ static bool RunLoopbackTest(
         local_output_buffer_address,
         dest_is_dram,
         worker_buffer_index_semaphore_id,
-        packet_header_buffer_cb_id);
+        packet_header_buffer_cb_id,
+        receiver_program,
+        receiver_device,
+        receiver_worker_core);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<IDevice*> devices = {sender_device};
+    std::vector<IDevice*> devices = {sender_device, receiver_device};
     log_trace(tt::LogTest, "{} programs, {} devices", programs.size(), devices.size());
     run_programs(programs, devices);
     log_info(tt::LogTest, "Reading back outputs");
@@ -772,7 +829,14 @@ static bool RunLineFabricTest(
         line_fabric.uniquely_connect_worker(devices[0], tt::tt_fabric::EdmLineFabricOpInterface::FORWARD);
 
     const std::size_t pages_per_send = chip0_worker_fabric_connection.buffer_size_bytes / page_size;
-    generate_sender_worker_kernels(
+
+    // For multicast, create a receiver program on the furthest device
+    auto furthest_device = devices.back();
+    programs.push_back(Program());
+    auto& receiver_program = programs.back();
+    CoreCoord receiver_worker_core = {0, 1};  // Different core from sender
+
+    generate_fabric_test_kernels(
         programs[0],
         devices[0],
         worker_core,
@@ -790,7 +854,10 @@ static bool RunLineFabricTest(
         local_output_buffer_address,
         dest_is_dram,
         worker_buffer_index_semaphore_id,
-        packet_header_buffer_cb_id);
+        packet_header_buffer_cb_id,
+        receiver_program,
+        furthest_device,
+        receiver_worker_core);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -960,8 +1027,8 @@ static int TestLoopbackEntrypoint(
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
 
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    if (num_devices < 4) {
-        log_info(tt::LogTest, "This test can only be run on T3000 devices");
+    if (num_devices < 2) {
+        log_info(tt::LogTest, "This test can only be run on 2+ chip systems");
         return 0;
     }
 
