@@ -14,8 +14,8 @@ class TtBiFusion:
             device=device,
             conv=model_params.cv1.block.conv,
             conv_pth=parameters.cv1.block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            # shard_layout=None,
+            # auto_shard=True,
             activation="relu",
             reshape=True,
         )
@@ -23,8 +23,8 @@ class TtBiFusion:
             device=device,
             conv=model_params.cv2.block.conv,
             conv_pth=parameters.cv2.block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            # shard_layout=None,
+            # auto_shard=True,
             activation="relu",
             reshape=True,
         )
@@ -32,8 +32,8 @@ class TtBiFusion:
             device=device,
             conv=model_params.cv3.block.conv,
             conv_pth=parameters.cv3.block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            # shard_layout=None,
+            # auto_shard=True,
             activation="relu",
             reshape=True,
         )
@@ -48,8 +48,8 @@ class TtBiFusion:
             device=device,
             conv=model_params.downsample.block.conv,
             conv_pth=parameters.downsample.block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            # shard_layout=None,
+            # auto_shard=True,
             activation="relu",
             reshape=True,
         )
