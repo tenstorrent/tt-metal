@@ -236,16 +236,15 @@ uint32_t calculate_L1_usage(
         return factor * alignment_bytes;
     };
 
-    // 5 sync CBs, each with 2 bytes per page, 2 or 1 pages.
-    uint32_t sync_cb_1_3_5 = 2 * (2 + 1 + 1);
-    uint32_t sync_cb_2_4 = 0;
+    uint32_t sync_cb_1 = 4;
+    uint32_t sync_cb_2 = 0;
     if (split_reader) {
-        sync_cb_2_4 = 2 * (2 + 1);  // 2 pages, 1 byte per page
+        sync_cb_2 = 4;
     }
 
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + in_one_cb_size + clear_value_cb_size + in_cb_config_0_size +
            in_cb_config_1_size + align(out_cb_config_size) /* global, involved */
-           + max_pool_partials_cb_config_size + sync_cb_1_3_5 + sync_cb_2_4;
+           + sync_cb_1 + sync_cb_2;
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(

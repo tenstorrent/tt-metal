@@ -24,7 +24,6 @@
 template <
     uint32_t in_nblocks_c,
     uint32_t in_cb_id,
-    uint32_t compute_sync_cb_id,
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
@@ -168,16 +167,10 @@ void kernel_main() {
         get_compile_time_arg_val(28);  // signal to compute and reader 1 that reader 0 is done initializing
     constexpr uint32_t sync_cb_id2 =
         get_compile_time_arg_val(29);  // signal to compute and reader 0 that reader 1 is done initializing
-    constexpr uint32_t sync_cb_id3 =
-        get_compile_time_arg_val(30);  // wait for compute to signal for reader 0 to reset CBs or write output
-    constexpr uint32_t sync_cb_id4 =
-        get_compile_time_arg_val(31);  // wait for compute to signal for reader 1 to reset CBs or write output
-    constexpr uint32_t stride_w = get_compile_time_arg_val(32);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(30);
 
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
-    constexpr uint32_t compute_sync_cb_id =
-        split_reader && reader_id == 1 ? sync_cb_id4 : sync_cb_id3;  // compute sync cb is the one for the reader
 
     uint32_t scalar_index = 0;
     uint32_t scalar_start = 0;
@@ -303,7 +296,6 @@ void kernel_main() {
             read_window_with_top_left_index<
                 in_nblocks_c,
                 in_cb_id,
-                compute_sync_cb_id,
                 window_h,
                 window_w,
                 in_w_padded,
@@ -331,7 +323,6 @@ void kernel_main() {
         read_window_with_top_left_index<
             in_nblocks_c,
             in_cb_id,
-            compute_sync_cb_id,
             window_h,
             window_w,
             in_w_padded,

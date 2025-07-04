@@ -378,17 +378,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // CBs for NC/BR/Compute synchornization
     int32_t sync_cb_id1 = next_cb_index++;
     tt::tt_metal::create_cb(sync_cb_id1, program, all_cores, 2, 2, tt::DataFormat::UInt16);
-    int32_t sync_cb_id3 = next_cb_index++;
-    tt::tt_metal::create_cb(sync_cb_id3, program, all_cores, 2, 1, tt::DataFormat::UInt16);
-    int32_t sync_cb_id5 = next_cb_index++;
-    tt::tt_metal::create_cb(sync_cb_id5, program, all_cores, 2, 1, tt::DataFormat::UInt16);
     int32_t sync_cb_id2 = 0;
-    int32_t sync_cb_id4 = 0;
     if (split_reader) {
         sync_cb_id2 = next_cb_index++;
-        sync_cb_id4 = next_cb_index++;
         tt::tt_metal::create_cb(sync_cb_id2, program, all_cores, 2, 2, tt::DataFormat::UInt16);
-        tt::tt_metal::create_cb(sync_cb_id4, program, all_cores, 2, 1, tt::DataFormat::UInt16);
     }
 
     // incoming data is the input cb instead of raw l1/dram addr
@@ -545,8 +538,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         multi_buffering_factor,
         sync_cb_id1,
         sync_cb_id2,
-        sync_cb_id3,
-        sync_cb_id4,
         stride_w};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
@@ -597,9 +588,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_one_cb_id,
         one_scalar_per_core,
         sync_cb_id1,
-        sync_cb_id2,
-        sync_cb_id3,
-        sync_cb_id4};
+        sync_cb_id2};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,

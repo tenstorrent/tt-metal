@@ -44,10 +44,6 @@ void MAIN {
         get_compile_time_arg_val(17);  // wait for reader 0 to signal that it is done initializing
     constexpr uint32_t sync_cb_id2 =
         get_compile_time_arg_val(18);  // wait for reader 1 to signal that it is done initializing
-    constexpr uint32_t sync_cb_id3 =
-        get_compile_time_arg_val(19);  // signal to reader 0 that compute needs CBs reset or to output written
-    constexpr uint32_t sync_cb_id4 =
-        get_compile_time_arg_val(20);  // signal to reader 1 that compute needs CBs reset or to output written
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -87,7 +83,6 @@ void MAIN {
         const bool reader0 = !(split_reader && (n & 0x1));
         const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
-        const uint32_t curr_sync_cb_id = reader0 ? sync_cb_id3 : sync_cb_id4;
         if constexpr (!one_scalar_per_core) {
             cb_wait_front(curr_scalar_cb_id, 1);
         }
