@@ -8,12 +8,10 @@
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpi.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
-sfpi_inline vFloat sfpu_exp(vFloat val) { return _sfpu_exp_(val); }
+sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
 
 template <
     bool APPROXIMATION_MODE,
