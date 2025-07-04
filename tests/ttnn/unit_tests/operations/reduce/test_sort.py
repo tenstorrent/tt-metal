@@ -94,6 +94,8 @@ def test_sort_prealocated_output(shape, dim, descending, device):
 @pytest.mark.parametrize(
     "shape, dim, descending",
     [
+        ([1, 1, 1, 2 * TILE_WIDTH], -1, False),
+        ([1, 1, 1, 8192 * TILE_WIDTH], -1, False),
         ([1, 1, 32, 96 * TILE_WIDTH], -1, False),
         ([1, 1, 32, 256 * TILE_WIDTH], -1, False),
         ([1, 4748 * TILE_WIDTH], -1, False),
