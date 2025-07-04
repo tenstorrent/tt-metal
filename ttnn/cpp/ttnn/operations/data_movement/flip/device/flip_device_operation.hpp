@@ -117,6 +117,6 @@ struct FlipDeviceOperation {
 
 namespace ttnn::prim {
 // Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-constexpr auto permute =
+constexpr auto flip =
     ttnn::register_operation<"ttnn::prim::flip", ttnn::operations::data_movement::FlipDeviceOperation>();
 }  // namespace ttnn::prim

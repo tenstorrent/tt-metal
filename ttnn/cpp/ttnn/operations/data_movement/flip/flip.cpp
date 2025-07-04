@@ -12,40 +12,30 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
+#include "ttnn/operations/data_movement/flip/device/flip_device_operation.hpp"
+
 namespace ttnn::operations::data_movement {
 namespace detail {
 
-ttnn::Tensor flip_impl(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<uint32_t>& dims,
-    const MemoryConfig& output_mem_config) {
-
-    IDevice* device = input_tensor.device();
-    uint32_t rank = input_tensor.logical_shape().rank();
-
-    auto formatted_input_tensor = input_tensor;
-    auto output = formatted_input_tensor;
-    return output;
-}
-
-ttnn::Tensor flip_launch(
-    const ttnn::Tensor& a,
-    const ttnn::SmallVector<uint32_t>& dims,
-    const MemoryConfig& output_mem_config) {
-    return flip_impl(a, dims, output_mem_config);
-}
-
-bool is_flip_nop(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int64_t>& dims) {
+bool is_flip_nop(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<uint32_t>& dims) {
     const auto& shape = input_tensor.get_logical_shape();
-
     for (auto dim : dims) {
-        auto normalized_dim = shape.get_normalized_index(dim);
-        if (shape[normalized_dim] > 1) {
+        if (shape[dim] > 1) {
             return false;
         }
     }
-
     return true;  // All flip dimensions have size 1, so it's a no-op
+}
+
+ttnn::Tensor flip_impl(
+    const ttnn::Tensor& input_tensor, const ttnn::SmallVector<uint32_t>& dims, const MemoryConfig& memory_config) {
+    //    // For tensors with rank < 4, pad to 4D for device operation compatibility
+    //    const auto rank = input_tensor.get_logical_shape().rank();
+
+    // Execute device operation
+    auto output = ttnn::prim::flip(input_tensor, dims, memory_config);
+
+    return output;
 }
 
 } // namespace detail
@@ -55,12 +45,26 @@ ttnn::Tensor ExecuteFlip::invoke(
     const ttnn::Tensor& input_tensor,
     const SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
+    TT_FATAL(!dims.empty(), "Flip dimensions cannot be empty");
+    TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
+
     const auto input_rank = input_tensor.logical_shape().rank();
-    TT_FATAL(is_device_tensor(input_tensor), "Tensor must already be on device");
+    TT_FATAL(input_rank <= 5, "Flip operation supports tensors with rank up to 5, got rank {}", input_rank);
 
-    auto output_tensor = input_tensor;
+    // Normalize dimensions to positive indices
+    SmallVector<uint32_t> normalized_dims(dims.size());
+    std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {
+        return input_tensor.logical_shape().get_normalized_index(idx);
+    });
 
-    return output_tensor;
+    auto mem_conf = memory_config.value_or(input_tensor.memory_config()
+
+    // Check for no-op case
+    if (detail::is_flip_nop(input_tensor, normalized_dims)) {
+        return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    }
+
+    return detail::flip_impl(input_tensor, normalized_dims, mem_conf);
 }
 
 ttnn::Tensor ExecuteFlip::invoke(
