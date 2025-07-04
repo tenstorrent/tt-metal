@@ -8,7 +8,9 @@
 #include <memory>
 #include <utility>
 
-#include "pybind11/pybind11.h"
+#include <pybind11/operators.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 #include "ttnn/global_circular_buffer.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
