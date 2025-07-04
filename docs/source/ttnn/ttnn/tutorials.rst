@@ -20,6 +20,7 @@ With the recommended virtual environment activated, you can run these tutorials 
 
 .. toctree::
 
+   tutorials/2025_dx_rework/ttnn_add_tensors.ipynb
    tutorials/2025_dx_rework/ttnn_basic_operations.ipynb
    tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.ipynb
    tutorials/2025_dx_rework/ttnn_multihead_attention.ipynb
