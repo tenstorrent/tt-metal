@@ -109,7 +109,8 @@ public:
         std::shared_ptr<IRouteManager> route_manager);
     tt::tt_metal::Program& get_program_handle();
     const FabricNodeId& get_node_id();
-    uint32_t add_fabric_connection(RoutingDirection direction, const std::vector<uint32_t>& link_indices);
+    uint32_t add_fabric_connection(
+        RoutingDirection direction, const std::vector<uint32_t>& link_indices, bool is_sync_fabric);
     void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
     void add_sender_sync_config(CoreCoord logical_core, TestTrafficSenderConfig sync_config);
     void add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config);
@@ -118,6 +119,7 @@ public:
     void set_line_sync(bool line_sync) { line_sync_ = line_sync; }
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
+    void set_master_sender(CoreCoord coord) { master_core_coord_ = coord; };
 
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
@@ -139,9 +141,11 @@ private:
     std::unordered_map<CoreCoord, TestReceiver> receivers_;
 
     std::unordered_map<RoutingDirection, std::set<uint32_t>> used_fabric_connections_{};
+    std::unordered_map<RoutingDirection, std::set<uint32_t>> used_sync_fabric_connections_{};
 
     bool benchmark_mode_ = false;
     bool line_sync_ = false;
+    CoreCoord master_core_coord_;
 
     // controller?
 };
@@ -236,7 +240,7 @@ inline void TestSender::add_config(TestTrafficSenderConfig config) {
     if (!fabric_connection_idx.has_value()) {
         // insert a new fabric connection by first checking the device for unused links
         auto new_link_idx =
-            this->test_device_ptr_->add_fabric_connection(outgoing_direction.value(), outgoing_link_indices);
+            this->test_device_ptr_->add_fabric_connection(outgoing_direction.value(), outgoing_link_indices, false);
         this->fabric_connections_.emplace_back(outgoing_direction.value(), new_link_idx);
         fabric_connection_idx = this->fabric_connections_.size() - 1;
     }
@@ -270,7 +274,7 @@ inline void TestSender::add_sync_config(TestTrafficSenderConfig sync_config) {
     if (!sync_fabric_connection_idx.has_value()) {
         // Add new sync fabric connection
         auto new_link_idx =
-            this->test_device_ptr_->add_fabric_connection(outgoing_direction.value(), outgoing_link_indices);
+            this->test_device_ptr_->add_fabric_connection(outgoing_direction.value(), outgoing_link_indices, true);
         this->sync_fabric_connections_.emplace_back(outgoing_direction.value(), new_link_idx);
         sync_fabric_connection_idx = this->sync_fabric_connections_.size() - 1;
     }
@@ -312,14 +316,16 @@ inline tt::tt_metal::Program& TestDevice::get_program_handle() { return this->pr
 inline const FabricNodeId& TestDevice::get_node_id() { return this->fabric_node_id_; }
 
 inline uint32_t TestDevice::add_fabric_connection(
-    RoutingDirection direction, const std::vector<uint32_t>& link_indices) {
+    RoutingDirection direction, const std::vector<uint32_t>& link_indices, bool is_sync_fabric) {
+    auto& used_fabric_connections =
+        is_sync_fabric ? this->used_sync_fabric_connections_ : this->used_fabric_connections_;
     // if all the connections have already been used by another worker, then its an error
     // else try to add whichever is not used
-    if (this->used_fabric_connections_.count(direction) == 0) {
-        this->used_fabric_connections_[direction] = {};
+    if (used_fabric_connections.count(direction) == 0) {
+        used_fabric_connections[direction] = {};
     }
 
-    const auto& used_link_indices = this->used_fabric_connections_.at(direction);
+    const auto& used_link_indices = used_fabric_connections.at(direction);
     std::optional<uint32_t> unused_link_idx;
     for (const auto& link_idx : link_indices) {
         if (used_link_indices.count(link_idx)) {
@@ -335,7 +341,7 @@ inline uint32_t TestDevice::add_fabric_connection(
         this->fabric_node_id_,
         direction);
 
-    this->used_fabric_connections_[direction].insert(unused_link_idx.value());
+    used_fabric_connections[direction].insert(unused_link_idx.value());
     return unused_link_idx.value();
 }
 
@@ -393,12 +399,11 @@ inline void TestDevice::create_sender_kernels() {
     const bool use_dynamic_routing = this->device_info_provider_->use_dynamic_routing();
 
     // Determine master core (first core in senders)
-    CoreCoord master_core = this->senders_.begin()->first;
     uint32_t num_local_sync_cores = static_cast<uint32_t>(this->senders_.size());
 
     for (const auto& [core, sender] : this->senders_) {
         // Determine if this is the master sync core
-        bool is_master_sync_core = (core == master_core);
+        bool is_master_sync_core = (core == master_core_coord_);
 
         // get ct args
         // TODO: fix these- number of fabric connections, mappings etc
@@ -441,24 +446,26 @@ inline void TestDevice::create_sender_kernels() {
                 core,
                 sender.global_line_sync_configs_.size());
 
-            if (sender.global_line_sync_configs_.empty()) {
-                log_info(tt::LogTest, "No sync configs for core {} - sync may not be needed on this sender", core);
-            }
-
             // For each sync config, add line sync configuration runtime args
             for (size_t i = 0; i < sender.global_line_sync_configs_.size(); ++i) {
                 const auto& [sync_config, fabric_conn_idx] = sender.global_line_sync_configs_[i];
 
                 // Add sync value and routing args for this sync config
                 line_sync_args.push_back(1);  // line_sync_val
-                log_info(tt::LogTest, "Sync config {} (fabric connection {}) has sync config", i, fabric_conn_idx);
+                log_info(
+                    tt::LogTest,
+                    "fabric connection {} has sync config src_node_id: {} dst_node_ids {} hops {} ",
+                    fabric_conn_idx,
+                    sync_config.src_node_id,
+                    sync_config.dst_node_ids,
+                    sync_config.hops);
 
                 // Add sync routing args (chip send type + routing info)
                 auto sync_traffic_args = sync_config.get_args();
                 // Extract only the routing part (skip metadata)
-                // Traffic config args format: [metadata][chip_send_type][routing][noc_fields]
-                // We need: [chip_send_type][routing][noc_fields] for sync
-                size_t metadata_size = 3;  // num_packets, seed, payload_buffer_size
+                // Traffic config args format: [metadata][chip_send_type][noc_send_type][noc_fields]
+                // We need: [noc_fields] for sync only
+                size_t metadata_size = 5;  // num_packets, seed, payload_buffer_size, chip_send_type, noc_send_type
                 line_sync_args.insert(
                     line_sync_args.end(), sync_traffic_args.begin() + metadata_size, sync_traffic_args.end());
             }
@@ -469,10 +476,19 @@ inline void TestDevice::create_sender_kernels() {
             line_sync_args.push_back(local_sync_address);
             line_sync_args.push_back(local_sync_val);
 
-            // Add core coordinates for local sync
+            // add master sender core
+            uint32_t sender_noc_encoding =
+                this->device_info_provider_->get_worker_noc_encoding(this->coord_, master_core_coord_);
+            line_sync_args.push_back(sender_noc_encoding);
+            // Add non-master core coordinates for local sync
             for (const auto& [sender_core, _] : this->senders_) {
-                line_sync_args.push_back(sender_core.x);
-                line_sync_args.push_back(sender_core.y);
+                bool is_master_sync_core = (sender_core == master_core_coord_);
+                if (is_master_sync_core) {
+                    continue;
+                }
+                uint32_t sender_noc_encoding =
+                    this->device_info_provider_->get_worker_noc_encoding(this->coord_, sender_core);
+                line_sync_args.push_back(sender_noc_encoding);
             }
 
             log_info(tt::LogTest, "Generated {} line sync runtime args for core {}", line_sync_args.size(), core);

@@ -28,6 +28,8 @@ void kernel_main() {
     size_t rt_args_idx = 0;
     auto sender_config = SenderKernelConfig::build_from_args(rt_args_idx);
 
+    // DPRINT << "MASTER_SYNC_CORE " << (uint)MASTER_SYNC_CORE <<ENDL();
+
     // clear out test results area
 
     // add line sync here

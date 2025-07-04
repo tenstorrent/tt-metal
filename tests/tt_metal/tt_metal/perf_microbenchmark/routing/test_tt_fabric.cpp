@@ -72,6 +72,9 @@ public:
 private:
     void add_traffic_config(const TestTrafficConfig& traffic_config);
 
+    // Track master senders for each device to avoid adding sync to all senders
+    std::unordered_map<FabricNodeId, CoreCoord> device_master_senders_;
+
     std::shared_ptr<TestFixture> fixture_;
     std::unordered_map<MeshCoordinate, TestDevice> test_devices_;
     std::unique_ptr<tt::tt_fabric::fabric_tests::GlobalAllocator> allocator_;
@@ -159,6 +162,7 @@ void TestContext::compile_programs() {
     for (auto& [coord, test_device] : test_devices_) {
         test_device.set_benchmark_mode(benchmark_mode_);
         test_device.set_line_sync(line_sync_);
+        test_device.set_master_sender(device_master_senders_[test_device.get_node_id()]);
         test_device.create_kernels();
         auto& program_handle = test_device.get_program_handle();
         if (program_handle.num_kernels()) {
@@ -224,9 +228,6 @@ void TestContext::process_line_sync_config(TestConfig& config) {
 
     log_info(tt::LogTest, "Processing line sync configurations");
 
-    // Track master senders for each device to avoid adding sync to all senders
-    std::unordered_map<FabricNodeId, CoreCoord> device_master_senders;
-
     // Find the master sender for each device (first sender in the device)
     for (const auto& coord : this->fixture_->get_available_device_coordinates()) {
         auto& test_device = this->test_devices_.at(coord);
@@ -235,7 +236,7 @@ void TestContext::process_line_sync_config(TestConfig& config) {
         // Find the first sender core for this device (will be the master)
         for (const auto& sender : config.senders) {
             if (sender.device == device_id && sender.core.has_value()) {
-                device_master_senders[device_id] = sender.core.value();
+                device_master_senders_[device_id] = sender.core.value();
                 break;
             }
         }
@@ -244,13 +245,13 @@ void TestContext::process_line_sync_config(TestConfig& config) {
     // Process each sync sender config
     for (const auto& sync_sender : config.global_line_sync_configs) {
         // Only process sync for devices that have a master sender
-        if (device_master_senders.find(sync_sender.device) == device_master_senders.end()) {
+        if (device_master_senders_.find(sync_sender.device) == device_master_senders_.end()) {
             log_warning(
                 tt::LogTest, "Skipping sync config for device {} - no master sender found", sync_sender.device.chip_id);
             continue;
         }
 
-        CoreCoord master_core = device_master_senders[sync_sender.device];
+        CoreCoord master_core = device_master_senders_[sync_sender.device];
         const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
 
         // Process each sync pattern for this device

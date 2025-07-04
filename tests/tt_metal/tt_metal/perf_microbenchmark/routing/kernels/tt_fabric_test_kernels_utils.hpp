@@ -416,7 +416,7 @@ struct LineSyncConfig {
 
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
     void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
-        // setup header fields.
+        // setup header fields. 2 rt args for 1D
         ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
             arg_idx, packet_header_address, packet_header, fabric_connection_handle);
 
@@ -460,8 +460,7 @@ struct LocalSyncConfig {
     void setup_core_coordinates(size_t& arg_idx) {
         // Get core coordinates from runtime args
         for (uint8_t i = 0; i < NUM_LOCAL_CORES; i++) {
-            sync_core_x_[i] = get_arg_val<uint32_t>(arg_idx++);
-            sync_core_y_[i] = get_arg_val<uint32_t>(arg_idx++);
+            sync_core_xy_encoding_[i] = get_arg_val<uint32_t>(arg_idx++);
         }
     }
 
@@ -469,20 +468,21 @@ struct LocalSyncConfig {
         if constexpr (IS_MASTER_CORE) {
             // Master core: signal all local cores
             for (uint8_t i = 0; i < NUM_LOCAL_CORES; i++) {
-                auto dest_noc_addr = get_noc_addr(sync_core_x_[i], sync_core_y_[i], sync_address);
+                auto dest_noc_addr = get_noc_addr_helper(sync_core_xy_encoding_[i], sync_address);
                 noc_semaphore_inc(dest_noc_addr, 1);
             }
             // Wait for all local cores to acknowledge
             noc_semaphore_wait(sync_ptr, NUM_LOCAL_CORES);
         } else {
-            // Non-master core: wait for signal from master
             noc_semaphore_wait(sync_ptr, 1);
+            // send ack back to master sender
+            auto master_sender_noc_addr = get_noc_addr_helper(sync_core_xy_encoding_[0], sync_address);
+            noc_semaphore_inc(master_sender_noc_addr, 1);
         }
     }
 
 private:
-    std::array<uint8_t, NUM_LOCAL_CORES> sync_core_x_;
-    std::array<uint8_t, NUM_LOCAL_CORES> sync_core_y_;
+    std::array<uint32_t, NUM_LOCAL_CORES> sync_core_xy_encoding_;
     uint32_t sync_address;
     volatile tt_l1_ptr uint32_t* sync_ptr;
     uint32_t sync_val;
@@ -816,9 +816,9 @@ struct SenderKernelConfig {
     void global_sync() {
         if constexpr (LINE_SYNC && MASTER_SYNC_CORE) {
             for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-                sync_fabric_connections()[i].open();
-                line_sync_configs()[i].global_sync();
-                sync_fabric_connections()[i].close();
+                // sync_fabric_connections()[i].open();
+                // line_sync_configs()[i].global_sync();
+                // sync_fabric_connections()[i].close();
             }
         }
     }
@@ -893,7 +893,7 @@ private:
                 new (&line_sync_configs()[i])
                     LineSyncConfig(&sync_fabric_connections()[i], packet_header_address, line_sync_val);
 
-                // setup packet header fields
+                // setup packet header fields, 6 rt args for 1D.
                 line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
                     arg_idx, packet_header_address);
             }
