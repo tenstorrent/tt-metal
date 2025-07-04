@@ -244,7 +244,7 @@ jobs:
 
   trigger-and-monitor-workflows:
     needs: [llk-submodule-uplift]
-    if: needs.update-submodule.outputs.has-changes == 'true' && (needs.update-submodule.outputs.should-run-wormhole == 'true' || needs.update-submodule.outputs.should-run-blackhole == 'true')
+    if: needs.lk-submodule-uplift.outputs.has-changes == 'true' && (needs.lk-submodule-uplift.outputs.should-run-wormhole == 'true' || needs.lk-submodule-uplift.outputs.should-run-blackhole == 'true')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout for GitHub CLI
@@ -397,7 +397,7 @@ jobs:
 
   finalize:
     needs: [llk-submodule-uplift, trigger-and-monitor-workflows]
-    if: always() && needs.update-submodule.outputs.has-changes == 'true' && needs.update-submodule.result == 'success' && (needs.trigger-and-monitor-workflows.result == 'success' || needs.trigger-and-monitor-workflows.result == 'skipped')
+    if: always() && needs.llk-submodule-uplift.outputs.has-changes == 'true' && needs.llk-submodule-uplift.result == 'success' && (needs.trigger-and-monitor-workflows.result == 'success' || needs.trigger-and-monitor-workflows.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: Auto-merge PR
