@@ -88,7 +88,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
         test_config.core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+            .noc = NOC::RISCV_0_default,
             .compile_args = reader_compile_args});
 
     auto writer_kernel = CreateKernel(
