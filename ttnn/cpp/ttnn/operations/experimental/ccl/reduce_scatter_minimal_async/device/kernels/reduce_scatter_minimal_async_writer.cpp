@@ -307,7 +307,8 @@ void kernel_main() {
                     size_t l1_read_addr = get_read_ptr(cb_output_id);
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t tile_id = tile_id_start + tiles_read;
-                        noc_async_write_tile(tile_id, output_addrgen, l1_read_addr);
+                        uint64_t local_noc_addr = get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 1 /*noc_id*/);
+                        noc_async_write(l1_read_addr, local_noc_addr, intermediate_page_size);
                         l1_read_addr += intermediate_page_size;
                         tiles_read++;
                     }
