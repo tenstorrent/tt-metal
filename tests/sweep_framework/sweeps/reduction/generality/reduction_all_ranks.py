@@ -11,8 +11,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args, profile_ttnn_call
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 # Override the default timeout in seconds for hang detection.
@@ -67,13 +66,15 @@ def run_reduction(device, tensor_shape, dim, keepdim, op, dtype) -> list:
         torch_errored = True
 
     ttnn_errored = False
-    start_time = start_measuring_time()
     try:
-        op_output_tensor = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim) if dim is not None else ttnn_op(ttnn_tensor)
+        if dim is not None:
+            op_output_tensor, e2e_perf = profile_ttnn_call(device, ttnn_op, ttnn_tensor, dim=dim, keepdim=keepdim)
+        else:
+            op_output_tensor, e2e_perf = profile_ttnn_call(device, ttnn_op, ttnn_tensor)
         output_tensor = ttnn.to_torch(ttnn.from_device(op_output_tensor))
     except RuntimeError:
         ttnn_errored = True
-    e2e_perf = stop_measuring_time(start_time)
+        e2e_perf = None
 
     # Skip the rest of the test if an exception was raised in both
     if torch_errored:

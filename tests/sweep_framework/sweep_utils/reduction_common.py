@@ -8,10 +8,9 @@ from functools import partial
 import torch
 import random
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
+from tests.sweep_framework.sweep_utils.utils import profile_ttnn_call
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
@@ -48,10 +47,10 @@ def run_sum(
         memory_config=input_a_memory_config,
     )
 
-    start_time = start_measuring_time()
-    op_output_tensor = ttnn.sum(input_tensor_a, dim=dim, memory_config=output_memory_config)
+    op_output_tensor, e2e_perf = profile_ttnn_call(
+        device, ttnn.sum, input_tensor_a, keepdim=keepdim, dim=dim, memory_config=output_memory_config
+    )
     output_tensor = ttnn.to_torch(op_output_tensor)
-    e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999
     tensors = [input_tensor_a, op_output_tensor]
     return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
@@ -86,10 +85,10 @@ def run_prod(
         memory_config=input_a_memory_config,
     )
 
-    start_time = start_measuring_time()
-    op_output_tensor = ttnn.prod(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
+    op_output_tensor, e2e_perf = profile_ttnn_call(
+        device, ttnn.prod, input_tensor_a, keepdim=keepdim, dim=dim, memory_config=output_memory_config
+    )
     output_tensor = ttnn.to_torch(op_output_tensor)
-    e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999
     tensors = [input_tensor_a, op_output_tensor]
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)

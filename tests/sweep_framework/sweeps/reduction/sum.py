@@ -5,15 +5,13 @@
 from typing import Optional, Tuple
 from functools import partial
 
+import pytest
 import torch
 import random
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.sweep_framework.sweep_utils.utils import gen_shapes, gen_pytest_parametrize_args
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.reduction_common import run_sum
 
 # Override the default timeout in seconds for hang detection.
@@ -99,11 +97,28 @@ def run(
     )
 
 
-import pytest
+@pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters, invalidate_vector))
+def test_sum(
+    device,
+    input_shape,
+    dim,
+    keepdim,
+    input_a_dtype,
+    input_a_layout,
+    input_a_memory_config,
+    output_memory_config,
+):
+    (result, msg), e2e_perf = run_sum(
+        input_shape, dim, keepdim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config, device
+    )
+    assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"E2E Perf: {e2e_perf}")
 
 
 @pytest.mark.parametrize(
-    "input_shape, dim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config",
+    "input_shape, dim, keepdim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config",
     [
         ([7, 32, 4, 96], 3, True, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
     ],

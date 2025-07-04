@@ -14,9 +14,13 @@ import itertools
 from typing import Optional, List, Callable
 import copy
 from functools import partial
+from typing import Tuple, Callable, List, Dict, Any
 
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from models.utility_functions import torch_random
+from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
+from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
+from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
 
 
 def sanitize_shape_rm(input_shape):
@@ -285,7 +289,7 @@ def get_device_grid_size():
     return y, x
 
 
-def gen_pytest_parametrize_args(parameters: dict, invalidate_function: Callable | None = None) -> dict:
+def gen_pytest_parametrize_args(parameters: dict, invalidate_function: Optional[Callable] = None) -> dict:
     """Generate pytest parametrize arguments from a dictionary of parameters."
     Args:
         parameters: A dictionary of parameters. The keys are the config names and the values are dictionaries of parameter values.
@@ -322,6 +326,7 @@ def gen_pytest_parametrize_args(parameters: dict, invalidate_function: Callable 
                 test_vector = {name: val for name, val in zip(test_argnames, arg_vals)}
                 should_skip, _reason = invalidate_function(test_vector)
                 if should_skip:
+                    logger.debug(f"Invalidate function returned {should_skip} for {test_vector} with reason {_reason}")
                     continue
             id_str = (
                 str(param_name)
@@ -330,3 +335,38 @@ def gen_pytest_parametrize_args(parameters: dict, invalidate_function: Callable 
             )
             test_id2values[id_str] = arg_vals
     return {"argnames": test_argnames, "argvalues": test_id2values.values(), "ids": test_id2values.keys()}
+
+
+IGNORE_RUNS = 1
+"""The number of runs to ignore when measuring the average time."""
+
+
+REPEAT_RUNS = 1
+"""The number of runs to average when measuring performance."""
+
+
+def profile_ttnn_call(device, function: Callable, *args: List[Any], **kwargs: Dict[str, Any]) -> Tuple[Any, float]:
+    """Determine the average time taken for a function call, excluding the first IGNORE_RUNS runs."""
+
+    # If this is called from pytest, we need to ignore the first IGNORE_RUNS runs to avoid the JIT compile time overhead.
+    # This is not a problem when called from sweep framework, because it already ignores the first run.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        for _ in range(IGNORE_RUNS):
+            _results = function(*args, **kwargs)
+
+    ttnn.synchronize_device(device)
+    start_time = start_measuring_time()
+    for _ in range(REPEAT_RUNS):
+        results = function(*args, **kwargs)
+    avg_host_time = stop_measuring_time(start_time) / REPEAT_RUNS
+    e2e_perf = {"E2E_PERF": avg_host_time}
+
+    # If this is called from pytest, get device time from profiler logs.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        ttnn.DumpDeviceProfiler(device)
+        opPerfData = get_device_data_generate_report(
+            PROFILER_LOGS_DIR, outputFolder=None, date=None, nameAppend=None, export_csv=False, cleanup_device_log=True
+        )
+        if opPerfData:
+            e2e_perf["AVG_DEVICE_TIME"] = opPerfData[0]["DEVICE KERNEL DURATION [ns]"]
+    return results, e2e_perf

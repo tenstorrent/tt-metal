@@ -5,6 +5,7 @@
 import ttnn
 from loguru import logger
 from tests.ttnn.utils_for_testing import check_with_pcc
+from models.utility_functions import is_wormhole_b0
 
 
 def get_product(lst):
@@ -17,10 +18,12 @@ def get_product(lst):
 def get_byte_count(tensor):
     shape = tensor.padded_shape
     dtype = tensor.dtype
-    if dtype == ttnn.float32:
+    if dtype in (ttnn.float32, ttnn.uint32, ttnn.int32):
         count = 4
     elif dtype == ttnn.bfloat16:
         count = 2
+    elif dtype == ttnn.uint8:
+        count = 1
     elif dtype == ttnn.bfloat8_b:
         count = 1.0625
     else:
@@ -29,35 +32,45 @@ def get_byte_count(tensor):
     return count * get_product(tensor.shape)
 
 
-WH_DRAM_THROUGHPUT = 256  # bytes/ns
+ARCH2DRAM_THROUGHPUT = {
+    "wormhole_b0": 256,  # bytes/ns
+    "blackhole": 512,  # bytes/ns
+}
 
 
-def get_rooofline_message(tensors, throughput=WH_DRAM_THROUGHPUT):
+def get_roofline_metrics(tensors, throughput=None):
+    if throughput is None:
+        throughput = ARCH2DRAM_THROUGHPUT[ttnn.get_arch_name()]
+
     byte_count = 0
     for tensor in tensors:
         byte_count += get_byte_count(tensor)
 
     # bytes / bytes/ns = ns
     roofline = byte_count / throughput
-    return f"ROOFLINE {roofline} BYTECOUNT {byte_count}"
+    return {"ROOFLINE": roofline, "BYTECOUNT": byte_count}
 
 
-def update_check_result(check_result, messages):
+def update_check_result(check_result, metrics):
     status, message = check_result
     if not status:
         return check_result
-    new_message = message
-    for msg in messages:
-        new_message += " " + msg
-    return (status, "PCC " + new_message)
+    metrics.update({"PCC": message})
+    message = " ".join([f"{key} {value}" for key, value in metrics.items()])
+    return status, message
 
 
 def get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf, flop_counts=None):
     check_result = check_with_pcc(torch_output_tensor, output_tensor, expected_pcc)
-    messages = [get_rooofline_message(tensors)]
+    metrics = get_roofline_metrics(tensors)
+    if isinstance(e2e_perf, dict):
+        metrics.update(e2e_perf)
+        e2e_perf = metrics["E2E_PERF"]
+    else:
+        metrics.update({"E2E_PERF": e2e_perf})
     if flop_counts:
-        messages.append(f"FLOP_COUNT {get_product(flop_counts)}")
-    updated_check_result = update_check_result(check_result, messages)
+        metrics.update({"FLOP_COUNT": get_product(flop_counts)})
+    updated_check_result = update_check_result(check_result, metrics)
     return [updated_check_result, e2e_perf]
 
 

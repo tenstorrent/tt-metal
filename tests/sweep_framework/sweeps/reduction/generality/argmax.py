@@ -9,8 +9,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args, profile_ttnn_call
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 # Override the default timeout in seconds for hang detection.
@@ -60,18 +59,18 @@ def run_argmax(device, tensor_shape, dim, keepdim, use_multicore) -> list:
 
     ttnn_errored = False
     ttnn_error_msg = ""
-    start_time = start_measuring_time()
     try:
-        op_output_tensor = (
-            ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, use_multicore=use_multicore)
-            if dim is not None
-            else ttnn_op(ttnn_tensor, use_multicore=use_multicore)
-        )
+        if dim is not None:
+            op_output_tensor, e2e_perf = profile_ttnn_call(
+                device, ttnn_op, ttnn_tensor, dim=dim, keepdim=keepdim, use_multicore=use_multicore
+            )
+        else:
+            op_output_tensor, e2e_perf = profile_ttnn_call(device, ttnn_op, ttnn_tensor, use_multicore=use_multicore)
         output_tensor = ttnn.to_torch(ttnn.from_device(op_output_tensor))
     except RuntimeError as e:
         ttnn_errored = True
         ttnn_error_msg = str(e)
-    e2e_perf = stop_measuring_time(start_time)
+        e2e_perf = None
 
     if torch_errored != ttnn_errored:
         return [

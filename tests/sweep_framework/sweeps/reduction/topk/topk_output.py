@@ -12,8 +12,8 @@ from tests.sweep_framework.framework.permutations import *
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_topk_simmilarity
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.utils import profile_ttnn_call
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 from loguru import logger
 
@@ -125,11 +125,11 @@ def run_topk(
         memory_config=output_memory_config,
     )
 
-    start_time = start_measuring_time()
-    ttnn.topk(input_tensor_a, k=k, dim=dim, largest=largest, sorted=True, out=(op_output_values, op_output_indices))
+    (op_output_values, op_output_indices), e2e_perf = profile_ttnn_call(
+        device, ttnn.topk, input_tensor_a, k=k, dim=dim, largest=largest, sorted=True
+    )
     output_values = ttnn.to_torch(op_output_values)
     output_indices = ttnn.to_torch(op_output_indices).to(torch.int64)
-    e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999
     tensors = [input_tensor_a, op_output_values, op_output_indices]
     return get_run_return(torch_output_values, output_values, expected_pcc, tensors, e2e_perf)
