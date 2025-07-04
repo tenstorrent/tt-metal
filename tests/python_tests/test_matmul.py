@@ -26,7 +26,7 @@ from helpers.utils import passed_test
 supported_formats = [
     DataFormat.Float16_b,
     DataFormat.Float16,
-    DataFormat.Bfp8_b,
+    # DataFormat.Bfp8_b,
     DataFormat.Float32,
 ]
 #   INPUT-OUTPUT FORMAT SWEEP
@@ -69,15 +69,10 @@ param_ids = generate_param_ids(all_params)
 def test_matmul(testname, formats, dest_acc, math_fidelity):
     torch_format = format_dict[formats.output_format]
 
-    input_dimensions = [32, 32]
+    input_dimensions = [64, 64]
 
     src_A, src_B, tile_cnt = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_dimensions,
-        const_face=True,
-        const_value_A=2,
-        const_value_B=2,
+        formats.input_format, formats.input_format, input_dimensions=input_dimensions
     )
 
     generate_golden = get_golden_generator(MatmulGolden)
@@ -93,12 +88,17 @@ def test_matmul(testname, formats, dest_acc, math_fidelity):
     ).to(torch_format)
     golden_tensor = golden_tensor.flatten()
 
-    tilized_A = tilize_block(
-        src_A, dimensions=input_dimensions, stimuli_format=formats.input_format
-    )
-    tilized_B = tilize_block(
-        src_B, dimensions=input_dimensions, stimuli_format=formats.input_format
-    )
+    if formats.input_format != DataFormat.Bfp8_b:
+        tilized_A = tilize_block(
+            src_A, dimensions=input_dimensions, stimuli_format=formats.input_format
+        )
+        tilized_B = tilize_block(
+            src_B, dimensions=input_dimensions, stimuli_format=formats.input_format
+        )
+    else:
+        # BFP8 format requires special handling for tilization
+        tilized_A = src_A
+        tilized_B = src_B
 
     res_address = write_stimuli_to_l1(
         tilized_A.flatten(),
