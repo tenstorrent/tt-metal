@@ -1595,6 +1595,8 @@ class ModelArgs:
     #     self.vision_n_global_layers = 8
 
     def _set_vision_params(self, vision_config):
+        self.vision_image_size = vision_config.get("image_size", 1540)
+        self.vision_rope_theta = vision_config.get("rope_theta", 10000.0)
         self.vision_chunk_size = vision_config.get("vision_chunk_size", 896)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
         self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", 8)
@@ -1612,6 +1614,9 @@ class ModelArgs:
 
         self.vision_dropout = vision_config.get("attention_dropout", 0.0)
         self.mm_tokens_per_image = vision_config.get("mm_tokens_per_image", 256)
+
+        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            self.vision_hidden_dim = vision_config.get("head_dim", 64)
 
         # Optional vision activation layer, defaults to GELU
         act_layer = vision_config.get("act_layer", "gelu").lower()
@@ -2430,6 +2435,14 @@ class ModelArgs:
             layer = model.vision_tower.transformer.layers[0].attention
         else:
             layer = model.vision_tower.vision_model.encoder.layers[0].self_attn  # Common naming
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_rot_emb(self):
+        model = self.reference_vision_transformer(wrap=False)
+        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            layer = model.vision_tower.patch_positional_embedding
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer

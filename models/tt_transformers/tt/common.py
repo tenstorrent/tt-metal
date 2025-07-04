@@ -219,11 +219,49 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
 def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
     # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
     # Values obtained from grid search
-    h = torch.arange(max_patches_per_side, device=freqs.device)
-    w = torch.arange(max_patches_per_side, device=freqs.device)
+    freqs /= scale_factor
+    return freqs
 
-    freqs_h = torch.outer(h, freqs[::2]).float()
-    freqs_w = torch.outer(w, freqs[1::2]).float()
+    # low_freq_factor = 1
+    # high_freq_factor = 4
+
+    # low_freq_wavelen = orig_context_len / low_freq_factor
+    # high_freq_wavelen = orig_context_len / high_freq_factor
+    # new_freqs = []
+    # for freq in freqs:
+    #     wavelen = 2 * math.pi / freq
+    #     if wavelen < high_freq_wavelen:
+    #         new_freqs.append(freq)
+    #     elif wavelen > low_freq_wavelen:
+    #         new_freqs.append(freq / scale_factor)
+    #     else:
+    #         assert low_freq_wavelen != high_freq_wavelen
+    #         smooth = (orig_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+    #         new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
+    # return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+
+
+def apply_scaling_vision(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    return freqs / scale_factor
+
+
+def precompute_vision_freqs(
+    dim: int, max_patches_per_side: int, theta: float, scale_factor=None, orig_context_len=None
+):
+    # Compute base frequencies
+    base_freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
+    if scale_factor is not None:
+        base_freqs = apply_scaling_vision(base_freqs, scale_factor, orig_context_len)
+
+    # Get height and width indices
+    h_idx = torch.arange(max_patches_per_side)
+    w_idx = torch.arange(max_patches_per_side)
+
+    # Compute 2D frequency matrices
+    freqs_h = torch.outer(h_idx, base_freqs[::2])
+    freqs_w = torch.outer(w_idx, base_freqs[1::2])
+
+    # Broadcast + merge
     inv_freq = torch.cat(
         [
             freqs_h[:, None, :].repeat(1, max_patches_per_side, 1),
@@ -231,13 +269,13 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: in
         ],
         dim=-1,
     ).reshape(
-        -1, self.dim // 2
-    )  # we reshape to only index on the position indexes, not tuple of indexes
-    # Different from paper, but it uses a different permutation in order to obtain the same calculation
+        -1, dim // 2
+    )  # Shape: [H*W, dim//2]
 
-    new_freqs = torch.cat((inv_freq, inv_freq), dim=-1)
-
-    return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+    full_freqs = torch.cat([inv_freq, inv_freq], dim=-1)
+    cos = full_freqs.cos()
+    sin = full_freqs.sin()
+    return cos, sin  # Shape: [H*W, dim]
 
 
 def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
@@ -278,7 +316,7 @@ def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
 
 def gather_cos_sin(position_ids, cos, sin):
     position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
-    cos = cos.gather(0, position_id_expanded)
+    Y = cos.gather(0, position_id_expanded)
     sin = sin.gather(0, position_id_expanded)
     cos = torch.stack([cos, cos], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
     sin = torch.stack([sin, sin], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
