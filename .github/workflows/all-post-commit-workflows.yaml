@@ -118,8 +118,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n150-viommu-large-stable },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-viommu-large-stable },
         ]
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
@@ -136,8 +136,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n150-viommu-large-stable },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-viommu-large-stable },
         ]
     uses: ./.github/workflows/models-post-commit.yaml
     with:
@@ -153,8 +153,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n150-viommu-large-stable },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-viommu-large-stable },
         ]
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
@@ -170,8 +170,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n150-viommu-large-stable },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-viommu-large-stable },
         ]
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:

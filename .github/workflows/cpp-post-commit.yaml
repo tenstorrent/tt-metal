@@ -66,7 +66,6 @@ jobs:
         TT_METAL_HOME: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -75,8 +74,8 @@ jobs:
     runs-on: >-
       ${{
         (startsWith(inputs.runner-label, 'tt-beta-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)))
-        || github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        || github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-viommu-large-stable', inputs.runner-label)
+        || fromJSON(format('["{0}"]', inputs.runner-label))
       }}
     steps:
       - name: ⬇️  Setup Job

@@ -44,7 +44,7 @@ jobs:
           }
         ]
     name: ${{ matrix.test-group.name }}
-    runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"]
+    runs-on: ${{ inputs.runner-label }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
