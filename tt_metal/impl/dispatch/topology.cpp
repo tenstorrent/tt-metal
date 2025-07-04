@@ -1505,12 +1505,20 @@ void build_tt_fabric_program(
             auto eth_chans_dir1 = active_fabric_eth_channels.at(dir1);
             auto eth_chans_dir2 = active_fabric_eth_channels.at(dir2);
 
+            // Hack for TG to connect the last routing plane correctly for dispatch
+            if (is_TG && (eth_chans_dir1.size() != eth_chans_dir2.size())) {
+                log_info(tt::LogMetal, "applying hack for chip: {}", device->id());
+                std::reverse(eth_chans_dir1.begin(), eth_chans_dir1.end());
+                std::reverse(eth_chans_dir2.begin(), eth_chans_dir2.end());
+            }
+
             // since tunneling cores are not guaraneteed to be reserved on the same routing plane, iterate through
             // the ordered eth channels in both directions
             uint32_t num_links = std::min(eth_chans_dir1.size(), eth_chans_dir2.size());
             for (uint32_t link = 0; link < num_links; link++) {
                 auto eth_chan_dir1 = eth_chans_dir1[link];
                 auto eth_chan_dir2 = eth_chans_dir2[link];
+                log_info(tt::LogMetal, "on chip: {}, connecting {} and {}", device->id(), eth_chan_dir1, eth_chan_dir2);
 
                 auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
