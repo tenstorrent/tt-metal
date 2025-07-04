@@ -23,6 +23,7 @@ class TtBepC3:
             device=device,
             conv=model_params.cv1.block.conv,
             conv_pth=parameters.cv1.block.conv,
+            shard_layout=shard_layout_cv2,
             # shard_layout=None,
             # auto_shard=True,
             activation="silu",
