@@ -13,6 +13,7 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
@@ -139,9 +140,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     }
 
     // Get OP Config, topology config
-    std::vector<Tensor> input_tensors = {input_tensor};
-    std::vector<Tensor> output_tensors = {output_tensor};
-    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
+    uint32_t page_size = input_tensor.buffer()->page_size();
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
     TT_FATAL(
@@ -165,7 +164,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
+    uint32_t l1_scratch_cb_page_size_bytes = page_size;
 
     // scatter-write currently only supports 2 distinct noc addresses
     uint32_t max_target_noc_addresses_per_packet = 2;
@@ -212,40 +211,58 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     auto reserved_packet_header_backward_CB_handle =
         CreateCircularBuffer(program, sender_backward_core_ranges, cb_reserved_packet_header_backward_config);
 
+    bool input_is_sharded = input_tensor.is_sharded();
+    bool output_is_sharded = output_tensor.is_sharded();
+
+    std::map<string, string> reader_compute_defines;
+    if (input_is_sharded) {
+        reader_compute_defines["INPUT_IS_SHARDED"] = "1";
+    }
+
+    std::map<string, string> writer_compute_defines;
+    if (output_is_sharded) {
+        reader_compute_defines["OUTPUT_IS_SHARDED"] = "1";
+        writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
+    }
+
     // KERNEL CREATION
     // Forward Direction
     // Reader
-    auto sender_reader_forward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-    sender_reader_forward_kernel_config.compile_args = {
+    std::vector<uint32_t> sender_reader_forward_compile_args = {
         ring_index,                                        // my_chip_id
         static_cast<uint32_t>(input_tensor_buffer_type),   // input_buffer_type
         static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
         sender_forward_cb_index,                           // cb_forward_id
         num_tiles_to_write_per_packet,                     // num_tiles_to_write_per_packet
-        op_config.get_page_size(),                         // tensor0_page_size
+        page_size,                                         // tensor0_page_size
         num_targets_forward,                               // num_slices_forward_direction
         num_targets_backward,                              // num_slices_backward_direction
         static_cast<uint32_t>(topology),                   // topology
         1,                                                 // direction
         fuse_op,                                           // fused op
     };
+    if (input_is_sharded) {
+        shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_forward_compile_args);
+    }
+    if (output_is_sharded) {
+        shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_forward_compile_args);
+    }
     auto worker_sender_reader_forward_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
         "minimal_default_reader.cpp",
         sender_forward_core_ranges,
-        sender_reader_forward_kernel_config);
+        tt::tt_metal::ReaderDataMovementConfig(sender_reader_forward_compile_args, reader_compute_defines));
 
     // Writer
-    auto sender_writer_forward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
-    sender_writer_forward_kernel_config.compile_args = {
+    std::vector<uint32_t> sender_writer_forward_compile_args = {
         ring_index,                                        // my_chip_id
         reserved_packet_header_forward_CB_index,           // reserved_packet_header_cb_id
         num_packet_headers_storable,                       // num_packet_headers_storable
         static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
         sender_forward_cb_index,                           // cb_forward_id
         num_tiles_to_write_per_packet,                     // num_tiles_to_write_per_packet
-        op_config.get_page_size(),                         // tensor0_page_size
+        page_size,                                         // tensor0_page_size
         num_targets_forward,                               // num_targets_forward_direction
         num_targets_backward,                              // num_targets_backward_direction
         dynamic_alternate,                                 // alternate
@@ -253,46 +270,53 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         static_cast<uint32_t>(topology),                   // topology
         1,                                                 // direction
     };
+    if (output_is_sharded) {
+        shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_forward_compile_args);
+    }
     auto worker_sender_writer_forward_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
         "minimal_default_writer.cpp",
         sender_forward_core_ranges,
-        sender_writer_forward_kernel_config);
+        tt::tt_metal::WriterDataMovementConfig(sender_writer_forward_compile_args, writer_compute_defines));
 
     // Backward Direction
     // Reader
-    auto sender_reader_backward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-    sender_reader_backward_kernel_config.compile_args = {
+    std::vector<uint32_t> sender_reader_backward_compile_args = {
         ring_index,                                        // my_chip_id
         static_cast<uint32_t>(input_tensor_buffer_type),   // input_buffer_type
         static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
         sender_backward_cb_index,                          // cb_forward_id
         num_tiles_to_write_per_packet,                     // num_tiles_to_write_per_packet
-        op_config.get_page_size(),                         // tensor0_page_size
+        page_size,                                         // tensor0_page_size
         num_targets_forward,                               // num_slices_forward_direction
         num_targets_backward,                              // num_slices_backward_direction
         static_cast<uint32_t>(topology),                   // topology
         0,                                                 // direction
         fuse_op,                                           // fused op
     };
+    if (input_is_sharded) {
+        shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_backward_compile_args);
+    }
+    if (output_is_sharded) {
+        shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_backward_compile_args);
+    }
     auto worker_sender_reader_backward_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
         "minimal_default_reader.cpp",
         sender_backward_core_ranges,
-        sender_reader_backward_kernel_config);
+        tt::tt_metal::ReaderDataMovementConfig(sender_reader_backward_compile_args, reader_compute_defines));
 
     // Writer
-    auto sender_writer_backward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
-    sender_writer_backward_kernel_config.compile_args = {
+    std::vector<uint32_t> sender_writer_backward_compile_args = {
         ring_index,                                        // my_chip_id
         reserved_packet_header_backward_CB_index,          // reserved_packet_header_cb_id
         num_packet_headers_storable,                       // num_packet_headers_storable
         static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
         sender_backward_cb_index,                          // cb_forward_id
         num_tiles_to_write_per_packet,                     // num_tiles_to_write_per_packet
-        op_config.get_page_size(),                         // tensor0_page_size
+        page_size,                                         // tensor0_page_size
         num_targets_forward,                               // num_targets_forward_direction
         num_targets_backward,                              // num_targets_backward_direction
         dynamic_alternate,                                 // alternate
@@ -300,13 +324,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         static_cast<uint32_t>(topology),                   // topology
         0,                                                 // direction
     };
+    if (output_is_sharded) {
+        shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_backward_compile_args);
+    }
     auto worker_sender_writer_backward_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
         "minimal_default_writer.cpp",
         sender_backward_core_ranges,
-        sender_writer_backward_kernel_config);
-
+        tt::tt_metal::WriterDataMovementConfig(sender_writer_backward_compile_args, writer_compute_defines));
     // Kernel Runtime Args
     for (uint32_t link = 0; link < num_links; link++) {
         /* All gather fusion */
@@ -353,6 +379,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
             input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
         };
+        if (input_is_sharded) {
+            shard_builder::extend_sharding_run_time_args(input_tensor, reader_forward_rt_args);
+        }
+        if (output_is_sharded) {
+            shard_builder::extend_sharding_run_time_args(output_tensor, reader_forward_rt_args);
+        }
         if (fuse_op) {
             fused_op_signaler_forward->push_all_gather_fused_op_rt_args(reader_forward_rt_args, 1, 0, 1);
         }
@@ -378,6 +410,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
             input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
         };
+        if (input_is_sharded) {
+            shard_builder::extend_sharding_run_time_args(input_tensor, reader_backward_rt_args);
+        }
+        if (output_is_sharded) {
+            shard_builder::extend_sharding_run_time_args(output_tensor, reader_backward_rt_args);
+        }
         if (fuse_op) {
             fused_op_signaler_backward->push_all_gather_fused_op_rt_args(reader_backward_rt_args, 1, 0, 0);
         }
@@ -409,6 +447,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
             input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
         };
+        if (output_is_sharded) {
+            shard_builder::extend_sharding_run_time_args(output_tensor, writer_forward_rt_args);
+        }
         writer_forward_rt_args.push_back(false);
         writer_forward_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
@@ -447,6 +488,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
             input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
         };
+        if (output_is_sharded) {
+            shard_builder::extend_sharding_run_time_args(output_tensor, writer_backward_rt_args);
+        }
         writer_backward_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
             const auto sender_fabric_node_id =
