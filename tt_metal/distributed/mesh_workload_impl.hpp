@@ -16,7 +16,7 @@ using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;
 class MeshCommandQueue;
 class FDMeshCommandQueue;
 
-class MeshWorkloadImpl : public std::enable_shared_from_this<MeshWorkloadImpl> {
+class MeshWorkloadImpl {
     // A MeshWorkload can be fully described using a set of programs mapped to different Logical Device Regions
     // in a Mesh + configurable runtime Args
     // The current iteration supports the following compute paradigms:

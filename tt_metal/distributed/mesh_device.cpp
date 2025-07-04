@@ -203,7 +203,7 @@ MeshDevice::MeshDevice(
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())),
     reader_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())) {
-    Inspector::mesh_device_created(this);
+    Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
 }
 
 std::shared_ptr<MeshDevice> MeshDevice::create(

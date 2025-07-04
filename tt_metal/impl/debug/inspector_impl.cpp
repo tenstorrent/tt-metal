@@ -202,54 +202,54 @@ void Logger::log_program_binary_status_change(const ProgramData& program_data, s
     }
 }
 
-void Logger::log_mesh_device_created(const distributed::MeshDevice* mesh_device) noexcept {
+void Logger::log_mesh_device_created(const MeshDeviceData& mesh_device_data) noexcept {
     if (!initialized) {
         return;
     }
     try {
         mesh_devices_ostream << "- mesh_device_created:\n";
-        mesh_devices_ostream << "    mesh_id: " << mesh_device->id() << "\n";
+        mesh_devices_ostream << "    mesh_id: " << mesh_device_data.mesh_id << "\n";
         mesh_devices_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
-        auto parent_mesh_id = mesh_device->get_parent_mesh_id();
-        if (parent_mesh_id.has_value()) {
-            mesh_devices_ostream << "    parent_mesh_id: " << *parent_mesh_id << "\n";
+        if (mesh_device_data.parent_mesh_id.has_value()) {
+            mesh_devices_ostream << "    parent_mesh_id: " << *mesh_device_data.parent_mesh_id << "\n";
         }
 
-        mesh_devices_ostream << "    devices: [";
-        bool first = true;
-        for (const auto& device : mesh_device->get_devices()) {
-            if (!first) {
-                mesh_devices_ostream << ", ";
+        auto mesh_device = mesh_device_data.mesh_device.lock();
+        if (mesh_device) {
+            mesh_devices_ostream << "    devices: [";
+            bool first = true;
+            for (const auto& device : mesh_device->get_devices()) {
+                if (!first) {
+                    mesh_devices_ostream << ", ";
+                }
+                first = false;
+                mesh_devices_ostream << device->id();
             }
-            first = false;
-            mesh_devices_ostream << device->id();
-        }
-        mesh_devices_ostream << "]\n";
+            mesh_devices_ostream << "]\n";
 
-        auto& shape = mesh_device->get_view().shape();
-        mesh_devices_ostream << "    shape: [";
-        for (size_t i = 0; i < shape.dims(); ++i) {
-            if (i > 0) {
-                mesh_devices_ostream << ", ";
+            auto& shape = mesh_device->get_view().shape();
+            mesh_devices_ostream << "    shape: [";
+            for (size_t i = 0; i < shape.dims(); ++i) {
+                if (i > 0) {
+                    mesh_devices_ostream << ", ";
+                }
+                mesh_devices_ostream << shape.get_stride(i);
             }
-            mesh_devices_ostream << shape.get_stride(i);
+            mesh_devices_ostream << "]\n";
         }
-        mesh_devices_ostream << "]\n";
-        // TODO: Print shape
-
         mesh_devices_ostream.flush();
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh device created: {}", e.what());
     }
 }
 
-void Logger::log_mesh_device_destroyed(const distributed::MeshDevice* mesh_device) noexcept {
+void Logger::log_mesh_device_destroyed(const MeshDeviceData& mesh_device_data) noexcept {
     if (!initialized) {
         return;
     }
     try {
         mesh_devices_ostream << "- mesh_device_destroyed:\n";
-        mesh_devices_ostream << "    mesh_id: " << mesh_device->id() << "\n";
+        mesh_devices_ostream << "    mesh_id: " << mesh_device_data.mesh_id << "\n";
         mesh_devices_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
         mesh_devices_ostream.flush();
     } catch (const std::exception& e) {
@@ -257,13 +257,13 @@ void Logger::log_mesh_device_destroyed(const distributed::MeshDevice* mesh_devic
     }
 }
 
-void Logger::log_mesh_device_initialized(const distributed::MeshDevice* mesh_device) noexcept {
+void Logger::log_mesh_device_initialized(const MeshDeviceData& mesh_device_data) noexcept {
     if (!initialized) {
         return;
     }
     try {
         mesh_devices_ostream << "- mesh_device_initialized:\n";
-        mesh_devices_ostream << "    mesh_id: " << mesh_device->id() << "\n";
+        mesh_devices_ostream << "    mesh_id: " << mesh_device_data.mesh_id << "\n";
         mesh_devices_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
         mesh_devices_ostream.flush();
     } catch (const std::exception& e) {
@@ -271,13 +271,13 @@ void Logger::log_mesh_device_initialized(const distributed::MeshDevice* mesh_dev
     }
 }
 
-void Logger::log_mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
+void Logger::log_mesh_workload_created(const MeshWorkloadData& mesh_workload_data) noexcept {
     if (!initialized) {
         return;
     }
     try {
         mesh_workloads_ostream << "- mesh_workload_created:\n";
-        mesh_workloads_ostream << "    mesh_workload_id: " << mesh_workload->get_id() << "\n";
+        mesh_workloads_ostream << "    mesh_workload_id: " << mesh_workload_data.mesh_workload_id << "\n";
         mesh_workloads_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
         mesh_workloads_ostream.flush();
     } catch (const std::exception& e) {
@@ -285,13 +285,13 @@ void Logger::log_mesh_workload_created(const distributed::MeshWorkloadImpl* mesh
     }
 }
 
-void Logger::log_mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
+void Logger::log_mesh_workload_destroyed(const MeshWorkloadData& mesh_workload_data) noexcept {
     if (!initialized) {
         return;
     }
     try {
         mesh_workloads_ostream << "- mesh_workload_destroyed:\n";
-        mesh_workloads_ostream << "    mesh_workload_id: " << mesh_workload->get_id() << "\n";
+        mesh_workloads_ostream << "    mesh_workload_id: " << mesh_workload_data.mesh_workload_id << "\n";
         mesh_workloads_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
         mesh_workloads_ostream.flush();
     } catch (const std::exception& e) {
@@ -299,13 +299,13 @@ void Logger::log_mesh_workload_destroyed(const distributed::MeshWorkloadImpl* me
     }
 }
 
-void Logger::log_mesh_workload_add_program(const distributed::MeshWorkloadImpl* mesh_workload, const distributed::MeshCoordinateRange& device_range, std::size_t program_id) noexcept {
+void Logger::log_mesh_workload_add_program(const MeshWorkloadData& mesh_workload_data, const distributed::MeshCoordinateRange& device_range, std::size_t program_id) noexcept {
     if (!initialized) {
         return;
     }
     try {
         mesh_workloads_ostream << "- mesh_workload_add_program:\n";
-        mesh_workloads_ostream << "    mesh_workload_id: " << mesh_workload->get_id() << "\n";
+        mesh_workloads_ostream << "    mesh_workload_id: " << mesh_workload_data.mesh_workload_id << "\n";
         mesh_workloads_ostream << "    program_id: " << program_id << "\n";
         mesh_workloads_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
         mesh_workloads_ostream << "    coordinates:\n";
@@ -326,13 +326,13 @@ void Logger::log_mesh_workload_add_program(const distributed::MeshWorkloadImpl* 
     }
 }
 
-void Logger::log_mesh_workload_set_program_binary_status(const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept {
+void Logger::log_mesh_workload_set_program_binary_status(const MeshWorkloadData& mesh_workload_data, std::size_t mesh_id, ProgramBinaryStatus status) noexcept {
     if (!initialized) {
         return;
     }
     try {
         mesh_workloads_ostream << "- mesh_workload_set_program_binary_status:\n";
-        mesh_workloads_ostream << "    mesh_workload_id: " << mesh_workload->get_id() << "\n";
+        mesh_workloads_ostream << "    mesh_workload_id: " << mesh_workload_data.mesh_workload_id << "\n";
         mesh_workloads_ostream << "    mesh_id: " << mesh_id << "\n";
         mesh_workloads_ostream << "    status: ";
         switch (status) {

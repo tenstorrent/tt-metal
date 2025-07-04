@@ -59,12 +59,15 @@ struct ProgramData {
 
 struct MeshDeviceData {
     std::weak_ptr<const distributed::MeshDevice> mesh_device;
-    std::size_t mesh_id;
+    int mesh_id;
+    std::optional<int> parent_mesh_id;
+    bool initialized = false;
 };
 
 struct MeshWorkloadData {
-    std::weak_ptr<const distributed::MeshWorkloadImpl> mesh_workload;
-    std::size_t mesh_workload_id;
+    const distributed::MeshWorkloadImpl* mesh_workload;
+    uint64_t mesh_workload_id;
+    std::unordered_map<int, ProgramBinaryStatus> binary_status_per_device;
 };
 
 class Logger {
@@ -91,13 +94,13 @@ public:
     void log_program_compile_finished(const ProgramData& program_data) noexcept;
     void log_program_binary_status_change(const ProgramData& program_data, std::size_t device_id, ProgramBinaryStatus status) noexcept;
 
-    void log_mesh_device_created(const distributed::MeshDevice* mesh_device) noexcept;
-    void log_mesh_device_destroyed(const distributed::MeshDevice* mesh_device) noexcept;
-    void log_mesh_device_initialized(const distributed::MeshDevice* mesh_device) noexcept;
-    void log_mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
-    void log_mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
-    void log_mesh_workload_add_program(const distributed::MeshWorkloadImpl* mesh_workload, const distributed::MeshCoordinateRange& device_range, std::size_t program_id) noexcept;
-    void log_mesh_workload_set_program_binary_status(const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
+    void log_mesh_device_created(const MeshDeviceData& mesh_device_data) noexcept;
+    void log_mesh_device_destroyed(const MeshDeviceData& mesh_device_data) noexcept;
+    void log_mesh_device_initialized(const MeshDeviceData& mesh_device_data) noexcept;
+    void log_mesh_workload_created(const MeshWorkloadData& mesh_workload_data) noexcept;
+    void log_mesh_workload_destroyed(const MeshWorkloadData& mesh_workload_data) noexcept;
+    void log_mesh_workload_add_program(const MeshWorkloadData& mesh_workload_data, const distributed::MeshCoordinateRange& device_range, std::size_t program_id) noexcept;
+    void log_mesh_workload_set_program_binary_status(const MeshWorkloadData& mesh_workload_data, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
 };
 
 class Data {

@@ -52,7 +52,8 @@ public:
         uint32_t build_key) noexcept;
 
     static void mesh_device_created(
-        const distributed::MeshDevice* mesh_device) noexcept;
+        const distributed::MeshDevice* mesh_device,
+        std::optional<int> parent_mesh_id) noexcept;
     static void mesh_device_destroyed(
         const distributed::MeshDevice* mesh_device) noexcept;
     static void mesh_device_initialized(

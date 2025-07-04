@@ -43,7 +43,7 @@ public:
     MeshWorkloadImpl& impl() { return *pimpl_; }
 
 private:
-    std::shared_ptr<MeshWorkloadImpl> pimpl_;
+    std::unique_ptr<MeshWorkloadImpl> pimpl_;
 
 private:
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
