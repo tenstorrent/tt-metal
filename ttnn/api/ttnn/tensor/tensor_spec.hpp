@@ -47,7 +47,7 @@ public:
 
 private:
     void populate_sharding_specs();
-    std::optional<MemoryConfig> populate_nd_shard_spec_from_legacy() const;
+    MemoryConfig populate_nd_shard_spec_from_legacy() const;
     std::optional<MemoryConfig> populate_legacy_shard_spec_from_nd() const;
 
     ttnn::Shape logical_shape_;

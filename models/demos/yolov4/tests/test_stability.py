@@ -33,7 +33,6 @@ from models.utility_functions import run_for_wormhole_b0
 @pytest.mark.parametrize("pcc_check_interval", [5])
 def test_yolov4_stability(
     device,
-    use_program_cache,
     batch_size,
     act_dtype,
     weight_dtype,

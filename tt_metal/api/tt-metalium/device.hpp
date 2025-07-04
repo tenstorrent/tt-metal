@@ -91,8 +91,9 @@ public:
     virtual std::vector<CoreCoord> ethernet_cores_from_logical_cores(
         const std::vector<CoreCoord>& logical_cores) const = 0;
 
-    // Returns the optimal DRAM bank coordinates to logical worker assignment
-    virtual std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment() = 0;
+    // Returns the optimal DRAM bank coordinates to logical worker assignment based on which noc will be issuing DRAM
+    // requests
+    virtual std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) = 0;
 
     // Convert a logical coordinate to virtual coordinate
     virtual CoreCoord virtual_core_from_logical_core(
@@ -185,6 +186,7 @@ public:
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     virtual void enable_program_cache() = 0;
+    virtual void clear_program_cache() = 0;
     virtual void disable_and_clear_program_cache() = 0;
     void set_program_cache_misses_allowed(bool allowed);
     virtual program_cache::detail::ProgramCache& get_program_cache() = 0;
@@ -214,10 +216,6 @@ public:
     virtual void reset_sub_device_stall_group() = 0;
     virtual uint32_t num_sub_devices() const = 0;
     virtual uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) = 0;
-
-    // TODO #15944: Temporary api until migration to actual fabric is complete
-    virtual std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
 
     virtual bool is_mmio_capable() const = 0;
 

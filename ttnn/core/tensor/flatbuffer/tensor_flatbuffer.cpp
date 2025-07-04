@@ -19,7 +19,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "mesh_shape_generated.h"
-#include "mesh_coordinate_generated.h"
+#include <tt-metalium/serialized_descriptors/mesh_coordinate_generated.h>
 #include "tensor_generated.h"
 
 #include <vector>
@@ -27,13 +27,14 @@
 namespace ttnn {
 namespace {
 
-flatbuffers::Offset<flatbuffer::MeshCoordinate> to_flatbuffer(
+flatbuffers::Offset<tt::tt_metal::distributed::flatbuffer::MeshCoordinate> to_flatbuffer(
     const tt::tt_metal::distributed::MeshCoordinate& coord, flatbuffers::FlatBufferBuilder& builder) {
     auto values_vector = builder.CreateVector(std::vector<uint32_t>(coord.coords().begin(), coord.coords().end()));
-    return flatbuffer::CreateMeshCoordinate(builder, values_vector);
+    return tt::tt_metal::distributed::flatbuffer::CreateMeshCoordinate(builder, values_vector);
 }
 
-tt::tt_metal::distributed::MeshCoordinate from_flatbuffer(const flatbuffer::MeshCoordinate* coord) {
+tt::tt_metal::distributed::MeshCoordinate from_flatbuffer(
+    const tt::tt_metal::distributed::flatbuffer::MeshCoordinate* coord) {
     return tt::tt_metal::distributed::MeshCoordinate(
         std::vector<uint32_t>(coord->values()->begin(), coord->values()->end()));
 }
@@ -203,7 +204,7 @@ Tensor from_flatbuffer(
                     coord, [host_buffer = std::move(host_buffer)]() mutable { return std::move(host_buffer); });
             }
 
-            // TODO: #22258 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used
+            // TODO: #24115 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used
             // directly in Tensor storage.
             const auto strategy = [&]() -> tt::tt_metal::DistributedTensorConfig {
                 std::unordered_set<const std::byte*> buffer_addresses;

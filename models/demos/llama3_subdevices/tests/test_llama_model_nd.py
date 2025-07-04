@@ -5,7 +5,6 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-import os
 from models.demos.llama3_subdevices.tt.llama_common import (
     HostEmbedding,
     PagedAttentionConfig,
@@ -15,8 +14,6 @@ from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.sampling import TTSampling
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import skip_for_blackhole
-
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 
 @torch.no_grad()
@@ -76,7 +73,7 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": True,
         }
     ],
     indirect=True,
@@ -90,7 +87,6 @@ def test_llama_model_inference(
     page_params,
     optimizations,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):

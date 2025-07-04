@@ -30,7 +30,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
-def test_attention_inference(batch, num_chunks, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
 

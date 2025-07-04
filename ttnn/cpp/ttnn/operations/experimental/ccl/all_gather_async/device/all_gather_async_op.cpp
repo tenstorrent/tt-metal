@@ -37,10 +37,10 @@ void AllGatherAsync::validate_with_output_tensors(
 
     if (output_tensors.size() > 0 and output_tensors[0].has_value()) {
         TT_FATAL(
-            output_tensors.size() <= 2,
-            "Error, Number of output tensors should be at most 2 but has {}",
+            output_tensors.size() <= 1,
+            "Error, Number of output tensors should be at most 1 but has {}",
             output_tensors.size());
-        const auto& output_tensor = output_tensors.size() == 1 ? output_tensors[0] : output_tensors[1];
+        const auto& output_tensor = output_tensors[0];
 
         TT_FATAL(
             output_tensor.value().storage_type() == StorageType::DEVICE,
@@ -139,15 +139,9 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] output_shard_num_cores: {}", output_shard_num_cores);
 
     // Check for minimal interleaved case
-    if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
-        input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
-        input_tensor_page_layout == tt::tt_metal::Layout::TILE) {
-        return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
-    } else if (
-        input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 &&
-        input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+    if (input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         input_tensor_page_layout == tt::tt_metal::Layout::TILE && semaphore.size() == 2) {
-        return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_ANY;
+        return AllGatherAsyncVersion::MINIMAL_INTERLEAVED;
     }
 
     log_trace(tt::LogOp, "[select_version] input_is_sharded: {}", input_is_sharded);
@@ -252,37 +246,15 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
     switch (version) {
-        case AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32: {
+        case AllGatherAsyncVersion::MINIMAL_INTERLEAVED: {
             log_trace(
-                tt::LogOp,
-                "Detected all gather specialized shape. all_gather_async_minimal_interleaved_dim3_1_1_32_any is "
-                "called");
-            return all_gather_async_minimal_interleaved_dim3_1_1_32_any(
+                tt::LogOp, "Detected all gather specialized shape. all_gather_async_minimal_interleaved is called");
+            return all_gather_async_minimal_interleaved(
                 input_tensors[0],
                 target_device,
                 forward_device,
                 backward_device,
                 output_tensors[0],
-                this->dim,
-                this->num_links,
-                target_ring_size,
-                device_index,
-                this->topology,
-                this->semaphore.at(0),
-                this->sub_device_id);
-        }
-        case AllGatherAsyncVersion::MINIMAL_INTERLEAVED_ANY: {
-            log_trace(
-                tt::LogOp,
-                "Detected all gather specialized shape. all_gather_async_minimal_interleaved_dim3_1_1_any_any is "
-                "called");
-            return all_gather_async_minimal_interleaved_dim3_1_1_any_any(
-                input_tensors[0],
-                output_tensors[0],
-                target_device,
-                forward_device,
-                backward_device,
-                output_tensors[1],
                 this->dim,
                 this->num_links,
                 target_ring_size,
@@ -410,7 +382,6 @@ Tensor all_gather_async_impl(
 
 Tensor all_gather_async_impl(
     const Tensor& input_tensor,
-    Tensor& persistent_intermediate_buffer,
     Tensor& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -437,8 +408,7 @@ Tensor all_gather_async_impl(
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
-    std::vector<std::optional<Tensor>> optional_output_tensors = {
-        persistent_intermediate_buffer, persistent_output_buffer};
+    std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
 
     return tt::tt_metal::operation::run(
                ttnn::AllGatherAsync(
@@ -454,7 +424,7 @@ Tensor all_gather_async_impl(
                {input_tensor},
                {},
                optional_output_tensors)
-        .at(1);
+        .at(0);
 }
 
 Tensor all_gather_async_impl(
@@ -529,7 +499,6 @@ Tensor all_gather_async(
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
-    Tensor& persistent_intermediate_buffer,
     Tensor& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -542,7 +511,6 @@ Tensor all_gather_async(
 
     return all_gather_async_impl(
         input_tensor,
-        persistent_intermediate_buffer,
         persistent_output_buffer,
         dim,
         multi_device_global_semaphore,

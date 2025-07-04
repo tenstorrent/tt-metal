@@ -414,7 +414,10 @@ def run_mamba_demo(
         ),
     ),
 )
-def test_demo(user_input, device, use_program_cache, get_tt_cache_path, model_version, max_gen_len):
+def test_demo(user_input, device, get_tt_cache_path, model_version, max_gen_len):
+    # https://github.com/tenstorrent/tt-metal/issues/23282
+    device.disable_and_clear_program_cache()
+
     return run_mamba_demo(
         prompts=user_input,
         device=device,

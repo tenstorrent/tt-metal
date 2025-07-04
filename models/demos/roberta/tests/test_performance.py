@@ -35,7 +35,7 @@ def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_l
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
 @pytest.mark.parametrize("bert", [ttnn_optimized_bert])
-def test_performance(device, use_program_cache, model_name, batch_size, sequence_size, bert):
+def test_performance(device, model_name, batch_size, sequence_size, bert):
     disable_persistent_kernel_cache()
 
     config = transformers.RobertaConfig.from_pretrained(model_name)

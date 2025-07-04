@@ -702,7 +702,12 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
             if (is_mm_conv && input_tensor.layout() == Layout::ROW_MAJOR &&
                 parallel_config.shard_scheme != TensorMemoryLayout::HEIGHT_SHARDED) {
                 // Workaround #13979 ttnn::tilize doesn't support BLOCK_SHARDED layout
-                input_tensor = ttnn::to_layout(input_tensor, Layout::TILE);
+                Tensor input_tensor_tilized = ttnn::to_layout(input_tensor, Layout::TILE);
+                if (conv_config.deallocate_activation) {
+                    input_tensor.deallocate(/*force*/ true);
+                    input_tensor_tilized = ttnn::move(input_tensor_tilized);
+                }
+                input_tensor = input_tensor_tilized;
             }
             if (!auto_shard_mm) {
                 ttnn::MemoryConfig input_tensor_sharded_memory_config_to_layout = input_tensor_sharded_memory_config;
@@ -730,22 +735,6 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         }
     }
     return {input_tensor, parallel_config, output_parallel_config};
-}
-
-void validate_weight_and_bias_tensors(
-    const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor) {
-    TT_ASSERT(!ttnn::has_storage_type_of(weight_tensor, ttnn::DEVICE_STORAGE_TYPE));
-    TT_ASSERT(weight_tensor.layout() == Layout::ROW_MAJOR);
-    TT_ASSERT(weight_tensor.logical_shape().rank() == 4);
-    // TODO: enable this assert
-    // TT_ASSERT(weight_tensor.get_shape() == weight_tensor.padded_shape());
-    if (bias_tensor.has_value()) {
-        TT_ASSERT(!ttnn::has_storage_type_of(bias_tensor.value(), ttnn::DEVICE_STORAGE_TYPE));
-        TT_ASSERT(bias_tensor.value().logical_shape().rank() == 4);
-        TT_ASSERT(bias_tensor.value().layout() == Layout::ROW_MAJOR);
-        // TODO: enable this assert
-        // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().padded_shape());
-    }
 }
 
 ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
