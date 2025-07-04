@@ -70,6 +70,9 @@ public:
 
     TestWorkerMemoryMap memory_map_;
 
+    // global line sync config
+    TestTrafficSenderConfig global_line_sync_configs_;
+
     // stores traffic config and the correspoding fabric_connection idx to use
     std::vector<std::pair<TestTrafficSenderConfig, uint32_t>> configs_;
 
@@ -106,6 +109,7 @@ public:
     void add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config);
     void create_kernels();
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
+    void set_line_sync(bool line_sync) { line_sync_ = line_sync; }
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
 
@@ -129,6 +133,7 @@ private:
     std::unordered_map<RoutingDirection, std::set<uint32_t>> used_fabric_connections_{};
 
     bool benchmark_mode_ = false;
+    bool line_sync_ = false;
 
     // controller?
 };
@@ -335,7 +340,14 @@ inline void TestDevice::create_sender_kernels() {
     const bool is_2d_fabric = this->device_info_provider_->is_2d_fabric();
     const bool use_dynamic_routing = this->device_info_provider_->use_dynamic_routing();
 
+    // Determine master core (first core in senders)
+    CoreCoord master_core = this->senders_.begin()->first;
+    uint32_t num_local_sync_cores = static_cast<uint32_t>(this->senders_.size());
+
     for (const auto& [core, sender] : this->senders_) {
+        // Determine if this is the master sync core
+        bool is_master_sync_core = (core == master_core);
+
         // get ct args
         // TODO: fix these- number of fabric connections, mappings etc
         std::vector<uint32_t> ct_args = {
@@ -343,7 +355,10 @@ inline void TestDevice::create_sender_kernels() {
             use_dynamic_routing,
             sender.fabric_connections_.size(), /* num fabric connections */
             sender.configs_.size(),
-            benchmark_mode_ ? 1u : 0u /* benchmark mode */};
+            benchmark_mode_ ? 1u : 0u,     /* benchmark mode */
+            line_sync_ ? 1u : 0u,          /* line sync */
+            is_master_sync_core ? 1u : 0u, /* master sync core */
+            num_local_sync_cores /* num local sync cores */};
 
         // memory map args
         // TODO: move to the right place

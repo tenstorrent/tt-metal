@@ -381,6 +381,10 @@ inline TestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yam
         test_config.benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
     }
 
+    if (test_yaml["line_sync"]) {
+        test_config.line_sync = parse_scalar<bool>(test_yaml["line_sync"]);
+    }
+
     return test_config;
 }
 
@@ -1414,6 +1418,11 @@ private:
         if (config.benchmark_mode) {
             out << YAML::Key << "benchmark_mode";
             out << YAML::Value << config.benchmark_mode;
+        }
+
+        if (config.line_sync) {
+            out << YAML::Key << "line_sync";
+            out << YAML::Value << config.line_sync;
         }
 
         out << YAML::Key << "fabric_setup";

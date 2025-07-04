@@ -1,6 +1,7 @@
 Tests:
   - name: "FullRingMulticast"
     benchmark_mode: true
+    line_sync: false
     fabric_setup:
       topology: Ring
 
@@ -15,6 +16,7 @@ Tests:
 
   - name: "HalfRingMulticast"
     benchmark_mode: true
+    line_sync: false
     fabric_setup:
       topology: Ring
 

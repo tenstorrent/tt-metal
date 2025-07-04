@@ -66,6 +66,7 @@ public:
     void wait_for_prorgams();
     void close_devices();
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
+    void set_line_sync(bool line_sync) { line_sync_ = line_sync; }
 
 private:
     void add_traffic_config(const TestTrafficConfig& traffic_config);
@@ -74,6 +75,7 @@ private:
     std::unordered_map<MeshCoordinate, TestDevice> test_devices_;
     std::unique_ptr<tt::tt_fabric::fabric_tests::GlobalAllocator> allocator_;
     bool benchmark_mode_ = false;  // Benchmark mode for current test
+    bool line_sync_ = false;       // Line sync for current test
 };
 
 void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
@@ -155,6 +157,7 @@ void TestContext::compile_programs() {
     // TODO: should we be taking const ref?
     for (auto& [coord, test_device] : test_devices_) {
         test_device.set_benchmark_mode(benchmark_mode_);
+        test_device.set_line_sync(line_sync_);
         test_device.create_kernels();
         auto& program_handle = test_device.get_program_handle();
         if (program_handle.num_kernels()) {
@@ -285,8 +288,9 @@ int main(int argc, char** argv) {
 
         test_context.open_devices(test_config.fabric_setup.topology, test_config.fabric_setup.routing_type.value());
 
-        // Set benchmark mode for this test group
+        // Set benchmark mode and line sync for this test group
         test_context.set_benchmark_mode(test_config.benchmark_mode);
+        test_context.set_line_sync(test_config.line_sync);
 
         auto built_tests = builder.build_tests({test_config});
 
