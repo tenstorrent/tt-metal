@@ -370,6 +370,8 @@ jobs:
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
           CIBW_BEFORE_BUILD: |
+            echo "=== CMake Version Check ==="
+            cmake --version
             export PYTHON_EXECUTABLE=$(which python)
             export Python_EXECUTABLE=$PYTHON_EXECUTABLE
             export Python3_EXECUTABLE=$PYTHON_EXECUTABLE
