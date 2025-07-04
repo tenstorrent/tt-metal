@@ -8,7 +8,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 60
+        default: 120
       skip_draft:
         description: 'Skip creating PR as draft'
         required: false
@@ -48,6 +48,7 @@ jobs:
         with:
           submodules: true
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0  # Ensure we get full history
 
       - name: Configure git
         run: |
@@ -61,7 +62,8 @@ jobs:
           OLD_SHA=$(git rev-parse HEAD)
           echo "old-sha=$OLD_SHA" >> $GITHUB_OUTPUT
 
-          git fetch origin main
+          # Fetch full history to ensure we can see all commits
+          git fetch --unshallow origin main 2>/dev/null || git fetch origin main
           git checkout main
           git pull origin main
 
@@ -144,19 +146,13 @@ jobs:
           echo "$COMMITS_TABLE_CONTENT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          # Generate PR body
+          # Generate simple initial PR body (will be updated later with full details)
           cat > ../../../llk_commit_log.txt << EOF
-          ## LLK Submodule Update
+          ## 🔄 LLK Submodule Update
 
-          | Previous Commit | New Commit |
-          |----------------|------------|
-          | \`$OLD_SHA\` | \`$NEW_SHA\` |
+          Updating LLK submodule from \`$OLD_SHA\` to \`$NEW_SHA\`.
 
-          ### Commits Uplifted:
-          $COMMITS_TABLE_CONTENT
-
-          ### Files Changed:
-          $(echo "$CHANGED_FILES" | sed 's/^/- /')
+          *This PR body will be updated with detailed information shortly...*
           EOF
 
       - name: Create Pull Request
@@ -193,19 +189,41 @@ jobs:
 
           # Generate updated PR body with PR link (use commits table from step output)
           cat > ../../../updated_llk_commit_log.txt << EOF
-          ## LLK Submodule Update
+          ## 🔄 LLK Submodule Update
 
-          **This PR:** [#$PR_NUMBER]($PR_URL)
+          ### 📋 Summary
+          This PR updates the LLK submodule to the latest version from the main branch.
 
-          | Previous Commit | New Commit |
-          |----------------|------------|
-          | \`$OLD_SHA\` | \`$NEW_SHA\` |
+          ### 🔗 Commit Range
+          | Previous Commit | New Commit | Compare |
+          |----------------|------------|---------|
+          | [\`$OLD_SHA\`](https://github.com/tenstorrent/tt_llk/commit/$OLD_SHA) | [\`$NEW_SHA\`](https://github.com/tenstorrent/tt_llk/commit/$NEW_SHA) | [View Changes](https://github.com/tenstorrent/tt_llk/compare/$OLD_SHA...$NEW_SHA) |
 
-          ### Commits Uplifted:
+          ### 📝 Commits Uplifted
           ${{ steps.analyze-changes.outputs.commits-table }}
 
-          ### Files Changed:
-          $(echo "$CHANGED_FILES" | sed 's/^/- /')
+          ### 📁 Files Changed ($(echo "$CHANGED_FILES" | wc -l) files)
+          <details>
+          <summary>Click to expand file list</summary>
+
+          $(echo "$CHANGED_FILES" | sed 's/^/- `/' | sed 's/$/`/')
+          </details>
+
+          ### 🏗️ Architecture Impact
+          $(if echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/"; then echo "- ⚠️ **Wormhole B0** changes detected - will trigger post-commit tests"; fi)
+          $(if echo "$CHANGED_FILES" | grep -q "^tt_llk_blackhole/"; then echo "- ⚠️ **Blackhole** changes detected - will trigger post-commit tests"; fi)
+          $(if ! echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/\|^tt_llk_blackhole/"; then echo "- ℹ️ No architecture-specific changes detected"; fi)
+
+          ### 🤖 Automation Status
+          - **Created by:** LLK Auto-Uplift Workflow
+          - **Trigger:** $(if [ "${{ github.event_name }}" = "schedule" ]; then echo "Scheduled ($(date))"; elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then echo "Repository Dispatch"; else echo "Manual/Workflow Call"; fi)
+          - **Branch:** \`${{ env.BRANCH_NAME }}\`
+
+          ### 🧪 Test Status
+          Test results and workflow status will be updated here automatically.
+
+          ---
+          *This PR will be automatically updated with test results and merged upon successful completion of all required checks.*
           EOF
 
           # Update the PR body with the new content including PR link
@@ -232,7 +250,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TIMEOUT_MINUTES=${{ inputs.workflow_timeout }}
+          TIMEOUT_MINUTES=${{ inputs.workflow_timeout || 120 }}
 
           # Build workflow list based on detected changes
           WORKFLOWS_TO_RUN=()
