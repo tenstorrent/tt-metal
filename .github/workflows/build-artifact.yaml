@@ -370,11 +370,16 @@ jobs:
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
           CIBW_BEFORE_BUILD: |
-            echo "=== pybind11 Debug ==="
-            python -c "import pybind11; print('pybind11 location:', pybind11.__file__)"
+            echo "=== Installing pybind11 ==="
+            python -m pip install pybind11
+            echo "=== Verify pybind11 installation ==="
             python -c "import pybind11; print('pybind11 version:', pybind11.__version__)"
-            echo "=== Python Library Check ==="
-            ls -la /opt/_internal/cpython-3.12.11/lib/libpython3.12.*
+            python -c "import pybind11; print('pybind11 location:', pybind11.__file__)"
+            echo "=== Python Library Search ==="
+            echo "Looking for Python library files..."
+            find /opt/python/cp312-cp312/lib -name "libpython*" 2>/dev/null || echo "No libpython found in cp312 lib"
+            find /opt/_internal -name "libpython*" 2>/dev/null || echo "No libpython found in _internal"
+            find /usr/lib -name "libpython*" 2>/dev/null | head -5 || echo "No libpython found in /usr/lib"
             echo "=== CMake Python Test ==="
             cmake --find-package -DNAME=Python -DCOMPILER_ID=GNU -DLANGUAGE=C -DMODE=EXIST
             echo "=== CMake Version Check ==="
