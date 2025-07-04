@@ -4,11 +4,11 @@
 
 #include "sort_program_factory.hpp"
 
-#include <cstdint>
-#include <iostream>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+
+#include <cstdint>
 
 namespace ttnn::operations::experimental::reduction::sort::program {
 
@@ -622,13 +622,32 @@ void SortProgramFactoryHybrid::override_runtime_arguments(
     const auto input_tensor_buffer = tensor_args.input_tensor.buffer();
     const auto value_tensor_buffer = output_tensors.at(0).buffer();
     const auto index_tensor_buffer = output_tensors.at(1).buffer();
+    const auto device = tensor_args.input_tensor.device();
 
+    // Lookup tensor data with physical core coordinates
+    std::vector<uint32_t> physical_core_lookup_table_data;
+    for (const auto& core_range : cached_program.shared_variables.core_range_set.ranges()) {
+        for (const auto& core_coord : core_range) {
+            const auto physical_core = device->worker_core_from_logical_core(core_coord);
+            physical_core_lookup_table_data.emplace_back(physical_core.x);
+            physical_core_lookup_table_data.emplace_back(physical_core.y);
+        }
+    }
+    const TensorSpec physical_core_lookup_table_spec(
+        ttnn::Shape{1, physical_core_lookup_table_data.size()},
+        TensorLayout{DataType::UINT32, PageConfig{Layout::ROW_MAJOR}, MemoryConfig()});
+    Tensor physical_core_lookup_table_tensor =
+        Tensor::from_vector(std::move(physical_core_lookup_table_data), physical_core_lookup_table_spec);
+    physical_core_lookup_table_tensor = physical_core_lookup_table_tensor.to_device(device);
+
+    // Update runtime args
     for (const auto& core_range : cached_program.shared_variables.core_range_set.ranges()) {
         for (const auto& core_coord : core_range) {
             auto& reader_runtime_args =
                 GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core_coord);
             reader_runtime_args[0] = input_tensor_buffer->address();
             reader_runtime_args[1] = index_tensor_buffer->address();
+            reader_runtime_args[2] = physical_core_lookup_table_tensor.buffer()->address();
 
             auto& writer_runtime_args =
                 GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id, core_coord);
