@@ -102,6 +102,22 @@ void kernel_main() {
                 const uint32_t j = i ^ sub_dist;
 
                 if (!(i >= global_tile_start && i < global_tile_end && j >= global_tile_start && j < global_tile_end)) {
+                    // If we do not have a barrier then a fast core could initiate
+                    // a transaction on the same semaphore which would create a
+                    // conflict if its new peer hasn't completed its previous
+                    // exchange.
+                    // For instance, with three cores A, B and C:
+                    //  A     B     C
+                    //  |     |     |
+                    //  E <-> E     | (A and B exchanging tiles)
+                    //  E <-> E     |
+                    //  E <-> E     |
+                    //  E <---E-----|  (C -> A)
+                    //  X     E     |  (A in invalid state)
+                    //  X     E     |
+                    //
+                    // The following barrier ensures that all cores are at the same stage,
+                    // which which no conflict can happen.
                     sort_barrier(
                         physical_core_lookup_table_cb_index,
                         sem_barrier_addr,

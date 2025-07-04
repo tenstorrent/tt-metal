@@ -136,7 +136,7 @@ void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, ui
 }
 
 /**
- * @brief Initializes the process of copying a tile to the destination buffer.
+ * @brief Helper function to manage copy_tile_to_dst_init_short_with_dt() calls.
  *
  * This function prepares the destination buffer for a new tile copy operation by
  * invoking a helper function to handle the initialization with the appropriate data type.

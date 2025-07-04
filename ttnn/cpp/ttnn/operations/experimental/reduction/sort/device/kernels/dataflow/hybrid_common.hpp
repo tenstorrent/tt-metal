@@ -30,15 +30,15 @@ constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
  * and then receives Wt tiles from the peer, writing them into the specified peer circular buffers.
  * Synchronization is handled using NoC semaphores to ensure correct ordering of tile transfers.
  *
- * @param value_tensor_this_cb_index   Circular buffer index for this core's value tensor tiles.
- * @param index_tensor_this_cb_index   Circular buffer index for this core's index tensor tiles.
- * @param cb_value_peer_index          Circular buffer index for peer's value tensor tiles.
- * @param cb_index_peer_index          Circular buffer index for peer's index tensor tiles.
- * @param Wt                          Number of tiles to exchange.
- * @param value_cb_tile_size           Size (in bytes) of each value tensor tile.
- * @param index_cb_tile_size           Size (in bytes) of each index tensor tile.
- * @param other_core_x                 X coordinate of the peer core.
- * @param other_core_y                 Y coordinate of the peer core.
+ * @param value_tensor_this_cb_index   Circular buffer index for this core's value tensor tiles (read from).
+ * @param index_tensor_this_cb_index   Circular buffer index for this core's index tensor tiles (read from).
+ * @param cb_value_peer_index          Circular buffer index for peer's value tensor tiles (write to).
+ * @param cb_index_peer_index          Circular buffer index for peer's index tensor tiles (write to).
+ * @param Wt                           Number of tiles to exchange.
+ * @param value_cb_tile_size           Size (in bytes) of each tile in value buffers.
+ * @param index_cb_tile_size           Size (in bytes) of each tile in index buffers.
+ * @param other_core_x                 Physical X coordinate of the peer core.
+ * @param other_core_y                 Physical Y coordinate of the peer core.
  * @param sem_self_ptr                 Pointer to this core's semaphore for synchronization.
  */
 FORCE_INLINE

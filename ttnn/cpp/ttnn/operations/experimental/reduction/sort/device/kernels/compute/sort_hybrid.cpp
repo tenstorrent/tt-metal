@@ -95,7 +95,7 @@ void MAIN {
 
                     sync_packer_unpacker(packer_unpacker_sync_cb_index);
 
-                    // Tile i not on this core
+                    // Tile i not on this core - nothing to do
                     if (i < global_tile_start || i >= global_tile_end) {
                         continue;
                     }
@@ -135,6 +135,8 @@ void MAIN {
                             } else {
                                 ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/32);
 
+                                // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
+                                // We swap their indices when using descending order
                                 if (dir) {
                                     tile_input_low = input_dest_end;
                                     tile_input_high = input_dest_start;
@@ -221,6 +223,8 @@ void MAIN {
 
                         ckernel::topk_merge(0, m_iter, 32);
 
+                        // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
+                        // If core must keep smallest values, then keep DEST[1] instead of DEST[0]
                         const uint32_t select_lower = dir ^ (i < j);
 
                         uint32_t value_output_tile = input_dest_start;
