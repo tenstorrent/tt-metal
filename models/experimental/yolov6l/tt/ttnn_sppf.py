@@ -23,8 +23,9 @@ class TtSppf:
             device=device,
             conv=model_params.cv2.block.conv,
             conv_pth=parameters.cv2.block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            # shard_layout=None,
+            # auto_shard=True,
             activation="silu",
             is_nhwc=True,
         )

@@ -8,15 +8,23 @@ from models.experimental.yolov6l.tt.common import Yolov6l_Conv2D
 
 
 class TtBepC3:
-    def __init__(self, device, parameters, model_params, n=6):
+    def __init__(
+        self,
+        device,
+        parameters,
+        model_params,
+        n=6,
+        shard_layout_cv2=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_layout_rep_block_first_two=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ):
         self.parameters = parameters
         self.model_params = model_params
         self.cv1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cv1.block.conv,
             conv_pth=parameters.cv1.block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            # shard_layout=None,
+            # auto_shard=True,
             activation="silu",
             is_nhwc=True,
             reshape=True,
@@ -25,8 +33,9 @@ class TtBepC3:
             device=device,
             conv=model_params.cv2.block.conv,
             conv_pth=parameters.cv2.block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            # shard_layout=None,
+            # auto_shard=True,
+            shard_layout=shard_layout_cv2,
             activation="silu",
             is_nhwc=True,
             reshape=True,
@@ -35,13 +44,16 @@ class TtBepC3:
             device=device,
             conv=model_params.cv3.block.conv,
             conv_pth=parameters.cv3.block.conv,
-            shard_layout=None,
-            auto_shard=True,
+            # shard_layout=None,
+            # auto_shard=True,
             activation="silu",
+            shard_layout=shard_layout_cv2,
             is_nhwc=True,
             reshape=True,
         )
-        self.repblock = TtRepBlock(device, parameters.m, model_params.m, n=n)
+        self.repblock = TtRepBlock(
+            device, parameters.m, model_params.m, n=n, shard_layout_rep_block_first_two=shard_layout_rep_block_first_two
+        )
 
     def __call__(self, x):
         conv1 = self.cv1(x)
