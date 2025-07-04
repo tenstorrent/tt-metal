@@ -183,7 +183,7 @@ depending on the most up-to-date installation methods.</p>
 <section id="circular-buffers">
 <h2>Circular buffers<a class="headerlink" href="#circular-buffers" title="Permalink to this heading"></a>
 </h2>
-<p>Here we introduce a new concept: circular buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between different kernels. There are in total 32 circular buffers supported on a Tensix. To utilize them, the host program must allocate the circular buffers and utilize the appropriate circular buffer index in the kernel.</p>
+<p>Here we introduce a new concept: circular buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between different kernels. There are in total 16 circular buffers supported on a Tensix. To utilize them, the host program must allocate the circular buffers and utilize the appropriate circular buffer index in the kernel.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tiles_per_cb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
 <span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="w"> </span><span class="n">src0_cb_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">;</span>
