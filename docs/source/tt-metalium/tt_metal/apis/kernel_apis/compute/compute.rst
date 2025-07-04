@@ -60,6 +60,7 @@ This page will soon contain the summary of tt-metal concepts relevant for the us
   asin_tile
   atan_tile
   acos_tile
+  selu_tile
 
   quant_tile
   requant_tile
