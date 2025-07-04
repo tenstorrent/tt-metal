@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.yolov11.tt.common import TtnnConv
+from models.demos.yolov11.tt.common import TtnnConv
 
 
 class TtnnBottleneck:
