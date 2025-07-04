@@ -6,6 +6,7 @@
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
+#include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -242,24 +243,6 @@ uint32_t max_shards_per_worker(const std::vector<std::vector<ReadRequest>>& sche
     return max_shards_per_worker;
 }
 
-CoreRangeSet get_custom_cores(const CoreRangeSet& available_cores, const uint32_t num_workers, bool row_wise) {
-    CoreRangeSet worker_cores;
-    std::vector<CoreRange> desired_core_range = {CoreRange({5, 3}, {6, 3}), CoreRange({2, 8}, {3, 8})};
-    for (const auto& cr : desired_core_range) {
-        auto cores = corerange_to_cores(cr, std::nullopt, row_wise);
-        for (const auto& core : cores) {
-            worker_cores = worker_cores.merge(CoreRangeSet(CoreRange(core, core)));
-            if (worker_cores.num_cores() == num_workers) {
-                break;
-            }
-        }
-        if (worker_cores.num_cores() == num_workers) {
-            break;
-        }
-    }
-    return worker_cores;
-}
-
 CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_t num_workers, bool row_wise) {
     CoreRangeSet worker_cores;
     for (const auto& cr : available_cores.ranges()) {
@@ -469,10 +452,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     auto available_cores = sub_device_cores.subtract(packet_worker_cores_grid);
 
     auto sender_core_grid = operation_attributes.use_optimal_ccl_for_llama
-                                ? detail::rs_heads_fusion::get_custom_cores(
-                                      available_cores,
-                                      num_workers_per_link * num_links,
-                                      input_shard_spec.orientation == ShardOrientation::ROW_MAJOR)
+                                ? llama_specific::get_custom_cores(num_workers_per_link * num_links)
                                 : detail::rs_heads_fusion::get_worker_cores(
                                       available_cores,
                                       num_workers_per_link * num_links,
