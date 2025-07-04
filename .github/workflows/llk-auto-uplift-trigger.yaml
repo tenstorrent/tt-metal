@@ -501,37 +501,55 @@ jobs:
           # Check latest runs for workflows that should have been triggered
           ALL_PASSED=true
           CHECKED_WORKFLOWS=0
+          FAILED_WORKFLOWS=()
+          SUCCEEDED_WORKFLOWS=()
 
           if [ "$SHOULD_RUN_WORMHOLE" = true ]; then
             echo "🔍 Checking latest All Post Commit Workflows run..."
-            LATEST_RUN=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json conclusion --jq '.[0].conclusion // "none"')
-            if [ "$LATEST_RUN" != "none" ]; then
+            LATEST_RUN_DATA=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json conclusion,databaseId,url --jq '.[0] // {}')
+            LATEST_CONCLUSION=$(echo "$LATEST_RUN_DATA" | jq -r '.conclusion // "none"')
+
+            if [ "$LATEST_CONCLUSION" != "none" ]; then
               CHECKED_WORKFLOWS=$((CHECKED_WORKFLOWS + 1))
-              if [ "$LATEST_RUN" != "success" ]; then
-                echo "❌ All Post Commit Workflows latest run: $LATEST_RUN"
+              RUN_ID=$(echo "$LATEST_RUN_DATA" | jq -r '.databaseId // ""')
+              RUN_URL=$(echo "$LATEST_RUN_DATA" | jq -r '.url // ""')
+
+              if [ "$LATEST_CONCLUSION" != "success" ]; then
+                echo "❌ All Post Commit Workflows latest run: $LATEST_CONCLUSION"
+                FAILED_WORKFLOWS+=("**All Post Commit Workflows** (conclusion: \`$LATEST_CONCLUSION\`): [View run]($RUN_URL)")
                 ALL_PASSED=false
               else
                 echo "✅ All Post Commit Workflows latest run: success"
+                SUCCEEDED_WORKFLOWS+=("**All Post Commit Workflows**: [View run]($RUN_URL)")
               fi
             else
               echo "❌ All Post Commit Workflows should have run but no runs found on this branch"
+              FAILED_WORKFLOWS+=("**All Post Commit Workflows**: No runs found on this branch")
               ALL_PASSED=false
             fi
           fi
 
           if [ "$SHOULD_RUN_BLACKHOLE" = true ]; then
             echo "🔍 Checking latest Blackhole Post Commit run..."
-            LATEST_RUN=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json conclusion --jq '.[0].conclusion // "none"')
-            if [ "$LATEST_RUN" != "none" ]; then
+            LATEST_RUN_DATA=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json conclusion,databaseId,url --jq '.[0] // {}')
+            LATEST_CONCLUSION=$(echo "$LATEST_RUN_DATA" | jq -r '.conclusion // "none"')
+
+            if [ "$LATEST_CONCLUSION" != "none" ]; then
               CHECKED_WORKFLOWS=$((CHECKED_WORKFLOWS + 1))
-              if [ "$LATEST_RUN" != "success" ]; then
-                echo "❌ Blackhole Post Commit latest run: $LATEST_RUN"
+              RUN_ID=$(echo "$LATEST_RUN_DATA" | jq -r '.databaseId // ""')
+              RUN_URL=$(echo "$LATEST_RUN_DATA" | jq -r '.url // ""')
+
+              if [ "$LATEST_CONCLUSION" != "success" ]; then
+                echo "❌ Blackhole Post Commit latest run: $LATEST_CONCLUSION"
+                FAILED_WORKFLOWS+=("**Blackhole Post Commit** (conclusion: \`$LATEST_CONCLUSION\`): [View run]($RUN_URL)")
                 ALL_PASSED=false
               else
                 echo "✅ Blackhole Post Commit latest run: success"
+                SUCCEEDED_WORKFLOWS+=("**Blackhole Post Commit**: [View run]($RUN_URL)")
               fi
             else
               echo "❌ Blackhole Post Commit should have run but no runs found on this branch"
+              FAILED_WORKFLOWS+=("**Blackhole Post Commit**: No runs found on this branch")
               ALL_PASSED=false
             fi
           fi
@@ -543,17 +561,31 @@ jobs:
 
           echo "tests-passed=$ALL_PASSED" >> $GITHUB_OUTPUT
 
+          # Build detailed comment with results
           if [ "$ALL_PASSED" == "true" ]; then
             echo "🎉 All required test runs passed!"
-            gh pr comment "$PR_NUMBER" \
-              --body "✅ **Test Re-check Successful**: All required workflow runs have passed after manual rerun." \
-              --repo "${{ github.repository }}"
+            COMMENT_BODY="✅ **Test Re-check Successful**: All required workflow runs have passed after manual rerun."$'\n\n'"### ✅ Successful Runs"
+            for workflow in "${SUCCEEDED_WORKFLOWS[@]}"; do
+              COMMENT_BODY="$COMMENT_BODY"$'\n'"- $workflow"
+            done
           else
             echo "❌ Some required test runs still failing"
-            gh pr comment "$PR_NUMBER" \
-              --body "❌ **Test Re-check Failed**: Some required workflows are still failing. Please check the latest runs." \
-              --repo "${{ github.repository }}"
+            COMMENT_BODY="❌ **Test Re-check Failed**: Some required workflows are still failing."$'\n\n'"### ❌ Failed Runs"
+            for workflow in "${FAILED_WORKFLOWS[@]}"; do
+              COMMENT_BODY="$COMMENT_BODY"$'\n'"- $workflow"
+            done
+
+            if [ ${#SUCCEEDED_WORKFLOWS[@]} -gt 0 ]; then
+              COMMENT_BODY="$COMMENT_BODY"$'\n\n'"### ✅ Successful Runs"
+              for workflow in "${SUCCEEDED_WORKFLOWS[@]}"; do
+                COMMENT_BODY="$COMMENT_BODY"$'\n'"- $workflow"
+              done
+            fi
           fi
+
+          gh pr comment "$PR_NUMBER" \
+            --body "$COMMENT_BODY" \
+            --repo "${{ github.repository }}"
 
   finalize:
     needs: [llk-submodule-uplift, trigger-and-monitor-workflows, recheck-tests]
