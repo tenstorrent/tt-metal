@@ -338,6 +338,8 @@ def test_upsample_multicore_corerange(
         (1, 72, 8, 8, 2, 2),
         (1, 288, 8, 8, 2, 2),
         (1, 1024, 8, 8, 2, 2),
+        (1, 256, 28, 28, 2, 2),
+        (1, 512, 14, 14, 2, 2),
     ),
 )
 @pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT])
