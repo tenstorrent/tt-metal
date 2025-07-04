@@ -67,8 +67,8 @@ def run_ag_with_trace(
                 cluster_axis=cluster_axis,
                 persistent_intermediate_buffer=persistent_intermediate_buffer,
                 multi_device_global_semaphore=[
-                    ccl_semaphore_handles[NUM_BUFFERS - 1],
-                    ccl_semaphore_handles[NUM_BUFFERS - 2],
+                    ccl_semaphore_handles[(2 * i) % NUM_BUFFERS],
+                    ccl_semaphore_handles[(2 * i + 1) % NUM_BUFFERS],
                 ],
                 persistent_output_buffer=persistent_output_tensor,
                 num_links=num_links,
