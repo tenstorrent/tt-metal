@@ -243,7 +243,7 @@ jobs:
           echo "Current SHA: ${{ steps.update-submodule.outputs.old-sha }}"
 
   trigger-and-monitor-workflows:
-    needs: [update-submodule]
+    needs: [llk-submodule-uplift]
     if: needs.update-submodule.outputs.has-changes == 'true' && (needs.update-submodule.outputs.should-run-wormhole == 'true' || needs.update-submodule.outputs.should-run-blackhole == 'true')
     runs-on: ubuntu-latest
     steps:
@@ -396,7 +396,7 @@ jobs:
           fi
 
   finalize:
-    needs: [update-submodule, trigger-and-monitor-workflows]
+    needs: [llk-submodule-uplift, trigger-and-monitor-workflows]
     if: always() && needs.update-submodule.outputs.has-changes == 'true' && needs.update-submodule.result == 'success' && (needs.trigger-and-monitor-workflows.result == 'success' || needs.trigger-and-monitor-workflows.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
