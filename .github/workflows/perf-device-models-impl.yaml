@@ -73,6 +73,7 @@ jobs:
             pytest models/demos/mnist/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/segformer/tests -m models_device_performance_bare_metal
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/swin_v2/tests -m models_device_performance_bare_metal
           else
             echo "Running CIv2 compatible tests"
             pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
