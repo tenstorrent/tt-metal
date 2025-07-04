@@ -370,11 +370,11 @@ jobs:
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
           CIBW_BEFORE_BUILD: |
-            echo "Python 3.12 installation check:"
-            ls -la /opt/python/cp312-cp312/
-            ls -la /opt/python/cp312-cp312/include/ || echo "No include directory"
-            ls -la /opt/python/cp312-cp312/lib/ || echo "No lib directory"
-            /opt/python/cp312-cp312/bin/python -c "import sysconfig; print(sysconfig.get_path('include'))"
+            export PYTHON_EXECUTABLE=$(which python)
+            export Python_EXECUTABLE=$PYTHON_EXECUTABLE
+            export Python3_EXECUTABLE=$PYTHON_EXECUTABLE
+            echo "Building with Python: $PYTHON_EXECUTABLE"
+            python --version
             mkdir -p /tmp/ccache && ccache -z && ccache -p
           CIBW_BEFORE_TEST: ccache -s
           CIBW_TEST_COMMAND: ${{ env.CIBW_TEST_CMD }}
