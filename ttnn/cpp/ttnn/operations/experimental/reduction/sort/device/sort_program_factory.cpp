@@ -346,10 +346,6 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
 
     // Calculate the number of cores utilized based on the input tensor shape
     const uint32_t all_core_utilization_count = (Wt + number_of_tiles_per_core - 1) / number_of_tiles_per_core;
-    std::cout << "Total number of cores: " << total_number_of_cores
-              << ", Number of tiles per core: " << number_of_tiles_per_core
-              << ", All core utilization count: " << all_core_utilization_count << ", Wt: " << Wt
-              << std::endl;  // TODO: Remove
 
     TT_FATAL(
         all_core_utilization_count <= total_number_of_cores,
@@ -357,7 +353,25 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         all_core_utilization_count,
         total_number_of_cores);
 
-    // TODO: Write how this works
+    /**
+     * Calculates the core range based on the number of work units (all_core_utilization_count) and the total number of
+     * available cores in the device's compute grid. The core range determines which cores will be utilized for
+     * computation.
+     *
+     * The calculation works as follows:
+     * 1. If all available cores are needed (all_core_utilization_count == total_number_of_cores), the core range covers
+     * the entire grid.
+     * 2. Otherwise, the number of rows (core_grid_calculated_rows_number) and columns
+     * (core_grid_calculated_columns_number) required to cover all_core_utilization_count are calculated based on the
+     * grid dimensions.
+     *    - If both rows and columns are zero, only a single core is used.
+     *    - If only rows are zero, the core range is set to cover the required number of columns in the first row.
+     *    - Otherwise, the core range is set to cover the required rows, and if there are remaining columns,
+     *      an additional range is added to cover those columns in the next row.
+     *
+     * The resulting core range is represented as a `CoreRangeSet`, which may consist of one or more `CoreRange`
+     * objects depending on the configuration.
+     */
     CoreRangeSet core_range;
     if (all_core_utilization_count == total_number_of_cores) {
         // All cores used
@@ -386,17 +400,12 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
             }
         }
     }
-    std::cout << "Core range: " << core_range.str() << " core_range.num_cores(): " << core_range.num_cores()
-              << std::endl;  // TODO: Remove
 
     // Lookup tensor data with physical core coordinates
     std::vector<uint32_t> physical_core_lookup_table_data;
     for (const auto& core_range : core_range.ranges()) {
         for (const auto& core_coord : core_range) {
             const auto physical_core = device->worker_core_from_logical_core(core_coord);
-            std::cout << "Core coord: " << core_coord.x << ", " << core_coord.y
-                      << " | Physical core: " << physical_core.x << ", " << physical_core.y
-                      << std::endl;  // TODO: Remove
             physical_core_lookup_table_data.emplace_back(physical_core.x);
             physical_core_lookup_table_data.emplace_back(physical_core.y);
         }
@@ -610,24 +619,20 @@ void SortProgramFactoryHybrid::override_runtime_arguments(
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
-    // TODO: Fill
     const auto input_tensor_buffer = tensor_args.input_tensor.buffer();
     const auto value_tensor_buffer = output_tensors.at(0).buffer();
     const auto index_tensor_buffer = output_tensors.at(1).buffer();
 
     for (const auto& core_range : cached_program.shared_variables.core_range_set.ranges()) {
         for (const auto& core_coord : core_range) {
-            // TODO: Fill as needed
-            // auto& reader_runtime_args =
-            //     GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core_coord);
-            // reader_runtime_args[0] = input_tensor_buffer->address();
-            // reader_runtime_args[1] = index_tensor_buffer->address();
-            // reader_runtime_args[2] =
-            // cached_program.shared_variables.physical_core_lookup_table_tensor_buffer->address(); // TODO: ?
+            auto& reader_runtime_args =
+                GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core_coord);
+            reader_runtime_args[0] = input_tensor_buffer->address();
+            reader_runtime_args[1] = index_tensor_buffer->address();
 
-            // auto& writer_runtime_args =
-            //     GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id, core_coord);
-            // writer_runtime_args[0] = value_tensor_buffer->address();
+            auto& writer_runtime_args =
+                GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id, core_coord);
+            writer_runtime_args[0] = value_tensor_buffer->address();
         }  // core_coord loop
     }  // core_range loop
 }
@@ -638,16 +643,21 @@ uint32_t SortProgramFactoryHybrid::get_number_of_tiles_per_core(
     const DataType& input_dtype,
     const DataType& index_dtype,
     HybridSortSlicingStrategy slicing_strategy) {
-    if (slicing_strategy == HybridSortSlicingStrategy::USE_AS_MANY_CORES) {
-        constexpr uint32_t MIN_TILES_PER_CORE = 2;
-        return std::max(Wt / total_number_of_cores, MIN_TILES_PER_CORE);
+    switch (slicing_strategy) {
+        case HybridSortSlicingStrategy::USE_AS_MANY_CORES: {
+            constexpr uint32_t MIN_TILES_PER_CORE = 2;
+            return std::max(Wt / total_number_of_cores, MIN_TILES_PER_CORE);
+        }
+        case HybridSortSlicingStrategy::FILL_CORES_FIRST:
+        default: {
+            if (input_dtype == DataType::FLOAT32 || input_dtype == DataType::UINT32 || input_dtype == DataType::INT32 ||
+                index_dtype == DataType::INT32 || index_dtype == DataType::UINT32) {
+                return 64;
+            }
+            break;
+        }
     }
-    // slicing_strategy == HybridSortSlicingStrategy::FILL_CORES_FIRST
 
-    if (input_dtype == DataType::FLOAT32 || input_dtype == DataType::UINT32 || input_dtype == DataType::INT32 ||
-        index_dtype == DataType::INT32 || index_dtype == DataType::UINT32) {
-        return 64;
-    }
     return 128;
 }
 

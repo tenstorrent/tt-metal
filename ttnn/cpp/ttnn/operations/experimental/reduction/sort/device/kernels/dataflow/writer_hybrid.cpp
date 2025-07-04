@@ -75,16 +75,6 @@ void kernel_main() {
     const uint16_t processing_pair_start = core_id * number_of_pairs_processed_by_each_core;
     const uint16_t processing_pair_end = processing_pair_start + number_of_pairs_processed_by_each_core;
 
-    DPRINT << "WRITER: "
-           << "core id: " << core_id << " output_tensor_buffer_addr: " << output_tensor_buffer_addr
-           << " grid_x: " << compute_with_storage_grid_size_x << " grid_y: " << compute_with_storage_grid_size_y
-           << " input_cb_index: " << index_tensor_cb_index << " output value_cb_index: " << value_tensor_cb_index
-           << " index_tensor_peer_cb_index: " << value_tensor_peer_cb_index
-           << " physical_core_lookup_table_cb_index: " << physical_core_lookup_table_cb_index << " Ht: " << Ht
-           << " Wt: " << Wt << " number_of_tiles_per_core: " << number_of_tiles_per_core
-           << " number_of_cores_used: " << number_of_cores_used << " sem_exchange_addr: " << sem_exchange_addr
-           << ENDL();
-
     // Output tensor config
     const uint32_t value_tensor_tile_size_bytes = get_tile_size(value_tensor_cb_index);
     const DataFormat value_tensor_data_format = get_dataformat(value_tensor_cb_index);
@@ -93,33 +83,23 @@ void kernel_main() {
         .page_size = value_tensor_tile_size_bytes,
         .data_format = value_tensor_data_format};
 
-    // sem_ptr_t sem_self_exchange_ptr = reinterpret_cast<sem_ptr_t>(sem_exchange_addr);
-
-    DPRINT << "WRITER: index data format = " << (uint32_t)get_dataformat(index_tensor_cb_index) << ENDL();
-
-    DPRINT << "WRITER: Starting" << ENDL();  // TODO: remove
     for (uint32_t h = 0; h < Ht; h++) {
+        // Generate input index tiles
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
-            DPRINT << "WRITER: Generating index tile: " << w << ENDL();  // TODO: Remove
             generate_index_tile(index_tensor_cb_index, core_id * number_of_tiles_per_core + w);
-            // PAUSE(); // TODO: Remove
         }  // w loop
-
-        DPRINT << "WRITER: AFTER LOGIC:" << ENDL();  // TODO: Remove
 
         // Write value tensor to DRAM
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
             cb_wait_front(value_tensor_cb_index, one_tile);
             const uint32_t l1_write_addr_val = get_read_ptr(value_tensor_cb_index);
             const uint32_t tile_offset = h * Wt + core_id * number_of_tiles_per_core + w;
-            // DPRINT << "WRITER: Writing tile: " << w << " at h: " << h << ", at offset = " << tile_offset
-            //    << ENDL();  // TODO: remove
+
             noc_async_write_tile(tile_offset, output_tensor_accessor, l1_write_addr_val);
             noc_async_write_barrier();
+
             cb_pop_front(value_tensor_cb_index, one_tile);
         }  // Wt loop
     }  // h loop
     cb_push_back(physical_core_lookup_table_cb_index, one_tile);
-
-    DPRINT << "WRITER: Finished reading and sorting tiles." << ENDL();  // TODO: remove
 }

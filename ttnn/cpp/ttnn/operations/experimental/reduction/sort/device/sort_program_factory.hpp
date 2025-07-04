@@ -12,6 +12,8 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
+#include <cstdint>
+
 namespace ttnn::operations::experimental::reduction::sort::program {
 using namespace tt::tt_metal;
 // Single row - single core
@@ -29,6 +31,7 @@ struct SortProgramFactorySingleRowSingleCore {
     static void override_runtime_arguments(
         cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
+
 // Hybrid approach - single row, multi core with processing multiple tiles on one core
 struct SortProgramFactoryHybrid {
     struct shared_variables_t {
@@ -43,13 +46,12 @@ struct SortProgramFactoryHybrid {
     static void override_runtime_arguments(
         cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 
-    // There are several parallel strategies to split the work on a 1D tensor
-    // - USE_AS_MANY_CORES: Use all cores (e.g. 64 on Wormhole) to process the same line.
-    //                      This optimizes latency.
-    // - FILL_CORES_FIRST:
-    enum class HybridSortSlicingStrategy {
-        USE_AS_MANY_CORES,
-        FILL_CORES_FIRST,
+    /**
+     * @brief Strategies for slicing work across cores in hybrid sort.
+     */
+    enum class HybridSortSlicingStrategy : uint8_t {
+        USE_AS_MANY_CORES,  ///< Use all available cores to process the same line, optimizing for latency.
+        FILL_CORES_FIRST,   ///< Fill cores sequentially before assigning additional work.
     };
 
     static uint32_t get_number_of_tiles_per_core(
@@ -57,7 +59,7 @@ struct SortProgramFactoryHybrid {
         uint32_t Wt,
         const DataType& input_dtype,
         const DataType& index_dtype,
-        HybridSortSlicingStrategy slicing_strategy);
+        HybridSortSlicingStrategy slicing_strategy = HybridSortSlicingStrategy::USE_AS_MANY_CORES);
 };
 
 // Single row - multi core
