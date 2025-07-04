@@ -34,6 +34,7 @@ from .pack import (
     pack_uint16,
     pack_uint32,
 )
+from .target_config import TestTargetConfig
 from .unpack import (
     unpack_bfp8_b,
     unpack_bfp16,
@@ -273,9 +274,12 @@ def wait_until_tensix_complete(core_loc, mailbox_addr, timeout=30, max_backoff=5
     Args:
         core_loc: The location of the core to poll.
         mailbox_addr: The mailbox address to read from.
-        timeout: Maximum time to wait (in seconds) before timing out. Default is 30 seconds.
+        timeout: Maximum time to wait (in seconds) before timing out. Default is 30 seconds. If running on a simulator it is 600 seconds.
         max_backoff: Maximum backoff time (in seconds) between polls. Default is 5 seconds.
     """
+    test_target = TestTargetConfig()
+    timeout = 600 if test_target.run_simulator else timeout
+
     start_time = time.time()
     backoff = 0.1  # Initial backoff time in seconds
 
@@ -284,9 +288,14 @@ def wait_until_tensix_complete(core_loc, mailbox_addr, timeout=30, max_backoff=5
             return
 
         time.sleep(backoff)
-        backoff = min(backoff * 2, max_backoff)  # Exponential backoff with a cap
+        # Disable exponential backoff if running on simulator
+        # The simulator sits idle due to no polling - If it is idle for too long, it gets stuck
+        if not test_target.run_simulator:
+            backoff = min(backoff * 2, max_backoff)  # Exponential backoff with a cap
 
-    assert False, f"Timeout reached: waited {timeout} seconds for {mailbox_addr.name}"
+    raise TimeoutError(
+        f"Timeout reached: waited {timeout} seconds for {mailbox_addr.name}"
+    )
 
 
 def wait_for_tensix_operations_finished(core_loc: str = "0,0"):
