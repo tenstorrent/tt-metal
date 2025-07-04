@@ -2,7 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/reduction/cumsum/cumsum.hpp"
+#include "../device/cumulation_device_operation_types.hpp"
+#include "../device/cumulation_device_operation.hpp"
+
+#include "cumsum.hpp"
+
 #include <algorithm>
 #include <iterator>
 #include <tt-logger/tt-logger.hpp>
@@ -14,13 +18,12 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/experimental/reduction/cumsum/device/cumsum_device_operation.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::operations::reduction::cumulation {
 
 uint64_t compute_padded_volume(const Shape& logical_shape, const tt::tt_metal::Tile& tile) {
     unsigned tile_width = tile.get_width();
@@ -53,12 +56,14 @@ uint64_t compute_padded_volume(const Shape& logical_shape, const tt::tt_metal::T
     return volume;
 }
 
-Tensor CumSumOperation::invoke(
+Tensor CumsumOperation::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
     int64_t dim,
     std::optional<ttnn::DataType> dtype,
-    std::optional<Tensor> optional_output_tensor) {
+    std::optional<Tensor> optional_output_tensor,
+    const bool& flip,
+    const std::optional<MemoryConfig>& memory_config) {
     const auto& input_shape = input_tensor.logical_shape();
     int tensor_rank = input_shape.rank();
 
@@ -175,7 +180,8 @@ Tensor CumSumOperation::invoke(
         }
 
         // Compute cumsum on permuted tensor (now accumulation is on dim=0)
-        Tensor output_tensor = ttnn::prim::cumsum(queue_id, permuted_tensor, 0, dtype, opt_output);
+        Tensor output_tensor = ttnn::prim::cumulation(
+            queue_id, permuted_tensor, 0, dtype, opt_output, memory_config, flip, CumulationOp::CUMSUM);
 
         // Apply backward permutation to restore initial shape
         output_tensor = ttnn::permute(output_tensor, permutation, output_tensor.memory_config());
@@ -194,7 +200,18 @@ Tensor CumSumOperation::invoke(
     }
 
     // For other dimensions, proceed with original cumsum
-    return ttnn::prim::cumsum(queue_id, adjusted_input_tensor, dim, dtype, optional_output_tensor);
+    return ttnn::prim::cumulation(
+        queue_id, adjusted_input_tensor, dim, dtype, optional_output_tensor, memory_config, flip, CumulationOp::CUMSUM);
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+Tensor CumsumBackwardOperation::invoke(
+    QueueId queue_id,
+    const Tensor& input,
+    int64_t dim,
+    std::optional<ttnn::DataType> dtype,
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<MemoryConfig>& memory_config) {
+    return CumsumOperation::invoke(queue_id, input, dim, dtype, optional_output_tensor, true, memory_config);
+}
+
+}  // namespace ttnn::operations::reduction::cumulation

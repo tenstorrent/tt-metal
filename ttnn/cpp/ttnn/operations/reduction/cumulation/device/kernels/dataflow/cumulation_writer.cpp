@@ -1,26 +1,28 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
 
-#include "../cumprod_common.hpp"
+#include "../cumulation_common.hpp"
 
 void kernel_main() {
-    constexpr bool output_dram = get_compile_time_arg_val(0) == 1;
-
     uint32_t output_base_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_rows_per_core = get_arg_val<uint32_t>(1);
-    uint32_t tiles_per_row = get_arg_val<uint32_t>(2);
-    uint32_t input_tile_offset = get_arg_val<uint32_t>(3);
-    uint32_t start_id = get_arg_val<uint32_t>(4);
+
+    constexpr bool output_dram = get_compile_time_arg_val(0) == 1;
+    const uint32_t num_rows_per_core = get_arg_val<uint32_t>(1);
+    const uint32_t tiles_per_row = get_arg_val<uint32_t>(2);
+    const uint32_t input_tile_offset = get_arg_val<uint32_t>(3);
+    const uint32_t start_id = get_arg_val<uint32_t>(4);
     // This is the offset of all dimensions below the cumulation axis
     uint32_t low_rank_offset = get_arg_val<uint32_t>(5);
     // This is the offset of all dimensions above the cumulation axis (HtWt for last two axes)
     uint32_t high_rank_offset = get_arg_val<uint32_t>(6);
 
-    uint32_t ublock_size_bytes = get_tile_size(cb_out);
-    uint32_t input_sram_addr = get_read_ptr(cb_out);
+    const uint32_t flip = get_arg_val<uint32_t>(7);
+
+    const uint32_t ublock_size_bytes = get_tile_size(cb_out);
+    const uint32_t input_sram_addr = get_read_ptr(cb_out);
 
     const auto& input_dataformat = get_dataformat(cb_out);
     const auto& output_data_format = get_dataformat(cb_out);

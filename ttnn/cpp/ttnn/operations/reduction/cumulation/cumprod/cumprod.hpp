@@ -10,7 +10,7 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::reduction {
+namespace operations::reduction::cumulation {
 
 struct CumprodOperation {
     static Tensor invoke(
@@ -22,8 +22,9 @@ struct CumprodOperation {
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace operations::reduction
+}  // namespace operations::reduction::cumulation
 
-constexpr auto cumprod = ttnn::register_operation<"ttnn::cumprod", ttnn::operations::reduction::CumprodOperation>();
+constexpr auto cumprod =
+    ttnn::register_operation<"ttnn::cumprod", ttnn::operations::reduction::cumulation::CumprodOperation>();
 
 }  // namespace ttnn

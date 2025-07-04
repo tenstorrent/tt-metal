@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/cumprod_device_operation.hpp"
+#include "../device/cumulation_device_operation_types.hpp"
+#include "../device/cumulation_device_operation.hpp"
 
 #include <tuple>
 
@@ -19,7 +20,7 @@
 #include "tt-metalium/assert.hpp"
 #include "cumprod.hpp"
 
-namespace ttnn::operations::reduction {
+namespace ttnn::operations::reduction::cumulation {
 
 Tensor CumprodOperation::invoke(
     const QueueId& queue_id,
@@ -75,13 +76,14 @@ Tensor CumprodOperation::invoke(
             ttnn::permute(adjusted_input_tensor, permutation, adjusted_input_tensor.memory_config());
 
         // device cumprod works on the first dimension of 4
-        Tensor output_tensor = ttnn::prim::cumprod(
+        Tensor output_tensor = ttnn::prim::cumulation(
             permuted_tensor,
             FIRST_DIMENSION,
             dtype,
             std::nullopt,
             memory_config.has_value() ? memory_config.value() : permuted_tensor.memory_config(),
-            queue_id);
+            false,
+            CumulationOp::CUMPROD);
 
         // permute back
         output_tensor = ttnn::permute(output_tensor, permutation, output_tensor.memory_config());
@@ -98,13 +100,14 @@ Tensor CumprodOperation::invoke(
         return output_tensor;
     }
 
-    return ttnn::prim::cumprod(
+    return ttnn::prim::cumulation(
         adjusted_input_tensor,
         cum_axis,
         dtype,
         optional_out,
         memory_config.has_value() ? memory_config.value() : adjusted_input_tensor.memory_config(),
-        queue_id);
+        false,
+        CumulationOp::CUMPROD);
 }
 
-}  // namespace ttnn::operations::reduction
+}  // namespace ttnn::operations::reduction::cumulation
