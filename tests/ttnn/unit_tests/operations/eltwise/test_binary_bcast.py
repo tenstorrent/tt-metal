@@ -564,7 +564,7 @@ def test_binary_sfpu_ops(input_shapes, dtype, ttnn_fn, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    out_tt = ttnn_fn(a_tt, b_tt, queue_id=cq_id, use_legacy=None)
+    out_tt = ttnn_fn(a_tt, b_tt, queue_id=cq_id, use_legacy=False)
     tt_out = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_fn)
@@ -639,7 +639,7 @@ def test_binary_sfpu_opt_out(input_shapes, dtype, ttnn_fn, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    ttnn_fn(a_tt, b_tt, queue_id=cq_id, output_tensor=out_tt, use_legacy=None)
+    ttnn_fn(a_tt, b_tt, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
     tt_out = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_fn)
