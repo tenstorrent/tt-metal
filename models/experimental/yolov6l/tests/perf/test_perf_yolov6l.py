@@ -17,6 +17,7 @@ from models.utility_functions import (
     is_wormhole_b0,
     run_for_wormhole_b0,
 )
+from models.utility_functions import disable_persistent_kernel_cache
 
 
 def get_expected_times(name):
@@ -26,7 +27,7 @@ def get_expected_times(name):
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype",
@@ -47,6 +48,7 @@ def test_perf_yolov6l(
     model_location_generator,
     resolution,
 ):
+    disable_persistent_kernel_cache()
     performant_runner = YOLOv6lPerformantRunner(
         device,
         batch_size,
