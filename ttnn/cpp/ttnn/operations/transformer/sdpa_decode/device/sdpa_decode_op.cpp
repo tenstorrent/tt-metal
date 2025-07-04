@@ -19,6 +19,8 @@ void ScaledDotProductAttentionDecode::validate(
     if (use_mla) {
         TT_FATAL(input_tensors.size() == 2, "Must have 2 input tensors and mask");
         TT_FATAL(this->head_dim_v.has_value(), "Must provide head_dim_v for multi-latent attention decode");
+        TT_FATAL(!this->paged_attention, "Paged attention is untested for multi-latent attention decode!");
+        TT_FATAL(this->is_causal, "Multi-latent attention decode only tested for causal!");
     } else {
         TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors and mask");
     }
@@ -40,19 +42,22 @@ void ScaledDotProductAttentionDecode::validate(
     const auto q_shape = input_tensors.at(0).padded_shape();
     const auto q_shape_unpadded = input_tensors.at(0).logical_shape();
     const auto k_shape = input_tensors.at(1).padded_shape();
+
+    // When using multi-latent attention, the V tensor is the same as K tensor, but of smaller head dimension.
+    // For the sake validation, we will use the K tensor shape for V tensor, and validate head_dim_v separately.
     const auto v_shape = use_mla ? input_tensors.at(1).padded_shape() : input_tensors.at(2).padded_shape();
 
     if (use_mla) {
         // Head dim v validation
         TT_FATAL(
+            q_shape[3] == k_shape[3],
+            "Head dimension of Q must be equal to head dim of K, got {} and {}",
+            q_shape[3],
+            k_shape[3]);
+        TT_FATAL(
             this->head_dim_v.value() <= q_shape[3],
             "Head dimension of V must be less than or equal to head dim of Q, got {} and {}",
             head_dim_v,
-            q_shape[3]);
-        TT_FATAL(
-            this->head_dim_v.value() <= k_shape[3],
-            "Head dimension of V must be less than or equal to head dim of K, got {} and {}",
-            this->head_dim_v,
             q_shape[3]);
     }
 
