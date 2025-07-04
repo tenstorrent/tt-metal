@@ -334,6 +334,11 @@ void DevicePool::initialize(
 }
 
 void DevicePool::initialize_fabric_and_dispatch_fw() const {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+        // Due to galaxy taking potentially taking a 2-3 minutes to compile all the firmware kernels
+        log_info(
+            tt::LogMetal, "Initializing Fabric and Dispatch Firmware for Galaxy cluster (this may take a few minutes)");
+    }
     this->initialize_active_devices();
     this->wait_for_fabric_router_sync();
     log_info(tt::LogMetal, "Devices initialized");

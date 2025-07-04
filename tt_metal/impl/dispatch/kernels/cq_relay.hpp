@@ -82,12 +82,12 @@ public:
             StreamId{0}  // my stream id -- As a sender I currently do NOT get acks over stream regs
         );
 
-        DPRINT << "Waiting for Fabric" << ENDL();
+        DPRINT << "Waiting for Fabric Mux" << ENDL();
 
         tt::tt_fabric::wait_for_fabric_endpoint_ready(mux_x, mux_y, mux_status_address, local_mux_status_address);
         tt::tt_fabric::fabric_client_connect<mux_num_buffers_per_channel>(edm);
 
-        DPRINT << "Connected to Fabric" << ENDL();
+        DPRINT << "Connected to Fabric Mux" << ENDL();
 
         if constexpr (FABRIC_2D) {
 #if (FABRIC_2D_DYNAMIC == 1)
