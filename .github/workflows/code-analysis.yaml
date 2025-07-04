@@ -194,9 +194,8 @@ jobs:
 
           # Generate updated PR body with PR link (use commits table from step output)
           cat > ../../../updated_llk_commit_log.txt << EOF
-          ## ⬆️ LLK Submodule Update
 
-          ### 📋 Summary
+          ## 📋 Summary
           This PR updates the LLK submodule to the latest version from the main branch.
 
           ### 🔗 Commit Range
