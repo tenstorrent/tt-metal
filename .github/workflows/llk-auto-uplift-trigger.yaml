@@ -59,7 +59,7 @@ jobs:
         id: update-submodule
         run: |
           cd ${{ env.SUBMODULE_PATH }}
-          OLD_SHA=$(git rev-parse HEAD)
+          OLD_SHA=$(git rev-parse --short=7 HEAD)
           echo "old-sha=$OLD_SHA" >> $GITHUB_OUTPUT
 
           # Fetch full history to ensure we can see all commits
@@ -67,7 +67,7 @@ jobs:
           git checkout main
           git pull origin main
 
-          NEW_SHA=$(git rev-parse HEAD)
+          NEW_SHA=$(git rev-parse --short=7 HEAD)
           echo "new-sha=$NEW_SHA" >> $GITHUB_OUTPUT
 
           if [ "$OLD_SHA" = "$NEW_SHA" ]; then
@@ -275,21 +275,31 @@ jobs:
           for workflow in "${WORKFLOWS_TO_RUN[@]}"; do
             echo "Triggering $workflow..."
 
-            # Capture the trigger time
-            TRIGGER_TIME=$(date -u +%s)
+            # Get existing runs before triggering to establish baseline
+            EXISTING_RUNS=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json databaseId --jq '.[].databaseId' | tr '\n' ' ')
+            echo "Existing runs before trigger: $EXISTING_RUNS"
 
             if gh workflow run "$workflow" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}"; then
               echo "✅ Successfully triggered $workflow"
 
-              # Wait for the run to appear with retry logic
+              # Wait for the new run to appear with retry logic
               RUN_ID=""
               for i in {1..12}; do
-                # Look for runs created after we triggered this workflow
-                RUN_ID=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json databaseId,createdAt --jq --argjson since "$TRIGGER_TIME" '.[0] | select(.createdAt | fromdateiso8601 > $since) | .databaseId // empty')
-                if [ -n "$RUN_ID" ]; then
+                # Get current runs and find the new one
+                CURRENT_RUNS=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json databaseId --jq '.[].databaseId')
+
+                # Find the run that wasn't in the existing list
+                for run_id in $CURRENT_RUNS; do
+                  if [[ ! " $EXISTING_RUNS " =~ " $run_id " ]]; then
+                    RUN_ID="$run_id"
+                    break
+                  fi
+                done
+
+                if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
                   break
                 fi
-                echo "Attempt $i: Waiting for workflow run to appear..."
+                echo "Attempt $i: Waiting for new workflow run to appear..."
                 sleep 10
               done
 
