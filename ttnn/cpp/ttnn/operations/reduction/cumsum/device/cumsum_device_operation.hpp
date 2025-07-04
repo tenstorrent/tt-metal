@@ -12,12 +12,16 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::operations::reduction {
+
+using namespace tt::tt_metal;
+using namespace tt::stl;
 
 struct CumSumDeviceOperation {
     struct operation_attributes_t {
         const int64_t dim;  // axis to perform cumsum on (must be `-tensor.dim <= dim < tensor.dim`)
         const tt::tt_metal::DataType dtype = tt::tt_metal::DataType::INVALID;
+        const bool flip;
     };
 
     struct tensor_args_t {
@@ -59,6 +63,8 @@ struct CumSumDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
+    static operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
@@ -66,14 +72,15 @@ struct CumSumDeviceOperation {
         const Tensor& input_tensor,
         int64_t dim,
         std::optional<ttnn::DataType> dtype,
-        std::optional<Tensor> preallocated_output);
+        std::optional<Tensor> preallocated_output,
+        const bool& flip);
 };
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::operations::reduction
 
 namespace ttnn::prim {
 
 constexpr auto cumsum =
-    ttnn::register_operation<"ttnn::prim::cumsum", ttnn::operations::experimental::reduction::CumSumDeviceOperation>();
+    ttnn::register_operation<"ttnn::prim::cumsum", ttnn::operations::reduction::CumSumDeviceOperation>();
 
 }  // namespace ttnn::prim

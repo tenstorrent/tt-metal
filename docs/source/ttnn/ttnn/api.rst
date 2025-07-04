@@ -411,7 +411,7 @@ Reduction
    ttnn.prod
    ttnn.topk
    ttnn.experimental.sort
-   ttnn.experimental.cumsum
+   ttnn.cumsum
 
 Data Movement
 =============

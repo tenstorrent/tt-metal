@@ -12,7 +12,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::operations::reduction {
 
 CumSumDeviceOperation::program_factory_t CumSumDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -60,6 +60,23 @@ void CumSumDeviceOperation::validate_on_program_cache_hit(
     validate_on_program_cache_miss(args, tensor_args);
 }
 
+operation::Hash CumSumDeviceOperation::compute_program_hash(
+    const operation_attributes_t& op_args, const tensor_args_t& tensor_args) {
+    return operation::hash_operation<CumSumDeviceOperation>(
+        select_program_factory(op_args, tensor_args).index(),
+        op_args.dim,
+        op_args.dtype,
+        op_args.flip,
+        tensor_args.input_tensor.logical_shape(),
+        tensor_args.input_tensor.dtype(),
+        tensor_args.input_tensor.memory_config(),
+        tensor_args.input_tensor.layout(),
+        tensor_args.preallocated_output.has_value() ? tensor_args.preallocated_output.value().logical_shape() : Shape{},
+        tensor_args.preallocated_output.has_value() ? tensor_args.preallocated_output.value().dtype() : DataType{},
+        tensor_args.preallocated_output.has_value() ? tensor_args.preallocated_output.value().memory_config()
+                                                    : MemoryConfig{});
+}
+
 CumSumDeviceOperation::spec_return_value_t CumSumDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return TensorSpec(
@@ -84,10 +101,11 @@ CumSumDeviceOperation::invoke(
     const Tensor& input_tensor,
     int64_t dim,
     std::optional<ttnn::DataType> dtype,
-    std::optional<Tensor> preallocated_output) {
+    std::optional<Tensor> preallocated_output,
+    const bool& flip) {
     return {
-        operation_attributes_t{.dim = dim, .dtype = dtype.value_or(input_tensor.dtype())},
+        operation_attributes_t{.dim = dim, .dtype = dtype.value_or(input_tensor.dtype()), .flip = flip},
         tensor_args_t{.input_tensor = input_tensor, .preallocated_output = std::move(preallocated_output)}};
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::operations::reduction
