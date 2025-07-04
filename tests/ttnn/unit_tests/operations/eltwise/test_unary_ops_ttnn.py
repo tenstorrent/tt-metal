@@ -389,6 +389,7 @@ def test_unary_exp_ttnn(input_shapes, device):
     golden_tensor = torch.exp(in_data)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    print("\nTTNN:", output_tensor, "\ngolden:", golden_tensor, "\n")
     assert comp_pass
 
 
