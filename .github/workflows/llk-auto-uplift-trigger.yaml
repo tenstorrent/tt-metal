@@ -128,12 +128,15 @@ jobs:
                 continue
               fi
 
-              # Try to get the PR number from the commit message
+              # Try to get the PR number from the commit message and clean the message
               pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
+              # Remove (#number) from the message for cleaner display
+              clean_message=$(echo "$message" | sed 's/ *(#[0-9]\+) *$//')
+
               if [ -n "$pr_number" ]; then
-                COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $message | $author | [#$pr_number](https://github.com/tenstorrent/tt-llk/pull/$pr_number) |"$'\n'
+                COMMITS_TABLE_CONTENT+="| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | [#$pr_number](https://github.com/tenstorrent/tt-llk/pull/$pr_number) |"$'\n'
               else
-                COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $message | $author | - |"$'\n'
+                COMMITS_TABLE_CONTENT+="| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | - |"$'\n'
               fi
             done < <(git log --pretty=tformat:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA})
           else
