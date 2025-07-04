@@ -369,6 +369,9 @@ jobs:
             CCACHE_TEMPDIR=/tmp/ccache
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
+            PYTHON_EXECUTABLE=/opt/python/cp312-cp312/bin/python
+            Python_EXECUTABLE=/opt/python/cp312-cp312/bin/python
+            Python3_EXECUTABLE=/opt/python/cp312-cp312/bin/python
           CIBW_BEFORE_BUILD: |
             echo "Python 3.12 installation check:"
             ls -la /opt/python/cp312-cp312/
