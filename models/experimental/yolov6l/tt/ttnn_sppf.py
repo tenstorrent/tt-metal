@@ -15,7 +15,6 @@ class TtSppf:
             conv=model_params.cv1.block.conv,
             conv_pth=parameters.cv1.block.conv,
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            # auto_shard=True,
             activation="silu",
         )
         self.cv2 = Yolov6l_Conv2D(
@@ -23,9 +22,8 @@ class TtSppf:
             conv=model_params.cv2.block.conv,
             conv_pth=parameters.cv2.block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
+            reshape=True,
         )
 
     def __call__(self, x):
@@ -73,5 +71,4 @@ class TtSppf:
         concat_output = ttnn.concat([conv1, m1, m2, m3], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         conv2 = self.cv2(concat_output)
-        conv2 = ttnn.reshape(conv2, (1, 20, 20, 1024), memory_config=ttnn.L1_MEMORY_CONFIG)
         return conv2
