@@ -49,6 +49,7 @@ void MAIN {
     constexpr bool use_attention_mask = get_compile_time_arg_val(21) == 1;
     constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(22);
     constexpr bool tilize_q = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(24);
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
     constexpr bool untilize_output = tilize_q;
@@ -107,11 +108,22 @@ void MAIN {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
+            // cur_pos is not provided, so we need to get it from the circular buffer
+            // a circular buffer is a list of positions, where each position corresponds to a batch of heads
+            // cur_pos is the position of the current head in the current batch
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
+            // cb_wait_front(cb_index_id, 1) waits for the circular buffer to have at least one tile ready so that we
+            // can read the index
             cb_wait_front(cb_index_id, 1);
             volatile uint32_t* index_addr_ptr;
+            // cb_get_tile(cb_index_id, 0, &index_addr_ptr) gets the first tile of the circular buffer
+            // which contains the positions of the heads in the current batch
             cb_get_tile(cb_index_id, 0, &index_addr_ptr);
+            // we add 4 + cur_batch to the index address pointer to get the position of the current head in the current
+            // batch, after we have reserved the tile
             cur_pos = index_addr_ptr[4 + cur_batch];
+            // cb_release_tile(cb_index_id) releases the tile so that it can be used by other cores
+            // this is necessary to avoid deadlocks, as the circular buffer is a shared resource
             cb_release_tile(cb_index_id);
         }
 
@@ -146,7 +158,10 @@ void MAIN {
         mm_init(cb_q_in, cb_k_in, cb_out_final);
         cb_pop_front(cb_q_rm, q_chunk_tiles);
     } else {
+        // mm_init is used to initialize the circular buffers for Q, K, and output
         mm_init(cb_q_in, cb_k_in, cb_out_final);
+        // cb_wait_front(cb_q_in, q_chunk_tiles) waits for the circular buffer cb_q_in to have at least q_chunk_tiles
+        // tiles ready so that we can write to it
         cb_wait_front(cb_q_in, q_chunk_tiles);
     }
 
@@ -238,12 +253,12 @@ void MAIN {
                     /// l1 = torch.exp(m_2 - m) * l_2
                     // reconfig_data_format(cb_prev_max_2, cb_cur_max); // DEBUG
                     // pack_reconfig_data_format(cb_exp_max_diff_2);
-                    sub_exp_block(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
+                    sub_exp_block<scale_fp32>(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
                     mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
                     /// l2 = torch.exp(m_1 - m) * l_1
                     // reconfig_data_format(cb_prev_max, cb_cur_max); // DEBUG
                     // pack_reconfig_data_format(cb_exp_max_diff);
-                    sub_exp_block(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
                     mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
                     /// l = l1 + l2
                     // reconfig_data_format(cb_cur_sum, cb_prev_sum); // DEBUG
