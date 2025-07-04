@@ -193,13 +193,7 @@ def test_moreh_cumsum_callback(input_shape, dim, device):
         rtol = atol = 0.1
 
         for i in range(2):
-            tt_output_cpu = (
-                ttnn.operations.moreh.cumsum(tt_input, dim)
-                .cpu()
-                .to(cpu_layout)
-                .unpad_from_tile(output_shape)
-                .to_torch()
-            )
+            tt_output_cpu = ttnn.to_torch(ttnn.operations.moreh.cumsum(tt_input, dim))
 
             logger.debug(f"torch_output.shape == {torch_output.shape}, tt_output_cpu == {tt_output_cpu.shape}")
 
