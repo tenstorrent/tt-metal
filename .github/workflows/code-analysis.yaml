@@ -116,23 +116,19 @@ jobs:
 
           # Generate commits table content
           COMMITS_TABLE_CONTENT="| Commit | Message | Author | PR |"$'\n'
-          COMMITS_TABLE_CONTENT+="|--------|---------|---------|-----|"$'\n'
+          COMMITS_TABLE_CONTENT+="|--------|---------|--------|----|"$'\n'
 
-          if [ "$COMMIT_COUNT" -gt 0 ]; then
-            # Generate commits table content
-            while IFS='|' read -r short_hash message author full_hash; do
-              # Skip empty lines
-              if [ -z "$short_hash" ]; then
-                continue
-              fi
+          git log --pretty=format:'%h|%s|%an|%H' ${OLD_SHA}..${NEW_SHA} | while IFS='|' read -r short_hash message author full_hash; do
+            # Escape pipe characters in message to not break Markdown table
+            safe_message=$(echo "$message" | sed 's/|/\\|/g')
 
-              # Try to get the PR number from the commit message
-              pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
-              if [ -n "$pr_number" ]; then
-                COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | [#$pr_number](https://github.com/tenstorrent/tt_llk/pull/$pr_number) |"$'\n'
-              else
-                COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $message | $author | - |"$'\n'
-              fi
+            pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
+
+            if [ -n "$pr_number" ]; then
+              COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $safe_message | $author | [#$pr_number](https://github.com/tenstorrent/tt_llk/pull/$pr_number) |"$'\n'
+            else
+              COMMITS_TABLE_CONTENT+="| [\`$short_hash\`](https://github.com/tenstorrent/tt_llk/commit/$full_hash) | $safe_message | $author | - |"$'\n'
+            fi
             done < <(git log --pretty=tformat:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA})
           else
             echo "No commits found - this shouldn't happen if we detected changes"
