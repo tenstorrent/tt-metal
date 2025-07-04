@@ -190,15 +190,148 @@ public:
 
     bool use_dynamic_routing() const override { return routing_type_ == RoutingType::Dynamic; }
 
+    /**
+     * This function takes hop information and computes the actual destination nodes that would be visited during a ring
+     * traversal multicast.
+     *
+     * For ring topology, nodes are arranged in a serpentine pattern where:
+     * - Traffic flows in a ring/circular pattern around the mesh
+     * - The direction of turn (at mesh boundaries) depends on the current row/position
+     * - Upper rows: East → South, Lower rows: East → North
+     * - Left columns: South → East, Right columns: South → West
+     */
+    std::vector<FabricNodeId> get_wrap_around_mesh_ring_topology_dst_node_ids(
+        const FabricNodeId& src_node_id, RoutingDirection initial_direction, uint32_t total_hops) const {
+        std::vector<FabricNodeId> ring_destinations;
+        ring_destinations.reserve(total_hops);
+
+        // Get starting coordinate
+        MeshCoordinate current_coord = get_device_coord(src_node_id);
+        RoutingDirection current_direction = initial_direction;
+
+        for (uint32_t hop = 0; hop < total_hops; ++hop) {
+            // Try to move in current direction
+            MeshCoordinate next_coord = current_coord;
+            bool can_move = true;
+
+            switch (current_direction) {
+                case RoutingDirection::N:
+                    if (current_coord[NS_DIM] == 0) {
+                        can_move = false;
+                    } else {
+                        next_coord = MeshCoordinate(current_coord[NS_DIM] - 1, current_coord[EW_DIM]);
+                    }
+                    break;
+                case RoutingDirection::S:
+                    if (current_coord[NS_DIM] == mesh_shape_[NS_DIM] - 1) {
+                        can_move = false;
+                    } else {
+                        next_coord = MeshCoordinate(current_coord[NS_DIM] + 1, current_coord[EW_DIM]);
+                    }
+                    break;
+                case RoutingDirection::E:
+                    if (current_coord[EW_DIM] == mesh_shape_[EW_DIM] - 1) {
+                        can_move = false;
+                    } else {
+                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] + 1);
+                    }
+                    break;
+                case RoutingDirection::W:
+                    if (current_coord[EW_DIM] == 0) {
+                        can_move = false;
+                    } else {
+                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] - 1);
+                    }
+                    break;
+                default: TT_THROW("routing direciton not supported: {}", current_direction);
+            }
+
+            // If we hit a boundary, determine next direction based on current position
+            if (!can_move) {
+                if (current_direction == RoutingDirection::E) {
+                    // Hit east boundary - direction depends on current row
+                    if (current_coord[NS_DIM] == 0) {
+                        current_direction = RoutingDirection::S;
+                    } else {
+                        current_direction = RoutingDirection::N;
+                    }
+                } else if (current_direction == RoutingDirection::W) {
+                    if (current_coord[NS_DIM] == 0) {
+                        current_direction = RoutingDirection::S;
+                    } else {
+                        current_direction = RoutingDirection::N;
+                    }
+                } else if (current_direction == RoutingDirection::S) {
+                    if (current_coord[EW_DIM] == 0) {
+                        current_direction = RoutingDirection::E;
+                    } else {
+                        current_direction = RoutingDirection::W;
+                    }
+                } else if (current_direction == RoutingDirection::N) {
+                    if (current_coord[EW_DIM] == 0) {
+                        current_direction = RoutingDirection::E;
+                    } else {
+                        current_direction = RoutingDirection::W;
+                    }
+                }
+
+                // Try again with new direction
+                switch (current_direction) {
+                    case RoutingDirection::N:
+                        next_coord = MeshCoordinate(current_coord[NS_DIM] - 1, current_coord[EW_DIM]);
+                        break;
+                    case RoutingDirection::S:
+                        next_coord = MeshCoordinate(current_coord[NS_DIM] + 1, current_coord[EW_DIM]);
+                        break;
+                    case RoutingDirection::E:
+                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] + 1);
+                        break;
+                    case RoutingDirection::W:
+                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] - 1);
+                        break;
+                    default: TT_THROW("routing direciton not supported: {}", current_direction);
+                }
+            }
+
+            // Move to next coordinate and add to destinations
+            current_coord = next_coord;
+            ring_destinations.push_back(get_fabric_node_id(current_coord));
+        }
+
+        log_debug(
+            tt::LogTest,
+            "src_node: {}, ring_destinations: {}, total_hops: {}",
+            src_node_id,
+            ring_destinations,
+            total_hops);
+
+        return ring_destinations;
+    }
+
     // ======================================================================================
     // IRouteManager methods
     // ======================================================================================
+    uint32_t get_num_mesh_dims() const override { return mesh_shape_.dims(); }
+
     // TODO: instead of parsing ChipSendType, this should only care about unicast/mcast
     // or capturing every device in the path or not
     std::vector<FabricNodeId> get_dst_node_ids_from_hops(
         FabricNodeId src_node,
         std::unordered_map<RoutingDirection, uint32_t>& hops,
         ChipSendType chip_send_type) const override {
+        if (this->topology_ == Topology::Ring) {
+            RoutingDirection initial_direction = RoutingDirection::N;
+            uint32_t total_hops = 0;
+            for (const auto& [direction, hop_count] : hops) {
+                if (hop_count != 0) {
+                    total_hops = hop_count;
+                    initial_direction = direction;
+                }
+            }
+            TT_FATAL(total_hops != 0, "all directions has 0 hops");
+            return get_wrap_around_mesh_ring_topology_dst_node_ids(src_node, initial_direction, total_hops);
+        }
+
         std::vector<FabricNodeId> dst_nodes;
         const MeshCoordinate& src_coord = get_device_coord(src_node);
         auto displacements = convert_hops_to_displacement(hops);
@@ -343,10 +476,160 @@ public:
         return hops;
     }
 
+    /**
+     * Unlike traditional multicast that sends in all directions from a source, unidirectional
+     * linear multicast divides the mesh into halves and only sends in ONE direction per source:
+     *
+     * **Horizontal Division:**
+     * - Left half of mesh (x < mesh_width/2): multicasts EAST to right half
+     * - Right half of mesh (x >= mesh_width/2): multicasts WEST to left half
+     *
+     * **Vertical Division:**
+     * - Upper half of mesh (y < mesh_height/2): multicasts SOUTH to lower half
+     * - Lower half of mesh (y >= mesh_height/2): multicasts NORTH to upper half
+     */
+    std::unordered_map<RoutingDirection, uint32_t> get_unidirectional_linear_mcast_hops(
+        const FabricNodeId& src_node_id, uint32_t dim) const override {
+        std::unordered_map<RoutingDirection, uint32_t> hops;
+        for (const auto& direction : FabricContext::routing_directions) {
+            hops[direction] = 0;
+        }
+
+        const auto src_coord = get_device_coord(src_node_id);
+
+        if (dim == NS_DIM) {
+            if (src_coord[NS_DIM] < mesh_shape_[NS_DIM] / 2) {
+                hops[RoutingDirection::S] = mesh_shape_[NS_DIM] - src_coord[NS_DIM] - 1;
+            } else {
+                hops[RoutingDirection::N] = src_coord[NS_DIM];
+            }
+        } else if (dim == EW_DIM) {
+            if (src_coord[EW_DIM] < mesh_shape_[EW_DIM] / 2) {
+                hops[RoutingDirection::E] = mesh_shape_[EW_DIM] - src_coord[EW_DIM] - 1;
+            } else {
+                hops[RoutingDirection::W] = src_coord[EW_DIM];
+            }
+        } else {
+            TT_THROW("input mesh dim is not supported: {}", dim);
+        }
+
+        return hops;
+    }
+
+    std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
+        const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const override {
+        // Get mesh dimensions
+        uint32_t mesh_height = mesh_shape_[NS_DIM];
+        uint32_t mesh_width = mesh_shape_[EW_DIM];
+
+        // Convert chip_id to row/col coordinates (row-major order)
+        uint32_t row = src_node.chip_id / mesh_width;
+        uint32_t col = src_node.chip_id % mesh_width;
+
+        // Check if the device is on the outer ring (perimeter)
+        bool is_perimeter = (row == 0) || (row == mesh_height - 1) || (col == 0) || (col == mesh_width - 1);
+
+        // If not on perimeter, return nullopt to indicate no valid ring neighbors
+        if (!is_perimeter) {
+            return std::nullopt;
+        }
+
+        // Calculate ring neighbors based on position on perimeter
+        // Ring goes clockwise: top row (L->R), right col (T->B), bottom row (R->L), left col (B->T)
+        chip_id_t forward_chip_id, backward_chip_id;
+
+        if (row == 0 && col == 0) {
+            // Top-left corner (0): forward=1, backward=4 (4x4 mesh)
+            forward_chip_id = 1;
+            backward_chip_id = mesh_width;
+        } else if (row == 0 && col == mesh_width - 1) {
+            // Top-right corner (3): forward=7, backward=2
+            forward_chip_id = src_node.chip_id + mesh_width;
+            backward_chip_id = src_node.chip_id - 1;
+        } else if (row == mesh_height - 1 && col == mesh_width - 1) {
+            // Bottom-right corner (15): forward=14, backward=11
+            forward_chip_id = src_node.chip_id - 1;
+            backward_chip_id = src_node.chip_id - mesh_width;
+        } else if (row == mesh_height - 1 && col == 0) {
+            // Bottom-left corner (12): forward=8, backward=13
+            forward_chip_id = src_node.chip_id - mesh_width;
+            backward_chip_id = src_node.chip_id + 1;
+        } else if (row == 0) {
+            // Top row (not corners): forward=right, backward=left
+            forward_chip_id = src_node.chip_id + 1;
+            backward_chip_id = src_node.chip_id - 1;
+        } else if (col == mesh_width - 1) {
+            // Right column (not corners): forward=down, backward=up
+            forward_chip_id = src_node.chip_id + mesh_width;
+            backward_chip_id = src_node.chip_id - mesh_width;
+        } else if (row == mesh_height - 1) {
+            // Bottom row (not corners): forward=left, backward=right
+            forward_chip_id = src_node.chip_id - 1;
+            backward_chip_id = src_node.chip_id + 1;
+        } else if (col == 0) {
+            // Left column (not corners): forward=up, backward=down
+            forward_chip_id = src_node.chip_id - mesh_width;
+            backward_chip_id = src_node.chip_id + mesh_width;
+        } else {
+            TT_THROW("Device {} should be on perimeter but logic error occurred", src_node.chip_id);
+        }
+
+        log_debug(
+            LogTest,
+            "src_node: {}, forward_chip_id: {}, backward_chip_id: {}",
+            src_node.chip_id,
+            forward_chip_id,
+            backward_chip_id);
+
+        FabricNodeId dst_node_forward = FabricNodeId{src_node.mesh_id, forward_chip_id};
+        FabricNodeId dst_node_backward = FabricNodeId{src_node.mesh_id, backward_chip_id};
+
+        return std::make_pair(dst_node_forward, dst_node_backward);
+    }
+
+    std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(
+        const FabricNodeId& src_node_id,
+        const FabricNodeId& dst_node_forward_id,
+        const FabricNodeId& dst_node_backward_id,
+        HighLevelTrafficPattern pattern_type) const override {
+        std::unordered_map<RoutingDirection, uint32_t> hops;
+        for (const auto& direction : FabricContext::routing_directions) {
+            hops[direction] = 0;
+        }
+
+        auto direction_forward = get_forwarding_direction(src_node_id, dst_node_forward_id);
+        auto direction_backward = get_forwarding_direction(src_node_id, dst_node_backward_id);
+
+        auto num_forward_hops = 0;
+        auto num_backward_hops = 0;
+        // TODO: fix for 6U since this is not a valide config for it.
+        uint32_t full_hop_count = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1) - 1;
+
+        if (pattern_type == HighLevelTrafficPattern::FullRingMulticast) {
+            num_forward_hops = full_hop_count;
+            num_backward_hops = full_hop_count;
+        } else if (pattern_type == HighLevelTrafficPattern::HalfRingMulticast) {
+            num_forward_hops = tt::div_up(full_hop_count, 2);
+            num_backward_hops = full_hop_count - num_forward_hops;
+            if (src_node_id.chip_id % 2 == 0) {
+                std::swap(num_forward_hops, num_backward_hops);
+            }
+        } else {
+            TT_THROW(
+                "Unsupported pattern type for ring multicast: only FullRingMulticast and HalfRingMulticast are "
+                "supported");
+        }
+
+        hops[direction_forward] = num_forward_hops;
+        hops[direction_backward] = num_backward_hops;
+
+        return hops;
+    }
+
     std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_multicast_hops(
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const override {
         std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_hops;
-        if (this->topology_ == Topology::Linear) {
+        if (this->topology_ == Topology::Linear || this->topology_ == Topology::Ring) {
             split_hops.reserve(4);
             for (const auto& [dir, hop_count] : hops) {
                 if (hop_count > 0) {
@@ -383,7 +666,7 @@ public:
         return possible_dsts[0];
     }
 
-    MeshShape get_mesh_shape() const { return mesh_shape_; }
+    MeshShape get_mesh_shape() const override { return mesh_shape_; }
 
     RoutingDirection get_forwarding_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const override {
@@ -395,7 +678,7 @@ public:
 
     RoutingDirection get_forwarding_direction(
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const override {
-        if (topology_ == Topology::Linear) {
+        if (topology_ == Topology::Linear || topology_ == Topology::Ring) {
             // for 1d, we expect hops only in one direction to be non-zero
             for (const auto& [direction, hop] : hops) {
                 if (hop != 0) {
