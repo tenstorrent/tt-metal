@@ -80,7 +80,7 @@ Data preparation and upload is the same as before. For this example, buffer 0 wi
 Circular buffers
 ----------------
 
-Here we introduce a new concept: circular buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between different kernels. There are in total 16 circular buffers supported on a Tensix. To utilize them, the host program must allocate the circular buffers and utilize the appropriate circular buffer index in the kernel.
+Here we introduce a new concept: circular buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between different kernels. There are in total 32 circular buffers supported on a Tensix. To utilize them, the host program must allocate the circular buffers and utilize the appropriate circular buffer index in the kernel.
 
 
 
