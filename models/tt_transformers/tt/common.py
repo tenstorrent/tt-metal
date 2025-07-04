@@ -219,22 +219,24 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
 def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
     # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
     # Values obtained from grid search
-    low_freq_factor = 1
-    high_freq_factor = 4
+    h = torch.arange(max_patches_per_side, device=freqs.device)
+    w = torch.arange(max_patches_per_side, device=freqs.device)
 
-    low_freq_wavelen = orig_context_len / low_freq_factor
-    high_freq_wavelen = orig_context_len / high_freq_factor
-    new_freqs = []
-    for freq in freqs:
-        wavelen = 2 * math.pi / freq
-        if wavelen < high_freq_wavelen:
-            new_freqs.append(freq)
-        elif wavelen > low_freq_wavelen:
-            new_freqs.append(freq / scale_factor)
-        else:
-            assert low_freq_wavelen != high_freq_wavelen
-            smooth = (orig_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
-            new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
+    freqs_h = torch.outer(h, freqs[::2]).float()
+    freqs_w = torch.outer(w, freqs[1::2]).float()
+    inv_freq = torch.cat(
+        [
+            freqs_h[:, None, :].repeat(1, max_patches_per_side, 1),
+            freqs_w[None, :, :].repeat(max_patches_per_side, 1, 1),
+        ],
+        dim=-1,
+    ).reshape(
+        -1, self.dim // 2
+    )  # we reshape to only index on the position indexes, not tuple of indexes
+    # Different from paper, but it uses a different permutation in order to obtain the same calculation
+
+    new_freqs = torch.cat((inv_freq, inv_freq), dim=-1)
+
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
