@@ -372,6 +372,23 @@ jobs:
           CIBW_BEFORE_BUILD: |
             echo "=== CMake Version Check ==="
             cmake --version
+            echo "=== Detailed Python Environment Debug ==="
+            python -c "
+            import sys, sysconfig
+            print('Python executable:', sys.executable)
+            print('Python version:', sys.version)
+            print('Include dir:', sysconfig.get_path('include'))
+            print('Stdlib dir:', sysconfig.get_path('stdlib'))
+            print('Platlib dir:', sysconfig.get_path('platlib'))
+            print('Python library dir:', sysconfig.get_config_var('LIBDIR'))
+            print('Python library file:', sysconfig.get_config_var('LIBRARY'))
+            print('Python config dir:', sysconfig.get_config_var('LIBPC'))
+            "
+            echo "=== File System Check ==="
+            ls -la $(python -c "import sysconfig; print(sysconfig.get_path('include'))")
+            find $(python -c "import sysconfig; print(sysconfig.get_path('include'))") -name "*.h" | head -5
+            echo "=== CMake Version Check ==="
+            cmake --version
             export PYTHON_EXECUTABLE=$(which python)
             export Python_EXECUTABLE=$PYTHON_EXECUTABLE
             export Python3_EXECUTABLE=$PYTHON_EXECUTABLE
