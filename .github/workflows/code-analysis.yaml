@@ -192,108 +192,43 @@ jobs:
           COMMIT_COUNT=$(git log --oneline ${OLD_SHA}..${NEW_SHA} | wc -l)
           FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l)
 
-          # Detect potential API breaking changes in C++ headers
-          HEADER_CHANGES=$(echo "$CHANGED_FILES" | grep -E "\.(h|hpp)$")
-          API_WARNINGS=""
-
-          if [ -n "$HEADER_CHANGES" ]; then
-            echo "🔍 Analyzing C++ header changes for API compatibility..."
-            # Check for potential breaking changes in headers
-            while IFS= read -r header; do
-              if [ -n "$header" ]; then
-                # Look for common API breaking patterns in the diff
-                DIFF_OUTPUT=$(git diff ${OLD_SHA}..${NEW_SHA} -- "$header" 2>/dev/null || echo "")
-
-                # Check for potentially breaking function signature changes
-                # Look for function definitions/declarations that changed
-                REMOVED_FUNCTIONS=$(echo "$DIFF_OUTPUT" | grep -E "^-\s*(template\s*<|inline\s+|static\s+|extern\s+|virtual\s+)*\s*\w+.*\(" | head -5)
-                ADDED_FUNCTIONS=$(echo "$DIFF_OUTPUT" | grep -E "^+\s*(template\s*<|inline\s+|static\s+|extern\s+|virtual\s+)*\s*\w+.*\(" | head -5)
-
-                if [ -n "$REMOVED_FUNCTIONS" ] && [ -n "$ADDED_FUNCTIONS" ]; then
-                  # Check for template parameter changes (breaking)
-                  if echo "$DIFF_OUTPUT" | grep -qE "^-.*template\s*<.*>" && echo "$DIFF_OUTPUT" | grep -qE "^+.*template\s*<.*>"; then
-                    API_WARNINGS="$API_WARNINGS\n- 🚨 **$header**: Template parameter changes detected (breaking)"
-                  fi
-
-                  # Check for argument order changes or type changes (breaking)
-                  # This is a heuristic: if we see the same function name but different parameter patterns
-                  while IFS= read -r removed_func; do
-                    if [ -n "$removed_func" ]; then
-                      # Extract function name (simplified)
-                      FUNC_NAME=$(echo "$removed_func" | sed 's/^-[^(]*\s\+\([a-zA-Z_][a-zA-Z0-9_]*\)\s*(.*/\1/')
-                      if [ -n "$FUNC_NAME" ] && echo "$ADDED_FUNCTIONS" | grep -q "$FUNC_NAME"; then
-                        # Same function name exists in both removed and added - likely parameter change
-                        API_WARNINGS="$API_WARNINGS\n- 🚨 **$header**: Function '$FUNC_NAME' signature changed (potentially breaking)"
-                      fi
-                    fi
-                  done <<< "$REMOVED_FUNCTIONS"
-
-                  # Check for simple extensions (non-breaking) - functions with same prefix but more params
-                  # If all removed functions have corresponding added functions with same prefix, it might be safe extension
-                  EXTENSION_SAFE=true
-                  while IFS= read -r removed_func; do
-                    if [ -n "$removed_func" ]; then
-                      # Extract the part before the last parameter
-                      FUNC_PREFIX=$(echo "$removed_func" | sed 's/^-//' | sed 's/,[^,]*)/)/g')
-                      if [ -n "$FUNC_PREFIX" ] && ! echo "$ADDED_FUNCTIONS" | grep -q "$(echo "$FUNC_PREFIX" | sed 's/)/,.*)/g')"; then
-                        EXTENSION_SAFE=false
-                        break
-                      fi
-                    fi
-                  done <<< "$REMOVED_FUNCTIONS"
-
-                  if [ "$EXTENSION_SAFE" = "false" ]; then
-                    API_WARNINGS="$API_WARNINGS\n- ⚠️ **$header**: Function signature changes detected (review required)"
-                  fi
-                fi
-
-                # Check for removed functions/classes
-                if echo "$DIFF_OUTPUT" | grep -qE "^-\s*(class|struct|enum|typedef|#define|inline|static|extern)"; then
-                  API_WARNINGS="$API_WARNINGS\n- 🚨 **$header**: Removed declarations detected"
-                fi
-
-                # Check for namespace changes
-                if echo "$DIFF_OUTPUT" | grep -q "^-.*namespace" || echo "$DIFF_OUTPUT" | grep -q "^+.*namespace"; then
-                  API_WARNINGS="$API_WARNINGS\n- ⚠️ **$header**: Namespace changes detected"
-                fi
-
-                # Check for macro changes
-                if echo "$DIFF_OUTPUT" | grep -qE "^-\s*#define" && echo "$DIFF_OUTPUT" | grep -qE "^+\s*#define"; then
-                  API_WARNINGS="$API_WARNINGS\n- ⚠️ **$header**: Macro definition changes detected"
-                fi
-              fi
-            done <<< "$HEADER_CHANGES"
-          fi
-
-          # Generate updated PR body with focus on API impact
+          # Generate updated PR body with PR link (use commits table from step output)
           cat > ../../../updated_llk_commit_log.txt << EOF
           ## 🔄 LLK Submodule Update
 
-          **Summary:** Updating LLK submodule from \`$OLD_SHA\` to \`$NEW_SHA\` ($COMMIT_COUNT commits, $FILE_COUNT files)
+          ### 📋 Summary
+          This PR updates the LLK submodule to the latest version from the main branch.
 
-          $(if [ -n "$API_WARNINGS" ]; then echo "### 🚨 Potential API Impact"; echo -e "$API_WARNINGS"; echo ""; echo "**⚠️ Review Required**: Changes to C++ headers detected. Please verify compatibility with existing tt-metal code."; echo ""; fi)
-
-          ### 🏗️ Architecture Impact
-          $(if echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/"; then echo "- **Wormhole**: Changes detected - will trigger all-post-commit tests"; fi)
-          $(if echo "$CHANGED_FILES" | grep -q "^tt_llk_blackhole/"; then echo "- **Blackhole**: Changes detected - will trigger blackhole-post-commit tests"; fi)
-          $(if ! echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/\|^tt_llk_blackhole/"; then echo "- **Cross-Architecture**: Changes affect common/shared components"; fi)
+          ### 🔗 Commit Range
+          | Previous Commit | New Commit | Compare |
+          |----------------|------------|---------|
+          | [\`$OLD_SHA\`](https://github.com/tenstorrent/tt-llk/commit/$OLD_SHA) | [\`$NEW_SHA\`](https://github.com/tenstorrent/tt-llk/commit/$NEW_SHA) | [View Changes](https://github.com/tenstorrent/tt-llk/compare/$OLD_SHA...$NEW_SHA) |
 
           ### 📝 Commits Uplifted ($COMMIT_COUNT commits)
           ${{ steps.analyze-changes.outputs.commits-table }}
 
           ### 📁 Files Changed ($FILE_COUNT files)
           <details>
-          <summary>📁 View all changed files ($FILE_COUNT)</summary>
+          <summary>Click to expand file list</summary>
 
-          \`\`\`
-          $(echo "$CHANGED_FILES")
-          \`\`\`
+          $(echo "$CHANGED_FILES" | sed 's/^/- `/' | sed 's/$/`/')
           </details>
 
-          **Links:** [Compare Changes](https://github.com/tenstorrent/tt-llk/compare/$OLD_SHA...$NEW_SHA) | [LLK Repository](https://github.com/tenstorrent/tt-llk)
+          ### 🏗️ Architecture Impact
+          $(if echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/"; then echo "- ⚠️ **Wormhole** changes detected - will trigger all-post-commit tests"; fi)
+          $(if echo "$CHANGED_FILES" | grep -q "^tt_llk_blackhole/"; then echo "- ⚠️ **Blackhole** changes detected - will trigger blackhole-post-commit tests"; fi)
+          $(if ! echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/\|^tt_llk_blackhole/"; then echo "- ℹ️ No architecture-specific changes detected"; fi)
+
+          ### 🤖 Automation Status
+          - **Created by:** LLK Auto-Uplift Workflow
+          - **Trigger:** $(if [ "${{ github.event_name }}" = "schedule" ]; then echo "Scheduled ($(date))"; elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then echo "Repository Dispatch"; else echo "Manual/Workflow Call"; fi)
+          - **Branch:** \`${{ env.BRANCH_NAME }}\`
+
+          ### 🧪 Test Status
+          Test results and workflow status will be updated here automatically.
 
           ---
-          *Auto-generated by LLK Auto-Uplift workflow. Test results will be posted below.*
+          *This PR will be automatically updated with test results and merged upon successful completion of all required checks.*
           EOF
 
           # Update the PR body with the new content including PR link
