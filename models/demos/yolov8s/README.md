@@ -68,3 +68,6 @@ The demo receives inputs from `models/demos/yolov8s/demo/images` dir by default.
 
 ### Outputs
 A runs folder will be created inside the `models/demos/yolov8s/demo/` directory. For reference, the model output will be stored in the torch_model directory, while the TTNN model output will be stored in the tt_model directory.
+
+### Web Demo
+- Try the interactive web demo [instructions](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov8s/README.md)
