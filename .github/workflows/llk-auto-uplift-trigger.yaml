@@ -95,6 +95,11 @@ jobs:
       - name: Update submodule
         id: update-submodule
         run: |
+          # Initialize and update submodules after reset
+          echo "🔄 Initializing and updating submodules"
+          git submodule init
+          git submodule update
+
           cd ${{ env.SUBMODULE_PATH }}
           OLD_SHA=$(git rev-parse --short=7 HEAD)
           echo "old-sha=$OLD_SHA" >> $GITHUB_OUTPUT
