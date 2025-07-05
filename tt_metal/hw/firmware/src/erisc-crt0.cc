@@ -8,7 +8,7 @@ void Application();
 
 static void *stack;  // saved stack pointer
 
-/*static*/ void do_erisc_exit();
+static void do_erisc_exit();
 
 // Pointer to exit routine, (so it may be called from a kernel).  USED
 // attribute is needed to keep this as an symbol that kernels may
@@ -60,7 +60,7 @@ extern "C" [[gnu::section(".start"), gnu::naked, gnu::optimize("Os")]] void _sta
 
 // This is not marked noreturn, because it does actually return --
 // just not to where it came from!
-void do_erisc_exit() {
+static void do_erisc_exit() {
     // Restore sp from the save slot.
     __asm__ volatile("lw sp, %[sp]\n\t" : : [sp] "m"(stack));
 
