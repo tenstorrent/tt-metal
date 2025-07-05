@@ -72,7 +72,7 @@ def test_attention_inference(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
     reference_model = model_args.reference_attention()
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model.load_state_dict(partial_state_dict, model_args.fuse_qkv)
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_prefill_rot_mat(
@@ -82,6 +82,7 @@ def test_attention_inference(
         model_args.rope_theta,
         model_args.rope_scaling_factor,
         model_args.orig_context_len,
+        ext_scaling_tensor=model_args.rope_ext_scaling_tensor,
     )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
 
