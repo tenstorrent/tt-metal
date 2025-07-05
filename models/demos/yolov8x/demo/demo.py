@@ -14,7 +14,7 @@ from ultralytics import YOLO
 import ttnn
 from models.demos.yolov8x.demo.demo_utils import LoadImages, load_coco_class_names, postprocess, preprocess
 from models.demos.yolov8x.reference import yolov8x
-from models.demos.yolov8x.tests.yolov8x_e2e_performant import Yolov8xTrace2CQ
+from models.demos.yolov8x.runner.performant_runner import YOLOv8xPerformantRunner
 from models.utility_functions import disable_persistent_kernel_cache
 
 
@@ -77,11 +77,7 @@ def test_demo(device, source, model_type, res, use_weights_from_ultralytics):
         model = yolov8x.DetectionModel()
 
     if model_type == "tt_model":
-        yolov8x_trace_2cq = Yolov8xTrace2CQ()
-        yolov8x_trace_2cq.initialize_yolov8x_trace_2cqs_inference(
-            device,
-            1,
-        )
+        performant_runner = YOLOv8xPerformantRunner(device, device_batch_size=1)
 
     save_dir = "models/demos/yolov8x/demo/runs"
 
@@ -101,13 +97,13 @@ def test_demo(device, source, model_type, res, use_weights_from_ultralytics):
         else:
             ttnn_im = im.clone()
             n, c, h, w = ttnn_im.shape
-            preds = yolov8x_trace_2cq.run(ttnn_im)
+            preds = performant_runner.run(ttnn_im)
             preds = ttnn.to_torch(preds, dtype=torch.float32)
         results = postprocess(preds, im, im0s, batch, names)[0]
 
         save_yolo_predictions_by_model(results, save_dir, source, model_type)
 
     if model_type == "tt_model":
-        yolov8x_trace_2cq.release_yolov8x_trace_2cqs_inference()
+        performant_runner.release()
 
     logger.info("Inference done")
