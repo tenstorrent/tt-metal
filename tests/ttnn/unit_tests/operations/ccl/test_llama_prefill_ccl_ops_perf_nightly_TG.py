@@ -12,7 +12,7 @@ from models.perf.device_perf_utils import run_device_perf_detailed
 @pytest.mark.parametrize(
     "shape_id, warmup_iters, perf_target_us",
     [
-        # TODO: update when scatter-write goes through
+        # TODO: update when all work on ccls is done
         # 128
         ("128_seq and sh-2048w", 15, 48),
         ("128_seq and sh-1280w", 15, 25),
@@ -74,7 +74,7 @@ def test_rs_ring(shape_id, warmup_iters, perf_target_us, galaxy_type):
 @pytest.mark.parametrize(
     "shape_id, warmup_iters, perf_target_us",
     [
-        # TODO: update when scatter-write goes through
+        # TODO: update when all work on ccls is done
         # 128
         ("128_seq and sh-256w", 15, 26),
         ("128_seq and sh-320w", 15, 20),
