@@ -8,7 +8,7 @@ run_tg_all_to_all_dispatch_perf_tests() {
 
   echo "LOG_METAL: Running all to all dispatch perf tests"
 
-  pytest -n auto -k TG tests/ttnn/unit_tests/operations/ccl/perf/test_all_to_all_dispatch_perf.py; fail+=$?
+  pytest -n auto -k TG tests/ttnn/multidevice_perf_tests/test_all_to_all_dispatch_perf.py; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
