@@ -550,14 +550,13 @@ def print_stats(dm_stats):
 
 
 def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", arch="blackhole"):
-
     # Set noc_width based on architecture
     noc_width = 32 if arch == "wormhole_b0" else 64
     multicast_schemes_test_ids = [100, 101]
-    
+
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Helper: Extract data for a specific test_id
     def extract_data(series, attributes, test_id):
         filtered = [
@@ -599,17 +598,14 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
                 data["grid_dimensions"].append(grid_dimensions)
 
         return data
-    
+
     # Helper: Plot Type 1 - Test Index vs Duration
     def plot_durations(ax, data):
-        lines = []
-        labels = []
-        
         risc_to_kernel_map = {
             "riscv_1": "Receiver",
             "riscv_0": "Sender",
         }
-            
+
         unique_transactions = sorted(set(data["riscv_1"]["transactions"] + data["riscv_0"]["transactions"]))
         for num_transactions in unique_transactions:
             for riscv in RISCV_LIST:
@@ -623,8 +619,13 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
                 ]
                 if grouped:
                     sizes, durations = zip(*grouped)
-                    ax.plot(sizes, durations, label=f"{risc_to_kernel_map[riscv]} (Number of Transactions={num_transactions})", marker="o")
-                    
+                    ax.plot(
+                        sizes,
+                        durations,
+                        label=f"{risc_to_kernel_map[riscv]} (Number of Transactions={num_transactions})",
+                        marker="o",
+                    )
+
         ax.set_xlabel("Transaction Size (bytes)")
         ax.set_ylabel("Duration (cycles)")
         ax.set_title("Transaction Size vs Duration")
@@ -632,20 +633,16 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
         ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x)}"))
         ax.set_yscale("log", base=10)
         # ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x)}"))
-        if lines:
-            ax.legend(
-                lines, labels, loc="center left", bbox_to_anchor=(1.0, 0.5), borderaxespad=0
-            )  # Legend outside plot
+        ax.legend(loc="center left", bbox_to_anchor=(1.0, 0.5), borderaxespad=0)  # Legend outside plot
         ax.grid()
 
     # Helper: Plot Type 2 - Transaction Size vs Bandwidth
     def plot_data_size_vs_bandwidth(ax, data, noc_width):
-        
         risc_to_kernel_map = {
             "riscv_1": "Receiver",
             "riscv_0": "Sender",
         }
-        
+
         unique_transactions = sorted(set(itertools.chain.from_iterable(data[riscv]["transactions"] for riscv in data)))
 
         for num_transactions in unique_transactions:
@@ -677,10 +674,9 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
         ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x)}"))
         ax.legend(loc="center left", bbox_to_anchor=(1.0, 0.5), borderaxespad=0)  # Legend outside plot
         ax.grid()
-        
-        
+
     # Helper: Plot Bandwidth for Multicast Schemes
-    def plot_bandwidth(ax, data, x_axis, lines, riscv, noc_index):
+    def plot_bandwidth_multicast(ax, data, x_axis, lines, riscv, noc_index):
         # Filter data where "noc_index" matches the input noc_index
         filtered_data = [
             (data[riscv][x_axis][i], data[riscv]["bandwidths"][i], data[riscv][lines][i])
@@ -719,89 +715,65 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
         ax.legend(loc="center left", bbox_to_anchor=(1.0, 0.5), borderaxespad=0)  # Legend outside plot
         ax.grid()
 
-    # Helper: Add comments section to the plot
-    def add_plot_comment_section(subsubfig, test_id):
-        if test_id in test_id_to_comment.keys():
-            txtObj = subsubfig[1].text(
-                0.5,
-                0,
-                f"Comments: {test_id_to_comment.get(test_id, 'No comment available, test has not been analyzed')}",
-                ha="center",
-                fontsize=10,
-                style="italic",
-                wrap=True,
-            )
-            txtObj._get_wrap_line_width = lambda: 0.9 * subsubfig[1].bbox.width
-
-    # Helper: Prepare figure and subfigures
-    def prepare_figure(
-        test_ids, plot_width, plot_height, nrows_per_subfigure, ncols_per_subfigure, comment_section_height_ratio
-    ):
-        subfigure_width = plot_width * ncols_per_subfigure
-        subfigure_height = plot_height * nrows_per_subfigure + comment_section_height_ratio * plot_height
-        figure_width = subfigure_width
-        figure_height = subfigure_height * len(test_ids)
-        fig = plt.figure(figsize=(figure_width, figure_height), constrained_layout=True)
-        subfigs = fig.subfigures(len(test_ids), 1)
-        return fig, subfigs if len(test_ids) > 1 else [subfigs]
-
-    # Parameters for individual plot and subfigure layout
+    # Parameters for individual plot and figure layout
     plot_width = 12  # Width of an individual plot
     plot_height = 6  # Height of an individual plot
-    nrows_per_subfigure = 1  # Number of rows of plots per subfigure
-    ncols_per_subfigure = 2  # Number of columns of plots per subfigure
+    nrows_per_figure = 1  # Number of rows of plots per figure
+    ncols_per_figure = 2  # Number of columns of plots per figure
     comment_section_height_ratio = 0.2  # Height ratio for the comment section
 
-    # Extract test IDs and prepare figure
+    # Extract test IDs
     test_ids = sorted(
         {attributes["Test id"] for riscv in RISCV_LIST for attributes in dm_stats[riscv]["attributes"].values()}
-    )
-    fig, subfigs = prepare_figure(
-        test_ids,
-        plot_width=plot_width,
-        plot_height=plot_height,
-        nrows_per_subfigure=nrows_per_subfigure,
-        ncols_per_subfigure=ncols_per_subfigure,
-        comment_section_height_ratio=comment_section_height_ratio,
     )
 
     # Extract data for plotting
     series = {riscv: dm_stats[riscv]["analysis"]["series"] for riscv in RISCV_LIST}
 
-    # Iterate over test IDs and create subplots
-    for idx, (subfig, test_id) in enumerate(zip(subfigs, test_ids)):
+    # Iterate over test IDs and create figures
+    for test_id in test_ids:
         test_name = test_id_to_name.get(test_id, f"Test ID {test_id}")
-        subsubfig = subfig.subfigures(2, 1, height_ratios=[1, comment_section_height_ratio])
-        subsubfig[0].suptitle(test_name, fontsize=16, weight="bold")
 
-        # Create subplots within the subfigure
-        axes = subsubfig[0].subplots(nrows_per_subfigure, ncols_per_subfigure)
+        # Prepare figure for the current test ID
+        figure_height = plot_height * nrows_per_figure + comment_section_height_ratio * plot_height
+        fig = plt.figure(figsize=(plot_width * ncols_per_figure, figure_height), constrained_layout=True)
+        fig.suptitle(test_name, fontsize=16, weight="bold")
+
+        # Create subplots within the figure
+        axes = fig.subplots(nrows_per_figure, ncols_per_figure)
 
         # Extract data for riscv_1 and riscv_0
         data = {riscv: extract_data(series[riscv], dm_stats[riscv]["attributes"], test_id) for riscv in RISCV_LIST}
 
         # Generate plots based on test type
         if test_id in multicast_schemes_test_ids:
-            plot_bandwidth(
+            plot_bandwidth_multicast(
                 axes[0], data, x_axis="grid_dimensions", lines="multicast_scheme_number", riscv="riscv_0", noc_index=0
             )
-            plot_bandwidth(
+            plot_bandwidth_multicast(
                 axes[1], data, x_axis="grid_dimensions", lines="multicast_scheme_number", riscv="riscv_0", noc_index=1
             )
-        else:
+        else:  # Packet Sizes
             plot_durations(axes[0], data)
             plot_data_size_vs_bandwidth(axes[1], data, noc_width)
 
-        add_plot_comment_section(subsubfig, test_id)
+        # Add comments section to the figure below the plots
+        fig.subplots_adjust(bottom=0.25)  # Adjust bottom margin to make space for comments
+        fig.text(
+            0.5,
+            0.02,  # Position the text closer to the bottom
+            f"Comments: {test_id_to_comment.get(test_id, 'No comment available, test has not been analyzed')}",
+            ha="center",
+            fontsize=10,
+            style="italic",
+            wrap=True,
+        )
 
         # Save the plot for this test id
         output_file = os.path.join(output_dir, f"{test_id_to_name.get(test_id, f'Test ID {test_id}')}.png")
         plt.savefig(output_file)
         plt.close(fig)
         logger.info(f"dm_stats plot for test id {test_id} saved at {output_file}")
-
-
-## TODO: PUT figure DECLARATION INSIDE EACH TEST ID ## !!!
 
 
 def export_dm_stats_to_csv(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement"):

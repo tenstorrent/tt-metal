@@ -149,13 +149,8 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
              (uint32_t)test_config.sub_grid_size.x,
              (uint32_t)test_config.sub_grid_size.y});
 
-        sender_kernel_path += "sender_multicast/";
+        sender_kernel_path += "sender_multicast.cpp";
 
-        if (test_config.loopback) {
-            sender_kernel_path += "loopback.cpp";
-        } else {
-            sender_kernel_path += "no_loopback.cpp";
-        }
     } else {  // Unicast Sender Kernel
         sender_kernel_path += "sender_unicast.cpp";
     }
@@ -169,8 +164,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
             .processor = data_movement_processor, .noc = test_config.noc_id, .compile_args = sender_compile_args});
 
     // Runtime Arguments
-    vector<uint32_t> sender_runtime_args = {};
-    sender_runtime_args.insert(sender_runtime_args.end(), sub_worker_coordinates.begin(), sub_worker_coordinates.end());
     std::vector<uint32_t> sender_runtime_args = {};
 
     if (!test_config.is_multicast) {  // Unicast Sender Runtime Arguments

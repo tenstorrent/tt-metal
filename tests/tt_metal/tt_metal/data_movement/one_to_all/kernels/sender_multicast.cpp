@@ -23,9 +23,9 @@ void kernel_main() {
     constexpr uint32_t end_y = get_compile_time_arg_val(12);
 
     // Specific for Multicast Schemes
-    constexpr uint32_t multicast_scheme_type = get_compile_time_arg_val(12);
-    constexpr uint32_t sub_grid_size_x = get_compile_time_arg_val(13);
-    constexpr uint32_t sub_grid_size_y = get_compile_time_arg_val(14);
+    constexpr uint32_t multicast_scheme_type = get_compile_time_arg_val(13);
+    constexpr uint32_t sub_grid_size_x = get_compile_time_arg_val(14);
+    constexpr uint32_t sub_grid_size_y = get_compile_time_arg_val(15);
 
     // Derivative values
     constexpr uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
