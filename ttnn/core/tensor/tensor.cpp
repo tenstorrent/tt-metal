@@ -555,7 +555,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
 
     Tensor output;
     if (distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
-        output = allocate_tensor_on_mesh(tensor_spec, mesh_device);
+        output = allocate_tensor_on_device(tensor_spec, mesh_device);
     } else {
         auto device_buffer = tensor_impl::allocate_buffer_on_device(device, tensor_spec);
         output = Tensor(DeviceStorage{device_buffer}, tensor_spec, ReplicateTensor{});
@@ -717,37 +717,56 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
     }
 }
 
-Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
-    // Allocate a mesh buffer synchronously.
-    auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
+Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
+    auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(device, tensor_spec);
     std::vector<distributed::MeshCoordinate> coords;
-    coords.reserve(mesh_device->shape().mesh_size());
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+    coords.reserve(device->shape().mesh_size());
+    for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
         coords.push_back(coord);
     }
     DeviceStorage device_storage(std::move(mesh_buffer), std::move(coords));
     return Tensor(std::move(device_storage), tensor_spec, ReplicateTensor{});
 }
 
-void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id) {
-    ZoneScoped;
-    TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Destination tensor must be on device");
-    TT_FATAL(
-        host_tensor.storage_type() == StorageType::HOST or host_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST,
-        "write_tensor only supports host_tensor to device_tensor data transfer");
+Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
+    auto distributed_host_buffer = DistributedHostBuffer::create(device->shape());
+    for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
+        distributed_host_buffer.emplace_shard(coord, []() { return HostBuffer(); });
+    }
 
-    auto& device_storage = std::get<DeviceStorage>(device_tensor.storage());
-    if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
-        tensor_impl::copy_to_mesh_tensor_wrapper(host_tensor, device_tensor, cq_id);
+    distributed_host_buffer = distributed_host_buffer.transform(
+        [&](const HostBuffer&) { return tensor_impl::allocate_host_buffer(tensor_spec); },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+    return Tensor(MultiDeviceHostStorage(std::move(distributed_host_buffer)), tensor_spec, ReplicateTensor{});
+}
+
+void write_tensor(const Tensor& src, Tensor& dst, bool blocking, QueueId cq_id) {
+    ZoneScoped;
+    TT_FATAL(
+        (is_device_tensor(src) && is_multi_device_host_tensor(dst)) ||                            // device to host
+            ((is_cpu_tensor(src) || is_multi_device_host_tensor(src)) && is_device_tensor(dst)),  // host to device
+        "Unsupported data transfer direction; source storage type: {}, destination storage type: {}",
+        src.storage_type(),
+        dst.storage_type());
+
+    if (is_device_tensor(src)) {
+        tensor_impl::copy_to_host_tensor_wrapper(src, dst, blocking, cq_id);
         return;
     }
 
-    TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Error");
-    TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Error");
-    TT_FATAL(host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(), "Error");
+    auto& device_storage = std::get<DeviceStorage>(dst.storage());
+    if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
+        TT_FATAL(!blocking, "Blocking is not supported for host to device copy");
+        tensor_impl::copy_to_device_tensor_wrapper(src, dst, cq_id);
+        return;
+    }
+
+    TT_FATAL(src.logical_shape() == dst.logical_shape(), "Error");
+    TT_FATAL(src.dtype() == dst.dtype(), "Error");
+    TT_FATAL(src.tensor_spec().page_config() == dst.tensor_spec().page_config(), "Error");
     std::visit(
         tt::stl::overloaded{
-            [cq_id, &host_tensor, &device_tensor](const DeviceStorage& device_storage) {
+            [cq_id, &src, &dst](const DeviceStorage& device_storage) {
                 // Copying from host to a single device.
                 const void* host_data = std::visit(
                     tt::stl::overloaded{
@@ -766,15 +785,15 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                         },
                         [](auto&&) -> const void* { TT_THROW("Unreachable"); },
                     },
-                    host_tensor.storage());
-                if (auto mesh_device = device_tensor.mesh_device()) {
-                    tt::tt_metal::memcpy(mesh_device->mesh_command_queue(*cq_id), device_tensor, host_data);
+                    src.storage());
+                if (auto mesh_device = dst.mesh_device()) {
+                    tt::tt_metal::memcpy(mesh_device->mesh_command_queue(*cq_id), dst, host_data);
                 } else {
-                    tt::tt_metal::memcpy(device_tensor.device()->command_queue(*cq_id), device_tensor, host_data);
+                    tt::tt_metal::memcpy(dst.device()->command_queue(*cq_id), dst, host_data);
                 }
             },
             [](auto&& s) { TT_THROW("Unreachable"); }},
-        device_tensor.storage());
+        dst.storage());
 }
 
 Tensor set_tensor_id(const Tensor& tensor) {
