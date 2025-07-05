@@ -43,7 +43,7 @@ class IDevice;
 enum class DataMovementProcessor;
 class KernelImpl;
 
-constexpr uint32_t max_runtime_args = 256;
+constexpr uint32_t max_runtime_args = 6144;
 
 using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
 struct KernelSource {
