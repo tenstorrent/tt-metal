@@ -77,29 +77,21 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Reset branch to latest main
+      - name: Ensure we have latest main
         run: |
-          # Fetch latest main to ensure we have the most recent changes
+          # Fetch latest main and stay on it
           git fetch origin main
+          git checkout main
+          git reset --hard origin/main
 
-          # Check if branch exists, if not create it
-          if git show-ref --verify --quiet refs/heads/${{ env.BRANCH_NAME }}; then
-            echo "🔄 Branch ${{ env.BRANCH_NAME }} exists, checking it out and resetting to main"
-            git checkout ${{ env.BRANCH_NAME }}
-            git reset --hard origin/main
-          else
-            echo "🌱 Creating fresh branch ${{ env.BRANCH_NAME }} from latest main"
-            git checkout -b ${{ env.BRANCH_NAME }} origin/main
-          fi
+          # Initialize and update submodules to get latest state
+          git submodule init
+          git submodule update
+          echo "✅ Updated to latest main with fresh submodules"
 
       - name: Update submodule
         id: update-submodule
         run: |
-          # Initialize and update submodules after reset
-          echo "🔄 Initializing and updating submodules"
-          git submodule init
-          git submodule update
-
           cd ${{ env.SUBMODULE_PATH }}
           OLD_SHA=$(git rev-parse --short=7 HEAD)
           echo "old-sha=$OLD_SHA" >> $GITHUB_OUTPUT
@@ -118,11 +110,6 @@ jobs:
           else
             echo "has-changes=true" >> $GITHUB_OUTPUT
             echo "✅ Changes detected: $OLD_SHA -> $NEW_SHA"
-
-            # Stage the submodule changes in the parent repo
-            cd ../../..
-            git add ${{ env.SUBMODULE_PATH }}
-            echo "📝 Staged submodule changes"
           fi
 
       - name: Analyze changes and generate PR body
@@ -200,13 +187,6 @@ jobs:
           *This PR body will be updated with detailed information shortly...*
           EOF
 
-      - name: Push branch to remote
-        if: steps.update-submodule.outputs.has-changes == 'true'
-        run: |
-          # Push the branch to remote so it exists for PR creation
-          git push origin ${{ env.BRANCH_NAME }}
-          echo "✅ Pushed branch ${{ env.BRANCH_NAME }} to remote"
-
       - name: Create Pull Request
         id: create-pr
         if: steps.update-submodule.outputs.has-changes == 'true'
@@ -216,6 +196,7 @@ jobs:
           commit-message: "chore: update LLK submodule to ${{ steps.update-submodule.outputs.new-sha }}"
           title: "chore: update LLK submodule to ${{ steps.update-submodule.outputs.new-sha }}"
           branch: ${{ env.BRANCH_NAME }}
+          base: main
           delete-branch: true
           body-path: llk_commit_log.txt
           add-paths: |
