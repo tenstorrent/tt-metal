@@ -197,7 +197,8 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     };
 
     // For each mesh in the system
-    auto user_meshes = this->get_user_physical_mesh_ids();
+    std::vector<MeshId> user_meshes{
+        MeshId{0}, MeshId{1}, MeshId{2}, MeshId{3}, MeshId{4}};  // this->get_user_physical_mesh_ids();
     if (reliability_mode == tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
         for (auto mesh_id : user_meshes) {
             size_t num_chips_in_mesh = intra_mesh_connectivity[mesh_id.get()].size();
@@ -1078,7 +1079,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
 
     // Trim the ethernet channels that don't map to live fabric routing planes.
     // NOTE: This MUST be called after ordering ethernet channels
-    this->trim_ethernet_channels_not_mapped_to_live_routing_planes();
+    // this->trim_ethernet_channels_not_mapped_to_live_routing_planes();
 
     this->convert_fabric_routing_table_to_chip_routing_table();
 }
