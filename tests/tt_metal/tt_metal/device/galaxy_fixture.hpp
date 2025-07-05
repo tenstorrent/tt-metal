@@ -15,6 +15,9 @@ namespace tt::tt_metal {
 
 class GalaxyFixture : public DispatchFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     bool SkipTestSuiteIfNotGalaxyMotherboard() {
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         if (!(this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices >= 32)) {
@@ -24,11 +27,17 @@ protected:
     }
 
     void SetUp() override {
-        this->DetectDispatchMode();
         if (this->SkipTestSuiteIfNotGalaxyMotherboard()) {
             GTEST_SKIP() << "Not a galaxy mobo";
         }
         DispatchFixture::SetUp();
+    }
+
+    void TearDown() override {
+        if (this->SkipTestSuiteIfNotGalaxyMotherboard()) {
+            return;
+        }
+        DispatchFixture::TearDownTestSuite();
     }
 
 private:
@@ -37,6 +46,9 @@ private:
 
 class TGFixture : public GalaxyFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SkipTestSuiteIfNotTG() {
         if (this->SkipTestSuiteIfNotGalaxyMotherboard()) {
             GTEST_SKIP() << "Not a galaxy mobo";
@@ -51,6 +63,9 @@ protected:
 
 class TGGFixture : public GalaxyFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SkipTestSuiteIfNotTGG() {
         if (this->SkipTestSuiteIfNotGalaxyMotherboard()) {
             GTEST_SKIP() << "Not a galaxy mobo";
