@@ -64,7 +64,7 @@ void generate_ccl_command_stream_to_kernel_args(
  * @return the runtime args
  */
 std::vector<uint32_t> generate_edm_connection_rt_args(
-    const tt::tt_fabric::SenderWorkerAdapterSpec& connection_info, const chip_id_t chip_id, tt::tt_metal::Program& program, CoreRangeSet worker_cores);
+    const tt::tt_fabric::SenderWorkerAdapterSpec& connection_info, chip_id_t chip_id, tt::tt_metal::Program& program, CoreRangeSet worker_cores);
 
 // TODO: eventually take a fabric handle
 void generate_multi_input_command_stream_kernel_rt_args(

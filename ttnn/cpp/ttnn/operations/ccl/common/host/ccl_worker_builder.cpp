@@ -1033,7 +1033,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
 
 std::vector<uint32_t> generate_edm_connection_rt_args(
     const tt::tt_fabric::SenderWorkerAdapterSpec& connection_info,
-    const chip_id_t chip_id,
+    chip_id_t chip_id,
     Program &program,
     CoreRangeSet worker_cores) {
     std::vector<uint32_t> new_rt_args;
