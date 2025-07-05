@@ -13,7 +13,6 @@ import cv2
 import numpy as np
 import orjson
 import requests
-import streamlit as st
 from streamlit_webrtc import VideoProcessorBase, webrtc_streamer
 
 # Configure the logger
@@ -62,7 +61,7 @@ class VideoProcessor(VideoProcessorBase):
                 rgb = (255, 0, 0)
             if len(box) >= 7 and class_names:
                 cls_conf = box[5]
-                cls_id = box[6]
+                cls_id = int(box[6])
                 print("%s: %f" % (class_names[cls_id], cls_conf))
                 classes = len(class_names)
                 offset = cls_id * 123457 % classes
@@ -98,7 +97,7 @@ class VideoProcessor(VideoProcessorBase):
 
         # Convert frame to PIL image and resize
         pil_image = frame.to_image()
-        pil_image = pil_image.resize((320, 320))  # Resize to target dimensions
+        pil_image = pil_image.resize((640, 640))  # Resize to target dimensions
         t1 = time.time()
 
         # Save image as JPEG in-memory with optimized settings
@@ -109,7 +108,7 @@ class VideoProcessor(VideoProcessorBase):
 
         # Parse API URL once at the class level for efficiency
         if not hasattr(self, "api_url"):
-            parser = argparse.ArgumentParser(description="YOLOv4 script")
+            parser = argparse.ArgumentParser(description="YOLOv8 script")
             parser.add_argument("--api-url", type=str, required=True, help="URL for the object detection API")
             args = parser.parse_args()
             self.api_url = args.api_url
@@ -140,7 +139,7 @@ class VideoProcessor(VideoProcessorBase):
         nms_thresh = 0.5
 
         # Load class names and plot bounding boxes
-        namesfile = "coco.names"
+        namesfile = "../../../../experimental/yolo_common/yolo_web_demo/coco.names"
         class_names = self.load_class_names(namesfile)
         image_final = self.plot_boxes_cv2(bgr_image, output, None, class_names)
 
@@ -152,15 +151,15 @@ class VideoProcessor(VideoProcessorBase):
         return av.VideoFrame.from_ndarray(image_final, format="bgr24")
 
 
-st.title("YOLOv4 Detection Demo")
+st.title("YOLOv8x Detection Demo")
 
 webrtc_streamer(
     key="example",
     video_transformer_factory=VideoProcessor,
     media_stream_constraints={
         "video": {
-            "width": {"min": 320, "ideal": 400, "max": 960},
-            "height": {"min": 320, "ideal": 400, "max": 960},
+            "width": {"min": 640, "ideal": 400, "max": 960},
+            "height": {"min": 640, "ideal": 400, "max": 960},
             "frameRate": {"min": 1, "ideal": 50, "max": 60},
         }
     },
