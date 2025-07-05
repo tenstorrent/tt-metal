@@ -296,8 +296,6 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         logger.info(
             f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.get('vae_decode'):.2f} seconds"
         )
-        profiler.clear()
-
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
                 break
