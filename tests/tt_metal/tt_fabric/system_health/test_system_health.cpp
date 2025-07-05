@@ -181,7 +181,6 @@ TEST(Cluster, ReportSystemHealth) {
     // It is a report of system health
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& eth_connections = cluster.get_ethernet_connections();
-    const auto& eth_connections_to_remote_mmio_devices = cluster.get_ethernet_connections_to_remote_mmio_devices();
 
     auto unique_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
     std::stringstream ss;

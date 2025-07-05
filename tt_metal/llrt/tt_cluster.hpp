@@ -269,8 +269,8 @@ public:
 
     // TODO: unify uint64_t with ChipUID
     std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>
-    get_ethernet_connections_to_remote_mmio_devices() const {
-        return this->cluster_desc_->get_ethernet_connections_to_remote_mmio_devices();
+    get_ethernet_connections_to_remote_devices() const {
+        return this->cluster_desc_->get_ethernet_connections_to_remote_devices();
     }
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
