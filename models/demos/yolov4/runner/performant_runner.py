@@ -19,9 +19,13 @@ class YOLOv4PerformantRunner:
         weight_dtype=ttnn.bfloat16,
         model_location_generator=None,
         resolution=(320, 320),
+        mesh_mapper=None,
+        mesh_composer=None,
     ):
         self.device = device
         self.resolution = resolution
+        self.mesh_mapper = mesh_mapper
+        self.mesh_composer = mesh_composer
         self.runner_infra = YOLOv4PerformanceRunnerInfra(
             device,
             device_batch_size,
@@ -29,6 +33,8 @@ class YOLOv4PerformantRunner:
             weight_dtype,
             model_location_generator,
             resolution=resolution,
+            mesh_mapper=self.mesh_mapper,
+            mesh_composer=self.mesh_composer,
         )
 
         (
@@ -92,10 +98,8 @@ class YOLOv4PerformantRunner:
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
         ttnn.synchronize_device(self.device)
-
         ttnn_output_tensor = self.runner_infra.output_tensor
-
-        return get_model_result(ttnn_output_tensor, self.resolution)
+        return get_model_result(ttnn_output_tensor, self.resolution, mesh_composer=self.mesh_composer)
 
     def _validate(self, input_tensor, result_output_tensor):
         result_boxes, result_confs = result_output_tensor

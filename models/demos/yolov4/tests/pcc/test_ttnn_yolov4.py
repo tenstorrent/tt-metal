@@ -40,7 +40,7 @@ def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_wei
         torch_model.load_state_dict(new_state_dict)
         torch_model.eval()
 
-    imgfile = "models/demos/yolov4/resources/giraffe_320.jpg"
+    imgfile = "models/demos/yolov4/resources/giraffe.jpg"
     img = load_image(imgfile, resolution)
     torch_input = image_to_tensor(img)
 
