@@ -661,4 +661,52 @@ jobs:
             --body "$COMPLETION_MESSAGE" \
             --repo "${{ github.repository }}" || echo "⚠️ Unable to comment on PR - insufficient permissions"
 
+          # Update the Test Status section in the PR body
+          echo "🔄 Updating PR body with final test status..."
+
+          # Build test status from actual workflow results
+          TEST_STATUS_LINES=""
+
+          if [ "${{ needs.trigger-and-monitor-workflows.result }}" = "skipped" ]; then
+            TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ℹ️ **No architecture-specific tests required** - No Wormhole or Blackhole changes detected"
+          else
+            # Post-commit jobs should have run, get their actual results
+            if [ "${{ needs.llk-submodule-uplift.outputs.should-run-wormhole }}" = "true" ]; then
+              WH_RUN=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json databaseId,url,conclusion --jq '.[0]' --repo "${{ github.repository }}")
+              WH_URL=$(echo "$WH_RUN" | jq -r '.url // ""')
+              WH_CONCLUSION=$(echo "$WH_RUN" | jq -r '.conclusion // ""')
+              if [ "$WH_CONCLUSION" = "success" ]; then
+                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ✅ **All Post Commit Workflows** passed: [View run]($WH_URL)"
+              else
+                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ❌ **All Post Commit Workflows** failed (conclusion: \`$WH_CONCLUSION\`): [View run]($WH_URL)"
+              fi
+            fi
+
+            if [ "${{ needs.llk-submodule-uplift.outputs.should-run-blackhole }}" = "true" ]; then
+              BH_RUN=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json databaseId,url,conclusion --jq '.[0]' --repo "${{ github.repository }}")
+              BH_URL=$(echo "$BH_RUN" | jq -r '.url // ""')
+              BH_CONCLUSION=$(echo "$BH_RUN" | jq -r '.conclusion // ""')
+              if [ "$BH_CONCLUSION" = "success" ]; then
+                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ✅ **Blackhole Post Commit** passed: [View run]($BH_URL)"
+              else
+                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ❌ **Blackhole Post Commit** failed (conclusion: \`$BH_CONCLUSION\`): [View run]($BH_URL)"
+              fi
+            fi
+          fi
+
+          # Build final test status
+          if [ -n "$TEST_STATUS_LINES" ]; then
+            TEST_STATUS="### 🧪 Test Status"$'\n'"**Workflow Results:**"$'\n'"$TEST_STATUS_LINES"
+          else
+            TEST_STATUS="### 🧪 Test Status"$'\n'"✅ **Workflow completed successfully** - Ready for review"
+          fi
+
+          # Get current PR body and update the Test Status section
+          CURRENT_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body' --repo "${{ github.repository }}")
+          UPDATED_BODY=$(echo "$CURRENT_BODY" | sed -E '/### 🧪 Test Status.*/,$d')
+          UPDATED_BODY="$UPDATED_BODY"$'\n\n'"$TEST_STATUS"
+
+          # Update PR body
+          echo "$UPDATED_BODY" | gh pr edit "$PR_NUMBER" --body-file - --repo "${{ github.repository }}"
+          echo "✅ Updated PR body with final test status"
           echo "✅ Workflow completed successfully - PR #$PR_NUMBER is ready for manual review"
