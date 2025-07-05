@@ -51,6 +51,8 @@ test_id_to_name = {
     23: "Conv Halo Gather",
     60: "All to All Packet Sizes",
     70: "All from All Packet Sizes",
+    100: "Multicast Schemes (Loopback Enabled)",
+    101: "Multicast Schemes (Loopback Disabled)",
 }
 
 # Comments for each test explaining why we get the perf that we do
@@ -310,6 +312,9 @@ test_bounds = {
 }
 
 
+RISCV_LIST = ["riscv_1", "riscv_0"]
+
+
 def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
     logger.info("Starting data movement tests...")
     log_file_path = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
@@ -545,106 +550,81 @@ def print_stats(dm_stats):
 
 
 def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", arch="blackhole"):
-    # Extract data for plotting
-    riscv_1_series = dm_stats["riscv_1"]["analysis"]["series"]
-    riscv_0_series = dm_stats["riscv_0"]["analysis"]["series"]
-
-    # Group data by Test id
-    test_ids = set()
-    for attributes in dm_stats["riscv_1"]["attributes"].values():
-        test_ids.add(attributes["Test id"])
-    for attributes in dm_stats["riscv_0"]["attributes"].values():
-        test_ids.add(attributes["Test id"])
-
-    test_ids = sorted(test_ids)  # Sort for consistent ordering
-
     # Set noc_width based on architecture
     noc_width = 32 if arch == "wormhole_b0" else 64
+    multicast_schemes_test_ids = [100, 101]
 
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
 
-    for test_id in test_ids:
-        # Create the figure for this test id
-        fig = plt.figure(layout="constrained", figsize=(18, 6))
-
-        # Add a title for the current Test id
-        test_name = test_id_to_name.get(test_id, f"Test ID {test_id}")
-        subsubfig = fig.subfigures(2, 1, height_ratios=[100, 1])
-        subsubfig[0].suptitle(test_name, fontsize=16, weight="bold")
-
-        # Create subplots within the subfigure
-        axes = subsubfig[0].subplots(1, 2)
-
-        # Filter data for the current Test id
-        riscv_1_filtered = [
-            entry
-            for entry in riscv_1_series
-            if dm_stats["riscv_1"]["attributes"][entry["duration_type"][0]["run_host_id"]]["Test id"] == test_id
-        ]
-        riscv_0_filtered = [
-            entry
-            for entry in riscv_0_series
-            if dm_stats["riscv_0"]["attributes"][entry["duration_type"][0]["run_host_id"]]["Test id"] == test_id
+    # Helper: Extract data for a specific test_id
+    def extract_data(series, attributes, test_id):
+        filtered = [
+            entry for entry in series if attributes[entry["duration_type"][0]["run_host_id"]]["Test id"] == test_id
         ]
 
-        # Aggregate data across all runtime_host_ids for the current Test id
-        riscv_1_durations = []
-        riscv_0_durations = []
-        riscv_1_data_sizes = []
-        riscv_0_data_sizes = []
-        riscv_1_bandwidths = []
-        riscv_0_bandwidths = []
-        riscv_1_transactions = []
-        riscv_0_transactions = []
+        data = {
+            "durations": [],
+            "data_sizes": [],
+            "bandwidths": [],
+            "transactions": [],
+        }
+        if test_id in multicast_schemes_test_ids:
+            data["noc_index"] = []
+            data["multicast_scheme_number"] = []
+            data["grid_dimensions"] = []
 
-        for entry in riscv_1_filtered:
-            duration = entry["duration_cycles"]
+        for entry in filtered:
             runtime_host_id = entry["duration_type"][0]["run_host_id"]
-            attributes = dm_stats["riscv_1"]["attributes"][runtime_host_id]
-            transaction_size = attributes["Transaction size in bytes"]
-            num_transactions = attributes["Number of transactions"]
+            attr = attributes[runtime_host_id]
+
+            duration = entry["duration_cycles"]
+            transaction_size = attr["Transaction size in bytes"]
+            num_transactions = attr["Number of transactions"]
             bandwidth = num_transactions * transaction_size / duration
-            riscv_1_durations.append(duration)
-            riscv_1_data_sizes.append(transaction_size)
-            riscv_1_bandwidths.append(bandwidth)
-            riscv_1_transactions.append(num_transactions)
 
-        for entry in riscv_0_filtered:
-            duration = entry["duration_cycles"]
-            runtime_host_id = entry["duration_type"][0]["run_host_id"]
-            attributes = dm_stats["riscv_0"]["attributes"][runtime_host_id]
-            transaction_size = attributes["Transaction size in bytes"]
-            num_transactions = attributes["Number of transactions"]
-            bandwidth = num_transactions * transaction_size / entry["duration_cycles"]
-            riscv_0_durations.append(duration)
-            riscv_0_data_sizes.append(transaction_size)
-            riscv_0_bandwidths.append(bandwidth)
-            riscv_0_transactions.append(num_transactions)
+            data["durations"].append(duration)
+            data["data_sizes"].append(transaction_size)
+            data["bandwidths"].append(bandwidth)
+            data["transactions"].append(num_transactions)
 
-        # Plot durations
-        ax = axes[0]
-        unique_transactions = sorted(set(riscv_1_transactions + riscv_0_transactions))  # Ensure ascending order
+            if test_id in multicast_schemes_test_ids:
+                noc_index = attr["NoC Index"]
+                multicast_scheme_type = attr["Multicast Scheme Type"]
+                grid_dimensions = f"{attr['Subordinate Grid Size X']} x {attr['Subordinate Grid Size Y']}"
+
+                data["noc_index"].append(noc_index)
+                data["multicast_scheme_number"].append(multicast_scheme_type)
+                data["grid_dimensions"].append(grid_dimensions)
+
+        return data
+
+    # Helper: Plot Type 1 - Test Index vs Duration
+    def plot_durations(ax, data):
+        risc_to_kernel_map = {
+            "riscv_1": "Receiver",
+            "riscv_0": "Sender",
+        }
+
+        unique_transactions = sorted(set(data["riscv_1"]["transactions"] + data["riscv_0"]["transactions"]))
         for num_transactions in unique_transactions:
-            # Group and plot RISCV 1 data
-            riscv_1_grouped = [
-                (sizes, durations)
-                for sizes, durations, trans in zip(riscv_1_data_sizes, riscv_1_durations, riscv_1_transactions)
-                if trans == num_transactions
-            ]
-            if riscv_1_grouped:
-                sizes, durations = zip(*riscv_1_grouped)
-                ax.plot(sizes, durations, label=f"Receiver (Number of Transactions={num_transactions})", marker="o")
-
-            # Group and plot RISCV 0 data
-            riscv_0_grouped = [
-                (sizes, durations)
-                for sizes, durations, trans in zip(riscv_0_data_sizes, riscv_0_durations, riscv_0_transactions)
-                if trans == num_transactions
-            ]
-            if riscv_0_grouped:
-                sizes, durations = zip(*riscv_0_grouped)
-                ax.plot(sizes, durations, label=f"Sender (Number of Transactions={num_transactions})", marker="o")
+            for riscv in RISCV_LIST:
+                # Group and plot RISCV 1 data
+                grouped = [
+                    (size, duration)
+                    for size, duration, transactions in zip(
+                        data[riscv]["data_sizes"], data[riscv]["durations"], data[riscv]["transactions"]
+                    )
+                    if transactions == num_transactions
+                ]
+                if grouped:
+                    sizes, durations = zip(*grouped)
+                    ax.plot(
+                        sizes,
+                        durations,
+                        label=f"{risc_to_kernel_map[riscv]} (Number of Transactions={num_transactions})",
+                        marker="o",
+                    )
 
         ax.set_xlabel("Transaction Size (bytes)")
         ax.set_ylabel("Duration (cycles)")
@@ -653,57 +633,141 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
         ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x)}"))
         ax.set_yscale("log", base=10)
         # ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x)}"))
-        ax.legend()
+        ax.legend(loc="center left", bbox_to_anchor=(1.0, 0.5), borderaxespad=0)  # Legend outside plot
         ax.grid()
 
-        # Plot size of data transferred vs bandwidth
-        ax = axes[1]
-        for num_transactions in unique_transactions:
-            # Group and plot RISCV 1 data
-            riscv_1_grouped = [
-                (size, bw)
-                for size, bw, trans in zip(riscv_1_data_sizes, riscv_1_bandwidths, riscv_1_transactions)
-                if trans == num_transactions
-            ]
-            if riscv_1_grouped:
-                sizes, bws = zip(*riscv_1_grouped)
-                ax.plot(sizes, bws, label=f"Receiver (Number of Transactions={num_transactions})", marker="o")
+    # Helper: Plot Type 2 - Transaction Size vs Bandwidth
+    def plot_data_size_vs_bandwidth(ax, data, noc_width):
+        risc_to_kernel_map = {
+            "riscv_1": "Receiver",
+            "riscv_0": "Sender",
+        }
 
-            # Group and plot RISCV 0 data
-            riscv_0_grouped = [
-                (size, bw)
-                for size, bw, trans in zip(riscv_0_data_sizes, riscv_0_bandwidths, riscv_0_transactions)
-                if trans == num_transactions
-            ]
-            if riscv_0_grouped:
-                sizes, bws = zip(*riscv_0_grouped)
-                ax.plot(sizes, bws, label=f"Sender (Number of Transactions={num_transactions})", marker="o")
+        unique_transactions = sorted(set(itertools.chain.from_iterable(data[riscv]["transactions"] for riscv in data)))
+
+        for num_transactions in unique_transactions:
+            grouped = {}
+            for riscv in RISCV_LIST:
+                grouped[riscv] = [
+                    (size, bw)
+                    for size, bw, transactions in zip(
+                        data[riscv]["data_sizes"], data[riscv]["bandwidths"], data[riscv]["transactions"]
+                    )
+                    if transactions == num_transactions
+                ]
+            if grouped[riscv]:
+                # Sort by data sizes (x-axis) before plotting
+                grouped[riscv].sort(key=lambda x: x[0])
+                sizes, bws = zip(*grouped[riscv])
+                ax.plot(sizes, bws, label=f"{risc_to_kernel_map[riscv]} (Transactions={num_transactions})", marker="o")
 
         # Add theoretical max bandwidth curve
-        transaction_sizes = sorted(set(riscv_1_data_sizes + riscv_0_data_sizes))
+        transaction_sizes = sorted(set(data["riscv_1"]["data_sizes"] + data["riscv_0"]["data_sizes"]))
         max_bandwidths = [noc_width * ((size / noc_width) / ((size / noc_width) + 1)) for size in transaction_sizes]
         ax.plot(transaction_sizes, max_bandwidths, label="Theoretical Max BW", linestyle="--", color="black")
 
+        # Set labels and title
         ax.set_xlabel("Transaction Size (bytes)")
         ax.set_ylabel("Bandwidth (bytes/cycle)")
         ax.set_title("Transaction Size vs Bandwidth")
         ax.set_xscale("log", base=2)
         ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x)}"))
-        ax.legend()
+        ax.legend(loc="center left", bbox_to_anchor=(1.0, 0.5), borderaxespad=0)  # Legend outside plot
         ax.grid()
 
-        # Add a comment section below the plots
-        if test_id in test_id_to_comment.keys():
-            txtObj = subsubfig[1].text(
-                0.5,
-                0,
-                f"Comments: {test_id_to_comment.get(test_id, 'No comment available, test has not been analyzed')}",
-                ha="center",
-                fontsize=10,
-                style="italic",
-                wrap=True,
+    # Helper: Plot Bandwidth for Multicast Schemes
+    def plot_bandwidth_multicast(ax, data, x_axis, lines, riscv, noc_index):
+        # Filter data where "noc_index" matches the input noc_index
+        filtered_data = [
+            (data[riscv][x_axis][i], data[riscv]["bandwidths"][i], data[riscv][lines][i])
+            for i in range(len(data[riscv][x_axis]))
+            if data[riscv].get("noc_index", [None])[i] == noc_index
+        ]
+
+        if not filtered_data:
+            return  # No data to plot for the given noc_index
+
+        # Sort the filtered data by the x_axis values
+        filtered_data.sort(key=lambda x: x[0])
+
+        # Extract sorted x_axis, bandwidths, and lines
+        sorted_x_axis, sorted_bandwidths, sorted_lines = zip(*filtered_data)
+
+        # Get unique line categories
+        lines_list = sorted(set(sorted_lines))
+
+        for line in lines_list:
+            # Filter data for the current line category
+            line_data = [(x, bw) for x, bw, l in zip(sorted_x_axis, sorted_bandwidths, sorted_lines) if l == line]
+
+            if line_data:
+                sizes, bws = zip(*line_data)
+                ax.plot(
+                    sizes,
+                    bws,
+                    label=f"{riscv.upper()}, NoC {noc_index}, {lines.replace('_', ' ').title()}: {line}",
+                    marker="o",
+                )
+
+        ax.set_xlabel(f"{x_axis.replace('_', ' ').title()}")
+        ax.set_ylabel("Bandwidth (bytes/cycle)")
+        ax.set_title(f"{x_axis.replace('_', ' ').title()} vs Bandwidth")
+        ax.legend(loc="center left", bbox_to_anchor=(1.0, 0.5), borderaxespad=0)  # Legend outside plot
+        ax.grid()
+
+    # Parameters for individual plot and figure layout
+    plot_width = 12  # Width of an individual plot
+    plot_height = 6  # Height of an individual plot
+    nrows_per_figure = 1  # Number of rows of plots per figure
+    ncols_per_figure = 2  # Number of columns of plots per figure
+    comment_section_height_ratio = 0.2  # Height ratio for the comment section
+
+    # Extract test IDs
+    test_ids = sorted(
+        {attributes["Test id"] for riscv in RISCV_LIST for attributes in dm_stats[riscv]["attributes"].values()}
+    )
+
+    # Extract data for plotting
+    series = {riscv: dm_stats[riscv]["analysis"]["series"] for riscv in RISCV_LIST}
+
+    # Iterate over test IDs and create figures
+    for test_id in test_ids:
+        test_name = test_id_to_name.get(test_id, f"Test ID {test_id}")
+
+        # Prepare figure for the current test ID
+        figure_height = plot_height * nrows_per_figure + comment_section_height_ratio * plot_height
+        fig = plt.figure(figsize=(plot_width * ncols_per_figure, figure_height), constrained_layout=True)
+        fig.suptitle(test_name, fontsize=16, weight="bold")
+
+        # Create subplots within the figure
+        axes = fig.subplots(nrows_per_figure, ncols_per_figure)
+
+        # Extract data for riscv_1 and riscv_0
+        data = {riscv: extract_data(series[riscv], dm_stats[riscv]["attributes"], test_id) for riscv in RISCV_LIST}
+
+        # Generate plots based on test type
+        if test_id in multicast_schemes_test_ids:
+            plot_bandwidth_multicast(
+                axes[0], data, x_axis="grid_dimensions", lines="multicast_scheme_number", riscv="riscv_0", noc_index=0
             )
-            txtObj._get_wrap_line_width = lambda: 0.9 * subsubfig[1].bbox.width
+            plot_bandwidth_multicast(
+                axes[1], data, x_axis="grid_dimensions", lines="multicast_scheme_number", riscv="riscv_0", noc_index=1
+            )
+        else:  # Packet Sizes
+            plot_durations(axes[0], data)
+            plot_data_size_vs_bandwidth(axes[1], data, noc_width)
+
+        # Add comments section to the figure below the plots
+        fig.subplots_adjust(bottom=0.25)  # Adjust bottom margin to make space for comments
+        fig.text(
+            0.5,
+            0.02,  # Position the text closer to the bottom
+            f"Comments: {test_id_to_comment.get(test_id, 'No comment available, test has not been analyzed')}",
+            ha="center",
+            fontsize=10,
+            style="italic",
+            wrap=True,
+        )
 
         # Save the plot for this test id
         output_file = os.path.join(output_dir, f"{test_id_to_name.get(test_id, f'Test ID {test_id}')}.png")
@@ -736,7 +800,7 @@ def export_dm_stats_to_csv(dm_stats, output_dir="tests/tt_metal/tt_metal/data_mo
                     "Bandwidth (bytes/cycle)",
                 ]
             )
-            for kernel in ["riscv_1", "riscv_0"]:
+            for kernel in RISCV_LIST:
                 kernel_series = dm_stats[kernel]["analysis"]["series"]
                 for entry in kernel_series:
                     run_host_id = entry["duration_type"][0]["run_host_id"]
