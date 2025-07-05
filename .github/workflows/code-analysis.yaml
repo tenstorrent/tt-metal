@@ -668,7 +668,7 @@ jobs:
           TEST_STATUS_LINES=""
 
           if [ "${{ needs.trigger-and-monitor-workflows.result }}" = "skipped" ]; then
-            TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ℹ️ **No architecture-specific tests required** - No Wormhole or Blackhole changes detected"
+            TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ℹ️ **No architecture-specific tests required** - No Wormhole or Blackhole tests were run"
           else
             # Post-commit jobs should have run, get their actual results
             if [ "${{ needs.llk-submodule-uplift.outputs.should-run-wormhole }}" = "true" ]; then
