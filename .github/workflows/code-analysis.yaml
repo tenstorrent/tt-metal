@@ -200,6 +200,13 @@ jobs:
           *This PR body will be updated with detailed information shortly...*
           EOF
 
+      - name: Push branch to remote
+        if: steps.update-submodule.outputs.has-changes == 'true'
+        run: |
+          # Push the branch to remote so it exists for PR creation
+          git push origin ${{ env.BRANCH_NAME }}
+          echo "✅ Pushed branch ${{ env.BRANCH_NAME }} to remote"
+
       - name: Create Pull Request
         id: create-pr
         if: steps.update-submodule.outputs.has-changes == 'true'
