@@ -180,7 +180,7 @@ uint32_t get_cycles_for_transaction_size(
     if (is_dram) {
         transaction_type = dram_bw;
     }
-    uint32_t latency_cyles = 0;
+    uint32_t latency_cyles = 1;
     if (transaction_type == l1_local_bw) {
         latency_cyles = index == 0 ? 56 : 52;
     } else if (transaction_type == l1_read_far_bw) {
@@ -313,8 +313,11 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor) 
         num_cores = std::max(input_num_cores, output_num_cores);
     }
 
-    // takes into account congestion (bisection bw)
-    num_cores = std::sqrt(num_cores);
+    // limit parallel work to available DRAM channels
+    int num_dram_channels = (arch == tt::ARCH::WORMHOLE_B0) ? 12 : 8;
+    if ((input_is_dram || output_is_dram) && num_cores > num_dram_channels) {
+        num_cores = std::min(num_cores, num_dram_channels);
+    }
 
     printf("FINAL num cores: %d\n", num_cores);
     bool input_is_local = input_is_sharded && num_cores == input_num_cores;
