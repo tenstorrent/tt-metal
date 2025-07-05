@@ -31,7 +31,7 @@ daemon_process = None
 daemon_pipe_path = "/tmp/tt_metal_fabric_edm_daemon"
 daemon_result_pipe_path = "/tmp/tt_metal_fabric_edm_daemon_result"
 daemon_lock = threading.Lock()
-binary_path = os.environ.get("TT_METAL_HOME", "") + "/build/test/ttnn/unit_tests_ttnn_fabric_edm"
+binary_path = os.environ.get("TT_METAL_HOME", "") + "/build/test/tt_metal/tt_fabric/test_fabric_1d_bw"
 
 # Global direct execution mode setting (determined once per test session)
 _direct_mode_enabled = None

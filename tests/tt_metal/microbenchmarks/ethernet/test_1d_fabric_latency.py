@@ -92,7 +92,7 @@ def run_latency_test(
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
 
     cmd = f"TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_DEVICE_PROFILER=1 \
-            {os.environ['TT_METAL_HOME']}/build/test/ttnn/unit_tests_ttnn_1d_fabric_latency \
+            {os.environ['TT_METAL_HOME']}/build/test/tt_metal/tt_fabric/unit_tests_1d_fabric_latency \
                 {line_size} \
                 {latency_measurement_worker_line_index} \
                 {latency_ping_message_size_bytes} \

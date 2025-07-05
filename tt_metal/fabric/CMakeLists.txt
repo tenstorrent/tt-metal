@@ -12,6 +12,8 @@ target_sources(
         fabric_host_utils.cpp
         fabric_context.cpp
         serialization/intermesh_link_table.cpp
+        erisc_datamover_builder_helper.cpp
+        ccl/ccl_common.cpp
 )
 
 # These headers are for the device, not host; will require cross compiling to verify.

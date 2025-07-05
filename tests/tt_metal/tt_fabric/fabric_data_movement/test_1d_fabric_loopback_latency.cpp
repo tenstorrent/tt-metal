@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
+#include "host_api.hpp"
+#include "tests/tt_metal/tt_fabric/common/test_fabric_edm_common.hpp"
 #include <cstdint>
 #include <cstddef>
 #include <optional>
@@ -32,8 +33,8 @@ inline void RunPersistent1dFabricLatencyTest(
     LatencyTestWriterSpecs writer_specs,
     size_t line_size,
     bool enable_fused_payload_with_sync,
-    ttnn::ccl::Topology topology) {
-    const bool is_ring = topology == ttnn::ccl::Topology::Ring;
+    tt::tt_fabric::Topology topology) {
+    const bool is_ring = topology == tt::tt_fabric::Topology::Ring;
 
     // Device init fabric is only supported on ring topologies because for this test, the line topology test
     // invokes a "custom" fabric where the end of the line loops back on itself. This is not an official configuration
@@ -50,10 +51,9 @@ inline void RunPersistent1dFabricLatencyTest(
     }
 
     TT_FATAL(writer_specs.size() < line_size, "num_devices_with_workers must be less than or equal to num_links");
-    using namespace ttnn::ccl;
 
     DEVICE_FIXTURE_T test_fixture;
-    auto view = *(test_fixture.view_);
+    auto &mesh_device = *(test_fixture.mesh_device_);
 
     std::vector<IDevice*> devices_;
     if (is_6u) {
@@ -71,25 +71,25 @@ inline void RunPersistent1dFabricLatencyTest(
                 "Invalid line size for 6u system. Supported line sizes are 4 and 8 but {} was specified.", line_size);
         }
         for (; *loop_var < line_size; (*loop_var)++) {
-            devices_.push_back(view.get_device(MeshCoordinate(r, c)));
+            devices_.push_back(mesh_device.get_device(MeshCoordinate(r, c)));
         }
     } else {
         if (line_size == 4) {
             devices_ = {
-                view.get_device(MeshCoordinate(0, 1)),
-                view.get_device(MeshCoordinate(0, 2)),
-                view.get_device(MeshCoordinate(1, 2)),
-                view.get_device(MeshCoordinate(1, 1))};
+                mesh_device.get_device(MeshCoordinate(0, 1)),
+                mesh_device.get_device(MeshCoordinate(0, 2)),
+                mesh_device.get_device(MeshCoordinate(1, 2)),
+                mesh_device.get_device(MeshCoordinate(1, 1))};
         } else {
             devices_ = {
-                view.get_device(MeshCoordinate(0, 0)),
-                view.get_device(MeshCoordinate(0, 1)),
-                view.get_device(MeshCoordinate(0, 2)),
-                view.get_device(MeshCoordinate(0, 3)),
-                view.get_device(MeshCoordinate(1, 3)),
-                view.get_device(MeshCoordinate(1, 2)),
-                view.get_device(MeshCoordinate(1, 1)),
-                view.get_device(MeshCoordinate(1, 0))};
+                mesh_device.get_device(MeshCoordinate(0, 0)),
+                mesh_device.get_device(MeshCoordinate(0, 1)),
+                mesh_device.get_device(MeshCoordinate(0, 2)),
+                mesh_device.get_device(MeshCoordinate(0, 3)),
+                mesh_device.get_device(MeshCoordinate(1, 3)),
+                mesh_device.get_device(MeshCoordinate(1, 2)),
+                mesh_device.get_device(MeshCoordinate(1, 1)),
+                mesh_device.get_device(MeshCoordinate(1, 0))};
         }
     }
     std::vector<IDevice*> devices;
@@ -115,7 +115,7 @@ inline void RunPersistent1dFabricLatencyTest(
     for (size_t i = 0; i < writer_specs.size(); i++) {
         if (writer_specs.at(i).has_value()) {
             const auto& spec = writer_specs.at(i).value();
-            ttnn::SmallVector<std::shared_ptr<Buffer>> device_dest_buffers;
+            tt::stl::SmallVector<std::shared_ptr<Buffer>> device_dest_buffers;
             auto message_size_bytes = spec.message_size_bytes;
             if (message_size_bytes == 0) {
                 // just allocate some dummy space - technically we don't need to allocate anything
@@ -150,7 +150,7 @@ inline void RunPersistent1dFabricLatencyTest(
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
     std::optional<std::vector<Program>> fabric_programs;
     std::vector<Program*> fabric_program_ptrs;
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle;
+    std::optional<tt::tt_fabric::EdmLineFabricOpInterface> fabric_handle;
     if (!use_device_init_fabric) {
         std::vector<Program> dummy_worker_programs;
         setup_test_with_persistent_fabric(
@@ -172,18 +172,13 @@ inline void RunPersistent1dFabricLatencyTest(
     CoreRangeSet worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));
     auto worker_cores_vec = corerange_to_cores(worker_cores, std::nullopt, false);
 
-    std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> global_semaphore_handles;
-
-    auto global_semaphores = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        devices_,
+    auto global_semaphore = tt::tt_metal::CreateGlobalSemaphore(
+        &mesh_device,
         devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                             // initial value
-        tt::tt_metal::BufferType::L1,  // buffer type
-        1000                           // attempts
+        tt::tt_metal::BufferType::L1  // buffer type
     );
-    global_semaphore_handles.push_back(global_semaphores);
-    tt::tt_metal::DeviceAddr worker_done_semaphore_address =
-        ttnn::global_semaphore::get_global_semaphore_address(global_semaphores.global_semaphores.at(0));
+    tt::tt_metal::DeviceAddr worker_done_semaphore_address = global_semaphore.address();
 
     size_t num_congestion_writers = 0;
     for (const auto& spec : writer_specs) {
@@ -201,13 +196,12 @@ inline void RunPersistent1dFabricLatencyTest(
     }
     TT_FATAL(latency_writer_index_opt.has_value(), "Latency writer not found");
     size_t latency_writer_index = latency_writer_index_opt.value();
-    auto congestion_writers_ready_semaphore = ttnn::global_semaphore::create_global_semaphore(
+    auto congestion_writers_ready_semaphore = tt::tt_metal::CreateGlobalSemaphore(
         devices[latency_writer_index],
         devices[latency_writer_index]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                              // initial value
         tt::tt_metal::BufferType::L1);  // buffer type
-    tt::tt_metal::DeviceAddr congestion_writers_ready_semaphore_address =
-        ttnn::global_semaphore::get_global_semaphore_address(congestion_writers_ready_semaphore);
+    tt::tt_metal::DeviceAddr congestion_writers_ready_semaphore_address = congestion_writers_ready_semaphore.address();
 
     std::vector<Program> programs(devices_with_workers.size());
 
@@ -255,10 +249,10 @@ inline void RunPersistent1dFabricLatencyTest(
         bool has_forward_connection = is_ring || !end_of_line;
         bool has_backward_connection = is_ring || !start_of_line;
 
-        std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_device_fabric_handle;
+        std::optional<tt::tt_fabric::EdmLineFabricOpInterface> local_device_fabric_handle;
         if (!use_device_init_fabric) {
             local_device_fabric_handle =
-                ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
+                tt::tt_fabric::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
                     device, forward_device, backward_device, &program, num_links, topology);
         }
 
@@ -281,8 +275,8 @@ inline void RunPersistent1dFabricLatencyTest(
         std::vector<uint32_t> worker_ct_args = {};
         std::string kernel_path =
             is_latency_packet_sender
-                ? "tests/ttnn/unit_tests/gtests/ccl/kernels/1D_fabric_loopback_latency_test_writer.cpp"
-                : "tests/ttnn/unit_tests/gtests/ccl/kernels/1D_fabric_latency_datapath_congestion_writer.cpp";
+                ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/1D_fabric_loopback_latency_test_writer.cpp"
+                : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/1D_fabric_latency_datapath_congestion_writer.cpp";
         if (is_latency_packet_sender) {
             const auto& packet_spec = std::get<LatencyPacketTestWriterSpec>(writer_specs[i]->spec);
             bool payloads_are_mcast = false;
@@ -306,14 +300,21 @@ inline void RunPersistent1dFabricLatencyTest(
                                       &program,
                                       &worker_core_logical](
                                          bool is_connected_in_direction,
-                                         ttnn::ccl::EdmLineFabricOpInterface::Direction direction,
+                                         tt::tt_fabric::EdmLineFabricOpInterface::Direction direction,
                                          std::vector<uint32_t>& rt_args_out) {
             rt_args_out.push_back(is_connected_in_direction);
             if (!use_device_init_fabric) {
                 if (is_connected_in_direction) {
                     const auto connection = local_device_fabric_handle->uniquely_connect_worker(device, direction);
-                    const auto new_rt_args = ttnn::ccl::worker_detail::generate_edm_connection_rt_args(
-                        connection, program, {worker_core_logical});
+                    auto worker_flow_control_semaphore_id = CreateSemaphore(program, {worker_core_logical}, 0);
+                    auto worker_teardown_semaphore_id = CreateSemaphore(program, {worker_core_logical}, 0);
+                    auto worker_buffer_index_semaphore_id = CreateSemaphore(program, {worker_core_logical}, 0);
+                    append_worker_to_fabric_edm_sender_rt_args(
+                        connection,
+                        worker_flow_control_semaphore_id,
+                        worker_teardown_semaphore_id,
+                        worker_buffer_index_semaphore_id,
+                        rt_args_out);
                     log_info(
                         tt::LogTest,
                         "On device: {}, connecting to EDM fabric in {} direction. EDM noc_x: {}, noc_y: {}",
@@ -321,13 +322,12 @@ inline void RunPersistent1dFabricLatencyTest(
                         direction,
                         connection.edm_noc_x,
                         connection.edm_noc_y);
-                    std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args_out));
                 }
             } else {
                 if (is_connected_in_direction) {
                     const auto device_fabric_node_id =
                         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
-                    chip_id_t connected_chip_id = direction == ttnn::ccl::EdmLineFabricOpInterface::FORWARD
+                    chip_id_t connected_chip_id = direction == tt::tt_fabric::EdmLineFabricOpInterface::FORWARD
                                                       ? forward_device->id()
                                                       : backward_device->id();
                     const auto connected_device_fabric_node_id =
@@ -432,8 +432,8 @@ inline void RunPersistent1dFabricLatencyTest(
             rt_args.push_back(std::abs(static_cast<int>(i) - static_cast<int>(latency_writer_index)));
         }
 
-        build_connection_args(has_forward_connection, ttnn::ccl::EdmLineFabricOpInterface::FORWARD, rt_args);
-        build_connection_args(has_backward_connection, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD, rt_args);
+        build_connection_args(has_forward_connection, tt::tt_fabric::EdmLineFabricOpInterface::FORWARD, rt_args);
+        build_connection_args(has_backward_connection, tt::tt_fabric::EdmLineFabricOpInterface::BACKWARD, rt_args);
         tt_metal::SetRuntimeArgs(program, worker_kernel_id, worker_core_logical, rt_args);
 
         program_device_index++;
@@ -462,7 +462,7 @@ inline void RunPersistent1dFabricLatencyTest(
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (IDevice* d : devices) {
-        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
+        tt_metal::Synchronize(d);
     }
     for (size_t i = 0; i < programs.size(); i++) {
         auto d = devices_with_workers.at(i);
@@ -559,13 +559,13 @@ int main(int argc, char** argv) {
             .message_size_bytes = congestion_writers_message_size};
     }
 
-    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;
+    tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear;
     if (topology_str == "linear") {
-        topology = ttnn::ccl::Topology::Linear;
+        topology = tt::tt_fabric::Topology::Linear;
     } else if (topology_str == "ring") {
-        topology = ttnn::ccl::Topology::Ring;
+        topology = tt::tt_fabric::Topology::Ring;
     } else if (topology_str == "mesh") {
-        topology = ttnn::ccl::Topology::Mesh;
+        topology = tt::tt_fabric::Topology::Mesh;
         TT_THROW("Topology \"mesh\" is currently unsupported.");
     } else {
         TT_THROW("Invalid topology: {}", topology_str);
