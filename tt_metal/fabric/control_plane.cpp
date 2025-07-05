@@ -1377,7 +1377,7 @@ static void write_to_all_tensix_cores(
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             data,
             size,
-            tt_cxy_pair(physical_chip_id, tensix_core),
+            tt_cxy_pair(physical_chip_id, CoreCoord{tensix_core.x, tensix_core.y}),
             tt_metal::MetalContext::instance().hal().get_dev_addr(
                 tt_metal::HalProgrammableCoreType::TENSIX, addr_type));
     }
