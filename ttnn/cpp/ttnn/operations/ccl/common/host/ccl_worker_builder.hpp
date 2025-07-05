@@ -64,7 +64,7 @@ void generate_ccl_command_stream_to_kernel_args(
  * @return the runtime args
  */
 std::vector<uint32_t> generate_edm_connection_rt_args(
-    const tt::tt_fabric::SenderWorkerAdapterSpec& connection_info, tt::tt_metal::Program& program, CoreRangeSet worker_cores);
+    const tt::tt_fabric::SenderWorkerAdapterSpec& connection_info, chip_id_t chip_id, tt::tt_metal::Program& program, CoreRangeSet worker_cores);
 
 // TODO: eventually take a fabric handle
 void generate_multi_input_command_stream_kernel_rt_args(
@@ -99,24 +99,6 @@ void generate_multi_input_command_stream_kernel_rt_args(
     std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override = std::nullopt,
     std::optional<std::vector<size_t>> const& tensor_indices = std::nullopt,
     ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider = nullptr);
-// Helper functions for building command processing datamovement kernels
-// TODO: Bundle into command bundle per command stream to cut down
-//       on args and improve usability
-void generate_multi_command_stream_kernel_rt_args(
-    tt::tt_metal::Program& program,
-    tt::tt_metal::KernelHandle kernel_id,
-    std::vector<uint32_t> const& cb_ids,
-    std::vector<const Tensor*> const& tensors,
-    IDevice* device,
-    uint32_t page_size,  // TODO: get from tensors
-    CoreRangeSet const& worker_core_range,
-    uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
-    std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> const& command_tensor_slices,
-    ttnn::ccl::cmd::CclCommandCode command_type,  // TODAY REQURED TO BE SAME - FUTURE - wrapped with above
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& backward_fabric_connections,
-    std::optional<std::vector<tt::tt_fabric::edm_termination_info_t>> const& edm_termination_infos,
-    std::vector<ttnn::ccl::cmd::CclCommandDestArgs> const& dest_args);
 tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     tt::tt_metal::Program& program,
     const std::vector<uint32_t>& cb_indices,
@@ -166,23 +148,6 @@ struct CCLWorkerArgBuilder {
         std::size_t operating_dim,
         uint32_t num_pages_per_packet,
         uint32_t worker_slice_index) const;
-
-    std::vector<uint32_t> generate_sender_writer_kernel_rt_args(
-        const std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& forward_fabric_connection,
-        size_t sender_worker_forward_flow_control_semaphore_id,
-        size_t sender_worker_forward_teardown_semaphore_id,
-        size_t sender_worker_forward_buffer_index_semaphore_id,
-        const std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& backward_fabric_connection,
-        size_t sender_worker_backward_flow_control_semaphore_id,
-        size_t sender_worker_backward_teardown_semaphore_id,
-        size_t sender_worker_backward_buffer_index_semaphore_id,
-        size_t forward_direction_distance_to_end_of_line,
-        size_t backward_direction_distance_to_end_of_line,
-        ttnn::ccl::InterleavedTensorWorkerSlice worker_slice,
-        std::size_t operating_dim,
-        uint32_t num_pages_per_packet,
-        uint32_t worker_slice_index,
-        std::optional<ttnn::ccl::SyncModeSpec> sync_details) const;
 
     std::vector<uint32_t> generate_sender_reader_kernel_ct_args() const;
 
