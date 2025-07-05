@@ -166,12 +166,16 @@ class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiD
 
 class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
 
-class MultiCommandQueueOnFabricMultiDeviceFixture : public MultiCommandQueueMultiDeviceFixture,
+class MultiCommandQueueMultiDeviceOnFabricFixture : public MultiCommandQueueMultiDeviceFixture,
                                                     public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
 protected:
     void SetUp() override {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
+        }
+        // Skip for TG as it's still being implemented
+        if (tt::tt_metal::IsGalaxyCluster()) {
+            GTEST_SKIP();
         }
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param

@@ -69,3 +69,6 @@ Use the following command to run the performant evaluation with Trace+2CQs:
 pytest models/experimental/yolo_eval/evaluate.py::test_yolov9c[res0-device_params0-tt_model]
 ```
 Note: The model is evaluated with 500 samples.
+
+### Web Demo
+- Try the interactive web demo [instructions](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov9c/README.md)
