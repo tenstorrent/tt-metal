@@ -77,6 +77,21 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: Reset branch to latest main
+        run: |
+          # Fetch latest main to ensure we have the most recent changes
+          git fetch origin main
+
+          # Check if branch exists, if not create it
+          if git show-ref --verify --quiet refs/heads/${{ env.BRANCH_NAME }}; then
+            echo "🔄 Branch ${{ env.BRANCH_NAME }} exists, checking it out and resetting to main"
+            git checkout ${{ env.BRANCH_NAME }}
+            git reset --hard origin/main
+          else
+            echo "🌱 Creating fresh branch ${{ env.BRANCH_NAME }} from latest main"
+            git checkout -b ${{ env.BRANCH_NAME }} origin/main
+          fi
+
       - name: Update submodule
         id: update-submodule
         run: |
