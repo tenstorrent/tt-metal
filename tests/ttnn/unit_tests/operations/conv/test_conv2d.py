@@ -77,7 +77,7 @@ def test_conv_features(
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat16 and packer_l1_acc and fp32_accum:
-        pytest.skip("skipping due to pack_untilize_dst issue!")
+        pytest.skip("skipping due to pack_untilize_dest issue!")
 
     run_conv(
         device,
