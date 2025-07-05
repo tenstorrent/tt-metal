@@ -367,6 +367,11 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             mapping_pages * aligned_mapping_page_size, {{mapping_tensor_cb_id, mapping_data_format}})
             .set_page_size(mapping_tensor_cb_id, aligned_mapping_page_size);
 
+    tt::tt_metal::CircularBufferConfig cb_send_preparation_buffer_config =
+        tt::tt_metal::CircularBufferConfig(
+            tokens_per_device * num_devices * sizeof(uint8_t), {{send_preparation_buffer_id, tt::DataFormat::UInt8}})
+            .set_page_size(send_preparation_buffer_id, tokens_per_device * sizeof(uint8_t));
+
     static constexpr auto num_packet_headers_storable = 8;
     static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig packet_header_cb_config =
@@ -399,6 +404,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto indices_tensor_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_indices_tensor_config);
     auto mapping_tensor_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_mapping_tensor_config);
     auto packet_header_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, packet_header_cb_config);
+    auto send_preparation_buffer_cb =
+        tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_send_preparation_buffer_config);
 
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {

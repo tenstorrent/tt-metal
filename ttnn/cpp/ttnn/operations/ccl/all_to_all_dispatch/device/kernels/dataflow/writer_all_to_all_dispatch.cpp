@@ -133,6 +133,18 @@ inline void dispatch_input_remote_device(
     }
 }
 
+void zero_buffer_async(uint32_t write_addr, int bytes) {
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    while (bytes > 0) {
+        uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
+        noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
+        write_addr += curr_bytes;
+        bytes -= curr_bytes;
+    }
+}
+
+void zero_buffer_barrier() { noc_async_read_barrier(); }
+
 void kernel_main() {
     constexpr bool input_is_dram = (bool)get_compile_time_arg_val(0);
     constexpr bool indices_is_dram = (bool)get_compile_time_arg_val(1);
@@ -203,6 +215,9 @@ void kernel_main() {
         }
     }
 
+    uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);
+    zero_buffer_async(send_preparation_buffer_address, tokens_per_device * num_devices * sizeof(uint8_t));
+
 #ifdef AXIS
     constexpr int axis = AXIS;
     constexpr uint32_t dispatch_devices = axis == 0 ? mesh_rows : mesh_cols;
@@ -223,6 +238,7 @@ void kernel_main() {
 
     uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
 
+    zero_buffer_barrier();
     for (uint32_t i = 0; i < directions.size(); i++) {
         if (directions[i] == true) {
             fabric_connections[i].open_finish();
@@ -231,6 +247,7 @@ void kernel_main() {
 
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
+    uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
     for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
         // global_token is the global token index for the current token
         // we need the global token index to write to the output buffer – each global token that could potentially be
@@ -251,7 +268,8 @@ void kernel_main() {
             // find the devices that the expert lives on and dispatch the input tokens to them
             // if there is no tensor parallelism, then the token will only be sent to one device
             for (uint32_t d = 0; d < num_devices; d++) {
-                if (devices_for_expert[d] == 1) {
+                if (devices_for_expert[d] == 1 && send_preparation_buffer[local_token * num_devices + d] == 0) {
+                    send_preparation_buffer[local_token * num_devices + d] = 1;
                     if (dest_chip_ids[d] == src_chip_id) {
                         // if the expert lives on the current device, we dispatch the input token to it
                         dispatch_input_local_device(input_token_read_addr, output_token_write_addr, output_page_size);
