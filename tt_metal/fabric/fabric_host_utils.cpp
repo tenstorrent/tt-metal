@@ -468,9 +468,4 @@ std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
     return physical_chip_ids;
 }
 
-// Overload for default behavior (no custom northwest corner)
-std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(const IntraMeshAdjacencyMap& topology_info) {
-    return convert_2d_mesh_adjacency_to_row_major_vector(topology_info, std::nullopt);
-}
-
 }  // namespace tt::tt_fabric
