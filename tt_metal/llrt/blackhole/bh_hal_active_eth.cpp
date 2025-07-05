@@ -126,7 +126,7 @@ HalCoreInfoType create_active_eth_mem_map() {
             }
         }
 
-        constexpr ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
+        constexpr ll_api::memory::Loading memory_load = ll_api::memory::Loading::DISCRETE;
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = fw_base,
             .local_init_addr = local_init,
