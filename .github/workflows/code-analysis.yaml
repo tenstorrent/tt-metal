@@ -304,6 +304,12 @@ jobs:
 
           if [ ${#WORKFLOWS_TO_RUN[@]} -eq 0 ]; then
             echo "No workflows to trigger based on changes detected"
+
+            # Comment on PR explaining why no workflows are running
+            gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
+              --body "ℹ️ **No architecture-specific tests required**: This LLK update doesn't contain Wormhole or Blackhole specific changes, so no post-commit workflows need to be triggered." \
+              --repo "${{ github.repository }}"
+
             exit 0
           fi
 
@@ -638,9 +644,21 @@ jobs:
 
           # Comment on PR that it's ready for review
           echo "📝 PR #$PR_NUMBER is ready for review and merge"
+
+          # Determine the appropriate completion message
+          if [ "${{ needs.trigger-and-monitor-workflows.result }}" = "success" ]; then
+            COMPLETION_MESSAGE="🎉 **LLK submodule update completed successfully!**
+            All required workflows have passed. This PR is ready for review and merge."
+          elif [ "${{ needs.trigger-and-monitor-workflows.result }}" = "skipped" ]; then
+            COMPLETION_MESSAGE="🎉 **LLK submodule update completed successfully!**
+            No architecture-specific tests were required. This PR is ready for review and merge."
+          else
+            COMPLETION_MESSAGE="🎉 **LLK submodule update completed successfully!**
+            This PR is ready for review and merge."
+          fi
+
           gh pr comment "$PR_NUMBER" \
-            --body "🎉 **LLK submodule update completed successfully!**
-            All workflows have passed. This PR is ready for review and merge." \
+            --body "$COMPLETION_MESSAGE" \
             --repo "${{ github.repository }}" || echo "⚠️ Unable to comment on PR - insufficient permissions"
 
           echo "✅ Workflow completed successfully - PR #$PR_NUMBER is ready for manual review"
