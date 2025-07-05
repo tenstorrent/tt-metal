@@ -95,6 +95,12 @@ void Hal::initialize_bh() {
     this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
+            if (local_init_addr == MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH ||
+                local_init_addr == MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH) {
+                // If this core has base firmware on it, local data has been offset by the base fw local size
+                // so we need to subtract it back out here
+                local_init_addr -= MEM_ERISC_BASE_FW_LOCAL_SIZE;
+            }
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
         }
 
@@ -131,6 +137,16 @@ void Hal::initialize_bh() {
     this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t {
         return get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_FW_MAILBOX) +
                offsetof(blackhole::EthFwMailbox, arg) + arg_index * sizeof(((blackhole::EthFwMailbox*)0)->arg[0]);
+    };
+
+    this->device_features_func_ = [](DeviceFeature feature) -> bool {
+        switch (feature) {
+            case DeviceFeature::ETH_FW_API: return true;
+            case DeviceFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DeviceFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DeviceFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            default: TT_THROW("Invalid Blackhole device feature {}", static_cast<int>(feature));
+        }
     };
 
     this->num_nocs_ = NUM_NOCS;

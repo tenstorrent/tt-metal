@@ -133,7 +133,7 @@ KernelHandle create_kernel(
                 tt::tt_metal::ComputeConfig{
                     .compile_args = compile_args,
                 });
-        case tt::RISCV::ERISC:
+        case tt::RISCV::ERISC0:
             return CreateKernel(
                 program,
                 kernel_path,
@@ -141,6 +141,18 @@ KernelHandle create_kernel(
                 tt::tt_metal::EthernetConfig{
                     .eth_mode = idle_eth ? Eth::IDLE : Eth::RECEIVER,
                     .noc = NOC::NOC_0,
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .compile_args = compile_args,
+                });
+        case tt::RISCV::ERISC1:
+            return CreateKernel(
+                program,
+                kernel_path,
+                cr_set,
+                tt::tt_metal::EthernetConfig{
+                    .eth_mode = idle_eth ? Eth::IDLE : Eth::RECEIVER,
+                    .noc = NOC::NOC_0,
+                    .processor = DataMovementProcessor::RISCV_1,
                     .compile_args = compile_args,
                 });
         default: TT_THROW("Unsupported {} processor in test.", magic_enum::enum_name(processor_class));
@@ -225,8 +237,10 @@ bool cb_config_successful(std::shared_ptr<distributed::MeshDevice> mesh_device, 
     return pass;
 }
 
-
-void test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoord& eth_core_coord) {
+void test_dummy_EnqueueProgram_with_runtime_args(
+    IDevice* device,
+    const CoreCoord& eth_core_coord,
+    DataMovementProcessor erisc_processor = DataMovementProcessor::RISCV_0) {
     Program program;
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
 
@@ -241,9 +255,20 @@ void test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
         eth_core_coord,
-        tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0, .defines = dummy_defines0});
+        tt::tt_metal::EthernetConfig{
+            .noc = tt::tt_metal::NOC::NOC_0, .processor = erisc_processor, .defines = dummy_defines0});
 
-    vector<uint32_t> dummy_kernel0_args = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    constexpr int k_NumDummyArgs = 9;
+    vector<uint32_t> dummy_kernel0_args(k_NumDummyArgs);
+    // Generate 9 random numbers
+    {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(0, 100);
+        for (uint32_t i = 0; i < k_NumDummyArgs; i++) {
+            dummy_kernel0_args[i] = dis(gen);
+        }
+    }
     tt::tt_metal::SetRuntimeArgs(program, dummy_kernel0, eth_core_coord, dummy_kernel0_args);
 
     tt::tt_metal::detail::CompileProgram(device, program);
@@ -802,8 +827,8 @@ bool verify_rt_args(
     std::string label = unique ? "Unique" : "Common";
     // Same idea as ReadFromDeviceL1() but with ETH support.
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
-    auto noc_xy = riscv == tt::RISCV::ERISC ? device->ethernet_core_from_logical_core(logical_core)
-                                            : device->worker_core_from_logical_core(logical_core);
+    auto noc_xy = riscv == tt::RISCV::ERISC0 ? device->ethernet_core_from_logical_core(logical_core)
+                                             : device->worker_core_from_logical_core(logical_core);
     std::vector<uint32_t> args_readback = tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
     log_debug(tt::LogTest, "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}", expected_rt_args.size(), label, noc_xy, logical_core.str(), addr, incr_val);
 
@@ -840,13 +865,14 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, const tt::RIS
                 device->allocator()->get_base_allocator_addr(HalMemType::L1) + 2 * 256 * sizeof(uint32_t);
             common_args_addr = unique_args_addr + 5 * 256 * sizeof(uint32_t);
             break;
-        case tt::RISCV::ERISC: {
+        case tt::RISCV::ERISC0:
+        case tt::RISCV::ERISC1: {
             HalProgrammableCoreType eth_core_type =
                 idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
             unique_args_addr = MetalContext::instance().hal().get_dev_addr(eth_core_type, HalL1MemAddrType::UNRESERVED);
             common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
             break;
-        } break;
+        }
         default: TT_THROW("Unsupported {} processor in get_args_addr.", riscv);
     }
     return {unique_args_addr, common_args_addr};
@@ -970,20 +996,28 @@ bool test_increment_runtime_args_sanity(
         idle_eth);
 }
 
+tt::RISCV datamovement_processor_to_riscv(DataMovementProcessor processor) {
+    switch (processor) {
+        case DataMovementProcessor::RISCV_0: return tt::RISCV::ERISC0;
+        case DataMovementProcessor::RISCV_1: return tt::RISCV::ERISC1;
+        default: TT_THROW("Unsupported processor {}", magic_enum::enum_name(processor));
+    }
+}
+
 void test_my_coordinates(IDevice* device, tt::RISCV processor_class, size_t cq_id = 0, bool idle_eth = false) {
     const std::string k_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates.cpp";
 
     // All logical cores
     CoreRangeSet cr{CoreRange{{2, 2}, {6, 6}}};
-    if (processor_class == tt::RISCV::ERISC) {
+    bool is_erisc = processor_class == tt::RISCV::ERISC0 || processor_class == tt::RISCV::ERISC1;
+    if (is_erisc) {
         const auto eth_cores =
             idle_eth ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
         cr = CoreRangeSet{std::set<CoreRange>{eth_cores.begin(), eth_cores.end()}};
     }
 
-    uint32_t cb_addr = processor_class == tt::RISCV::ERISC
-                           ? hal::get_erisc_l1_unreserved_base()
-                           : device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    uint32_t cb_addr = is_erisc ? hal::get_erisc_l1_unreserved_base()
+                                : device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     std::vector<uint32_t> compile_args{
         cb_addr,
     };
@@ -1266,7 +1300,17 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixSetCommonRuntimeArgsMultipleC
 TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthEnqueueDummyProgram) {
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
-            local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, eth_core);
+            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+                HalProgrammableCoreType::ACTIVE_ETH);
+            for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+                log_info(
+                    tt::LogTest,
+                    "Test active ethernet enqueue dummy program with runtime args for eth_core: {} DM{}",
+                    eth_core.str(),
+                    erisc_idx);
+                local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+                    device, eth_core, static_cast<DataMovementProcessor>(erisc_idx));
+            }
         }
     }
 }
@@ -1279,9 +1323,23 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthIncrementRuntimeArgsSanity
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-            log_info(tt::LogTest, "Issuing test for eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
-            EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
-                device, dummy_program_config, 16, 16, tt::RISCV::ERISC));
+            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+                HalProgrammableCoreType::ACTIVE_ETH);
+            for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+                log_info(
+                    tt::LogTest,
+                    "Test active ethernet runtime args for eth_core: {} DM{} using cr_set: {}",
+                    eth_core.str(),
+                    erisc_idx,
+                    cr_set.str());
+                EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+                    device,
+                    dummy_program_config,
+                    16,
+                    16,
+                    local_test_functions::datamovement_processor_to_riscv(
+                        static_cast<DataMovementProcessor>(erisc_idx))));
+            }
         }
     }
 }
@@ -1298,7 +1356,7 @@ TEST_F(
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
             log_info(tt::LogTest, "Issuing test for idle eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
             EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
-                device, dummy_program_config, 16, 16, tt::RISCV::ERISC, true));
+                device, dummy_program_config, 16, 16, tt::RISCV::ERISC0, true));
         }
     }
 }
@@ -1317,7 +1375,7 @@ TEST_F(
             log_info(
                 tt::LogTest, "Issuing test for inactive eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
             EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
-                device, dummy_program_config, 16, 16, tt::RISCV::ERISC, true));
+                device, dummy_program_config, 16, 16, tt::RISCV::ERISC0, true));
         }
     }
 }
@@ -1328,8 +1386,8 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestRuntimeArgsCorrectlySentS
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (IDevice* device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->command_queue(), dummy_program_config, 9, 12, 15, 1));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->command_queue(), dummy_program_config, 9, 12, 15, 1);
     }
 }
 
@@ -1558,8 +1616,8 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllRuntimeArgsCorrectlySe
         CoreRangeSet cr_set(cr);
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->command_queue(), dummy_program_config, 13, 17, 19, 1));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->command_queue(), dummy_program_config, 13, 17, 19, 1);
     }
 }
 
@@ -1571,8 +1629,8 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllRuntimeArgsCorrectlySe
         CoreRangeSet cr_set(cr);
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->command_queue(), dummy_program_config, 255, 255, 255, 1));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->command_queue(), dummy_program_config, 255, 255, 255, 1);
     }
 }
 
@@ -1585,8 +1643,8 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSendRuntimeArgsMultiCoreR
         CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->command_queue(), dummy_program_config, 12, 9, 2));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
+            device, device->command_queue(), dummy_program_config, 12, 9, 2);
     }
 }
 
@@ -1600,8 +1658,8 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSendRuntimeArgsMultiNonOv
         CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->command_queue(), dummy_program_config, 9, 12, 2));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
+            device, device->command_queue(), dummy_program_config, 9, 12, 2);
     }
 }
 
@@ -1614,8 +1672,8 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestUpdateRuntimeArgsMultiCor
         CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->command_queue(), dummy_program_config, 9, 31, 10));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
+            device, device->command_queue(), dummy_program_config, 9, 31, 10);
     }
 }
 
@@ -1701,7 +1759,14 @@ TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesEth) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
         }
-        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC);
+        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            HalProgrammableCoreType::ACTIVE_ETH);
+        for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+            log_info(tt::LogTest, "Test logical coordinates active ethernet DM{}", erisc_idx);
+            local_test_functions::test_my_coordinates(
+                device,
+                local_test_functions::datamovement_processor_to_riscv(static_cast<DataMovementProcessor>(erisc_idx)));
+        }
     }
 }
 
@@ -1718,8 +1783,10 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesDataMo
 // Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesCompute) {
     for (IDevice* device : devices_) {
-        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
-        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE, 1);
+        for (int cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
+            log_info(tt::LogTest, "Test logical coordinates CQ{} compute core", cq_id);
+            local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE, cq_id);
+        }
     }
 }
 
@@ -1730,8 +1797,19 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesEth) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
         }
-        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC, 0);
-        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC, 1);
+
+        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            HalProgrammableCoreType::ACTIVE_ETH);
+        for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+            for (int cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
+                log_info(tt::LogTest, "Test logical coordinates CQ{} active ethernet DM{}", cq_id, erisc_idx);
+                local_test_functions::test_my_coordinates(
+                    device,
+                    local_test_functions::datamovement_processor_to_riscv(
+                        static_cast<DataMovementProcessor>(erisc_idx)),
+                    cq_id);
+            }
+        }
     }
 }
 
@@ -2012,8 +2090,8 @@ TEST_F(CommandQueueSingleCardProgramFixture, DISABLED_TensixTestFillDispatchCore
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
 
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->command_queue(), dummy_program_config, 256, 256, 256, NUM_ITER));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->command_queue(), dummy_program_config, 256, 256, 256, NUM_ITER);
     }
 }
 
