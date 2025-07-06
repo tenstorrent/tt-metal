@@ -461,6 +461,20 @@ tt_metal::FabricConfig MetalContext::get_fabric_config() const {
 }
 
 void MetalContext::initialize_control_plane() {
+    // Check for environment variable override for custom mesh graph descriptor path
+    const char* custom_mesh_graph_desc = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    if (custom_mesh_graph_desc != nullptr) {
+        std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc);
+        if (!std::filesystem::exists(mesh_graph_desc_path)) {
+            TT_THROW("Custom mesh graph descriptor file not found: {}", mesh_graph_desc_path.string());
+        }
+
+        log_info(tt::LogDistributed, "Using custom mesh graph descriptor: {}", mesh_graph_desc_path.string());
+        global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
+            mesh_graph_desc_path.string());
+        return;
+    }
+
     // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
     // descriptors
     std::string mesh_graph_descriptor;
