@@ -105,12 +105,16 @@ void kernel_main() {
 
             if constexpr (!direction) {
                 uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
-                tiles_read += backwards_offset;
-                pages_read_in_row += backwards_offset;
-                if (pages_read_in_row >= slice_Wt) {
-                    row_offset += stride_Wt;
-                    pages_read_in_row = pages_read_in_row - slice_Wt;
+
+                for (uint32_t k = 0; k < backwards_offset; ++k) {
+                    tiles_read++;
+                    pages_read_in_row++;
+                    if (pages_read_in_row == slice_Wt) {
+                        row_offset += stride_Wt;
+                        pages_read_in_row = pages_read_in_row - slice_Wt;
+                    }
                 }
+
                 intermediate_pages_read_in_row = pages_read_in_row;
                 intermediate_row_offset = row_offset;
             }
@@ -146,7 +150,7 @@ void kernel_main() {
                     tiles_read++;
 
                     pages_read_in_row++;
-                    if (pages_read_in_row >= slice_Wt) {
+                    if (pages_read_in_row == slice_Wt) {
                         row_offset += stride_Wt;
                         pages_read_in_row = 0;
                     }
@@ -164,7 +168,7 @@ void kernel_main() {
                         intermediate_l1_write_addr += input_tensor_page_size;
 
                         intermediate_pages_read_in_row++;
-                        if (intermediate_pages_read_in_row >= slice_Wt) {
+                        if (intermediate_pages_read_in_row == slice_Wt) {
                             intermediate_row_offset += stride_Wt;
                             intermediate_pages_read_in_row = 0;
                         }
@@ -186,12 +190,16 @@ void kernel_main() {
                     } else {
                         tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read, tile_granularity);
                     }
-                    tiles_read += tiles_to_read_in_other_direction;
-                    pages_read_in_row += tiles_to_read_in_other_direction;
-                    if (pages_read_in_row >= slice_Wt) {
-                        row_offset += stride_Wt;
-                        pages_read_in_row = pages_read_in_row - slice_Wt;
+
+                    for (uint32_t k = 0; k < tiles_to_read_in_other_direction; ++k) {
+                        tiles_read++;
+                        pages_read_in_row++;
+                        if (pages_read_in_row == slice_Wt) {
+                            row_offset += stride_Wt;
+                            pages_read_in_row = pages_read_in_row - slice_Wt;
+                        }
                     }
+
                     intermediate_pages_read_in_row = pages_read_in_row;
                     intermediate_row_offset = row_offset;
                 }
