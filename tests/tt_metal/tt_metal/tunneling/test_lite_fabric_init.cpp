@@ -29,14 +29,15 @@ TEST_F(DeviceFixture, MmioEthCoreInitSingleEthCore) {
     if (arch_ == tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for Wormhole B0, as it does not support tunneling yet";
     }
-    // if (devices_.size() != 2) {
-    //     GTEST_SKIP() << "Only expect to be initializing 1 eth device per MMIO chip. Test should ";
-    // }
+    if (devices_.size() != 2) {
+        GTEST_SKIP() << "Only expect to be initializing 1 eth device per MMIO chip. Test should ";
+    }
 
-    MmmioAndEthDeviceDesc desc;
+    ::tunneling::MmmioAndEthDeviceDesc desc;
     get_mmio_device_and_eth_device_to_init(devices_, desc);
 
-    auto mmio_program = create_eth_init_program(desc, false);
+    auto mmio_program = create_eth_init_program(
+        desc, ::tunneling::TestConfig{.init_all_eth_cores = false, .init_handshake_only = true});
 
     auto virtual_eth_core = desc.mmio_device->ethernet_core_from_logical_core(desc.mmio_eth.value());
     std::cout << "virtual_eth_core " << virtual_eth_core.str() << std::endl;
@@ -57,10 +58,11 @@ TEST_F(DeviceFixture, MmioEthCoreInitAllEthCores) {
         GTEST_SKIP() << "Only expect to be initializing 1 eth device per MMIO chip. Test should ";
     }
 
-    MmmioAndEthDeviceDesc desc;
+    ::tunneling::MmmioAndEthDeviceDesc desc;
     get_mmio_device_and_eth_device_to_init(devices_, desc);
 
-    auto mmio_program = create_eth_init_program(desc, true);
+    auto mmio_program =
+        create_eth_init_program(desc, ::tunneling::TestConfig{.init_all_eth_cores = true, .init_handshake_only = true});
 
     auto virtual_eth_core = desc.mmio_device->ethernet_core_from_logical_core(desc.mmio_eth.value());
     std::cout << "virtual_eth_core " << virtual_eth_core.str() << std::endl;
