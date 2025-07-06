@@ -25,7 +25,131 @@ struct WriterSpec {
     size_t message_size_bytes;
 };
 
+class NonDeviceInitFabric1DFixture : public BaseFabricFixture {
+public:
+    std::shared_ptr<MeshDeviceView> view_;
+    std::map<chip_id_t, IDevice*> physical_devices_;
+    void SetupDevices() override {
+        ValidateEnvironment();
+        const MeshShape cluster_shape = GetDeterminedMeshShape();
+        const auto& physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape);
+        physical_devices_ = tt::tt_metal::detail::CreateDevices(physical_device_ids);
+
+        std::vector<IDevice*> devices = {};
+        devices.reserve(physical_device_ids.size());
+        for (auto device_id : physical_device_ids) {
+            devices.push_back(physical_devices_.at(device_id));
+        }
+        MeshContainer<IDevice*> device_container(cluster_shape, devices);
+        view_ = std::make_shared<MeshDeviceView>(device_container);
+        device_open = true;
+    }
+    void TearDown() override {
+        if (device_open) {
+            tt::tt_metal::detail::CloseDevices(physical_devices_);
+            device_open = false;
+        }
+    }
+
+    NonDeviceInitFabric1DFixture() : BaseFabricFixture() { this->SetupDevices(); }
+
+    // NonDeviceInitFabric1DFixture(
+    //     tt::tt_metal::FabricConfig fabric_config,
+    //     tt::tt_metal::FabricReliabilityMode reliability_mode =
+    //         tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
+    //     BaseFabricFixture(fabric_config, reliability_mode) {
+    //     this->SetupDevices();
+    // }
+
+    ~NonDeviceInitFabric1DFixture() override { TearDown(); }
+};
+
 using LatencyTestWriterSpecs = std::vector<std::optional<WriterSpec>>;
+
+template <typename MESH_DEVICE_OR_VIEW_T>
+static std::vector<IDevice*> get_test_devices_impl(
+    const MESH_DEVICE_OR_VIEW_T& mesh_device_or_view, size_t line_size, bool is_6u) {
+    std::vector<IDevice*> devices_;
+    if (is_6u) {
+        // on 6u galaxy systems, we can form a 2D torus so we can just use a full row or column
+        devices_.reserve(line_size);
+        size_t r = 0;
+        size_t c = 0;
+        size_t* loop_var = nullptr;
+        if (line_size == 4) {
+            loop_var = &c;
+        } else if (line_size == 8) {
+            loop_var = &r;
+        } else {
+            TT_THROW(
+                "Invalid line size for 6u system. Supported line sizes are 4 and 8 but {} was specified.", line_size);
+        }
+        for (; *loop_var < line_size; (*loop_var)++) {
+            devices_.push_back(mesh_device_or_view.get_device(MeshCoordinate(r, c)));
+        }
+    } else {
+        if (line_size == 4) {
+            devices_ = {
+                mesh_device_or_view.get_device(MeshCoordinate(0, 1)),
+                mesh_device_or_view.get_device(MeshCoordinate(0, 2)),
+                mesh_device_or_view.get_device(MeshCoordinate(1, 2)),
+                mesh_device_or_view.get_device(MeshCoordinate(1, 1))};
+        } else {
+            devices_ = {
+                mesh_device_or_view.get_device(MeshCoordinate(0, 0)),
+                mesh_device_or_view.get_device(MeshCoordinate(0, 1)),
+                mesh_device_or_view.get_device(MeshCoordinate(0, 2)),
+                mesh_device_or_view.get_device(MeshCoordinate(0, 3)),
+                mesh_device_or_view.get_device(MeshCoordinate(1, 3)),
+                mesh_device_or_view.get_device(MeshCoordinate(1, 2)),
+                mesh_device_or_view.get_device(MeshCoordinate(1, 1)),
+                mesh_device_or_view.get_device(MeshCoordinate(1, 0))};
+        }
+    }
+    return devices_;
+}
+template <typename TEST_FIXTURE_T>
+static std::vector<IDevice*> get_test_devices(const TEST_FIXTURE_T& test_fixture, size_t line_size, bool is_6u) {
+    return get_test_devices_impl(*test_fixture.mesh_device_, line_size, is_6u);
+}
+template <>
+std::vector<IDevice*> get_test_devices<NonDeviceInitFabric1DFixture>(
+    const NonDeviceInitFabric1DFixture& test_fixture, size_t line_size, bool is_6u) {
+    return get_test_devices_impl(*test_fixture.view_, line_size, is_6u);
+}
+
+template <typename TEST_FIXTURE_T>
+static std::unordered_map<IDevice*, tt::tt_metal::DeviceAddr> get_worker_done_semaphore_address(
+    const TEST_FIXTURE_T& test_fixture, std::vector<IDevice*>& devices) {
+    auto global_semaphore = tt::tt_metal::CreateGlobalSemaphore(
+        test_fixture.mesh_device_.get(),
+        devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        0,                            // initial value
+        tt::tt_metal::BufferType::L1  // buffer type
+    );
+    tt::tt_metal::DeviceAddr worker_done_semaphore_address = global_semaphore.address();
+    std::unordered_map<IDevice*, tt::tt_metal::DeviceAddr> worker_done_sem_addrs;
+    for (auto* d : devices) {
+        worker_done_sem_addrs[d] = worker_done_semaphore_address;
+    }
+    worker_done_sem_addrs[test_fixture.mesh_device_.get()] = worker_done_semaphore_address;
+    return worker_done_sem_addrs;
+}
+template <>
+std::unordered_map<IDevice*, tt::tt_metal::DeviceAddr> get_worker_done_semaphore_address<NonDeviceInitFabric1DFixture>(
+    const NonDeviceInitFabric1DFixture& test_fixture, std::vector<IDevice*>& devices) {
+    std::unordered_map<IDevice*, tt::tt_metal::DeviceAddr> worker_done_sem_addrs;
+    for (auto* d : devices) {
+        auto global_semaphore = tt::tt_metal::CreateGlobalSemaphore(
+            d,
+            d->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+            0,                            // initial value
+            tt::tt_metal::BufferType::L1  // buffer type
+        );
+        worker_done_sem_addrs[d] = global_semaphore.address();
+    }
+    return worker_done_sem_addrs;
+}
 
 template <typename DEVICE_FIXTURE_T>
 inline void RunPersistent1dFabricLatencyTest(
@@ -53,45 +177,9 @@ inline void RunPersistent1dFabricLatencyTest(
     TT_FATAL(writer_specs.size() < line_size, "num_devices_with_workers must be less than or equal to num_links");
 
     DEVICE_FIXTURE_T test_fixture;
-    auto &mesh_device = *(test_fixture.mesh_device_);
+    // auto &mesh_device = *(test_fixture.mesh_device_);
 
-    std::vector<IDevice*> devices_;
-    if (is_6u) {
-        // on 6u galaxy systems, we can form a 2D torus so we can just use a full row or column
-        devices_.reserve(line_size);
-        size_t r = 0;
-        size_t c = 0;
-        size_t* loop_var = nullptr;
-        if (line_size == 4) {
-            loop_var = &c;
-        } else if (line_size == 8) {
-            loop_var = &r;
-        } else {
-            TT_THROW(
-                "Invalid line size for 6u system. Supported line sizes are 4 and 8 but {} was specified.", line_size);
-        }
-        for (; *loop_var < line_size; (*loop_var)++) {
-            devices_.push_back(mesh_device.get_device(MeshCoordinate(r, c)));
-        }
-    } else {
-        if (line_size == 4) {
-            devices_ = {
-                mesh_device.get_device(MeshCoordinate(0, 1)),
-                mesh_device.get_device(MeshCoordinate(0, 2)),
-                mesh_device.get_device(MeshCoordinate(1, 2)),
-                mesh_device.get_device(MeshCoordinate(1, 1))};
-        } else {
-            devices_ = {
-                mesh_device.get_device(MeshCoordinate(0, 0)),
-                mesh_device.get_device(MeshCoordinate(0, 1)),
-                mesh_device.get_device(MeshCoordinate(0, 2)),
-                mesh_device.get_device(MeshCoordinate(0, 3)),
-                mesh_device.get_device(MeshCoordinate(1, 3)),
-                mesh_device.get_device(MeshCoordinate(1, 2)),
-                mesh_device.get_device(MeshCoordinate(1, 1)),
-                mesh_device.get_device(MeshCoordinate(1, 0))};
-        }
-    }
+    std::vector<IDevice*> devices_ = get_test_devices<DEVICE_FIXTURE_T>(test_fixture, line_size, is_6u);
     std::vector<IDevice*> devices;
     std::vector<IDevice*> devices_with_workers;
     devices.reserve(line_size);
@@ -164,21 +252,16 @@ inline void RunPersistent1dFabricLatencyTest(
             tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval,
             !is_ring,
             use_device_init_fabric);
-    } else {
-        subdevice_managers = create_subdevices(devices);
+        // } else {
+        //     subdevice_managers = create_subdevices(devices);
     }
 
     // Other boiler plate setup
     CoreRangeSet worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));
     auto worker_cores_vec = corerange_to_cores(worker_cores, std::nullopt, false);
 
-    auto global_semaphore = tt::tt_metal::CreateGlobalSemaphore(
-        &mesh_device,
-        devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-        0,                             // initial value
-        tt::tt_metal::BufferType::L1  // buffer type
-    );
-    tt::tt_metal::DeviceAddr worker_done_semaphore_address = global_semaphore.address();
+    auto worker_done_sem_addrs = get_worker_done_semaphore_address(test_fixture, devices);
+    std::unordered_map<size_t, tt::tt_metal::DeviceAddr> writer_spec_to_worker_done_sem_addr_map;
 
     size_t num_congestion_writers = 0;
     for (const auto& spec : writer_specs) {
@@ -228,6 +311,7 @@ inline void RunPersistent1dFabricLatencyTest(
         const size_t line_index = i;
         auto& program = programs.at(program_device_index);
         auto* device = devices_with_workers.at(program_device_index);
+        writer_spec_to_worker_done_sem_addr_map[i] = worker_done_sem_addrs.at(device);
         const CoreCoord& worker_core_logical = writer_specs.at(i)->worker_core_logical;
         const size_t dest_noc_x = device->worker_core_from_logical_core(worker_core_logical).x;
         const size_t dest_noc_y = device->worker_core_from_logical_core(worker_core_logical).y;
@@ -351,16 +435,18 @@ inline void RunPersistent1dFabricLatencyTest(
             std::vector<size_t> downstream_writer_noc_x_list;
             std::vector<size_t> downstream_writer_noc_y_list;
             std::vector<size_t> downstream_writer_hop_distance_list;
-            for (const auto& ws : writer_specs) {
-                if (!ws.has_value()) {
+            for (size_t i = 0; i < writer_specs.size(); i++) {
+                if (!writer_specs.at(i).has_value()) {
                     continue;
                 }
+                const auto& ws = writer_specs.at(i);
+                auto worker_done_sem_addr = writer_spec_to_worker_done_sem_addr_map.at(i);
                 if (std::holds_alternative<LatencyPacketTestWriterSpec>(ws->spec)) {
                 } else if (std::holds_alternative<DatapathBusyDataWriterSpec>(ws->spec)) {
                     const auto& datapath_spec = std::get<DatapathBusyDataWriterSpec>(ws->spec);
                     const auto downstream_worker_core_noc =
                         device->worker_core_from_logical_core(ws->worker_core_logical);
-                    downstream_writer_semaphore_addresses.push_back(worker_done_semaphore_address);
+                    downstream_writer_semaphore_addresses.push_back(worker_done_sem_addr);
                     downstream_writer_noc_x_list.push_back(downstream_worker_core_noc.x);
                     downstream_writer_noc_y_list.push_back(downstream_worker_core_noc.y);
                     downstream_writer_hop_distance_list.push_back(datapath_spec.write_distance);
@@ -387,7 +473,7 @@ inline void RunPersistent1dFabricLatencyTest(
             if (upstream_congestion_writer.has_value()) {
                 const auto upstream_worker_core_noc =
                     device->worker_core_from_logical_core(upstream_congestion_writer->worker_core_logical);
-                rt_args.push_back(worker_done_semaphore_address);
+                rt_args.push_back(writer_spec_to_worker_done_sem_addr_map.at(i));
                 rt_args.push_back(upstream_worker_core_noc.x);
                 rt_args.push_back(upstream_worker_core_noc.y);
             }
@@ -417,7 +503,7 @@ inline void RunPersistent1dFabricLatencyTest(
                 dest_noc_x,
                 dest_noc_y,
                 datapath_spec.write_distance,
-                worker_done_semaphore_address,
+                writer_spec_to_worker_done_sem_addr_map.at(i),
                 packet_header_cb_index,
                 packet_header_cb_size_in_headers};
 
@@ -576,11 +662,11 @@ int main(int argc, char** argv) {
             RunPersistent1dFabricLatencyTest<Fabric1DRingDeviceInitFixture>(
                 writer_specs, line_size, enable_fused_payload_with_sync, topology);
         } else {
-            RunPersistent1dFabricLatencyTest<Fabric1DFixture>(
+            RunPersistent1dFabricLatencyTest<NonDeviceInitFabric1DFixture>(
                 writer_specs, line_size, enable_fused_payload_with_sync, topology);
         }
     } else {
-        RunPersistent1dFabricLatencyTest<Fabric1DFixture>(
+        RunPersistent1dFabricLatencyTest<NonDeviceInitFabric1DFixture>(
             writer_specs, line_size, enable_fused_payload_with_sync, topology);
     }
 }
