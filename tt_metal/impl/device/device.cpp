@@ -219,12 +219,6 @@ std::unique_ptr<Allocator> Device::initialize_allocator(
     return std::make_unique<L1BankingAllocator>(config);
 }
 
-void Device::compile_command_queue_programs() {
-    ZoneScoped;
-    auto command_queue_program_ptr = create_and_compile_cq_program(this);
-    this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
-}
-
 // Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch cores
 void Device::configure_command_queue_programs() {
     chip_id_t device_id = this->id();
@@ -299,14 +293,7 @@ void Device::init_command_queue_host() {
 }
 
 void Device::init_command_queue_device() {
-    if (tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
-        detail::EnablePersistentKernelCache();
-        this->compile_command_queue_programs();
-        detail::DisablePersistentKernelCache();
-    } else {
-        this->compile_command_queue_programs();
-    }
-
+    this->command_queue_programs_.push_back(get_compiled_cq_program(this));
     TT_ASSERT(this->command_queue_programs_.size() == 1);
     this->configure_command_queue_programs();
     Program& command_queue_program = *this->command_queue_programs_[0];

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "jit_build/build.hpp"
 #include "program_command_sequence.hpp"
 
 #include "tt-metalium/buffer.hpp"
@@ -20,6 +21,7 @@
 #include "program_device_map.hpp"              // ProgramTransferInfo
 #include "tt-metalium/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
+#include "tt_metal.hpp"
 
 #include <umd/device/tt_core_coordinates.h>             // CoreType
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
@@ -29,6 +31,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -129,6 +132,51 @@ struct ProgramOffsetsState {
 using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
 using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
 using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
+
+// Internal class for holding a group of programs for parallel compilation.
+class ProgramCompileGroup {
+private:
+    std::unordered_map<IDevice*, std::unique_ptr<Program>> program_device_map_;
+
+public:
+    ProgramCompileGroup() = default;
+
+    ~ProgramCompileGroup() { program_device_map_.clear(); }
+
+    // Add a program to the compile group. Throws if the program already exists in the group.
+    void add_program(IDevice* device, std::unique_ptr<Program> program) {
+        TT_FATAL(!program_device_map_.contains(device), "Program already exists in the compile group.");
+        program_device_map_[device] = std::move(program);
+    }
+
+    // Compiles all programs in the group
+    void compile_all(bool force_slow_dispatch) {
+        std::vector<std::shared_future<void>> events;
+        for (auto& [device, program] : program_device_map_) {
+            auto pgm = program.get();
+            launch_build_step(
+                [device, pgm, force_slow_dispatch]() { pgm->compile(device, force_slow_dispatch); }, events);
+        }
+        sync_build_steps(events);
+    }
+
+    // Write runtime args for all programs in the group
+    void write_runtime_args(bool force_slow_dispatch) {
+        for (auto& [device, program] : program_device_map_) {
+            detail::WriteRuntimeArgsToDevice(device, *program, force_slow_dispatch);
+        }
+    }
+
+    // Remove and return a program from the compile group
+    std::unique_ptr<Program> remove_program(IDevice* device) {
+        TT_FATAL(program_device_map_.contains(device), "Program not found in the compile group.");
+        return std::move(program_device_map_[device]);
+    }
+
+    void clear() { program_device_map_.clear(); }
+
+    bool contains(IDevice* device) const { return program_device_map_.contains(device); }
+};
 
 // The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
 class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {
