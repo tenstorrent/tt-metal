@@ -84,10 +84,29 @@ def download_headers():
         sys.exit(f"Unsupported CHIP_ARCH detected: {CHIP_ARCH}")
 
     HEADER_DIR = "../hw_specific/inc"
-    STAMP_FILE = os.path.join(HEADER_DIR, ".headers_downloaded")
-    if os.path.exists(STAMP_FILE):
-        print("Headers already downloaded. Skipping download.")
-        return
+    ARCH_FILE = os.path.join(HEADER_DIR, ".architecture")
+
+    # Check if architecture has changed
+    if os.path.exists(ARCH_FILE):
+        with open(ARCH_FILE, "r") as f:
+            stored_arch = f.read().strip()
+        if stored_arch == CHIP_ARCH.value:
+            print(
+                "Headers already downloaded for current architecture. Skipping download."
+            )
+            return
+        else:
+            print(
+                f"Architecture changed from {stored_arch} to {CHIP_ARCH.value}. Clearing headers directory."
+            )
+            if os.path.exists(HEADER_DIR):
+                import shutil
+
+                shutil.rmtree(HEADER_DIR)
+    else:
+        print(
+            f"No architecture file found. Will download headers for {CHIP_ARCH.value}."
+        )
 
     BASE_URL = f"https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/{CHIP_ARCH.value}"
     WORMHOLE_SPECIFIC_URL = f"https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/{CHIP_ARCH.value}/wormhole_b0_defines"
@@ -150,9 +169,9 @@ def download_headers():
                 print(f"Failed to download {header} after retries from primary URL")
                 sys.exit(1)
 
-    # Create the stamp file to indicate headers are downloaded
-    with open(STAMP_FILE, "w") as f:
-        f.write("Headers downloaded.\n")
+    # Save the current architecture to track changes
+    with open(ARCH_FILE, "w") as f:
+        f.write(CHIP_ARCH.value)
 
 
 def pytest_configure(config):
