@@ -168,6 +168,10 @@ class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDe
 
 class MultiCommandQueueMultiDeviceOnFabricFixture : public MultiCommandQueueMultiDeviceFixture,
                                                     public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
+private:
+    // Save the result to reduce UMD calls
+    inline static bool should_skip_ = false;
+
 protected:
     void SetUp() override {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
