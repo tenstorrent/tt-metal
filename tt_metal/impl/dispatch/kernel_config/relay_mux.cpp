@@ -83,21 +83,6 @@ void RelayMux::GenerateStaticConfigs() {
         mux_config_core);
     mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args();
 
-    log_debug(
-        tt::LogMetal,
-        "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {} Channel Size: {}, Num "
-        "Slots: {}, L1 Size: {}",
-        device_->id(),
-        kernels_requiring_header_only_channel,
-        kernels_requiring_full_size_channel,
-        static_config_.buffer_size_bytes.value(),
-        logical_core_.str(),
-        GetVirtualCore().str(),
-        d2h_,
-        mux_buffer_size,
-        num_slots,
-        l1_size);
-
     uint32_t mux_buffer_end =
         mux_kernel_config_->get_start_address_to_clear() + mux_kernel_config_->get_num_bytes_to_clear();
     TT_ASSERT(mux_buffer_end < l1_size, "RelayMux Buffer End {} Exceeds Max L1 {}", mux_buffer_end, l1_size);
@@ -116,6 +101,26 @@ void RelayMux::GenerateStaticConfigs() {
     const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(destination_device_id);
     const auto& available_links = tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
     TT_ASSERT(!available_links.empty());
+
+    log_debug(
+        tt::LogMetal,
+        "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {} Channel Size: {}, Num "
+        "Slots: {}, L1 Size: {}, Src: {}, Dst: {}, Links: {}, Link Index: {}",
+        device_->id(),
+        kernels_requiring_header_only_channel,
+        kernels_requiring_full_size_channel,
+        static_config_.buffer_size_bytes.value(),
+        logical_core_.str(),
+        GetVirtualCore().str(),
+        d2h_,
+        mux_buffer_size,
+        num_slots,
+        l1_size,
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        available_links,
+        available_links.back());
+
     tt_fabric::append_fabric_connection_rt_args(
         src_fabric_node_id,
         dst_fabric_node_id,

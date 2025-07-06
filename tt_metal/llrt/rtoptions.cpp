@@ -180,7 +180,7 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     using_slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
-    fd_fabric_en = getenv(TT_METAL_FD_FABRIC_DEMO) != nullptr;
+    fd_fabric_en = true;  // getenv(TT_METAL_FD_FABRIC_DEMO) != nullptr;
 
     const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
     if (dispatch_data_collection_str != nullptr) {
