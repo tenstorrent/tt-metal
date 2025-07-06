@@ -305,6 +305,23 @@ void get_runtime_args_for_edm_termination_infos(
 void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
     size_t sender_worker_flow_control_semaphore_id,
+    size_t sender_worker_terminate_semaphore_id,
+    size_t sender_worker_buffer_index_semaphore_id,
+    std::vector<uint32_t>& args_out);
+
+void append_worker_to_fabric_edm_sender_rt_args(
+    tt::tt_fabric::chan_id_t eth_channel,
+    size_t sender_worker_flow_control_semaphore_id,
+    size_t sender_worker_teardown_semaphore_id,
+    size_t sender_worker_buffer_index_semaphore_id,
+    std::vector<uint32_t>& args_out);
+
+// TODO: will be deprecated
+void append_worker_to_fabric_edm_sender_rt_args(
+    const SenderWorkerAdapterSpec& connection,
+    chip_id_t chip_id,
+    const CoreRangeSet& worker_cores,
+    size_t sender_worker_flow_control_semaphore_id,
     size_t sender_worker_teardown_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out);

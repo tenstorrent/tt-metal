@@ -171,20 +171,28 @@ void create_mux_kernel(
 
     // mux to drainer will always be a full size channel connection
     auto drainer_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
-    std::vector<uint32_t> mux_rt_args = {
-        0, /* ignored, direction */
-        tt::tt_fabric::WorkerXY(drainer_test_config.drainer_virtual_core.x, drainer_test_config.drainer_virtual_core.y)
-            .to_uint32(),
-        drainer_kernel_config->get_channel_base_address(drainer_channel_type, 0),
-        drainer_kernel_config->num_buffers_full_size_channel,
-        drainer_kernel_config->get_flow_control_address(drainer_channel_type, 0),
-        drainer_kernel_config->get_connection_handshake_address(drainer_channel_type, 0),
-        drainer_kernel_config->get_connection_info_address(drainer_channel_type, 0),
-        drainer_kernel_config->buffer_size_bytes_full_size_channel,
-        drainer_kernel_config->get_buffer_index_address(drainer_channel_type, 0),
+    tt::tt_fabric::SenderWorkerAdapterSpec sender_worker_adapter_spec{
+        .edm_noc_x = drainer_test_config.drainer_virtual_core.x,
+        .edm_noc_y = drainer_test_config.drainer_virtual_core.y,
+        .edm_buffer_base_addr = drainer_kernel_config->get_channel_base_address(drainer_channel_type, 0),
+        .num_buffers_per_channel = drainer_kernel_config->num_buffers_full_size_channel,
+        .edm_l1_sem_addr = drainer_kernel_config->get_flow_control_address(drainer_channel_type, 0),
+        .edm_connection_handshake_addr =
+            drainer_kernel_config->get_connection_handshake_address(drainer_channel_type, 0),
+        .edm_worker_location_info_addr = drainer_kernel_config->get_connection_info_address(drainer_channel_type, 0),
+        .buffer_size_bytes = drainer_kernel_config->buffer_size_bytes_full_size_channel,
+        .buffer_index_semaphore_id = drainer_kernel_config->get_buffer_index_address(drainer_channel_type, 0),
+        .edm_direction = tt::tt_fabric::eth_chan_directions::EAST, /* ignored, direction */
+    };
+    std::vector<uint32_t> mux_rt_args;
+    tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
+        sender_worker_adapter_spec,
+        device->id(),
+        {mux_logical_core},
         worker_flow_control_semaphore_id,
         worker_teardown_semaphore_id,
-        worker_buffer_index_semaphore_id};
+        worker_buffer_index_semaphore_id,
+        mux_rt_args);
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {
         std::make_pair(mux_kernel_config->get_start_address_to_clear(), mux_kernel_config->get_num_bytes_to_clear())};
