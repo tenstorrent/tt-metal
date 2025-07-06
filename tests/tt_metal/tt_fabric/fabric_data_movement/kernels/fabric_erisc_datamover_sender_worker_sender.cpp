@@ -29,16 +29,17 @@ void kernel_main() {
     // Test doesn't support multiple pages per send yet since we are writing
     // to interleaved which will never have subsequent pages on the same core
     // (and hence, able to share a packet header)
-    constexpr uint32_t total_pages_to_send = get_compile_time_arg_val(1);
-    constexpr uint32_t page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(3);
-    constexpr bool dest_is_dram = get_compile_time_arg_val(4) != 0;
-    constexpr bool mcast_mode = get_compile_time_arg_val(5) == 1;
-    constexpr bool write_scatter_mode = get_compile_time_arg_val(6) == 1;
+    constexpr uint32_t total_pages_to_send = get_compile_time_arg_val(0);
+    constexpr uint32_t page_size = get_compile_time_arg_val(1);
+    // constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(3);
+    constexpr bool dest_is_dram = get_compile_time_arg_val(2) != 0;
+    constexpr bool mcast_mode = get_compile_time_arg_val(3) == 1;
+    constexpr bool write_scatter_mode = get_compile_time_arg_val(4) == 1;
     constexpr uint32_t num_pages_per_send = (write_scatter_mode ? 2 : 1);
 
-    DPRINT << "sws: args " << "\n\tnum_pages_to_send=" << total_pages_to_send << "\n\tpage_size=" << page_size
-           << "\n\tnum_buffers_per_channel=" << num_buffers_per_channel
+    DPRINT << "sws: args " << "\n\tnum_pages_to_send=" << total_pages_to_send << "\n\tpage_size="
+           << page_size
+           //    << "\n\tnum_buffers_per_channel=" << num_buffers_per_channel
            << "\n\tdest_is_dram=" << (dest_is_dram ? "T" : "F") << "\n\tmcast_mode=" << (mcast_mode ? "T" : "F")
            << "\n\twrite_scatter_mode=" << (write_scatter_mode ? "T" : "F") << "\n";
 
@@ -53,33 +54,35 @@ void kernel_main() {
     //    which can then be used to statically compute offsets into EDM unreserved L1
     //    according to the static EDM L1 allocation scheme.
     //    This should let us get away with describing the full connection in 3-4 args total
-    const uint32_t eth_l1_base_addr = get_arg_val<uint32_t>(arg_idx++);
-    // erisc l1 semaphore address
-    const uint32_t eth_sender_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
-    volatile uint32_t* const writer_send_sem_addr =
-        reinterpret_cast<volatile uint32_t* const>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
-    volatile uint32_t* const worker_teardown_sem_addr =
-        reinterpret_cast<volatile uint32_t* const>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
-    const uint32_t eth_sender_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t eth_sender_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_buffers_per_edm_channel = get_arg_val<uint32_t>(arg_idx++);
-    size_t edm_connection_handshake_id = get_arg_val<uint32_t>(arg_idx++);
-    size_t edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
-    size_t edm_buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
+    // const uint32_t eth_l1_base_addr = get_arg_val<uint32_t>(arg_idx++);
+    // // erisc l1 semaphore address
+    // const uint32_t eth_sender_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
+    // volatile uint32_t* const writer_send_sem_addr =
+    //     reinterpret_cast<volatile uint32_t* const>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
+    // volatile uint32_t* const worker_teardown_sem_addr =
+    //     reinterpret_cast<volatile uint32_t* const>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
+    // const uint32_t eth_sender_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    // const uint32_t eth_sender_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    // const uint32_t num_buffers_per_edm_channel = get_arg_val<uint32_t>(arg_idx++);
+    // size_t edm_connection_handshake_id = get_arg_val<uint32_t>(arg_idx++);
+    // size_t edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
+    // size_t edm_buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     size_t dest_addr = get_arg_val<uint32_t>(arg_idx++);
     // For global semaphore, we get the address directly (not a semaphore ID)
     volatile uint32_t* const last_message_semaphore_address =
         reinterpret_cast<volatile uint32_t* const>(get_arg_val<uint32_t>(arg_idx++));
     // Note: Semaphore initialization moved to receiver kernel
-    auto worker_buffer_index_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    // auto worker_buffer_index_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     // TODO: move to semaphore
-    auto edm_buffer_index_sem_id = get_arg_val<uint32_t>(arg_idx++);
-    auto edm_buffer_index_id = edm_buffer_index_sem_id;
-    ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(writer_send_sem_addr));
-    ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(worker_teardown_sem_addr));
-    ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(last_message_semaphore_address));
+    // auto edm_buffer_index_sem_id = get_arg_val<uint32_t>(arg_idx++);
+    // auto edm_buffer_index_id = edm_buffer_index_sem_id;
+    // ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(writer_send_sem_addr));
+    // ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(worker_teardown_sem_addr));
+    // ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(last_message_semaphore_address));
     auto packet_header_buffer_cb_id = get_arg_val<uint32_t>(arg_idx++);
+
+    auto sender = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
 
     transmit_config config;
     if (mcast_mode) {
@@ -96,25 +99,25 @@ void kernel_main() {
     const InterleavedAddrGen<dest_is_dram> dest_addr_gen = {
         .bank_base_address = dest_addr, .page_size = page_size};
 
-    ASSERT(num_buffers_per_channel > 0);
-    auto sender = tt::tt_fabric::WorkerToFabricEdmSender(
-        true,  // persistent fabric (always true)
-        0,
-        eth_sender_noc_x,
-        eth_sender_noc_y,
-        eth_l1_base_addr,
-        num_buffers_per_channel,
-        eth_sender_l1_sem_id,
+    // ASSERT(num_buffers_per_channel > 0);
+    // auto sender = tt::tt_fabric::WorkerToFabricEdmSender(
+    //     true,  // persistent fabric (always true)
+    //     0,
+    //     eth_sender_noc_x,
+    //     eth_sender_noc_y,
+    //     eth_l1_base_addr,
+    //     num_buffers_per_channel,
+    //     eth_sender_l1_sem_id,
 
-        edm_connection_handshake_id,
-        edm_worker_location_info_addr,
-        edm_buffer_size_bytes + sizeof(PACKET_HEADER_TYPE),
-        edm_buffer_index_id,
-        writer_send_sem_addr,
-        worker_teardown_sem_addr,
-        worker_buffer_index_semaphore_addr,
-        tt::tt_fabric::WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
-        StreamId{std::numeric_limits<uint32_t>::max()});
+    //     edm_connection_handshake_id,
+    //     edm_worker_location_info_addr,
+    //     edm_buffer_size_bytes + sizeof(PACKET_HEADER_TYPE),
+    //     edm_buffer_index_id,
+    //     writer_send_sem_addr,
+    //     worker_teardown_sem_addr,
+    //     worker_buffer_index_semaphore_addr,
+    //     tt::tt_fabric::WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
+    //     StreamId{std::numeric_limits<uint32_t>::max()});
 
     sender.open();
 

@@ -174,10 +174,15 @@ public:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
 
-        if (!(arch_ == tt::ARCH::WORMHOLE_B0 && num_devices_ >= 8 &&
-              (tt::tt_metal::GetNumPCIeDevices() == 4 || tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
-            TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
+        if (num_devices_ < 2) {
+            TT_THROW("This suite can only be run on 2+ device systems");
         }
+
+        // if (!(arch_ == tt::ARCH::WORMHOLE_B0 && num_devices_ >= 8 &&
+        //       (tt::tt_metal::GetNumPCIeDevices() == 4 || tt::tt_metal::GetNumPCIeDevices() ==
+        //       GALAXY_6U_NUM_DEVICES))) {
+        //     TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
+        // }
     }
 
     void SetupDevices() {
@@ -469,24 +474,26 @@ static void generate_fabric_test_kernels(
     Program& sender_program,
     IDevice* sender_device,
     const CoreCoord& worker_core,
-    const tt::tt_fabric::SenderWorkerAdapterSpec& worker_fabric_connection,
+    const uint32_t fabric_connection_link_index,
     const mode_variant_t& mode,
-    std::size_t edm_buffer_size_no_header,
     uint32_t page_size,
     uint32_t num_pages_total,
     uint32_t num_pages_per_edm_buffer,
-    uint32_t local_worker_fabric_semaphore_id,
-    uint32_t local_worker_teardown_semaphore_id,
-    uint32_t local_worker_last_message_semaphore_id,
+    // uint32_t local_worker_fabric_semaphore_id,
+    // uint32_t local_worker_teardown_semaphore_id,
+    // uint32_t local_worker_last_message_semaphore_id,
     uint32_t dram_input_buffer_base_addr,
     bool src_is_dram,
     uint32_t dram_output_buffer_base_addr,
     bool dest_is_dram,
-    uint32_t worker_buffer_index_semaphore_id,
+    // uint32_t worker_buffer_index_semaphore_id,
     uint32_t packet_header_buffer_cb_id,
     Program& receiver_program,
     IDevice* receiver_device,
-    const CoreCoord& receiver_worker_core) {
+    const CoreCoord& receiver_worker_core,
+    bool scatter_write) {
+    using tt::tt_fabric::FabricNodeId;
+    using tt::tt_fabric::MeshId;
     // Create global semaphore and receiver kernel if needed
     uint32_t receiver_noc_x = 0;
     uint32_t receiver_noc_y = 0;
@@ -505,7 +512,7 @@ static void generate_fabric_test_kernels(
     receiver_noc_x = receiver_noc_coord.x;
     receiver_noc_y = receiver_noc_coord.y;
 
-    const auto& edm_noc_core = CoreCoord(worker_fabric_connection.edm_noc_x, worker_fabric_connection.edm_noc_y);
+    // const auto& edm_noc_core = CoreCoord(worker_fabric_connection.edm_noc_x, worker_fabric_connection.edm_noc_y);
     std::vector<uint32_t> sender_worker_reader_compile_args{
         src_is_dram,      //
         num_pages_total,  //
@@ -523,35 +530,17 @@ static void generate_fabric_test_kernels(
     }
 
     std::vector<uint32_t> sender_worker_writer_compile_args{
-        num_pages_per_edm_buffer,
-        num_pages_total,
-        page_size,
-        worker_fabric_connection.num_buffers_per_channel,
-        dest_is_dram,
-        std::holds_alternative<mcast_send>(mode) ? 1 : 0};
-    log_trace(tt::LogTest, "worker_fabric_connection.edm_l1_sem_addr: {}", worker_fabric_connection.edm_l1_sem_addr);
-    log_trace(tt::LogTest, "worker_buffer_index_semaphore_id: {}", worker_buffer_index_semaphore_id);
-    log_trace(tt::LogTest, "last_message_semaphore_address: {}", local_worker_last_message_semaphore_id);
-    log_trace(
-        tt::LogTest, "Sender communicating with EDM: x={}, y={}", (uint32_t)edm_noc_core.x, (uint32_t)edm_noc_core.y);
+        num_pages_total, page_size, dest_is_dram, std::holds_alternative<mcast_send>(mode) ? 1 : 0, scatter_write};
     std::vector<uint32_t> sender_worker_writer_runtime_args{
-        worker_fabric_connection.edm_buffer_base_addr,
-        worker_fabric_connection.edm_l1_sem_addr,
-        local_worker_fabric_semaphore_id,
-        local_worker_teardown_semaphore_id,
-        (uint32_t)edm_noc_core.x,
-        (uint32_t)edm_noc_core.y,
-        worker_fabric_connection.num_buffers_per_channel,
+        dram_output_buffer_base_addr, global_completion_semaphore_addr, packet_header_buffer_cb_id};
 
-        worker_fabric_connection.edm_connection_handshake_addr,
-        worker_fabric_connection.edm_worker_location_info_addr,
-        edm_buffer_size_no_header,
-        dram_output_buffer_base_addr,
-        global_completion_semaphore_addr != 0 ? global_completion_semaphore_addr
-                                              : local_worker_last_message_semaphore_id,
-        worker_buffer_index_semaphore_id,
-        worker_fabric_connection.buffer_index_semaphore_id,
-        packet_header_buffer_cb_id};
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        FabricNodeId(MeshId{0}, 0),
+        FabricNodeId(MeshId{0}, 1),
+        fabric_connection_link_index,
+        sender_program,
+        worker_core,
+        sender_worker_writer_runtime_args);
 
     if (std::holds_alternative<mcast_send>(mode)) {
         sender_worker_writer_runtime_args.push_back(std::get<mcast_send>(mode).distance);
@@ -623,28 +612,17 @@ static bool RunLoopbackTest(
     tt_metal::IDevice* sender_device,
     tt_metal::IDevice* receiver_device,
 
-    const CoreCoord& eth_sender_core,
-    const CoreCoord& eth_receiver_core,
-
     const uint32_t page_size,
     const uint32_t num_pages_total,
     bool src_is_dram,
     bool dest_is_dram,
     std::vector<Program>& programs,
-    tt::tt_fabric::FabricEriscDatamoverBuilder& chip_0_edm_builder,
-    std::optional<SubdeviceInfo>& subdevice_managers) {
+    bool scatter_write) {
     auto& sender_program = programs.at(0);
-    // Add receiver program
-    programs.push_back(Program());
     auto& receiver_program = programs.at(1);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
     std::vector<CoreCoord> worker_cores = {CoreCoord(0, 0)};
-
-    auto local_worker_fabric_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, worker_cores.at(0), 0);
-    auto local_worker_teardown_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, worker_cores.at(0), 0);
-    auto local_worker_last_message_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, worker_cores.at(0), 0);
-    auto worker_buffer_index_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, worker_cores.at(0), 0);
 
     // Receiver kernel core on different device
     CoreCoord receiver_worker_core = {0, 1};  // Different core from sender
@@ -666,7 +644,7 @@ static bool RunLoopbackTest(
 
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
     // Output buffer is now on the receiver device
-    auto local_output_buffer = CreateBuffer(InterleavedBufferConfig{
+    auto output_buffer = CreateBuffer(InterleavedBufferConfig{
         receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
 
     uint32_t packet_header_buffer_cb_id = tt::CBIndex::c_1;
@@ -678,49 +656,38 @@ static bool RunLoopbackTest(
             .set_page_size(packet_header_buffer_cb_id, page_size);
     auto packet_header_buffer =
         tt_metal::CreateCircularBuffer(sender_program, worker_cores.at(0), packet_header_buffer_config);
-    tt_metal::detail::WriteToBuffer(local_output_buffer, all_zeros);
+    tt_metal::detail::WriteToBuffer(output_buffer, all_zeros);
 
     auto local_input_buffer_address = local_input_buffer->address();
-    auto local_output_buffer_address = local_output_buffer->address();
+    auto output_buffer_address = output_buffer->address();
 
-    ////////////////////////////////////////////////////////////////////////////
-    // EDM Builder Setup
-    ////////////////////////////////////////////////////////////////////////////
-
-    const std::size_t edm_buffer_size_no_header =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
-
-    auto chip0_worker_fabric_connection = chip_0_edm_builder.build_connection_to_worker_channel();
     ////////////////////////////////////////////////////////////////////////////
     // Build Workers
     ////////////////////////////////////////////////////////////////////////////
     log_trace(tt::LogTest, "Generating local_sender -> remote_receiver workers");
-    const std::size_t pages_per_send = chip0_worker_fabric_connection.buffer_size_bytes / page_size;
+    const std::size_t pages_per_send = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / page_size;
     const auto& worker_core = worker_cores.at(0);
     log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
+    constexpr size_t fabric_connection_routing_plane_index = 0;
     generate_fabric_test_kernels(
         sender_program,
         sender_device,
         worker_core,
-        chip0_worker_fabric_connection,
-        unicast_send{2},  // 2 hops because we are looping back to ourselves
-        edm_buffer_size_no_header,
+        fabric_connection_routing_plane_index,
+        unicast_send{1},  // 1 hops because we are sending to the next chip where receiver lives
         page_size,
         num_pages_total,
         pages_per_send,
-        local_worker_fabric_semaphore_id,
-        local_worker_teardown_semaphore_id,
-        local_worker_last_message_semaphore_id,
         local_input_buffer_address,
         src_is_dram,
-        local_output_buffer_address,
+        output_buffer_address,
         dest_is_dram,
-        worker_buffer_index_semaphore_id,
         packet_header_buffer_cb_id,
         receiver_program,
         receiver_device,
-        receiver_worker_core);
+        receiver_worker_core,
+        scatter_write);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -733,7 +700,7 @@ static bool RunLoopbackTest(
     bool pass = true;
     constexpr bool enable_check = true;
     if constexpr (enable_check) {
-        pass &= run_output_check(all_zeros, inputs, local_output_buffer) == Correctness::Correct;
+        pass &= run_output_check(all_zeros, inputs, output_buffer) == Correctness::Correct;
     }
     return pass;
 }
@@ -749,13 +716,10 @@ static bool RunLineFabricTest(
     const uint32_t num_pages_total,
     bool src_is_dram,
     bool dest_is_dram,
-
-    std::optional<SubdeviceInfo>& subdevice_managers,
-    tt::tt_fabric::EdmLineFabricOpInterface& line_fabric) {
+    bool scatter_write) {
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
-    const std::size_t edm_buffer_size_no_header =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
+    const std::size_t edm_buffer_size_no_header = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const size_t local_chip_id = 0;
     const size_t remote_chip_id = 1;
     auto program_ptrs = std::vector<Program*>(devices.size());
@@ -811,24 +775,13 @@ static bool RunLineFabricTest(
         tt_metal::CreateCircularBuffer(programs[0], worker_cores.at(0), packet_header_buffer_config);
 
     ////////////////////////////////////////////////////////////////////////////
-    //   Setup Semaphores and Builders
-    ////////////////////////////////////////////////////////////////////////////
-
-    auto local_worker_fabric_semaphore_id = tt::tt_metal::CreateSemaphore(programs[0], worker_cores.at(0), 0);
-    auto local_worker_teardown_semaphore_id = tt::tt_metal::CreateSemaphore(programs[0], worker_cores.at(0), 0);
-    auto local_worker_last_message_semaphore_id = tt::tt_metal::CreateSemaphore(programs[0], worker_cores.at(0), 0);
-    auto worker_buffer_index_semaphore_id = tt::tt_metal::CreateSemaphore(programs[0], worker_cores.at(0), 0);
-    ////////////////////////////////////////////////////////////////////////////
     // Build Workers
     ////////////////////////////////////////////////////////////////////////////
     log_trace(tt::LogTest, "Generating local_sender -> remote_receiver workers");
     const auto& worker_core = worker_cores.at(0);
     log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
-    auto chip0_worker_fabric_connection =
-        line_fabric.uniquely_connect_worker(devices[0], tt::tt_fabric::EdmLineFabricOpInterface::FORWARD);
-
-    const std::size_t pages_per_send = chip0_worker_fabric_connection.buffer_size_bytes / page_size;
+    const std::size_t pages_per_send = edm_buffer_size_no_header / page_size;
 
     // For multicast, create a receiver program on the furthest device
     auto furthest_device = devices.back();
@@ -836,28 +789,25 @@ static bool RunLineFabricTest(
     auto& receiver_program = programs.back();
     CoreCoord receiver_worker_core = {0, 1};  // Different core from sender
 
+    constexpr size_t fabric_connection_routing_plane_index = 0;
     generate_fabric_test_kernels(
         programs[0],
         devices[0],
         worker_core,
-        chip0_worker_fabric_connection,
+        fabric_connection_routing_plane_index,
         mcast_send{mcast_first_chip, mcast_last_chip - mcast_first_chip + 1},
-        edm_buffer_size_no_header,
         page_size,
         num_pages_total,
         pages_per_send,
-        local_worker_fabric_semaphore_id,
-        local_worker_teardown_semaphore_id,
-        local_worker_last_message_semaphore_id,
         local_input_buffer_address,
         src_is_dram,
         local_output_buffer_address,
         dest_is_dram,
-        worker_buffer_index_semaphore_id,
         packet_header_buffer_cb_id,
         receiver_program,
         furthest_device,
-        receiver_worker_core);
+        receiver_worker_core,
+        scatter_write);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -916,7 +866,6 @@ static void setup_test_with_persistent_fabric(
     bool loopback_on_last_device = false,
     bool is_galaxy = false,
     const tt::tt_fabric::FabricRouterBufferConfig& edm_buffer_config = tt::tt_fabric::FabricRouterBufferConfig{}) {
-    log_info(tt::LogTest, "Enabling persistent fabric");
     fabric_programs = std::vector<Program>(devices.size());
     subdevice_managers = create_subdevices(devices);
     std::transform(
@@ -954,7 +903,8 @@ static int TestLineFabricEntrypoint(
     const uint32_t page_size,
     const uint32_t num_pages_total,
     const bool src_is_dram,
-    const bool dest_is_dram) {
+    const bool dest_is_dram,
+    const bool scatter_write = false) {
     // argv[0]: program
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
@@ -965,7 +915,7 @@ static int TestLineFabricEntrypoint(
         return 0;
     }
 
-    Fabric1DFixture test_fixture;
+    auto test_fixture = Fabric1DDeviceInitFixture(tt::tt_metal::FabricConfig::FABRIC_1D);
     auto &mesh_device = *(test_fixture.mesh_device_);
 
     // build a line of devices
@@ -974,12 +924,8 @@ static int TestLineFabricEntrypoint(
         mesh_device.get_device(MeshCoordinate(0, 1)),
         mesh_device.get_device(MeshCoordinate(0, 2)),
         mesh_device.get_device(MeshCoordinate(0, 3))};
+
     std::vector<Program> programs(1);
-    std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
-    std::optional<std::vector<Program>> fabric_programs;
-    std::vector<Program*> fabric_program_ptrs;
-    std::optional<tt::tt_fabric::EdmLineFabricOpInterface> line_fabric;
-    setup_test_with_persistent_fabric(devices, subdevice_managers, fabric_programs, fabric_program_ptrs, line_fabric);
 
     auto launch_workers = [&](std::vector<Program>& _programs) -> bool {
         bool success = false;
@@ -987,18 +933,13 @@ static int TestLineFabricEntrypoint(
             success = RunLineFabricTest(
                 std::vector<IDevice*>{devices[0]},
                 _programs,
-                // fabric_hops,
-
                 mcast_first_chip,
                 mcast_last_chip,
-
                 page_size,
                 num_pages_total,
                 src_is_dram,
                 dest_is_dram,
-
-                subdevice_managers,
-                line_fabric.value());
+                scatter_write);
 
         } catch (std::exception& e) {
             log_error(tt::LogTest, "Caught exception: {}", e.what());
@@ -1011,8 +952,6 @@ static int TestLineFabricEntrypoint(
 
     std::vector<Program> second_run_programs(1);
     success = launch_workers(second_run_programs);
-    persistent_fabric_teardown_sequence(
-        devices, subdevice_managers, line_fabric.value(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
 
     test_fixture.TearDown();
 
@@ -1020,7 +959,11 @@ static int TestLineFabricEntrypoint(
 }
 
 static int TestLoopbackEntrypoint(
-    const uint32_t page_size, const uint32_t num_pages_total, const bool src_is_dram, const bool dest_is_dram) {
+    const uint32_t page_size,
+    const uint32_t num_pages_total,
+    const bool src_is_dram,
+    const bool dest_is_dram,
+    bool scatter_write = false) {
     // argv[0]: program
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
@@ -1032,75 +975,18 @@ static int TestLoopbackEntrypoint(
         return 0;
     }
 
-    Fabric1DFixture test_fixture;
+    auto test_fixture = Fabric1DDeviceInitFixture(tt::tt_metal::FabricConfig::FABRIC_1D);
     auto &mesh_device = *(test_fixture.mesh_device_);
 
     const auto& device_0 = mesh_device.get_device(MeshCoordinate(0, 0));
     const auto& device_1 = mesh_device.get_device(MeshCoordinate(0, 1));
-
-    const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
-    auto eth_sender_core_iter = active_eth_cores.begin();
-    auto eth_sender_core_iter_end = active_eth_cores.end();
-    chip_id_t device_id = std::numeric_limits<chip_id_t>::max();
-    tt_xy_pair eth_receiver_core;
-    bool initialized = false;
-    tt_xy_pair eth_sender_core;
-    do {
-        TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "Error");
-        std::tie(device_id, eth_receiver_core) = device_0->get_connected_ethernet_core(*eth_sender_core_iter);
-        eth_sender_core = *eth_sender_core_iter;
-        eth_sender_core_iter++;
-    } while (device_id != device_1->id());
-    TT_ASSERT(device_id == device_1->id());
     // const auto& device_1 = test_fixture.mesh_device_->get_device(device_id);
 
-    std::vector<Program> programs(1);
-    std::optional<std::vector<Program>> fabric_programs;
-    auto& sender_program = programs.at(0);
+    std::vector<Program> programs(2);
 
-    log_info(tt::LogTest, "Enabling persistent fabric");
-    fabric_programs = std::vector<Program>(2);
-    subdevice_managers = create_subdevices({device_0, device_1});
-
-    auto& fabric_sender_program = fabric_programs->at(0);
-    auto& fabric_receiver_program = fabric_programs->at(1);
     IDevice* sender_device = device_0;
     IDevice* receiver_device = device_1;
 
-    const std::size_t edm_buffer_size = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
-    const chip_id_t local_chip_id = 0;
-    const chip_id_t remote_chip_id = 1;
-    // Note this is a fabric level test so we can keep the use of packet header here (we aren't using the
-    // fabric API yet because that requires us to use device init fabric, which doesn't implement the loopback
-    // that we take advantage of here)
-    const auto& edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size + sizeof(PACKET_HEADER_TYPE));
-    auto chip_0_edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
-        sender_device, fabric_sender_program, eth_sender_core, local_chip_id, remote_chip_id, edm_config);
-    chip_0_edm_builder.set_firmware_context_switch_interval(0);
-    auto chip_1_edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
-        receiver_device, fabric_receiver_program, eth_receiver_core, remote_chip_id, local_chip_id, edm_config);
-    chip_1_edm_builder.set_firmware_context_switch_interval(0);
-    // Create the loopback connection on the second device
-    chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
-    auto local_edm_kernel = tt::tt_fabric::generate_edm_kernel(
-        fabric_sender_program,
-        sender_device,
-        chip_0_edm_builder,
-        eth_sender_core,
-        DataMovementProcessor::RISCV_0,
-        NOC::NOC_0);
-    auto remote_edm_kernel = tt::tt_fabric::generate_edm_kernel(
-        fabric_receiver_program,
-        receiver_device,
-        chip_1_edm_builder,
-        eth_receiver_core,
-        DataMovementProcessor::RISCV_0,
-        NOC::NOC_0);
-
-    tt::tt_metal::detail::CompileProgram(sender_device, fabric_sender_program);
-    tt::tt_metal::detail::CompileProgram(receiver_device, fabric_receiver_program);
-    tt_metal::EnqueueProgram(sender_device->command_queue(), fabric_sender_program, false);
-    tt_metal::EnqueueProgram(receiver_device->command_queue(), fabric_receiver_program, false);
     log_trace(tt::LogTest, "{} programs ", programs.size());
     bool success = false;
     try {
@@ -1108,16 +994,12 @@ static int TestLoopbackEntrypoint(
             device_0,
             device_1,
 
-            eth_sender_core,
-            eth_receiver_core,
-
             page_size,
             num_pages_total,
             src_is_dram,
             dest_is_dram,
             programs,
-            chip_0_edm_builder,
-            subdevice_managers);
+            scatter_write);
     } catch (std::exception& e) {
         log_error(tt::LogTest, "Caught exception: {}", e.what());
         test_fixture.TearDown();
@@ -1127,22 +1009,18 @@ static int TestLoopbackEntrypoint(
     {
         // Run the test twice with a single fabric invocation
 
-        std::vector<Program> second_programs(1);
+        std::vector<Program> worker_programs(2);
         try {
             success = RunLoopbackTest(
                 device_0,
                 device_1,
 
-                eth_sender_core,
-                eth_receiver_core,
-
                 page_size,
                 num_pages_total,
                 src_is_dram,
                 dest_is_dram,
-                second_programs,
-                chip_0_edm_builder,
-                subdevice_managers);
+                worker_programs,
+                scatter_write);
         } catch (std::exception& e) {
             log_error(tt::LogTest, "Caught exception: {}", e.what());
             test_fixture.TearDown();
@@ -1150,21 +1028,9 @@ static int TestLoopbackEntrypoint(
         }
         // Wait for worker programs to finish
 
-        auto d0_worker_subdevice = device_0->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
-        auto d1_worker_subdevice = device_1->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
-        auto d0_fabric_subdevice = device_0->get_sub_device_ids()[TEST_EDM_FABRIC_SUBDEVICE_INDEX];
-        auto d1_fabric_subdevice = device_1->get_sub_device_ids()[TEST_EDM_FABRIC_SUBDEVICE_INDEX];
         // Teardown the fabric
-        tt_metal::Finish(sender_device->command_queue(), {d0_worker_subdevice});
+        tt_metal::Finish(sender_device->command_queue());
         // tt_metal::Finish(receiver_device->command_queue(), {d1_worker_subdevice});
-
-        // Notify fabric of teardown
-        chip_1_edm_builder.teardown_from_host(receiver_device);
-        chip_0_edm_builder.teardown_from_host(sender_device);
-
-        // wait for fabric finish
-        tt_metal::Finish(sender_device->command_queue(), {d0_fabric_subdevice});
-        tt_metal::Finish(receiver_device->command_queue(), {d1_fabric_subdevice});
     }
 
     test_fixture.TearDown();
