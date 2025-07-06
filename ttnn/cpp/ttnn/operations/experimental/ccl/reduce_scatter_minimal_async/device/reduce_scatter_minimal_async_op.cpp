@@ -11,7 +11,6 @@
 
 namespace ttnn {
 
-// TODO: (GR)
 void ReduceScatterMinimalAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
