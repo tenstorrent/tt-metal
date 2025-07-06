@@ -228,7 +228,6 @@ def run_reduce_scatter_impl(
         "batch_2",
         "batch_1",
     ],
-    # ids=["batch_8", "batch_4", "batch_2", "batch_1_bfloat16", "batch_1_bfloat8"],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_rs",
