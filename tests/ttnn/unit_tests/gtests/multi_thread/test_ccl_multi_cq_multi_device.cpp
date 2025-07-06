@@ -25,7 +25,6 @@
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/distributed/types.hpp"

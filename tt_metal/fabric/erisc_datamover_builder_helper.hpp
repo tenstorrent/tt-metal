@@ -6,11 +6,10 @@
 
 #include <tt-metalium/erisc_datamover_builder.hpp>
 
-#include "ttnn/operations/ccl/ccl_host_types.hpp"
-#include "ttnn/distributed/types.hpp"
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
-namespace ttnn {
-namespace ccl {
+namespace tt::tt_fabric {
 
 class EdmLineFabricOpInterface {
 public:
@@ -98,8 +97,7 @@ public:
         tt::tt_fabric::TerminationSignal termination_signal =
             tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE) const;
 
-    static void launch_mesh_fabric(MeshDevice* mesh_device);
-    static void teardown_edm_fabric(MeshDevice* mesh_device);
+    static void teardown_edm_fabric(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
     void set_firmware_context_switch_interval(size_t interval);
 
@@ -121,13 +119,4 @@ private:
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval;
 };
 
-void initialize_edm_fabric(
-    distributed::MeshDevice* mesh_device,
-    bool wrap_fabric_around_mesh = false,
-    std::optional<size_t> context_switch_interval_override = std::nullopt,
-    Topology topology = Topology::Linear);
-void teardown_edm_fabric(
-    distributed::MeshDevice* mesh_device, bool wrap_fabric_around_mesh = false, Topology topology = Topology::Linear);
-
-};  // namespace ccl
-};  // namespace ttnn
+}  // namespace tt::tt_fabric

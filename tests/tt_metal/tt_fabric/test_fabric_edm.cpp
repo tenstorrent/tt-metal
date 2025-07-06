@@ -12,7 +12,7 @@
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
+#include "tests/tt_metal/tt_fabric/common/test_fabric_edm_common.hpp"
 
 // Global state for daemon mode
 static bool daemon_running = true;

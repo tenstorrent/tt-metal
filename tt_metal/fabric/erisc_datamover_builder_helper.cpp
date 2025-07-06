@@ -8,10 +8,10 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "tt_metal/fabric/ccl/ccl_common.hpp"
 #include "erisc_datamover_builder_helper.hpp"
 
-namespace ttnn::ccl {
+namespace tt::tt_fabric {
 
 std::vector<CoreCoord> reorder_connected_sockets(
     const tt::tt_metal::IDevice* local_device, const std::vector<CoreCoord>& connected_sockets) {
@@ -65,7 +65,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     for (size_t i = 0; i < device_sequence.size(); i++) {
         log_trace(tt::LogOp, "device[{}] id={}", i, device_sequence[i]->id());
     }
-    auto get_min_link_count = [&](IDevice* src_device, IDevice* dest_device, size_t min_link_count) {
+    auto get_min_link_count = [&](tt::tt_metal::IDevice* src_device, tt::tt_metal::IDevice* dest_device, size_t min_link_count) {
         const auto& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());
         const auto& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());
         if (src_device_sockets.size() > 0) {
@@ -92,7 +92,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     this->num_links = min_link_count;
 
     auto build_edm_directions =
-        [&](IDevice* src_device, IDevice* dest_device, Program* src_program, Program* dest_program) {
+        [&](tt::tt_metal::IDevice* src_device, tt::tt_metal::IDevice* dest_device, tt::tt_metal::Program* src_program, tt::tt_metal::Program* dest_program) {
             const auto& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());
             const auto& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());
             // re-order the connected_sockets based on virtual coords
@@ -465,7 +465,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     }
 }
 
-tt::tt_fabric::SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(
+SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(
     tt::tt_metal::IDevice* device, Direction direction) {
     TT_FATAL(
         (direction == FORWARD)
@@ -530,7 +530,7 @@ void EdmLineFabricOpInterface::build_kernels() const {
                             device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).y,
                             device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).x,
                             risc_id);
-                        auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
+                        auto local_edm_kernel = tt::tt_fabric::generate_edm_kernel(
                             *program,
                             device,
                             edm_builder,
@@ -622,7 +622,7 @@ EdmLineFabricOpInterface::generate_ordered_termination_info_farthest_to_nearest(
     return edm_termination_infos;
 }
 
-void EdmLineFabricOpInterface::teardown_from_host(tt::tt_fabric::TerminationSignal termination_signal) const {
+void EdmLineFabricOpInterface::teardown_from_host(TerminationSignal termination_signal) const {
     for (tt::tt_metal::IDevice* d : this->device_sequence) {
         if (edm_builders_forward_direction.find(d->id()) != edm_builders_forward_direction.end()) {
             for (auto& edm_builder : edm_builders_forward_direction.at(d->id())) {
@@ -651,7 +651,7 @@ void EdmLineFabricOpInterface::set_firmware_context_switch_interval(size_t inter
 }
 
 void initialize_edm_fabric(
-    distributed::MeshDevice* mesh_device,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
     bool wrap_fabric_around_mesh,
     std::optional<size_t> context_switch_interval_override,
     Topology topology) {
@@ -733,15 +733,15 @@ void initialize_edm_fabric(
     }
 }
 
-void teardown_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabric_around_mesh, Topology topology) {
-    auto teardown = [topology](const std::vector<IDevice*>& line_view) {
+void teardown_edm_fabric(tt::tt_metal::distributed::MeshDevice* mesh_device, bool wrap_fabric_around_mesh, Topology topology) {
+    auto teardown = [topology](const std::vector<tt::tt_metal::IDevice*>& line_view) {
         std::vector<tt::tt_metal::Program> programs(line_view.size());
         std::vector<tt::tt_metal::Program*> program_ptrs;
         program_ptrs.reserve(programs.size());
         std::transform(
-            programs.begin(), programs.end(), std::back_inserter(program_ptrs), [](Program& p) { return &p; });
+            programs.begin(), programs.end(), std::back_inserter(program_ptrs), [](tt::tt_metal::Program& p) { return &p; });
         EdmLineFabricOpInterface edm_fabric(line_view, program_ptrs, std::nullopt, false, topology);
-        edm_fabric.teardown_from_host(tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+        edm_fabric.teardown_from_host(TerminationSignal::IMMEDIATELY_TERMINATE);
     };
     if (wrap_fabric_around_mesh) {
         auto devices = mesh_device->get_view().get_ring_devices();
@@ -756,4 +756,4 @@ void teardown_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabric_
     }
 }
 
-}  // namespace ttnn::ccl
+}  // namespace tt::tt_fabric
