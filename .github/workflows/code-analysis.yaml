@@ -250,7 +250,6 @@ jobs:
           ### 🤖 Automation Status
           - **Created by:** LLK Auto-Uplift Workflow
           - **Trigger:** $(if [ "${{ github.event_name }}" = "schedule" ]; then echo "Scheduled ($(date))"; elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then echo "Repository Dispatch"; else echo "Manual/Workflow Call"; fi)
-          - **Branch:** \`${{ env.BRANCH_NAME }}\`
 
           ### 🧪 Test Status
           Test results and workflow status will be updated here automatically.
