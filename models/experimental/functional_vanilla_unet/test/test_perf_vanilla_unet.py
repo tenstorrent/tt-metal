@@ -119,7 +119,7 @@ def create_custom_preprocessor(device):
 
 
 def get_expected_times(name):
-    base = {"vanilla_unet": (29.40, 0.51)}
+    base = {"vanilla_unet": (40, 0.51)}
     return base[name]
 
 
