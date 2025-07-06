@@ -102,6 +102,13 @@ void RelayMux::GenerateStaticConfigs() {
     const auto& available_links = tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
     TT_ASSERT(!available_links.empty());
 
+    // TG Gateway is connected differently. All tunnels from the MMIO are for dispatch use are we index the link by the
+    // tunnel index
+    int link_index = available_links.back();
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device_->is_mmio_capable()) {
+        link_index = tunnel_id_;
+    }
+
     log_debug(
         tt::LogMetal,
         "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {} Channel Size: {}, Num "
@@ -122,13 +129,7 @@ void RelayMux::GenerateStaticConfigs() {
         available_links.back());
 
     tt_fabric::append_fabric_connection_rt_args(
-        src_fabric_node_id,
-        dst_fabric_node_id,
-        available_links.back(),
-        *program_,
-        {logical_core_},
-        mux_rt_args_,
-        GetCoreType());
+        src_fabric_node_id, dst_fabric_node_id, link_index, *program_, {logical_core_}, mux_rt_args_, GetCoreType());
 }
 
 void RelayMux::GenerateDependentConfigs() {}
