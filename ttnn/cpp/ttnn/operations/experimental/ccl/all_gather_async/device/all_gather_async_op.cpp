@@ -220,6 +220,8 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     }
 
     // Check for default minimal case
+    // Note: Since default minimal implementation also supports sharding,
+    // should check for the special llama sharding case first before falling back to this implementation
     if (input_tensor_page_layout == tt::tt_metal::Layout::TILE && semaphore.size() == 2) {
         return AllGatherAsyncVersion::MINIMAL_DEFAULT;
     }
