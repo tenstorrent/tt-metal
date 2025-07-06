@@ -12,15 +12,18 @@
 #include <tt-metalium/host_api.hpp>
 #include <cstdlib>
 #include <exception>
+#include <functional>
 #include <map>
 #include <optional>
 #include <random>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
+#include <array>
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -79,6 +82,7 @@ struct TestInfo {
     bool use_trace{false};
     bool dispatch_from_eth{false};
     bool use_all_cores{false};
+    bool test_double_buffering{false};
 };
 
 std::tuple<uint32_t, uint32_t> get_core_count() {
@@ -139,6 +143,9 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
             " -ac: use all viable worker cores (default {}x{})",
             std::get<0>(core_count),
             std::get<1>(core_count));
+        log_info(
+            LogTest,
+            " -db: test double buffering performance with programs 2x prefetcher cache size (default disabled)");
         exit(0);
     }
 
@@ -165,6 +172,7 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
     info.nfast_kernels = test_args::get_command_option_uint32(input_args, "-nf", 0);
     info.use_trace = test_args::has_command_option(input_args, "-tr");
     info.dispatch_from_eth = test_args::has_command_option(input_args, "-de");
+    info.test_double_buffering = test_args::has_command_option(input_args, "-db");
     if (info.kernel_size < MIN_KERNEL_SIZE_BYTES) {
         log_fatal(tt::LogTest, "Minimum kernel size is {} bytes", MIN_KERNEL_SIZE_BYTES);
         exit(0);
@@ -332,40 +340,116 @@ struct FakeBenchmarkState {
     std::vector<int> range{1};
 };
 
-template <typename T>
-static int pgm_dispatch(T& state, TestInfo info) {
-    if constexpr (std::is_same_v<T, benchmark::State>) {
-        log_info(LogTest, "Running {}", state.name());
-    }
-    if (info.use_all_cores) {
-        auto core_count = get_core_count();
-        info.workers = CoreRange({0, 0}, {std::get<0>(core_count), std::get<1>(core_count)});
-    }
+// Helper structure to encapsulate program execution logic
+struct ProgramExecutor {
+    std::function<void()> execute_programs;
+    std::function<void()> warmup_programs;
+    uint32_t total_program_iterations;
 
+    ProgramExecutor(std::function<void()> exec, std::function<void()> warm, uint32_t total_iters) :
+        execute_programs(exec), warmup_programs(warm), total_program_iterations(total_iters) {}
+};
+
+// Helper function to create program executor for standard test
+ProgramExecutor create_standard_executor(
+    const TestInfo& info, std::array<tt_metal::Program, 2>& program, CommandQueue& cq) {
+    auto warmup_func = [&info, &program, &cq]() {
+        for (int i = 0; i < info.warmup_iterations; i++) {
+            EnqueueProgram(cq, program[0], false);
+            for (int j = 0; j < info.nfast_kernels; j++) {
+                EnqueueProgram(cq, program[1], false);
+            }
+        }
+    };
+
+    auto execute_func = [&info, &program, &cq]() {
+        for (int i = 0; i < info.iterations; i++) {
+            EnqueueProgram(cq, program[0], false);
+            for (int j = 0; j < info.nfast_kernels; j++) {
+                EnqueueProgram(cq, program[1], false);
+            }
+        }
+    };
+
+    return ProgramExecutor(execute_func, warmup_func, info.iterations);
+}
+
+// Helper function to create program executor for double buffering test
+ProgramExecutor create_double_buffering_executor(
+    const TestInfo& info, std::vector<tt_metal::Program>& programs, CommandQueue& cq) {
+    auto warmup_func = [&info, &programs, &cq]() {
+        for (int w = 0; w < info.warmup_iterations; w++) {
+            for (uint32_t i = 0; i < programs.size(); i++) {
+                EnqueueProgram(cq, programs[i], false);
+            }
+        }
+    };
+
+    auto execute_func = [&info, &programs, &cq]() {
+        for (int iter = 0; iter < info.iterations; iter++) {
+            for (uint32_t i = 0; i < programs.size(); i++) {
+                EnqueueProgram(cq, programs[i], false);
+            }
+        }
+    };
+
+    return ProgramExecutor(execute_func, warmup_func, info.iterations * programs.size());
+}
+
+// Helper function to setup trace if enabled
+template <typename T>
+uint32_t setup_trace_if_enabled(const TestInfo& info, tt_metal::IDevice* device, ProgramExecutor& executor) {
+    uint32_t tid = 0;
     if (info.use_trace) {
-        log_info(LogTest, "Running with trace enabled");
+        CommandQueue& cq = device->command_queue();
+        uint8_t cq_id = cq.id();
+        tid = BeginTraceCapture(device, cq_id);
+        executor.execute_programs();
+        EndTraceCapture(device, cq_id, tid);
+        Finish(cq);
     }
-    log_info(LogTest, "Warmup iterations: {}", info.warmup_iterations);
-    log_info(LogTest, "Iterations: {}", info.iterations);
-    log_info(
-        LogTest,
-        "Grid: ({}-{}) ({} cores)",
-        info.workers.start_coord.str(),
-        info.workers.end_coord.str(),
-        info.workers.size());
-    log_info(LogTest, "Kernel size: {}", info.kernel_size);
-    if (info.nfast_kernels != 0) {
-        log_info(LogTest, "Fast kernel cycles: {}", info.fast_kernel_cycles);
-        log_info(LogTest, "Slow kernel cycles: {}", info.slow_kernel_cycles);
-        log_info(LogTest, "{} fast kernels between slow kernels", info.nfast_kernels);
-    } else {
-        log_info(LogTest, "Kernel cycles: {}", info.slow_kernel_cycles);
+    return tid;
+}
+
+// Helper function to run the benchmark timing loop
+template <typename T>
+void run_benchmark_timing_loop(
+    T& state, const TestInfo& info, CommandQueue& cq, ProgramExecutor& executor, uint32_t tid) {
+    for (auto _ : state) {
+        auto start = std::chrono::system_clock::now();
+        if (info.use_trace) {
+            EnqueueTrace(cq, tid, false);
+        } else {
+            executor.execute_programs();
+        }
+        if (info.time_just_finish) {
+            start = std::chrono::system_clock::now();
+        }
+        Finish(cq);
+        auto end = std::chrono::system_clock::now();
+
+        if constexpr (std::is_same_v<T, benchmark::State>) {
+            auto elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(end - start);
+            state.SetIterationTime(elapsed_seconds.count());
+        } else {
+            std::chrono::duration<double> elapsed_seconds = (end - start);
+            log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
+            log_info(
+                LogTest,
+                "Ran in {}us per iteration",
+                elapsed_seconds.count() * 1000 * 1000 / executor.total_program_iterations);
+        }
     }
-    log_info(LogTest, "KGs: {}", info.n_kgs);
-    log_info(LogTest, "CBs: {}", info.n_cbs);
-    log_info(LogTest, "UniqueRTArgs: {}", info.n_args);
-    log_info(LogTest, "CommonRTArgs: {}", info.n_common_args);
-    log_info(LogTest, "Sems: {}", info.n_sems);
+}
+
+// Helper function to set benchmark counters
+template <typename T>
+void set_benchmark_counters(
+    T& state,
+    const TestInfo& info,
+    tt_metal::IDevice* device,
+    uint32_t total_iterations,
+    const std::unordered_map<std::string, uint32_t>& extra_counters = {}) {
     if constexpr (std::is_same_v<T, benchmark::State>) {
         if (dump_test_info) {
             state.counters["cores"] = benchmark::Counter(info.workers.size(), benchmark::Counter::kDefaults);
@@ -384,8 +468,111 @@ static int pgm_dispatch(T& state, TestInfo info) {
             state.counters["trisc_enabled"] = benchmark::Counter(info.trisc_enabled, benchmark::Counter::kDefaults);
             state.counters["erisc_enabled"] = benchmark::Counter(info.erisc_enabled, benchmark::Counter::kDefaults);
             state.counters["cb_gs"] = benchmark::Counter(info.n_cb_gs, benchmark::Counter::kDefaults);
+
+            // Add extra counters
+            for (const auto& [key, value] : extra_counters) {
+                state.counters[key] = benchmark::Counter(value, benchmark::Counter::kDefaults);
+            }
+        }
+
+        state.counters["IterationTime"] = benchmark::Counter(
+            total_iterations, benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
+        state.counters["Clock"] = benchmark::Counter(get_tt_npu_clock(device), benchmark::Counter::kDefaults);
+    }
+}
+
+// Helper function to convert from DispatchCoreType to CoreType
+CoreType dispatch_core_type_to_core_type(DispatchCoreType dispatch_core_type) {
+    switch (dispatch_core_type) {
+        case DispatchCoreType::WORKER: return CoreType::WORKER;
+        case DispatchCoreType::ETH: return CoreType::ETH;
+        default: TT_THROW("invalid dispatch core type");
+    }
+}
+
+// Helper function to create double buffering programs
+std::pair<std::vector<tt_metal::Program>, std::unordered_map<std::string, uint32_t>> create_double_buffering_programs(
+    const TestInfo& info, tt_metal::IDevice* device, DispatchCoreType dispatch_core_type) {
+    uint32_t prefetcher_cache_size = tt::tt_metal::MetalContext::instance()
+                                         .dispatch_mem_map(dispatch_core_type_to_core_type(dispatch_core_type))
+                                         .ringbuffer_size();
+    uint32_t target_total_size = (3 * prefetcher_cache_size) / 2;
+    uint32_t estimated_program_size =
+        1 << std::bit_width(info.kernel_size * 3);  // Rough estimate for program with 3 kernels
+    uint32_t num_programs = std::max(1u, target_total_size / estimated_program_size);
+
+    log_info(LogTest, "Double buffering test: prefetcher cache size = {} bytes", prefetcher_cache_size);
+    log_info(
+        LogTest,
+        "Estimated program size = {} bytes, target total program size = {} bytes (1.5x cache)",
+        estimated_program_size,
+        target_total_size);
+    log_info(LogTest, "Creating {} programs for cache overflow test", num_programs);
+
+    std::vector<tt_metal::Program> programs(num_programs);
+    uint32_t kernel_runtime = 2000;  // cycles - short enough to focus on dispatch time
+
+    for (uint32_t i = 0; i < num_programs; i++) {
+        if (!initialize_program(info, device, programs[i], kernel_runtime)) {
+            throw std::runtime_error("Program creation failed for double buffering test");
         }
     }
+
+    std::unordered_map<std::string, uint32_t> extra_counters = {
+        {"num_programs", num_programs},
+        {"prefetcher_cache_size", prefetcher_cache_size},
+        {"target_program_size", target_total_size}};
+
+    return {std::move(programs), extra_counters};
+}
+
+// Helper function to log test configuration
+void log_test_configuration(const TestInfo& info) {
+    if (info.use_trace) {
+        log_info(LogTest, "Running with trace enabled");
+    }
+    log_info(LogTest, "Warmup iterations: {}", info.warmup_iterations);
+    log_info(LogTest, "Iterations: {}", info.iterations);
+    log_info(
+        LogTest,
+        "Grid: ({}-{}) ({} cores)",
+        info.workers.start_coord.str(),
+        info.workers.end_coord.str(),
+        info.workers.size());
+    log_info(LogTest, "Kernel size: {}", info.kernel_size);
+
+    if (info.nfast_kernels != 0) {
+        log_info(LogTest, "Fast kernel cycles: {}", info.fast_kernel_cycles);
+        log_info(LogTest, "Slow kernel cycles: {}", info.slow_kernel_cycles);
+        log_info(LogTest, "{} fast kernels between slow kernels", info.nfast_kernels);
+    } else {
+        log_info(LogTest, "Kernel cycles: {}", info.slow_kernel_cycles);
+    }
+
+    log_info(LogTest, "KGs: {}", info.n_kgs);
+    log_info(LogTest, "CBs: {}", info.n_cbs);
+    log_info(LogTest, "UniqueRTArgs: {}", info.n_args);
+    log_info(LogTest, "CommonRTArgs: {}", info.n_common_args);
+    log_info(LogTest, "Sems: {}", info.n_sems);
+
+    if (info.test_double_buffering) {
+        log_info(LogTest, "Double buffering test: ENABLED");
+    }
+}
+
+template <typename T>
+static int pgm_dispatch(T& state, TestInfo info) {
+    if constexpr (std::is_same_v<T, benchmark::State>) {
+        log_info(LogTest, "Running {}", state.name());
+    }
+
+    // Apply configuration adjustments
+    if (info.use_all_cores) {
+        auto core_count = get_core_count();
+        info.workers = CoreRange({0, 0}, {std::get<0>(core_count), std::get<1>(core_count)});
+    }
+
+    log_test_configuration(info);
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
 
@@ -394,77 +581,45 @@ static int pgm_dispatch(T& state, TestInfo info) {
         const chip_id_t device_id = 0;
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
         tt_metal::IDevice* device = tt_metal::CreateDevice(
-            device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000, DispatchCoreConfig{dispatch_core_type});
+            device_id, 1, DEFAULT_L1_SMALL_SIZE, 900 * 1024 * 1024, DispatchCoreConfig{dispatch_core_type});
         CommandQueue& cq = device->command_queue();
 
-        tt_metal::Program program[2];
-        if (!initialize_program(info, device, program[0], info.slow_kernel_cycles)) {
-            if constexpr (std::is_same_v<T, benchmark::State>) {
-                state.SkipWithError("Program creation failed");
-            }
-            tt_metal::CloseDevice(device);
-            return 1;
-        }
-        if (!initialize_program(info, device, program[1], info.fast_kernel_cycles)) {
-            if constexpr (std::is_same_v<T, benchmark::State>) {
-                state.SkipWithError("Program creation failed");
-            }
-            tt_metal::CloseDevice(device);
-            return 1;
-        }
+        // Declare program storage at function scope to ensure proper lifetime
+        std::vector<tt_metal::Program> double_buffer_programs;
+        std::array<tt_metal::Program, 2> standard_programs;
+        ProgramExecutor executor([]() {}, []() {}, 0);  // Initialize with placeholder
 
-        // Cache stuff
-        for (int i = 0; i < info.warmup_iterations; i++) {
-            EnqueueProgram(cq, program[0], false);
-            for (int j = 0; j < info.nfast_kernels; j++) {
-                EnqueueProgram(cq, program[1], false);
-            }
-        }
-
-        auto main_program_loop = [&]() {
-            for (int i = 0; i < info.iterations; i++) {
-                EnqueueProgram(cq, program[0], false);
-                for (int j = 0; j < info.nfast_kernels; j++) {
-                    EnqueueProgram(cq, program[1], false);
+        if (info.test_double_buffering) {
+            auto [programs, extra_counters] = create_double_buffering_programs(info, device, dispatch_core_type);
+            double_buffer_programs = std::move(programs);  // Move to function scope
+            // Store extra counters for later use
+            if constexpr (std::is_same_v<T, benchmark::State>) {
+                if (dump_test_info) {
+                    for (const auto& [key, value] : extra_counters) {
+                        state.counters[key] = benchmark::Counter(value, benchmark::Counter::kDefaults);
+                    }
                 }
             }
-        };
-        uint32_t tid = 0;
-        if (info.use_trace) {
-            tid = BeginTraceCapture(device, cq.id());
-            main_program_loop();
-            EndTraceCapture(device, cq.id(), tid);
-            Finish(cq);
+            executor = create_double_buffering_executor(info, double_buffer_programs, cq);
+        } else {
+            if (!initialize_program(info, device, standard_programs[0], info.slow_kernel_cycles) ||
+                !initialize_program(info, device, standard_programs[1], info.fast_kernel_cycles)) {
+                throw std::runtime_error("Program creation failed");
+            }
+            executor = create_standard_executor(info, standard_programs, cq);
         }
 
-        for (auto _ : state) {
-            auto start = std::chrono::system_clock::now();
-            if (info.use_trace) {
-                EnqueueTrace(cq, tid, false);
-            } else {
-                main_program_loop();
-            }
-            if (info.time_just_finish) {
-                start = std::chrono::system_clock::now();
-            }
-            Finish(cq);
-            auto end = std::chrono::system_clock::now();
+        // Set benchmark counters before timing (all values are known at this point)
+        set_benchmark_counters(state, info, device, executor.total_program_iterations);
 
-            if constexpr (std::is_same_v<T, benchmark::State>) {
-                auto elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(end - start);
-                state.SetIterationTime(elapsed_seconds.count());
-            } else {
-                std::chrono::duration<double> elapsed_seconds = (end - start);
-                log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
-                log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / info.iterations);
-            }
-        }
+        // Run warmup
+        executor.warmup_programs();
 
-        if constexpr (std::is_same_v<T, benchmark::State>) {
-            state.counters["IterationTime"] = benchmark::Counter(
-                info.iterations, benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
-            state.counters["Clock"] = benchmark::Counter(get_tt_npu_clock(device), benchmark::Counter::kDefaults);
-        }
+        // Setup trace if enabled
+        uint32_t tid = setup_trace_if_enabled<T>(info, device, executor);
+
+        // Run benchmark timing loop
+        run_benchmark_timing_loop(state, info, cq, executor, tid);
 
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
@@ -506,6 +661,7 @@ static void Max12288Args(benchmark::internal::Benchmark* b) {
 static void Max8192Args(benchmark::internal::Benchmark* b) {
     b->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192);
 }
+static void Range1KTo8KArgs(benchmark::internal::Benchmark* b) { b->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192); }
 
 static void KernelCycleArgs(benchmark::internal::Benchmark* b) {
     // Dispatch time for most normal kernels is around 3000-4000 cycles.
@@ -728,6 +884,20 @@ BENCHMARK_CAPTURE(
     TestInfo{.warmup_iterations = 5000, .kernel_size = 256, .ncrisc_enabled = false, .trisc_enabled = false, .use_trace = true, .use_all_cores = true})
     ->Apply(KernelCycleArgs)
     ->UseManualTime();
+
+// Double buffering performance test - measures dispatch time with programs 2x cache size
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    double_buffering_cache_miss_test,
+    TestInfo{
+        .iterations = 5000,
+        .warmup_iterations = 1000,
+        .use_trace = true,
+        //.use_all_cores = true,
+        .test_double_buffering = true})
+    ->Apply(Range1KTo8KArgs)
+    ->UseManualTime();
+
 int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "--custom")) {
