@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <numeric>
+#include <tt-logger/tt-logger.hpp>
 #include <vector>
 
 #include "blackhole/bh_hal.hpp"
@@ -103,15 +104,15 @@ void Hal::initialize_bh() {
         std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
 
     this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
+        // Relocation to init space to be copied into local. With base FW offset
+        if ((addr & MEM_AERISC_LOCAL_BASE) == MEM_AERISC_LOCAL_BASE) {
+            return (addr & ~MEM_AERISC_LOCAL_BASE) + local_init_addr;
+        }
+
+        // Normal relocation to init space to be copied into local.
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
-            if (local_init_addr == MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH ||
-                local_init_addr == MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH) {
-                // If this core has base firmware on it, local data has been offset by the base fw local size
-                // so we need to subtract it back out here
-                local_init_addr -= MEM_ERISC_BASE_FW_LOCAL_SIZE;
-            }
-            return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
+            return (addr & ~MEM_AERISC_LOCAL_BASE) + local_init_addr;
         }
 
         // Note: Blackhole does not have IRAM

@@ -86,15 +86,13 @@ inline void wait_subordinate_eriscs() {
     WAYPOINT("SED");
 }
 
+// Copy from init scratch space to local memory
 inline void initialize_local_memory() {
     uint32_t* data_image = (uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
     extern uint32_t __ldm_data_start[];
     extern uint32_t __ldm_data_end[];
     const uint32_t ldm_data_size = (uint32_t)__ldm_data_end - (uint32_t)__ldm_data_start;
     // Copy data from data_image in __ldm_data_start for ldm_data_size bytes
-    for (uint32_t i = 0; i < ldm_data_size; i++) {
-        __ldm_data_start[i] = data_image[i];
-    }
     l1_to_local_mem_copy(__ldm_data_start, data_image, ldm_data_size);
 }
 

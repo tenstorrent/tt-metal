@@ -55,5 +55,4 @@ void _start() {
             ASSERT(erisc_info->channels[i].bytes_sent == 0);
         }
     }
-    return;
 }

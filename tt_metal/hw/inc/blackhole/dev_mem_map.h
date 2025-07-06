@@ -38,10 +38,20 @@
 
 #define MEM_DRAM_SIZE (4177920 * 1024U)
 
+// Local memory for processors WITHOUT base FW
 #define MEM_LOCAL_BASE 0xFFB00000
 #define MEM_BRISC_LOCAL_SIZE (8 * 1024)
 #define MEM_NCRISC_LOCAL_SIZE (8 * 1024)
 #define MEM_TRISC_LOCAL_SIZE (4 * 1024)
+
+// Taken from base fw executable. It places the stack here.
+#define MEM_ERISC_BASE_FW_LOCAL_SIZE 0x610
+#define MEM_ERISC_KERNEL_SIZE (24 * 1024)
+#define MEM_ERISC_RESERVED1 0
+#define MEM_ERISC_RESERVED1_SIZE 1024
+
+// Offset by BASE FW
+#define MEM_AERISC_LOCAL_BASE (MEM_LOCAL_BASE + MEM_ERISC_BASE_FW_LOCAL_SIZE)
 
 // Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
 #define MEM_BANK_TO_NOC_XY_SIZE 1024
@@ -194,11 +204,6 @@
 #define MEM_SUBORDINATE_ERISC_LOCAL_SIZE (8 * 1024)
 #define MEM_ERISC_FIRMWARE_SIZE (24 * 1024)
 #define MEM_SUBORDINATE_ERISC_FIRMWARE_SIZE (24 * 1024)
-// Taken from base fw executable. It places the stack here.
-#define MEM_ERISC_BASE_FW_LOCAL_SIZE 0x610
-#define MEM_ERISC_KERNEL_SIZE (24 * 1024)
-#define MEM_ERISC_RESERVED1 0
-#define MEM_ERISC_RESERVED1_SIZE 1024
 
 /////////////
 // Idle ERISC memory map
