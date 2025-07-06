@@ -355,15 +355,19 @@ static SubdeviceInfo create_subdevices(const std::vector<IDevice*>& devices) {
     return subdevice_info;
 }
 
-
 static Correctness run_output_check(
+    CommandQueue& cq,
     const std::vector<uint32_t>& all_zeros,
     const std::vector<uint32_t>& inputs,
     std::shared_ptr<Buffer>& output_buffer) {
     constexpr bool debug_mode = true;
     std::vector<uint32_t> readback_data_vec(all_zeros.size(), 0);  // init to 0 data for easier debug
 
-    tt_metal::detail::ReadFromBuffer(output_buffer, readback_data_vec);
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        tt_metal::detail::ReadFromBuffer(output_buffer, readback_data_vec);
+    } else {
+        tt_metal::EnqueueReadBuffer(cq, output_buffer, readback_data_vec, true);
+    }
     return run_output_check(inputs, readback_data_vec);
 };
 
@@ -656,7 +660,12 @@ static bool RunLoopbackTest(
             .set_page_size(packet_header_buffer_cb_id, page_size);
     auto packet_header_buffer =
         tt_metal::CreateCircularBuffer(sender_program, worker_cores.at(0), packet_header_buffer_config);
-    tt_metal::detail::WriteToBuffer(output_buffer, all_zeros);
+
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        tt_metal::detail::WriteToBuffer(output_buffer, all_zeros);
+    } else {
+        tt_metal::EnqueueWriteBuffer(receiver_device->command_queue(), output_buffer, all_zeros, true);
+    }
 
     auto local_input_buffer_address = local_input_buffer->address();
     auto output_buffer_address = output_buffer->address();
@@ -700,7 +709,8 @@ static bool RunLoopbackTest(
     bool pass = true;
     constexpr bool enable_check = true;
     if constexpr (enable_check) {
-        pass &= run_output_check(all_zeros, inputs, output_buffer) == Correctness::Correct;
+        pass &= run_output_check(receiver_device->command_queue(), all_zeros, inputs, output_buffer) ==
+                Correctness::Correct;
     }
     return pass;
 }
@@ -827,7 +837,8 @@ static bool RunLineFabricTest(
         for (size_t i = 0; i < output_buffers.size(); i++) {
             bool compare_with_input = (mcast_first_chip <= i && i <= mcast_last_chip);
             auto& golden_tensor = compare_with_input ? inputs : all_zeros;
-            pass &= run_output_check(all_zeros, golden_tensor, output_buffers.at(i)) == Correctness::Correct;
+            pass &= run_output_check(devices[i]->command_queue(), all_zeros, golden_tensor, output_buffers.at(i)) ==
+                    Correctness::Correct;
         }
     }
 
