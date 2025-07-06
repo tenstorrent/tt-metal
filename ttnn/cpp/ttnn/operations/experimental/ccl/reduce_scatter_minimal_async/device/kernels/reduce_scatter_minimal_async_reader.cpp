@@ -105,9 +105,7 @@ void kernel_main() {
 
             if constexpr (!direction) {
                 uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
-
                 for (uint32_t k = 0; k < backwards_offset; ++k) {
-                    tiles_read++;
                     pages_read_in_row++;
                     if (pages_read_in_row == slice_Wt) {
                         row_offset += stride_Wt;
@@ -115,6 +113,7 @@ void kernel_main() {
                     }
                 }
 
+                tiles_read += backwards_offset;
                 intermediate_pages_read_in_row = pages_read_in_row;
                 intermediate_row_offset = row_offset;
             }
@@ -192,7 +191,6 @@ void kernel_main() {
                     }
 
                     for (uint32_t k = 0; k < tiles_to_read_in_other_direction; ++k) {
-                        tiles_read++;
                         pages_read_in_row++;
                         if (pages_read_in_row == slice_Wt) {
                             row_offset += stride_Wt;
@@ -200,6 +198,7 @@ void kernel_main() {
                         }
                     }
 
+                    tiles_read += tiles_to_read_in_other_direction;
                     intermediate_pages_read_in_row = pages_read_in_row;
                     intermediate_row_offset = row_offset;
                 }
