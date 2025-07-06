@@ -69,7 +69,7 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
 }
 
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in0_cb, uint32_t scale_cb, uint32_t rows>
-void reduce_c(uint32_t out_cb, uint32_t cols) {
+void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
@@ -77,28 +77,33 @@ void reduce_c(uint32_t out_cb, uint32_t cols) {
     // Precondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
 
-    reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
-
-    const uint32_t num_tiles = rows * cols;
+    uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
 
+    max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
+    constexpr uint32_t prev_max_dst_idx = 1;
 
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
+        reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
         for (uint32_t j = 0; j < cols; j++) {
             reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
         }
+        reduce_uninit();
+        if (do_eltwise_max) {
+            copy_tile_to_dst_init_short(prev_cb);
+            copy_tile(prev_cb, i, prev_max_dst_idx);
+            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
+        }
 
-        cb_reserve_back(out_cb, 1);
         pack_tile(reduce_dst_idx, out_cb);
-        cb_push_back(out_cb, 1);
         release_dst();
     }
 
-    reduce_uninit();
+    cb_push_back(out_cb, rows);
 }
 
 template <int vector_mode = (int)VectorMode::RC>
@@ -327,7 +332,8 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     }
 }
 
-void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+template <bool pop_in_cb>
+void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Precondition: out_cb has num_tiles free
     // Postcondition: in_cb has num_tiles consumed
@@ -346,7 +352,9 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
         cb_push_back(out_cb, 1);
         release_dst();
     }
-    cb_pop_front(in_cb, num_tiles);
+    if (pop_in_cb) {
+        cb_pop_front(in_cb, num_tiles);
+    }
 }
 
 ALWI void cb_matmul_blocks(

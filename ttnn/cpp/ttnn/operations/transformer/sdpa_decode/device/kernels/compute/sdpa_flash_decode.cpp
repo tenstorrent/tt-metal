@@ -284,12 +284,8 @@ void MAIN {
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_max);
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
-                    cb_cur_max, Sk_chunk_t_dynamic);
+                    cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > 0);
 
-                if (k_chunk > k_chunk_start) {
-                    reconfig_data_format(cb_cur_max, cb_prev_max);
-                    max_block_inplace(cb_cur_max, cb_prev_max, Sq_chunk_t);
-                }
                 /* QK -= cb_cur_max */
                 /* QK = exp(QK)*/
                 reconfig_data_format(cb_qk_im, cb_cur_max);
@@ -300,7 +296,7 @@ void MAIN {
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_sum);
                 reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
-                    cb_cur_sum, Sk_chunk_t_dynamic);
+                    cb_cur_sum, cb_prev_sum, Sk_chunk_t_dynamic);
 
                 /* OUT_IM = QK @ V_CHUNK */
                 pack_reconfig_data_format(cb_out_mm);
@@ -323,6 +319,7 @@ void MAIN {
                 /* OUT_ACC += OUT_IM */
                 if (k_chunk == k_chunk_start) {
                     cb_out_mm = cb_out_im;
+
                 } else {
                     reconfig_data_format(cb_prev_max, cb_cur_max);  // DEBUG
                     pack_reconfig_data_format(cb_exp_max_diff);
@@ -350,15 +347,16 @@ void MAIN {
                 }
 
                 if (k_chunk < k_chunk_end - 1 || do_reduce) {
-                    // Set cb_prev_sum and cb_prev_max
-                    std::swap(cb_cur_max, cb_prev_max);
-                    std::swap(cb_cur_sum, cb_prev_sum);
+                    reconfig_data_format(cb_cur_max, cb_cur_max);  // DEBUG
+                    pack_reconfig_data_format(cb_prev_max);
+                    move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
+                    move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 } else {
                     // Write o, m, l into cb_out
                     reconfig_data_format_srca(cb_out_accumulate_im);
-                    copy_block(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
-                    copy_block(cb_cur_max, cb_out_m, Sq_chunk_t);
-                    copy_block(cb_cur_sum, cb_out_l, Sq_chunk_t);
+                    move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
+                    move_block<true>(cb_cur_max, cb_out_m, Sq_chunk_t);
+                    move_block<true>(cb_cur_sum, cb_out_l, Sq_chunk_t);
                 }
             }
         }
@@ -372,11 +370,12 @@ void MAIN {
             if (k_chunk_end - k_chunk_start < k_num_chunks) {
                 // This indicates that there are computes done by other workers. Needs to wait for them and send to
                 // reducer's compute
+
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
-                    reconfig_data_format_srca(cb_out_o);  // DEBUG
+                    reconfig_data_format(cb_q_in, cb_q_in);  // DEBUG
                     pack_reconfig_data_format(cb_out_accumulate_im_2);
-                    copy_block(cb_out_o, cb_out_accumulate_im_2, q_chunk_tiles);
-                    copy_block(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
+                    move_block<true>(cb_out_o, cb_out_accumulate_im_2, q_chunk_tiles);
+                    move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
                     max_block(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
 
                     // l = torch.exp(m_2 - m) * l_2 + torch.exp(m_1 - m) * l_1
@@ -397,10 +396,8 @@ void MAIN {
 
                     // reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff); // DEBUG
                     // pack_reconfig_data_format(cb_out_accumulate_im);
-
-                    mul_block_bcast_cols(cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im, Sq_chunk_t, DHt);
-                    mul_block_bcast_cols(
-                        cb_out_accumulate_im_2, cb_exp_max_diff_2, cb_out_accumulate_im_2, Sq_chunk_t, DHt);
+                    mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, DHt);
+                    mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, DHt);
 
                     // reconfig_data_format(cb_out_accumulate_im, cb_out_accumulate_im_2);
                     // pack_reconfig_data_format(cb_out_accumulate_im);
@@ -411,8 +408,8 @@ void MAIN {
                     // pack_reconfig_data_format(cb_prev_max);
                     cb_pop_front(cb_prev_max, Sq_chunk_t);
                     cb_pop_front(cb_m_in, Sq_chunk_t);
-                    copy_block(cb_cur_max, cb_prev_max, Sq_chunk_t);
-                    copy_block(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                    move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
+                    move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
             }
 
@@ -424,33 +421,19 @@ void MAIN {
             /* cb_out_accumulate_im *= cb_prev_sum */
             reconfig_data_format(cb_out_accumulate_im, cb_prev_sum);  // DEBUG
             pack_reconfig_data_format(cb_out_accumulate_im);
-
-            mul_block_bcast_cols(cb_out_accumulate_im, cb_prev_sum, cb_out_accumulate_im, Sq_chunk_t, DHt);
+            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_prev_sum, Sq_chunk_t, DHt);
             pack_reconfig_data_format(cb_out_final);
 
             if constexpr (untilize_output) {
-                // if constexpr (use_pack_untilize) {
-                //     pack_untilize_init_short<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final);
-                // } else {
                 untilize_init_short(cb_out_accumulate_im);
-                // }
                 cb_wait_front(cb_out_accumulate_im, out_chunk_tiles);
                 cb_reserve_back(cb_out_final, out_chunk_tiles);
-                // if constexpr (use_pack_untilize) {
-                //     pack_untilize_block<out_chunk_tiles>(cb_out_accumulate_im, 1, cb_out_final);
-                // } else {
                 untilize_block(cb_out_accumulate_im, out_chunk_tiles, cb_out_final);
-                // }
                 cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
                 cb_push_back(cb_out_final, out_chunk_tiles);
-
-                // if constexpr (use_pack_untilize) {
-                //     pack_untilize_uninit(cb_out_final);
-                // } else {
                 untilize_uninit(cb_out_final);
-                // }
             } else {
-                copy_block(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
+                move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
             }
 
             // free up cb_prev_max after K chunks

@@ -338,7 +338,6 @@ def test_llama_tg_ScaledDotProductAttentionDecodeRMQ(
 )
 def test_llama_tg_ScaledDotProductAttentionDecodeSweep(
     device,
-    use_program_cache,
     chunk_sizes,
     cur_positions,
     b,
