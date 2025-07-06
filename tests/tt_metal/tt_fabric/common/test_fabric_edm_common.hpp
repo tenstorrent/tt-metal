@@ -118,36 +118,36 @@ public:
     virtual void TearDown() = 0;
 };
 
-class Fabric1DFixture : public BaseFabricFixture {
-public:
-    std::shared_ptr<MeshDevice> mesh_device_;
+// class Fabric1DDeviceInitFixture : public BaseFabricFixture {
+// public:
+//     std::shared_ptr<MeshDevice> mesh_device_;
 
-    void SetupDevices() override {
-        ValidateEnvironment();
-        const MeshShape cluster_shape = GetDeterminedMeshShape();
-        mesh_device_ = MeshDevice::create(MeshDeviceConfig(cluster_shape));
-        device_open = true;
-    }
+//     void SetupDevices() override {
+//         ValidateEnvironment();
+//         const MeshShape cluster_shape = GetDeterminedMeshShape();
+//         mesh_device_ = MeshDevice::create(MeshDeviceConfig(cluster_shape));
+//         device_open = true;
+//     }
 
-    void TearDown() override {
-        if (device_open) {
-            tt::tt_metal::CloseDevice(mesh_device_.get());
-            device_open = false;
-        }
-    }
+//     void TearDown() override {
+//         if (device_open) {
+//             tt::tt_metal::CloseDevice(mesh_device_.get());
+//             device_open = false;
+//         }
+//     }
 
-    Fabric1DFixture() : BaseFabricFixture() { this->SetupDevices(); }
+//     Fabric1DDeviceInitFixture() : BaseFabricFixture() { this->SetupDevices(); }
 
-    Fabric1DFixture(
-        tt::tt_metal::FabricConfig fabric_config,
-        tt::tt_metal::FabricReliabilityMode reliability_mode =
-            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
-        BaseFabricFixture(fabric_config, reliability_mode) {
-        this->SetupDevices();
-    }
+//     Fabric1DDeviceInitFixture(
+//         tt::tt_metal::FabricConfig fabric_config,
+//         tt::tt_metal::FabricReliabilityMode reliability_mode =
+//             tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
+//         BaseFabricFixture(fabric_config, reliability_mode) {
+//         this->SetupDevices();
+//     }
 
-    ~Fabric1DFixture() override { TearDown(); }
-};
+//     ~Fabric1DDeviceInitFixture() override { TearDown(); }
+// };
 
 class Fabric1DDeviceInitFixture {
 public:
@@ -177,12 +177,6 @@ public:
         if (num_devices_ < 2) {
             TT_THROW("This suite can only be run on 2+ device systems");
         }
-
-        // if (!(arch_ == tt::ARCH::WORMHOLE_B0 && num_devices_ >= 8 &&
-        //       (tt::tt_metal::GetNumPCIeDevices() == 4 || tt::tt_metal::GetNumPCIeDevices() ==
-        //       GALAXY_6U_NUM_DEVICES))) {
-        //     TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
-        // }
     }
 
     void SetupDevices() {
@@ -253,14 +247,14 @@ public:
     }
 };
 
-class Fabric1DLineDeviceInitFixture : public Fabric1DFixture {
+class Fabric1DLineDeviceInitFixture : public Fabric1DDeviceInitFixture {
 public:
-    Fabric1DLineDeviceInitFixture() : Fabric1DFixture(tt::tt_metal::FabricConfig::FABRIC_1D) {}
+    Fabric1DLineDeviceInitFixture() : Fabric1DDeviceInitFixture(tt::tt_metal::FabricConfig::FABRIC_1D) {}
 };
 
-class Fabric1DRingDeviceInitFixture : public Fabric1DFixture {
+class Fabric1DRingDeviceInitFixture : public Fabric1DDeviceInitFixture {
 public:
-    Fabric1DRingDeviceInitFixture() : Fabric1DFixture(tt::tt_metal::FabricConfig::FABRIC_1D_RING) {}
+    Fabric1DRingDeviceInitFixture() : Fabric1DDeviceInitFixture(tt::tt_metal::FabricConfig::FABRIC_1D_RING) {}
 };
 class Fabric1DRingStrictDeviceInitFixture : public Fabric1DDeviceInitFixture {
 public:
@@ -1225,10 +1219,10 @@ static std::vector<IDevice*> generate_default_line_fabric_under_test(
         // Choosing pcie devices so that more links are supported. More links == more (likelihood of) congestion.
         if (line_size <= 4) {
             devices_ = {
+                view.get_device(MeshCoordinate(0, 0)),
                 view.get_device(MeshCoordinate(0, 1)),
                 view.get_device(MeshCoordinate(0, 2)),
-                view.get_device(MeshCoordinate(1, 2)),
-                view.get_device(MeshCoordinate(1, 1))};
+                view.get_device(MeshCoordinate(0, 3))};
         } else {
             devices_ = {
                 view.get_device(MeshCoordinate(0, 0)),
@@ -1284,13 +1278,13 @@ static std::vector<std::vector<IDevice*>> generate_line_fabrics_under_test(
 }
 
 template <typename FABRIC_DEVICE_FIXTURE>
-void create_fabric_fixture(std::unique_ptr<Fabric1DFixture>& test_fixture, bool use_galaxy) {
+void create_fabric_fixture(std::unique_ptr<Fabric1DDeviceInitFixture>& test_fixture, bool use_galaxy) {
     auto fixture_recreate_needed = []() -> bool {
         auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
         return (
             // prev not Fabric1D, now Fabric1D
             (fabric_config != tt::tt_metal::FabricConfig::DISABLED &&
-             std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DFixture>) ||
+             std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DDeviceInitFixture>) ||
             // prev not Fabric1DLine, now Fabric1DLine
             (fabric_config != tt::tt_metal::FabricConfig::FABRIC_1D &&
              std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DLineDeviceInitFixture>) ||
@@ -1538,9 +1532,9 @@ static tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_helper(Fabr
     }
 }
 
-template <typename FABRIC_DEVICE_FIXTURE = Fabric1DFixture>
+template <typename FABRIC_DEVICE_FIXTURE = Fabric1DDeviceInitFixture>
 void Run1DFabricPacketSendTest(
-    std::unique_ptr<Fabric1DFixture>& test_fixture,
+    std::unique_ptr<Fabric1DDeviceInitFixture>& test_fixture,
     const std::vector<Fabric1DPacketSendTestSpec>& test_specs,
     const WriteThroughputStabilityTestWithPersistentFabricParams& params = {},
     size_t fabric_context_switch_interval =
@@ -2383,9 +2377,9 @@ static std::vector<CoreCoord> setup_worker_core_coords(
     return worker_cores_vec;
 }
 
-template <typename FABRIC_DEVICE_FIXTURE = Fabric1DFixture>
+template <typename FABRIC_DEVICE_FIXTURE = Fabric1DDeviceInitFixture>
 void Run1DFullMeshFabricPacketSendTest(
-    std::unique_ptr<Fabric1DFixture>& test_fixture_,
+    std::unique_ptr<Fabric1DDeviceInitFixture>& test_fixture_,
     const Fabric1DPacketSendTestSpec& test_specs,
     const FullMeshTestParams& params = {},
     size_t fabric_context_switch_interval =
@@ -2615,7 +2609,7 @@ static void RunWriteThroughputStabilityTestWithPersistentFabric(
     auto params_copy = params;
     params_copy.num_links = num_links;
     params_copy.num_op_invocations = num_op_invocations;
-    std::unique_ptr<Fabric1DFixture> test_fixture = nullptr;
+    std::unique_ptr<Fabric1DDeviceInitFixture> test_fixture = nullptr;
     Run1DFabricPacketSendTest(test_fixture, test_specs, params_copy, 0);
 }
 
