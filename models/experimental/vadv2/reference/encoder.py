@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
 import torch
 import numpy as np
 import torch.nn as nn
@@ -163,24 +166,6 @@ class BEVFormerEncoder(nn.Module):
         shift=0.0,
         **kwargs,
     ):
-        """Forward function for `TransformerDecoder`.
-        Args:
-            bev_query (Tensor): Input BEV query with shape
-                `(num_query, bs, embed_dims)`.
-            key & value (Tensor): Input multi-cameta features with shape
-                (num_cam, num_value, bs, embed_dims)
-            reference_points (Tensor): The reference
-                points of offset. has shape
-                (bs, num_query, 4) when as_two_stage,
-                otherwise has shape ((bs, num_query, 2).
-            valid_ratios (Tensor): The radios of valid
-                points on the feature map, has shape
-                (bs, num_levels, 2)
-        Returns:
-            Tensor: Results with shape [1, num_query, bs, embed_dims] when
-                return_intermediate is `False`, otherwise it has shape
-                [num_layers, num_query, bs, embed_dims].
-        """
         output = bev_query
         intermediate = []
 

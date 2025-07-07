@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
 import torch
 import torch.nn as nn
 from torch.nn import LayerNorm
@@ -9,26 +12,6 @@ import math
 
 
 def multi_scale_deformable_attn_pytorch(value, value_spatial_shapes, sampling_locations, attention_weights):
-    """CPU version of multi-scale deformable attention.
-
-    Args:
-        value (Tensor): The value has shape
-            (bs, num_keys, mum_heads, embed_dims//num_heads)
-        value_spatial_shapes (Tensor): Spatial shape of
-            each feature map, has shape (num_levels, 2),
-            last dimension 2 represent (h, w)
-        sampling_locations (Tensor): The location of sampling points,
-            has shape
-            (bs ,num_queries, num_heads, num_levels, num_points, 2),
-            the last dimension 2 represent (x, y).
-        attention_weights (Tensor): The weight of sampling points used
-            when calculate the attention, has shape
-            (bs ,num_queries, num_heads, num_levels, num_points),
-
-    Returns:
-        Tensor: has shape (bs, num_queries, embed_dims)
-    """
-
     bs, _, num_heads, embed_dims = value.shape
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
     value_list = value.split([H_ * W_ for H_, W_ in value_spatial_shapes], dim=1)
@@ -64,18 +47,6 @@ def multi_scale_deformable_attn_pytorch(value, value_spatial_shapes, sampling_lo
 
 
 def inverse_sigmoid(x, eps=1e-5):
-    """Inverse function of sigmoid.
-
-    Args:
-        x (Tensor): The tensor to do the
-            inverse.
-        eps (float): EPS avoid numerical
-            overflow. Defaults 1e-5.
-    Returns:
-        Tensor: The x has passed the inverse
-            function of sigmoid, has same
-            shape with input.
-    """
     x = x.clamp(min=0, max=1)
     x1 = x.clamp(min=eps)
     x2 = (1 - x).clamp(min=eps)
@@ -83,27 +54,6 @@ def inverse_sigmoid(x, eps=1e-5):
 
 
 class MultiheadAttention(nn.Module):
-    """A wrapper for ``torch.nn.MultiheadAttention``.
-
-    This module implements MultiheadAttention with identity connection,
-    and positional encoding  is also passed as input.
-
-    Args:
-        embed_dims (int): The embedding dimension.
-        num_heads (int): Parallel attention heads.
-        attn_drop (float): A Dropout layer on attn_output_weights.
-            Default: 0.0.
-        proj_drop (float): A Dropout layer after `nn.MultiheadAttention`.
-            Default: 0.0.
-        dropout_layer (obj:`ConfigDict`): The dropout_layer used
-            when adding the shortcut.
-        init_cfg (obj:`mmcv.ConfigDict`): The Config for initialization.
-            Default: None.
-        batch_first (bool): When it is True,  Key, Query and Value are shape of
-            (batch, n, embed_dim), otherwise (n, batch, embed_dim).
-             Default to False.
-    """
-
     def __init__(
         self,
         embed_dims,
@@ -227,32 +177,6 @@ class MultiheadAttention(nn.Module):
 
 
 class CustomMSDeformableAttention(nn.Module):
-    """An attention module used in Deformable-Detr.
-
-    `Deformable DETR: Deformable Transformers for End-to-End Object Detection.
-    <https://arxiv.org/pdf/2010.04159.pdf>`_.
-
-    Args:
-        embed_dims (int): The embedding dimension of Attention.
-            Default: 256.
-        num_heads (int): Parallel attention heads. Default: 64.
-        num_levels (int): The number of feature map used in
-            Attention. Default: 4.
-        num_points (int): The number of sampling points for
-            each query in each head. Default: 4.
-        im2col_step (int): The step used in image_to_column.
-            Default: 64.
-        dropout (float): A Dropout layer on `inp_identity`.
-            Default: 0.1.
-        batch_first (bool): Key, Query and Value are shape of
-            (batch, n, embed_dim)
-            or (n, batch, embed_dim). Default to False.
-        norm_cfg (dict): Config dict for normalization layer.
-            Default: None.
-        init_cfg (obj:`mmcv.ConfigDict`): The Config for initialization.
-            Default: None.
-    """
-
     def __init__(
         self,
         embed_dims=256,
@@ -313,42 +237,6 @@ class CustomMSDeformableAttention(nn.Module):
         flag="decoder",
         **kwargs,
     ):
-        """Forward Function of MultiScaleDeformAttention.
-
-        Args:
-            query (Tensor): Query of Transformer with shape
-                (num_query, bs, embed_dims).
-            key (Tensor): The key tensor with shape
-                `(num_key, bs, embed_dims)`.
-            value (Tensor): The value tensor with shape
-                `(num_key, bs, embed_dims)`.
-            identity (Tensor): The tensor used for addition, with the
-                same shape as `query`. Default None. If None,
-                `query` will be used.
-            query_pos (Tensor): The positional encoding for `query`.
-                Default: None.
-            key_pos (Tensor): The positional encoding for `key`. Default
-                None.
-            reference_points (Tensor):  The normalized reference
-                points with shape (bs, num_query, num_levels, 2),
-                all elements is range in [0, 1], top-left (0,0),
-                bottom-right (1, 1), including padding area.
-                or (N, Length_{query}, num_levels, 4), add
-                additional two dimensions is (w, h) to
-                form reference boxes.
-            key_padding_mask (Tensor): ByteTensor for `query`, with
-                shape [bs, num_key].
-            spatial_shapes (Tensor): Spatial shape of features in
-                different levels. With shape (num_levels, 2),
-                last dimension represents (h, w).
-            level_start_index (Tensor): The start index of each level.
-                A tensor has shape ``(num_levels, )`` and can be represented
-                as [0, h_0*w_0, h_0*w_0+h_1*w_1, ...].
-
-        Returns:
-             Tensor: forwarded results with shape [num_query, bs, embed_dims].
-        """
-
         if value is None:
             value = query
 
@@ -545,7 +433,7 @@ class MapDetectionTransformerDecoder(nn.Module):
                 reference_points=reference_points_input,
                 spatial_shapes=spatial_shapes,
             )
-            # output = output.permute(1, 0, 2)
+            output = output.permute(1, 0, 2)
 
             if reg_branches is not None:
                 tmp = reg_branches[lid](output)
@@ -560,7 +448,7 @@ class MapDetectionTransformerDecoder(nn.Module):
 
                 reference_points = new_reference_points.detach()
 
-            # output = output.permute(1, 0, 2)
+            output = output.permute(1, 0, 2)
             if self.return_intermediate:
                 intermediate.append(output)
                 intermediate_reference_points.append(reference_points)
@@ -574,13 +462,6 @@ class MapDetectionTransformerDecoder(nn.Module):
 
 
 class DetectionTransformerDecoder(nn.Module):
-    """Implements the decoder in DETR3D transformer.
-    Args:
-        return_intermediate (bool): Whether to return intermediate outputs.
-        coder_norm_cfg (dict): Config of last normalization layer. Default：
-            `LN`.
-    """
-
     def __init__(self, num_layers, embed_dim, num_heads):
         super(DetectionTransformerDecoder, self).__init__()
         self.return_intermediate = True
@@ -626,23 +507,6 @@ class DetectionTransformerDecoder(nn.Module):
         cls_branches=None,
         **kwargs,
     ):
-        """Forward function for `Detr3DTransformerDecoder`.
-        Args:
-            query (Tensor): Input query with shape
-                `(num_query, bs, embed_dims)`.
-            reference_points (Tensor): The reference
-                points of offset. has shape
-                (bs, num_query, 4) when as_two_stage,
-                otherwise has shape ((bs, num_query, 2).
-            reg_branch: (obj:`nn.ModuleList`): Used for
-                refining the regression results. Only would
-                be passed when with_box_refine is True,
-                otherwise would be passed a `None`.
-        Returns:
-            Tensor: Results with shape [1, num_query, bs, embed_dims] when
-                return_intermediate is `False`, otherwise it has shape
-                [num_layers, num_query, bs, embed_dims].
-        """
         output = query
         intermediate = []
         intermediate_reference_points = []
@@ -683,12 +547,6 @@ class DetectionTransformerDecoder(nn.Module):
 
 
 class CustomTransformerDecoder(nn.Module):
-    """Implements the decoder in DETR3D transformer.
-    Args:
-        return_intermediate (bool): Whether to return intermediate outputs.
-        coder_norm_cfg (dict): Config of last normalization layer. Default: `LN`.
-    """
-
     def __init__(self, num_layers, return_intermediate=False, embed_dim=256, num_heads=8):
         super(CustomTransformerDecoder, self).__init__()
         self.return_intermediate = return_intermediate
