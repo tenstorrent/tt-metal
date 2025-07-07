@@ -585,13 +585,21 @@ jobs:
 
           if [ "$SHOULD_RUN_WORMHOLE" = true ]; then
             echo "🔍 Checking latest All Post Commit Workflows run..."
-            LATEST_RUN_DATA=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json conclusion,databaseId,url --jq '.[0] // {}')
+
+            # Get PR creation time to filter runs created after PR
+            PR_CREATED_AT=$(gh pr view "$PR_NUMBER" --json createdAt --jq '.createdAt' --repo "${{ github.repository }}")
+            echo "PR created at: $PR_CREATED_AT"
+
+            # Get workflow runs created after PR creation time
+            LATEST_RUN_DATA=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json conclusion,databaseId,url,createdAt --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | .[0] // {}")
             LATEST_CONCLUSION=$(echo "$LATEST_RUN_DATA" | jq -r '.conclusion // "none"')
 
             if [ "$LATEST_CONCLUSION" != "none" ]; then
               CHECKED_WORKFLOWS=$((CHECKED_WORKFLOWS + 1))
               RUN_ID=$(echo "$LATEST_RUN_DATA" | jq -r '.databaseId // ""')
               RUN_URL=$(echo "$LATEST_RUN_DATA" | jq -r '.url // ""')
+              RUN_CREATED_AT=$(echo "$LATEST_RUN_DATA" | jq -r '.createdAt // ""')
+              echo "Found WH run created at: $RUN_CREATED_AT"
 
               if [ "$LATEST_CONCLUSION" != "success" ]; then
                 echo "❌ All Post Commit Workflows latest run: $LATEST_CONCLUSION"
@@ -602,21 +610,25 @@ jobs:
                 SUCCEEDED_WORKFLOWS+=("**All Post Commit Workflows**: [View run]($RUN_URL)")
               fi
             else
-              echo "❌ All Post Commit Workflows should have run but no runs found on this branch"
-              FAILED_WORKFLOWS+=("**All Post Commit Workflows**: No runs found on this branch")
+              echo "❌ All Post Commit Workflows should have run but no runs found after PR creation"
+              FAILED_WORKFLOWS+=("**All Post Commit Workflows**: No runs found after PR creation")
               ALL_PASSED=false
             fi
           fi
 
           if [ "$SHOULD_RUN_BLACKHOLE" = true ]; then
             echo "🔍 Checking latest Blackhole Post Commit run..."
-            LATEST_RUN_DATA=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json conclusion,databaseId,url --jq '.[0] // {}')
+
+            # Get workflow runs created after PR creation time
+            LATEST_RUN_DATA=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json conclusion,databaseId,url,createdAt --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | .[0] // {}")
             LATEST_CONCLUSION=$(echo "$LATEST_RUN_DATA" | jq -r '.conclusion // "none"')
 
             if [ "$LATEST_CONCLUSION" != "none" ]; then
               CHECKED_WORKFLOWS=$((CHECKED_WORKFLOWS + 1))
               RUN_ID=$(echo "$LATEST_RUN_DATA" | jq -r '.databaseId // ""')
               RUN_URL=$(echo "$LATEST_RUN_DATA" | jq -r '.url // ""')
+              RUN_CREATED_AT=$(echo "$LATEST_RUN_DATA" | jq -r '.createdAt // ""')
+              echo "Found BH run created at: $RUN_CREATED_AT"
 
               if [ "$LATEST_CONCLUSION" != "success" ]; then
                 echo "❌ Blackhole Post Commit latest run: $LATEST_CONCLUSION"
@@ -627,8 +639,8 @@ jobs:
                 SUCCEEDED_WORKFLOWS+=("**Blackhole Post Commit**: [View run]($RUN_URL)")
               fi
             else
-              echo "❌ Blackhole Post Commit should have run but no runs found on this branch"
-              FAILED_WORKFLOWS+=("**Blackhole Post Commit**: No runs found on this branch")
+              echo "❌ Blackhole Post Commit should have run but no runs found after PR creation"
+              FAILED_WORKFLOWS+=("**Blackhole Post Commit**: No runs found after PR creation")
               ALL_PASSED=false
             fi
           fi
@@ -735,9 +747,13 @@ jobs:
           if [ "${{ needs.trigger-and-monitor-workflows.result }}" = "skipped" ]; then
             TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ℹ️ **No architecture-specific tests required** - No Wormhole or Blackhole tests were run"
           else
+            # Get PR creation time to filter runs created after PR
+            PR_CREATED_AT=$(gh pr view "$PR_NUMBER" --json createdAt --jq '.createdAt' --repo "${{ github.repository }}")
+            echo "PR created at: $PR_CREATED_AT"
+
             # Post-commit jobs should have run, get their actual results
             if [ "${{ needs.llk-submodule-uplift.outputs.should-run-wormhole }}" = "true" ]; then
-              WH_RUN=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json databaseId,url,conclusion --jq '.[0]' --repo "${{ github.repository }}")
+              WH_RUN=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json databaseId,url,conclusion,createdAt --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | .[0] // {}" --repo "${{ github.repository }}")
               WH_URL=$(echo "$WH_RUN" | jq -r '.url // ""')
               WH_CONCLUSION=$(echo "$WH_RUN" | jq -r '.conclusion // ""')
               if [ "$WH_CONCLUSION" = "success" ]; then
@@ -748,7 +764,7 @@ jobs:
             fi
 
             if [ "${{ needs.llk-submodule-uplift.outputs.should-run-blackhole }}" = "true" ]; then
-              BH_RUN=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json databaseId,url,conclusion --jq '.[0]' --repo "${{ github.repository }}")
+              BH_RUN=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json databaseId,url,conclusion,createdAt --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | .[0] // {}" --repo "${{ github.repository }}")
               BH_URL=$(echo "$BH_RUN" | jq -r '.url // ""')
               BH_CONCLUSION=$(echo "$BH_RUN" | jq -r '.conclusion // ""')
               if [ "$BH_CONCLUSION" = "success" ]; then
