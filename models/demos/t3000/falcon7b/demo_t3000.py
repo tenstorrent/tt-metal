@@ -34,6 +34,7 @@ from models.utility_functions import is_wormhole_b0
     ],
 )
 @pytest.mark.parametrize("mesh_device", (1, 2, 3, 4, 5, 6, 7, 8), indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_demo_multichip(
     perf_mode,  # Option to measure perf using max seq length (with invalid outputs) and expected perf (t/s)
     max_seq_len,

@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.t3000.falcon40b.tt.falcon_ccl import TT_CCL
 from models.demos.t3000.falcon40b.tt.falcon_mlp import TtFalconMLP
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 from models.utility_functions import skip_for_grayskull
@@ -63,8 +64,10 @@ def run_test_FalconMLP_inference(
     pytorch_out = pytorch_FalconMLP_model(mlp_input)
     # TT hardware execution -------------------------------------------------------------
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_FalconMLP_model = TtFalconMLP(
         mesh_device,
+        tt_ccl,
         state_dict,
         base_url,
         layer_num,
@@ -87,6 +90,8 @@ def run_test_FalconMLP_inference(
     # check outputs ----------------------------------------------------------------------
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out_tensor, pcc)
     logger.info(f"PCC value: {output_pcc}")
+
+    tt_ccl.close()
 
     if does_pass:
         logger.info("Falcon MLP output Passed!")
@@ -127,6 +132,7 @@ def run_test_FalconMLP_inference(
     ],
     ids=("BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM", "BFLOAT16-DRAM"),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_FalconMLP_inference(
     num_devices,
     model_version,

@@ -571,6 +571,7 @@ def run_falcon_demo_kv(
 @pytest.mark.parametrize("perf_mode", (False,))  # Option to measure perf using max seq length (with invalid outputs)
 @pytest.mark.parametrize("greedy_sampling", (False,))
 @pytest.mark.parametrize("max_seq_len", (128,))
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_demo(
     perf_mode,
     greedy_sampling,

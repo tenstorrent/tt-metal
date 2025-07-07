@@ -11,6 +11,7 @@ from models.demos.t3000.falcon40b.tt.model_config import model_config_entries
 
 
 @pytest.mark.parametrize("max_seq_len", (128,))
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_demo_generate_reference_output(
     max_seq_len, model_location_generator, get_tt_cache_path, t3k_mesh_device, is_ci_env
 ):
@@ -41,6 +42,7 @@ def test_demo_generate_reference_output(
 
 
 @pytest.mark.parametrize("max_seq_len", (128,))
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_demo(
     max_seq_len,
     model_location_generator,

@@ -15,6 +15,7 @@ class TtFalconMLP:
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         base_url,
         layer_num,
@@ -26,6 +27,7 @@ class TtFalconMLP:
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.hidden_size = hidden_size
         self.model_config = model_config
 
@@ -115,18 +117,13 @@ class TtFalconMLP:
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
 
-        hidden_states = ttnn.sharded_to_interleaved(hidden_states, memory_config=self.model_config["DEFAULT_MEMCFG"])
-
-        hidden_states = ttnn.reduce_scatter(
+        hidden_states = ttnn.experimental.reduce_scatter_minimal_async(
             hidden_states,
             dim=3,
-            math_op=ttnn.ReduceType.Sum,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
             num_links=1,  # only unidirectional supported for now
-            memory_config=self.model_config["DEFAULT_MEMCFG"],
-        )
-
-        hidden_states = ttnn.interleaved_to_sharded(
-            hidden_states, self.model_config["MLP_REDUCE_SCATTER_OUTPUT_MEMCFG"]
+            memory_config=self.model_config["MLP_REDUCE_SCATTER_OUTPUT_MEMCFG"],
+            subdevice_id=self.tt_ccl.worker_sub_device_id,
         )
 
         # return TT Tensor
@@ -185,10 +182,11 @@ class TtFalconMLP:
         if should_deallocate_ln_tensors:
             x.deallocate(True)
 
-        return ttnn.reduce_scatter(
+        return ttnn.experimental.reduce_scatter_minimal_async(
             self.output,
             dim=3,
-            math_op=ttnn.ReduceType.Sum,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
             num_links=1,  # only one link supported for now
             memory_config=self.model_config["DEFAULT_MEMCFG"],
+            subdevice_id=self.tt_ccl.worker_sub_device_id,
         )
