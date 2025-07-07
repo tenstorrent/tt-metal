@@ -84,7 +84,7 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
     };
 
     bool math_approx_mode = false;
-    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
         core_group_1,
@@ -99,7 +99,7 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
             1                            // per_core_block_size
         };
 
-        auto eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
             core_group_2,
