@@ -418,10 +418,10 @@ class TtMixtralAttention(LightweightModule):
         output_11BH_gathered = ttnn.experimental.all_gather_async(
             output_11SH,
             dim=1,
-            multi_device_global_semaphore=self.multi_device_global_semaphore_handles[:2],
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=1,
             memory_config=output_11SH.memory_config(),
-            subdevice_id=self.worker_sub_device_id,
+            subdevice_id=self.tt_ccl.worker_sub_device_id,
         )
         output_11SH.deallocate(True)
         output_11BH_reduced = ttnn.experimental.fast_reduce_nc(
