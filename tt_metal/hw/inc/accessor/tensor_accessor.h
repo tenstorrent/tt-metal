@@ -73,9 +73,10 @@ public:
         // Check that page_id is within bounds
         ASSERT(page_id < dspec().tensor_volume());
         if (dspec().rank() >= 4) {
-            return get_bank_and_offset_rank4_or_more(page_id);
+            return get_bank_and_offset_from_page_id(page_id);
         }
 
+        // Calculate the page coordinate in the tensor
         typename DSpec::Shape page_coord;
         if constexpr (!DSpec::has_static_rank) {
             // If rank is not known at compile time, we need to use the _page_coord buffer for span
@@ -132,7 +133,7 @@ private:
             bank_base_address + page_mapping.bank_page_offset * page_size + offset);
     }
 
-    PageMapping get_bank_and_offset_rank4_or_more(uint32_t page_id) const {
+    PageMapping get_bank_and_offset_from_page_id(uint32_t page_id) const {
         size_t flattened_shard_id = 0;
         size_t page_offset_within_shard = 0;
         for (int i = dspec().rank() - 1; i >= 0; --i) {
