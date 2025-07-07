@@ -115,11 +115,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("gelu_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("gelu_tile<{1}u>({0});", idst, (uint32_t)param0)};
             break;
-        case UnaryOpType::RSQRT:
-            op_init_and_name = {
-                fmt::format("rsqrt_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("rsqrt_tile<{1}u>({0});", idst, (uint32_t)param0)};
-            break;
         case UnaryOpType::HEAVISIDE:
             op_init_and_name = {
                 "heaviside_tile_init();",
