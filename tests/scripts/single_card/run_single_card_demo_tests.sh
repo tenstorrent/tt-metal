@@ -315,9 +315,9 @@ run_yolov7_demo() {
 
 }
 
-run_yolov6l_perf() {
-
-  pytest --disable-warnings models/demos/yolov6l/demo/demo.py
+run_yolov6l_demo() {
+  # yolov6 demo
+  pytest models/demos/yolov6l/demo/demo.py
 
 }
 
