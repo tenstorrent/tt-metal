@@ -105,9 +105,6 @@ class TtDecoder(nn.Module):
         B, C, H, W = input_shape
         hidden_states = sample
 
-        if self.conv_in_slice_config is not None:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
         [hidden_states, [H, W], [self.tt_conv_in_weights, self.tt_conv_in_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv_in_weights,
@@ -132,16 +129,11 @@ class TtDecoder(nn.Module):
         )
         C = self.conv_in_params["output_channels"]
 
-        if self.conv_in_slice_config is not None:
-            hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-
         logger.info("Starting mid-block")
         hidden_states, [C, H, W] = self.mid_block.forward(hidden_states, [B, C, H, W])
 
         for idx, up_block in enumerate(self.up_blocks):
             logger.info(f"Starting {idx}. up-block")
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
             hidden_states, [C, H, W] = up_block.forward(hidden_states, [B, C, H, W])
 
         logger.info("Executing out ops")
@@ -159,12 +151,8 @@ class TtDecoder(nn.Module):
             num_out_blocks=self.norm_blocks,
         )
 
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.silu(hidden_states)
 
-        if self.conv_out_slice_config is not None:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
         [hidden_states, [H, W], [self.tt_conv_out_weights, self.tt_conv_out_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv_out_weights,

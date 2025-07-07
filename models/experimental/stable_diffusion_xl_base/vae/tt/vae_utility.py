@@ -10,8 +10,8 @@ def get_DRAM_GN_config(module_path, idx):
     if module_path is None:
         core_x = 4
         core_y = 4
-        num_out_blocks = 128
-    elif "mid_block" in module_path:
+        num_out_blocks = 96
+    elif "mid_block" in module_path or "up_blocks.0" in module_path:
         core_y = 4
         num_out_blocks = 4
     else:
@@ -19,23 +19,20 @@ def get_DRAM_GN_config(module_path, idx):
         block_id = int(parts[parts.index("up_blocks") + 1])
         resnet_id = int(parts[parts.index("resnets") + 1])
 
-        if block_id == 0:
-            core_y = 4
-            num_out_blocks = 4
-        elif block_id == 1:
+        if block_id == 1:
             core_y = 8
             num_out_blocks = 4
         elif block_id == 2:
             core_y = 8
-            num_out_blocks = 16
+            num_out_blocks = 12
         else:
             if idx == 1 and resnet_id == 0:
                 core_y = 8
-                num_out_blocks = 64
+                num_out_blocks = 48
             else:
                 core_x = 4
                 core_y = 4
-                num_out_blocks = 128
+                num_out_blocks = 96
 
     return core_x, core_y, num_out_blocks
 
