@@ -57,7 +57,7 @@ public:
         return get_noc_addr(get_bank_and_offset(page_id), offset, noc);
     }
 
-    template <typename ArrType, std::enable_if_t<detail::has_subscript_operator_v<ArrType>, int> = 0>
+    template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
     FORCE_INLINE std::uint64_t get_noc_addr(
         const ArrType page_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         return get_noc_addr(get_bank_and_offset(page_coord), offset, noc);
@@ -65,8 +65,8 @@ public:
 
     // Helpers
     struct PageMapping {
-        uint32_t bank_id;
-        uint32_t bank_page_offset;
+        size_t bank_id;
+        size_t bank_page_offset;
     };
 
     PageMapping get_bank_and_offset(uint32_t page_id) const {
