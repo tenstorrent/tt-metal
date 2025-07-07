@@ -5,7 +5,6 @@
 #pragma once
 
 #include <unordered_set>
-#include <functional>
 
 #include <tt_stl/span.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
