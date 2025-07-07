@@ -8,6 +8,7 @@ from loguru import logger
 import ttnn
 from models.demos.t3000.mixtral8x7b.reference.model import Attention, precompute_freqs_cis
 from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
+from models.demos.t3000.mixtral8x7b.tt.mixtral_ccl import TT_CCL
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
@@ -29,6 +30,7 @@ from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
     ),
 )
 @torch.no_grad()
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_mixtral_attention_inference(t3k_mesh_device, reset_seeds, seq_len):
     pcc = 0.99
     dtype = ttnn.bfloat8_b
@@ -57,7 +59,8 @@ def test_mixtral_attention_inference(t3k_mesh_device, reset_seeds, seq_len):
     )
 
     # Load ttnn model
-    tt_model = TtMixtralAttention(t3k_mesh_device, state_dict, args=model_args, layer_num=0, dtype=dtype)
+    tt_ccl = TT_CCL(t3k_mesh_device)
+    tt_model = TtMixtralAttention(t3k_mesh_device, tt_ccl, state_dict, args=model_args, layer_num=0, dtype=dtype)
 
     generation_start_pos = 0
     generation_length = 3
@@ -126,6 +129,8 @@ def test_mixtral_attention_inference(t3k_mesh_device, reset_seeds, seq_len):
             else:
                 logger.warning(f"{current_cache} Failed! PCC value is lower than {pcc}")
                 all_tests_pass = False
+
+    tt_ccl.close()
 
     if all_tests_pass:
         logger.info("Mixtral Attention output Passed!")

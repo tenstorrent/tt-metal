@@ -10,9 +10,10 @@ from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
 class TtMoeLayer(LightweightModule):
-    def __init__(self, mesh_device, state_dict, experts, args, layer_num, dtype):
+    def __init__(self, mesh_device, tt_ccl, state_dict, experts, args, layer_num, dtype):
         super().__init__()
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.experts = experts
         self.args = args
         self.dtype = dtype
@@ -131,7 +132,13 @@ class TtMoeLayer(LightweightModule):
 
         # All gather
         if mode == "prefill":
-            output_11BH_gathered = ttnn.all_gather(results_11BH, dim=1, num_links=1)
+            output_11BH_gathered = ttnn.experimental.all_gather_async(
+                results_11BH,
+                dim=1,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                subdevice_id=self.tt_ccl.worker_sub_device_id,
+            )
             results_11BH.deallocate(True)
             # Sum reduction
             output_11BH_reduced = ttnn.experimental.fast_reduce_nc(
@@ -139,7 +146,13 @@ class TtMoeLayer(LightweightModule):
             )
             output_11BH_gathered.deallocate(True)
         else:  # Decode mode
-            output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)
+            output_11BH_gathered = ttnn.experimental.all_gather_async(
+                results_11BH,
+                dim=2,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                subdevice_id=self.tt_ccl.worker_sub_device_id,
+            )
             results_11BH.deallocate(True)
             # Reduction
             output_11BH_reduced = ttnn.matmul(
