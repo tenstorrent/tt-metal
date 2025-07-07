@@ -109,7 +109,8 @@ tt::tt_metal::Tensor transform_type(const tt::tt_metal::Tensor& input_tensor, co
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));
 
-    return Tensor(std::move(output_storage), spec, input_tensor.distributed_tensor_config());
+    return Tensor(
+        std::move(output_storage), spec, input_tensor.distributed_tensor_config(), input_tensor.tensor_topology());
 }
 
 }  // namespace detail
