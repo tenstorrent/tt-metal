@@ -27,8 +27,6 @@ target_sources(
         moreh_arange/moreh_arange.cpp
         moreh_bmm_backward/moreh_bmm_backward.cpp
         moreh_bmm/moreh_bmm.cpp
-        moreh_cumsum/device/moreh_cumsum_device_operation.cpp
-        moreh_cumsum/device/moreh_cumsum_program_factory.cpp
         moreh_cumsum/moreh_cumsum.cpp
         moreh_dot_backward/device/moreh_dot_backward_device_operation.cpp
         moreh_dot_backward/device/moreh_dot_backward_program_factory.cpp
