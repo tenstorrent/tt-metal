@@ -295,35 +295,6 @@ def eltwise_gelu(
 
 
 @setup_host_and_device
-def eltwise_rsqrt(
-    x,
-    *args,
-    fast_and_approx,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-
-    if t0.layout == ttnn.TILE_LAYOUT:
-        t1 = ttnn.rsqrt(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
-    else:
-        # this case is for test_eltwise_rsqrt_in_depth.py with shape (3, 11, 92, 100) RM
-        # either use this format or move the test to non-working as ttnn does not use run_with_autoformat
-        input_shape = t0.shape
-        t0 = t0.cpu().pad_to_tile(0)
-        t0 = t0.to(ttnn.TILE_LAYOUT)
-        t0 = t0.to(device)
-        t1 = ttnn.rsqrt(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
-        t1 = t1.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(input_shape)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def eltwise_prelu(
     x,
     *args,
@@ -2025,6 +1996,7 @@ eltwise_relu = make_unary_op_optional_output(ttnn.relu)
 eltwise_relu6 = make_unary_op_optional_output(ttnn.relu6)
 
 eltwise_sqrt = make_unary_op_optional_output(ttnn.sqrt)
+eltwise_rsqrt = make_unary_op_optional_output(ttnn.rsqrt)
 eltwise_cbrt = make_ttnn_unary_op(ttnn.cbrt)
 eltwise_rad2deg = make_unary_op_composite_ttnn(ttnn.rad2deg)
 eltwise_deg2rad = make_unary_op_composite_ttnn(ttnn.deg2rad)
