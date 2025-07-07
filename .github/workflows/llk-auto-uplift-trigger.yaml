@@ -496,7 +496,7 @@ jobs:
 
             # Wait before next check
             if [ ${#RUN_IDS[@]} -gt 0 ]; then
-              sleep 60
+              sleep 300 # check every 5 minutes
             fi
           done
 
