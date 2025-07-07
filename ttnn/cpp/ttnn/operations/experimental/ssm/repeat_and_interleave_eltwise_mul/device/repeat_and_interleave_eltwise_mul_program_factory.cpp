@@ -220,8 +220,6 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
         // Set runtime args
         uint32_t num_blocks_per_core;
         for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
-            const CoreCoord& core = cores.at(i);
-
             if (i < g1_numcores) {
                 num_blocks_per_core = num_blocks_per_core_group_1;
             } else {

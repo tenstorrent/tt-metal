@@ -173,8 +173,6 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
                 {0, 0, 0, 0}};  // (total_tiles, total_tiles_per_row, total_tiles_per_col, num_chunks_per_row)
 
             for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); i++) {
-                const CoreCoord& core = cores.at(i);
-
                 reader_runtime_args[i][0] = total_tiles;
                 reader_runtime_args[i][1] = total_tiles_per_row;
 

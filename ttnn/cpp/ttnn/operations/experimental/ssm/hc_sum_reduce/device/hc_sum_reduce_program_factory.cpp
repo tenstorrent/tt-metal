@@ -153,8 +153,6 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
         std::vector<std::vector<uint32_t>> compute_runtime_args = {cores.size(), {0, 0}};
 
         for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
-            const CoreCoord& core = cores.at(i);
-
             if (i < g1_numcores) {
                 num_blocks_per_core = num_blocks_per_core_group_1;
             } else {
