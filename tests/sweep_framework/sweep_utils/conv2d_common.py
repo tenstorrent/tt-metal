@@ -276,7 +276,7 @@ def run_conv2d_short_sweep(
         output_dtype = ttnn.DataType(output_dtype)
         if stride_h == kernel_height and stride_w == kernel_width and stride_h >= 16 and pad_h == 0 and pad_w == 0:
             conv_config.enable_kernel_stride_folding = True
-        conv_config.dtype = output_dtype
+        conv_output_dtype = output_dtype
         conv_config.weights_dtype = weights_dtype
         conv_config.output_layout = output_layout
     else:

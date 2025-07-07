@@ -1114,7 +1114,6 @@ ttnn::Tensor prepare_conv_bias(
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
-    DataType conv_output_dtype = output_dtype.value_or(input_dtype);
     TT_ASSERT(conv_config.weights_dtype.has_value(), "prepare_conv_bias requires conv_config.weights_dtype to be set.");
 
     // Use common setup function to get configuration parameters
