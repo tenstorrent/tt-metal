@@ -33,7 +33,7 @@ class TtBiFusion:
         self.upsample = Yolov6x_Conv_T_2D(
             model_params.upsample.upsample_transpose,
             parameters.upsample.upsample_transpose,
-            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             device=device,
         )
         self.downsample = Yolov6l_Conv2D(
