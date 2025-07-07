@@ -278,12 +278,13 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
 
 /* ========== Directed ideal test case; Test id = 3 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
+    // Physical Constraints
+    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
     // Parameters
-    uint32_t num_of_transactions = 179;
-    uint32_t transaction_size_pages = 4 * 32;
-    uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
-    // Max transaction size = 4 * 32 pages = 128 * 32 bytes = 4096 bytes for WH; 8192 bytes for BH
-    // Max total transaction size = 179 * 8192 bytes = 1466368 bytes = 1.4 MB = L1 capacity
+    uint32_t num_of_transactions = 1;
+    uint32_t transaction_size_pages = max_transmittable_pages / num_of_transactions;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});

@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt  # type: ignore
 import itertools
 import matplotlib.ticker as mticker
 import numpy as np
+from collections import defaultdict
 
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
@@ -119,8 +120,8 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.08},
         },
         3: {  # DRAM Unary Directed Ideal
-            "riscv_1": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 22},
-            "riscv_0": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 21},
+            "riscv_1": {"latency": {"lower": 46000, "upper": 49000}, "bandwidth": 22},
+            "riscv_0": {"latency": {"lower": 46000, "upper": 49000}, "bandwidth": 21},
         },
         # 4: {
         #     "riscv_0": {"latency": {"lower": 200, "upper": 18000}, "bandwidth": 0.1},
@@ -221,8 +222,8 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.16},
         },
         3: {  # DRAM Unary Directed Ideal
-            "riscv_1": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 33},
-            "riscv_0": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 34},
+            "riscv_1": {"latency": {"lower": 29000, "upper": 32000}, "bandwidth": 33},
+            "riscv_0": {"latency": {"lower": 29000, "upper": 32000}, "bandwidth": 34},
         },
         # 4: {
         #     "riscv_0": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.17},
@@ -338,7 +339,7 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
     if report:
         export_dm_stats_to_csv(dm_stats)
 
-    # Check performance (TODO: enable assertions)
+    # Check performance
     performance_check(dm_stats, arch=arch, verbose=verbose)
 
     logger.info("Data movement tests completed.")
@@ -544,17 +545,73 @@ def print_stats(dm_stats):
         logger.info("")
 
 
+def aggregate_performance(dm_stats, method="median"):
+    """
+    Aggregates duration and bandwidth per run_host_id for each kernel,
+    and includes the attributes for each run_host_id.
+
+    Args:
+        dm_stats: nested dict as produced by gather_analysis_stats
+        method: 'median' or 'average'
+
+    Returns:
+        Dict: {kernel: {run_host_id: {
+            "duration_cycles": aggregated_value,
+            "bandwidth": aggregated_value,
+            "attributes": attributes_dict,
+            "all_durations": [...],
+            "all_bandwidths": [...],
+        }}}
+    """
+    result = {}
+    for kernel in dm_stats.keys():
+        grouped_durations = defaultdict(list)
+        grouped_bandwidths = defaultdict(list)
+        for entry in dm_stats[kernel]["analysis"]["series"]:
+            run_host_id = entry["duration_type"][0]["run_host_id"]
+            attributes = dm_stats[kernel]["attributes"][run_host_id]
+            num_transactions = attributes["Number of transactions"]
+            transaction_size = attributes["Transaction size in bytes"]
+            duration = entry["duration_cycles"]
+            bandwidth = num_transactions * transaction_size / duration if duration else 0
+            grouped_durations[run_host_id].append(duration)
+            grouped_bandwidths[run_host_id].append(bandwidth)
+
+        agg = {}
+        for run_host_id in grouped_durations:
+            durations = grouped_durations[run_host_id]
+            bandwidths = grouped_bandwidths[run_host_id]
+            if method == "median":
+                agg_duration = float(np.median(durations))
+                agg_bandwidth = float(np.median(bandwidths))
+            elif method == "average":
+                agg_duration = float(np.mean(durations))
+                agg_bandwidth = float(np.mean(bandwidths))
+            else:
+                raise ValueError(f"Unknown method: {method}")
+            agg[run_host_id] = {
+                "duration_cycles": agg_duration,
+                "bandwidth": agg_bandwidth,
+                "attributes": dm_stats[kernel]["attributes"][run_host_id],
+                "all_durations": durations,
+                "all_bandwidths": bandwidths,
+            }
+        result[kernel] = agg
+    return result
+
+
 def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", arch="blackhole"):
+    agg_stats = aggregate_performance(dm_stats)
+
     # Extract data for plotting
-    riscv_1_series = dm_stats["riscv_1"]["analysis"]["series"]
-    riscv_0_series = dm_stats["riscv_0"]["analysis"]["series"]
+    riscv_1_series = agg_stats["riscv_1"]
+    riscv_0_series = agg_stats["riscv_0"]
 
     # Group data by Test id
     test_ids = set()
-    for attributes in dm_stats["riscv_1"]["attributes"].values():
-        test_ids.add(attributes["Test id"])
-    for attributes in dm_stats["riscv_0"]["attributes"].values():
-        test_ids.add(attributes["Test id"])
+    for kernel in agg_stats.keys():
+        for stats in agg_stats[kernel].values():
+            test_ids.add(stats["attributes"]["Test id"])
 
     test_ids = sorted(test_ids)  # Sort for consistent ordering
 
@@ -577,16 +634,8 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
         axes = subsubfig[0].subplots(1, 2)
 
         # Filter data for the current Test id
-        riscv_1_filtered = [
-            entry
-            for entry in riscv_1_series
-            if dm_stats["riscv_1"]["attributes"][entry["duration_type"][0]["run_host_id"]]["Test id"] == test_id
-        ]
-        riscv_0_filtered = [
-            entry
-            for entry in riscv_0_series
-            if dm_stats["riscv_0"]["attributes"][entry["duration_type"][0]["run_host_id"]]["Test id"] == test_id
-        ]
+        riscv_1_filtered = [entry for entry in riscv_1_series.values() if entry["attributes"]["Test id"] == test_id]
+        riscv_0_filtered = [entry for entry in riscv_0_series.values() if entry["attributes"]["Test id"] == test_id]
 
         # Aggregate data across all runtime_host_ids for the current Test id
         riscv_1_durations = []
@@ -599,28 +648,16 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
         riscv_0_transactions = []
 
         for entry in riscv_1_filtered:
-            duration = entry["duration_cycles"]
-            runtime_host_id = entry["duration_type"][0]["run_host_id"]
-            attributes = dm_stats["riscv_1"]["attributes"][runtime_host_id]
-            transaction_size = attributes["Transaction size in bytes"]
-            num_transactions = attributes["Number of transactions"]
-            bandwidth = num_transactions * transaction_size / duration
-            riscv_1_durations.append(duration)
-            riscv_1_data_sizes.append(transaction_size)
-            riscv_1_bandwidths.append(bandwidth)
-            riscv_1_transactions.append(num_transactions)
+            riscv_1_durations.append(entry["duration_cycles"])
+            riscv_1_bandwidths.append(entry["bandwidth"])
+            riscv_1_data_sizes.append(entry["attributes"]["Transaction size in bytes"])
+            riscv_1_transactions.append(entry["attributes"]["Number of transactions"])
 
         for entry in riscv_0_filtered:
-            duration = entry["duration_cycles"]
-            runtime_host_id = entry["duration_type"][0]["run_host_id"]
-            attributes = dm_stats["riscv_0"]["attributes"][runtime_host_id]
-            transaction_size = attributes["Transaction size in bytes"]
-            num_transactions = attributes["Number of transactions"]
-            bandwidth = num_transactions * transaction_size / entry["duration_cycles"]
-            riscv_0_durations.append(duration)
-            riscv_0_data_sizes.append(transaction_size)
-            riscv_0_bandwidths.append(bandwidth)
-            riscv_0_transactions.append(num_transactions)
+            riscv_0_durations.append(entry["duration_cycles"])
+            riscv_0_bandwidths.append(entry["bandwidth"])
+            riscv_0_data_sizes.append(entry["attributes"]["Transaction size in bytes"])
+            riscv_0_transactions.append(entry["attributes"]["Number of transactions"])
 
         # Plot durations
         ax = axes[0]
@@ -714,11 +751,13 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
 
 def export_dm_stats_to_csv(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement"):
     os.makedirs(output_dir, exist_ok=True)
+    agg_stats = aggregate_performance(dm_stats)
+
     # Group by test id
     test_ids = set()
-    for riscv in dm_stats.keys():
-        for attributes in dm_stats[riscv]["attributes"].values():
-            test_ids.add(attributes["Test id"])
+    for riscv in agg_stats.keys():
+        for test_run in agg_stats[riscv].values():
+            test_ids.add(test_run["attributes"]["Test id"])
     test_ids = sorted(test_ids)
 
     for test_id in test_ids:
@@ -730,29 +769,27 @@ def export_dm_stats_to_csv(dm_stats, output_dir="tests/tt_metal/tt_metal/data_mo
                 [
                     "Kernel",
                     "Run Host ID",
-                    "Log2 of Transaction Size (bytes)",
+                    "Transaction Size (bytes)",
                     "Number of Transactions",
                     "Latency (cycles)",
                     "Bandwidth (bytes/cycle)",
                 ]
             )
-            for kernel in ["riscv_1", "riscv_0"]:
-                kernel_series = dm_stats[kernel]["analysis"]["series"]
-                for entry in kernel_series:
-                    run_host_id = entry["duration_type"][0]["run_host_id"]
-                    attributes = dm_stats[kernel]["attributes"].get(run_host_id, {})
+            for kernel in agg_stats.keys():
+                for run_host_id, run_stats in agg_stats[kernel].items():
+                    # run_host_id = entry["duration_type"][0]["run_host_id"]
+                    attributes = run_stats["attributes"]
                     if attributes.get("Test id") != test_id:
                         continue
                     transaction_size = attributes.get("Transaction size in bytes", 0)
                     num_transactions = attributes.get("Number of transactions", 0)
-                    duration_cycles = entry["duration_cycles"]
-                    bandwidth = (num_transactions * transaction_size) / duration_cycles if duration_cycles else 0
-                    log2_transaction_size = int(np.log2(transaction_size)) if transaction_size > 0 else 0
+                    duration_cycles = run_stats["duration_cycles"]
+                    bandwidth = run_stats["bandwidth"]
                     writer.writerow(
                         [
                             "Receiver" if kernel == "riscv_1" else "Sender",
                             run_host_id,
-                            log2_transaction_size,
+                            transaction_size,
                             num_transactions,
                             duration_cycles,
                             bandwidth,
