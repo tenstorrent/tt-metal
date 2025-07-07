@@ -37,8 +37,8 @@ jobs:
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-viommu-large-stable', inputs.runner-label)
+        || fromJSON(format('["{0}"]', inputs.runner-label))
       }}
     container:
       image: ${{ inputs.docker-image }}
@@ -48,7 +48,6 @@ jobs:
         PYTHONPATH: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -87,8 +86,6 @@ jobs:
     name: models slow dispatch
     runs-on:
       - ${{ inputs.runner-label }}
-      - in-service
-      - cloud-virtual-machine
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -98,7 +95,6 @@ jobs:
         SLOW_RUNTIME_MODE: true
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
       run:

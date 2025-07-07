@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-large-stable },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-viommu-large-stable },
         ]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
