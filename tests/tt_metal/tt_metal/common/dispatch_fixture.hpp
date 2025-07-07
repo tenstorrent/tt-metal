@@ -27,7 +27,6 @@ private:
 public:
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, const bool skip_finish = false) {
-        const uint64_t program_id = program.get_id();
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
         } else {
