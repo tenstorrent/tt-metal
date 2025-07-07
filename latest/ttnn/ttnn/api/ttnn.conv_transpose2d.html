@@ -188,6 +188,7 @@ Where:</p>
 <li><p><strong>padding</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>] or </em><em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>]</em><em>)</em>) – zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].</p></li>
 <li><p><strong>dilation</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – spacing between kernel elements.</p></li>
 <li><p><strong>groups</strong> (<em>int</em>) – number of blocked connections from input channels to output channels.</p></li>
+<li><p><strong>dtype</strong> (<em>DataType</em><em>, </em><em>None</em>) – the data type of the output tensor. Default: None (will use the same dtype as input_tensor).</p></li>
 <li><p><strong>conv_config</strong> (<a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><em>ttnn.Conv2dConfig</em></a><em>, </em><em>None</em>) – configuration for convolution. Default: None</p></li>
 <li><p><strong>compute_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>None</em>) – configuration for compute kernel. Default: None</p></li>
 <li><p><strong>mirror_kernel</strong> (<em>bool</em>) – Determines if the op should mirror the kernel internally. Should be set to True if the kernel has already been mirrored.</p></li>

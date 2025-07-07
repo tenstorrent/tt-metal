@@ -163,6 +163,7 @@
 <li><p><strong>padding</strong> (<em>int</em><em> or </em><em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em><em>)</em>) – Zero-padding added to both sides of the input. pad_length or [pad_left, pad_right].</p></li>
 <li><p><strong>dilation</strong> (<em>int</em>) – Spacing between kernel elements.</p></li>
 <li><p><strong>groups</strong> (<em>int</em>) – Number of blocked connections from input channels to output channels.</p></li>
+<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>None</em>) – The data type of the input tensor. Default: None (will use the same dtype as input_tensor).</p></li>
 <li><p><strong>conv_config</strong> (<a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><em>ttnn.Conv2dConfig</em></a><em>, </em><em>None</em>) – Configuration for convolution. Default: None</p></li>
 <li><p><strong>compute_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>None</em>) – Configuration for compute kernel. Default: None</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>None</em>) – Output Tensor’s Memory Configuration. Default: None</p></li>
