@@ -189,7 +189,7 @@ def run_reduce_scatter_impl(
         torch_rs_out = torch.cat(torch_rs_out_tensor, 3)
 
         tt_rs_out = ttnn.from_device(tt_rs_out_tensor)
-        tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+        tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=3))
 
         if ones_tensor:
             eq, output = comp_equal(tt_rs_out, torch_rs_out)
