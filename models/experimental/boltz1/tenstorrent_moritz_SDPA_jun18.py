@@ -800,11 +800,13 @@ class DiffusionTransformer(Module):
 class PairWeightedAveraging(Module):
     def __init__(
         self,
+        device,
         head_dim: int,
         n_heads: int,
         state_dict: dict,
         compute_kernel_config: ttnn.DeviceComputeKernelConfig,
     ):
+        self.device = device
         super().__init__(state_dict, compute_kernel_config)
         self.head_dim = head_dim
         self.n_heads = n_heads
@@ -884,9 +886,11 @@ class PairWeightedAveraging(Module):
 class OuterProductMean(Module):
     def __init__(
         self,
+        device,
         state_dict: dict,
         compute_kernel_config: ttnn.DeviceComputeKernelConfig,
     ):
+        self.device = device
         super().__init__(state_dict, compute_kernel_config)
         self.norm_weight = self.torch_to_tt("norm.weight")
         self.norm_bias = self.torch_to_tt("norm.bias")
@@ -935,6 +939,7 @@ class OuterProductMean(Module):
 class MSALayer(Module):
     def __init__(
         self,
+        device,
         avg_head_dim: int,
         avg_n_heads: int,
         tri_att_head_dim: int,
@@ -942,25 +947,29 @@ class MSALayer(Module):
         state_dict: dict,
         compute_kernel_config: ttnn.DeviceComputeKernelConfig,
     ):
+        self.device = device
         super().__init__(state_dict, compute_kernel_config)
-        self.msa_transition = Transition(True, filter_dict(state_dict, "msa_transition"), compute_kernel_config)
+        self.msa_transition = Transition(device, True, filter_dict(state_dict, "msa_transition"), compute_kernel_config)
         self.pair_weighted_averaging = PairWeightedAveraging(
+            device,
             head_dim=avg_head_dim,
             n_heads=avg_n_heads,
             state_dict=filter_dict(state_dict, "pair_weighted_averaging"),
             compute_kernel_config=compute_kernel_config,
         )
         self.outer_product_mean = OuterProductMean(
+            device,
             state_dict=filter_dict(state_dict, "outer_product_mean"),
             compute_kernel_config=compute_kernel_config,
         )
         self.triangle_multiplication_start = TriangleMultiplication(
-            False, filter_dict(state_dict, "tri_mul_out"), compute_kernel_config
+            device, False, filter_dict(state_dict, "tri_mul_out"), compute_kernel_config
         )
         self.triangle_multiplication_end = TriangleMultiplication(
-            True, filter_dict(state_dict, "tri_mul_in"), compute_kernel_config
+            device, True, filter_dict(state_dict, "tri_mul_in"), compute_kernel_config
         )
         self.triangle_attention_start = TriangleAttention(
+            device,
             tri_att_head_dim,
             tri_att_n_heads,
             False,
@@ -968,13 +977,14 @@ class MSALayer(Module):
             compute_kernel_config,
         )
         self.triangle_attention_end = TriangleAttention(
+            device,
             tri_att_head_dim,
             tri_att_n_heads,
             True,
             filter_dict(state_dict, "tri_att_end", "mha."),
             compute_kernel_config,
         )
-        self.z_transition = Transition(True, filter_dict(state_dict, "z_transition"), compute_kernel_config)
+        self.z_transition = Transition(device, True, filter_dict(state_dict, "z_transition"), compute_kernel_config)
 
     def __call__(self, z: ttnn.Tensor, m: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         m = ttnn.add(m, self.pair_weighted_averaging(m, z))
@@ -1003,6 +1013,7 @@ class MSALayer(Module):
 class MSA(Module):
     def __init__(
         self,
+        device,
         n_blocks: int,
         avg_head_dim: int,
         avg_n_heads: int,
@@ -1011,11 +1022,13 @@ class MSA(Module):
         state_dict: dict,
         compute_kernel_config: ttnn.DeviceComputeKernelConfig,
     ):
+        self.device = device
         super().__init__(state_dict, compute_kernel_config)
         self.s_weight = self.torch_to_tt("s_proj.weight")
         self.msa_weight = self.torch_to_tt("msa_proj.weight")
         self.blocks = [
             MSALayer(
+                device,
                 avg_head_dim,
                 avg_n_heads,
                 tri_att_head_dim,
@@ -1194,6 +1207,7 @@ class DiffusionTransformerModule(TorchWrapper):
 class MSAModule(TorchWrapper):
     def __init__(
         self,
+        device,
         n_blocks: int,
         avg_head_dim: int,
         avg_n_heads: int,
@@ -1201,6 +1215,7 @@ class MSAModule(TorchWrapper):
         tri_att_n_heads: int,
     ):
         super().__init__()
+        self.device = device
         self.n_blocks = n_blocks
         self.avg_head_dim = avg_head_dim
         self.avg_n_heads = avg_n_heads
@@ -1218,6 +1233,7 @@ class MSAModule(TorchWrapper):
         error_msgs,
     ):
         self.module = MSA(
+            self.device,
             self.n_blocks,
             self.avg_head_dim,
             self.avg_n_heads,
