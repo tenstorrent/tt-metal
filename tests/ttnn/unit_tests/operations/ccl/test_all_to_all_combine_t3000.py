@@ -522,7 +522,7 @@ def check_results(test_tensor, ref_tensor, data_map):
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7000])
-@pytest.mark.parametrize("seq", [1])
+@pytest.mark.parametrize("seq", [1, 2])
 @pytest.mark.parametrize("scheme", ["random"])
 @pytest.mark.parametrize("num_iters", [2])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
@@ -551,8 +551,6 @@ def test_all_to_all_combine_no_trace(
     batch = batches_per_device * devices
     experts = experts_per_device * devices
 
-    torch.set_printoptions(threshold=10000)
-
     run_all_to_all_combine_test(
         mesh_device,
         mesh_shape,
@@ -568,6 +566,80 @@ def test_all_to_all_combine_no_trace(
         topology=topology,
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize(
+    "seq_len, num_iters, warmup_iters",
+    [(1, 40, 10), (128, 10, 5)],
+    ids=["decode", "prefill"],
+)
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_perf(
+    mesh_device,
+    mesh_shape,
+    cluster_axis,
+    batches_per_device,
+    experts_per_device,
+    select_experts_k,
+    hidden_size,
+    seq_len,
+    num_iters,
+    warmup_iters,
+    num_links,
+    topology,
+    dtype,
+    input_memory_config,
+    output_memory_config,
+):
+    if cluster_axis is None:
+        dispatch_devices = mesh_shape[0] * mesh_shape[1]
+    else:
+        dispatch_devices = mesh_shape[cluster_axis]
+
+    batch = batches_per_device * dispatch_devices
+    experts = experts_per_device * dispatch_devices
+
+    trace_all_to_all_combine(
+        mesh_device,
+        mesh_shape,
+        cluster_axis,
+        batch,
+        seq_len,
+        experts,
+        select_experts_k,
+        hidden_size,
+        num_iters,
+        warmup_iters,
+        num_links,
+        "random",  # scheme TODO worst_perf
+        dtype,
+        topology,
+        input_memory_config,
+        output_memory_config,
     )
 
 
