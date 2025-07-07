@@ -62,6 +62,18 @@ def convert_with_nbconvert(notebook: Path, output_tmp: Path) -> None:
     )
 
 
+def has_file_changed(file: Path) -> bool:
+    """
+    Check if file has changed since last commit
+    """
+    result = subprocess.run(
+        ["git", "diff", "--quiet", str(file)],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    return result.returncode != 0
+
+
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -109,8 +121,15 @@ def main() -> None:
 
     # Stage new or changed files
     files_to_add = new_files + updated_files
+
     if files_to_add:
         subprocess.run(["black"] + [str(f) for f in files_to_add])
+
+    # Only add files that have changed since last commit
+    files_to_add = [f for f in files_to_add if has_file_changed(f)]
+    print(f"files to add: {files_to_add}")
+
+    if files_to_add:
         subprocess.run(["git", "add"] + [str(f) for f in files_to_add], check=True)
         print("🟢 Staged files:")
         for f in files_to_add:
