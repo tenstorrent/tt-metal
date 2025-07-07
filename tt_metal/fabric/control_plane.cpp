@@ -1695,13 +1695,15 @@ void ControlPlane::initialize_intermesh_eth_links() {
         }
 
         // Remote connections visible to UMD
-        auto ethernet_connections_to_remote_devices = cluster.get_ethernet_connections_to_remote_devices()[chip_id];
-        for (auto [link, _] : ethernet_connections_to_remote_devices) {
-            // Find the CoreCoord for this channel
-            for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
-                if (channel == link) {
-                    intermesh_eth_links.push_back({core_coord, link});
-                    break;
+        auto remote_connections = cluster.get_ethernet_connections_to_remote_devices().find(chip_id);
+        if (remote_connections != cluster.get_ethernet_connections_to_remote_devices().end()) {
+            for (auto [link, _] : remote_connections->second) {
+                // Find the CoreCoord for this channel
+                for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
+                    if (channel == link) {
+                        intermesh_eth_links.push_back({core_coord, link});
+                        break;
+                    }
                 }
             }
         }
