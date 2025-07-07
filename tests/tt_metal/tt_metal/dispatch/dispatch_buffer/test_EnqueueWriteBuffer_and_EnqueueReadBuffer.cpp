@@ -153,10 +153,9 @@ void clear_buffer(CommandQueue& cq, Buffer& buffer) {
 vector<ShardedSubBufferStressTestConfig> generate_sharded_sub_buffer_test_configs(uint32_t max_buffer_size) {
     vector<ShardedSubBufferStressTestConfig> configs;
 
-    const uint32_t max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
-    uint32_t buffer_size = 10 * max_prefetch_command_size;
+    uint32_t buffer_size = 0;
     while (buffer_size <= max_buffer_size) {
-        uint32_t page_size = max_prefetch_command_size;
+        uint32_t page_size = 4;
         while (page_size <= buffer_size) {
             uint32_t region_offset = 0;
             while (buffer_size % page_size == 0 && region_offset < buffer_size) {
