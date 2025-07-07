@@ -64,6 +64,7 @@ all_params = generate_params(
         MathOperation.Square,
         MathOperation.Celu,
         MathOperation.Silu,
+        MathOperation.Gelu,
     ],
 )
 param_ids = generate_param_ids(all_params)

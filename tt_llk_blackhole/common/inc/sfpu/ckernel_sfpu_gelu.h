@@ -4,14 +4,13 @@
 
 #pragma once
 
+#include "ckernel_sfpu_cdf.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_load_config.h"
 #include "sfpi.h"
 #include "sfpi_fp16.h"
 
-namespace ckernel
-{
-namespace sfpu
+namespace ckernel::sfpu
 {
 
 template <bool APPROXIMATION_MODE>
@@ -36,8 +35,8 @@ inline sfpi::vFloat _calculate_gelu_core_(sfpi::vFloat in)
     return result;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_gelu_(const int iterations)
+template <int ITERATIONS>
+inline void _calculate_gelu_appx_()
 {
     sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
@@ -47,7 +46,7 @@ inline void _calculate_gelu_(const int iterations)
     sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
 
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         // sfpi::vFloat in = sfpi::dst_reg[0];
         // sfpi::vFloat result = calculate_gelu_core<APPROXIMATION_MODE>(in);
@@ -84,8 +83,35 @@ inline void _calculate_gelu_(const int iterations)
     sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
 }
 
+template <int ITERATIONS>
+inline void _calculate_gelu_accurate_()
+{
+    constexpr bool scaled = true;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        sfpi::vFloat in     = sfpi::dst_reg[0];
+        sfpi::vFloat result = _calculate_cdf_appx_(in, scaled);
+        sfpi::dst_reg[0]    = result;
+        sfpi::dst_reg++;
+    }
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_gelu_derivative_(const int iterations)
+inline void _calculate_gelu_()
+{
+    if constexpr (APPROXIMATION_MODE)
+    {
+        _calculate_gelu_appx_<ITERATIONS>();
+    }
+    else
+    {
+        _calculate_gelu_accurate_<ITERATIONS>();
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_gelu_derivative_()
 {
     if constexpr (APPROXIMATION_MODE)
     {
@@ -100,7 +126,7 @@ inline void _calculate_gelu_derivative_(const int iterations)
 
 // SFPU microcode:
 #pragma GCC unroll 0
-        for (int d = 0; d < iterations; d++)
+        for (int d = 0; d < ITERATIONS; d++)
         {
             sfpi::vFloat val = sfpi::dst_reg[0];
             val              = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode);
@@ -129,7 +155,7 @@ inline void _calculate_gelu_derivative_(const int iterations)
 
 // SFPU microcode:
 #pragma GCC unroll 0
-        for (int d = 0; d < iterations; d++)
+        for (int d = 0; d < ITERATIONS; d++)
         {
             sfpi::vFloat in             = sfpi::dst_reg[0];
             sfpi::vFloat neg_half_sq_in = in * in * -0.5f;
@@ -237,5 +263,4 @@ inline void _init_gelu_derivative_()
     }
 }
 
-} // namespace sfpu
-} // namespace ckernel
+} // namespace ckernel::sfpu

@@ -51,6 +51,7 @@ class MathOperation(Enum):
     SfpuElwLeftShift = "SFPU_OP_LSHFT"
     SfpuElwLogicalRightShift = "SFPU_OP_LOGICAL_RSHFT"
     Silu = "SFPU_OP_SILU"
+    Gelu = "SFPU_OP_GELU"
 
 
 class ReduceDimension(Enum):
