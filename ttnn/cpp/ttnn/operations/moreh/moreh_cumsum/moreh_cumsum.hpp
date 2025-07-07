@@ -5,7 +5,6 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/moreh/moreh_cumsum/device/moreh_cumsum_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_cumsum {
 struct MorehCumsum {
@@ -13,8 +12,7 @@ struct MorehCumsum {
         const Tensor& input,
         int64_t dim,
         const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+        const std::optional<MemoryConfig>& memory_config);
 };
 
 struct MorehCumsumBackward {
@@ -22,8 +20,7 @@ struct MorehCumsumBackward {
         const Tensor& output_grad,
         int64_t dim,
         const std::optional<Tensor>& input_grad,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+        const std::optional<MemoryConfig>& memory_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_cumsum
 
