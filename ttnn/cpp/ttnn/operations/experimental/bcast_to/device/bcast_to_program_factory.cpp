@@ -139,7 +139,6 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto input = tensor_args.input;
-    uint32_t data_size = input.element_size();
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
 
     auto output_shape = output.logical_shape();
@@ -147,7 +146,6 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
 
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_data_format);
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
-    uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
 
     // Device Setup
     auto* device = input.device();

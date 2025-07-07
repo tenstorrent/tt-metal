@@ -33,12 +33,9 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     auto* src2_buffer = other.buffer();
 
     uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
-    float scaler = 1.0f;
     const auto& a_shape_wo_padding = input.logical_shape();
     uint32_t pad_h = a_shape_wo_padding[2] % tt::constants::TILE_HEIGHT;
     uint32_t pad_w = a_shape_wo_padding[3] % tt::constants::TILE_WIDTH;
-    uint32_t mask_h = (pad_h == 0) ? (tt::constants::TILE_HEIGHT) : (pad_h);
-    uint32_t mask_w = (pad_w == 0) ? (tt::constants::TILE_WIDTH) : (pad_w);
 
     IDevice* device = input.device();
 

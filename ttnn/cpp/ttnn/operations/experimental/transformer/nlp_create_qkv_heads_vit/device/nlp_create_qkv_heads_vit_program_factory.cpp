@@ -33,7 +33,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
     ////////////////////////////////////////////////////////////////////////////
     uint32_t per_tensor_tiles = ashape[3] / TILE_WIDTH;  // 72
     const uint32_t q_num_tiles_per_tensor = 24;
-    const uint32_t kv_num_tiles_per_tensor = 24;
     const uint32_t num_q_heads = 12;
     const uint32_t num_kv_heads = 12;
 
