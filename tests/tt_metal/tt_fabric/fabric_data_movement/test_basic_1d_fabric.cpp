@@ -134,8 +134,7 @@ void get_mcast_receivers(
     }
 }
 
-void RunTestLineMcast(
-    BaseFabricFixture* fixture, RoutingDirection unicast_dir, const std::vector<McastRoutingInfo>& mcast_routing_info) {
+void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info) {
     auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     bool system_accomodates_mcast = false;

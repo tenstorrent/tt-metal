@@ -195,9 +195,7 @@ void RunTestChipMCast1D(
     uint32_t range,
     bool enable_fabric_tracing = false);
 
-
-void RunTestLineMcast(
-    BaseFabricFixture* fixture, RoutingDirection unicast_dir, const std::vector<McastRoutingInfo>& mcast_routing_info);
+void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info);
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
