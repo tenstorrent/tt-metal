@@ -71,7 +71,7 @@ void MAIN {
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(12);
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(13);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(14);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(17);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(15);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
