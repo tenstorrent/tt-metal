@@ -183,6 +183,7 @@ class TtLlamaMLP(LightweightModule):
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
             buffer_key="BINARY_MUL",
+            use_optimal_ccl_for_llama=False if mode == "prefill" else True,
         )
         ttnn.deallocate(ff1ff3)
 
@@ -203,6 +204,7 @@ class TtLlamaMLP(LightweightModule):
             cluster_axis=0,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+            use_optimal_ccl_for_llama=True,
         )
 
         ttnn.deallocate(w2_out)
