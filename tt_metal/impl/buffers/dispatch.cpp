@@ -847,40 +847,22 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     return dispatch_params;
 }
 
-BufferReadDispatchParamsVariant initialize_interleaved_buf_read_dispatch_params(
+BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
     Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed) {
     auto root_buffer = buffer.root_buffer();
-    auto region = buffer.root_buffer_region();
-
-    BufferReadDispatchParamsVariant dispatch_params;
-
-    const bool read_large_pages = are_pages_larger_than_max_prefetch_cmd_size(*root_buffer);
-    if (read_large_pages) {
-        dispatch_params = BufferReadLargePageDispatchParams{};
-    } else {
-        dispatch_params = BufferReadDispatchParams{};
-    }
-
+    const BufferRegion region = buffer.root_buffer_region();
     IDevice* device = root_buffer->device();
 
-    std::visit(
-        [&](auto& params) {
-            params.total_pages_to_read = region.size / root_buffer->page_size();
-            params.src_page_index = region.offset / root_buffer->page_size();
-            params.cq_id = cq_id;
-            params.device = device;
-            params.address = root_buffer->address();
-            params.unpadded_dst_offset = 0;
-            params.expected_num_workers_completed = expected_num_workers_completed;
-            params.num_banks = device->allocator()->get_num_banks(root_buffer->buffer_type());
-            params.padded_page_size = root_buffer->aligned_page_size();
-
-            if constexpr (std::is_same_v<std::decay_t<decltype(params)>, BufferReadLargePageDispatchParams>) {
-                const PartialPageSpec partial_page_spec = calculate_partial_page_spec(*root_buffer);
-                params.partial_page_spec = partial_page_spec;
-            }
-        },
-        dispatch_params);
+    BufferReadDispatchParams dispatch_params;
+    dispatch_params.total_pages_to_read = region.size / root_buffer->page_size();
+    dispatch_params.src_page_index = region.offset / root_buffer->page_size();
+    dispatch_params.cq_id = cq_id;
+    dispatch_params.device = device;
+    dispatch_params.address = root_buffer->address();
+    dispatch_params.unpadded_dst_offset = 0;
+    dispatch_params.expected_num_workers_completed = expected_num_workers_completed;
+    dispatch_params.num_banks = device->allocator()->get_num_banks(root_buffer->buffer_type());
+    dispatch_params.padded_page_size = root_buffer->aligned_page_size();
 
     return dispatch_params;
 }
@@ -1012,14 +994,14 @@ std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer_r
 }
 
 std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(
-    void* dst, BufferReadDispatchParams* dispatch_params, Buffer& buffer) {
+    void* dst, const BufferReadDispatchParams& dispatch_params, Buffer& buffer) {
     return std::make_shared<tt::tt_metal::CompletionReaderVariant>(
         std::in_place_type<tt::tt_metal::ReadBufferDescriptor>,
         buffer.page_size(),
-        dispatch_params->padded_page_size,
+        dispatch_params.padded_page_size,
         dst,
-        dispatch_params->unpadded_dst_offset,
-        dispatch_params->total_pages_read);
+        dispatch_params.unpadded_dst_offset,
+        dispatch_params.total_pages_read);
 }
 
 void copy_completion_queue_data_into_user_space(
