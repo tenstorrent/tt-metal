@@ -46,6 +46,7 @@ class TtUpsample2D(nn.Module):
         )
         self.conv_slice_config = get_DRAM_conv_config(module_path, 1)
         self.conv_config = model_config.get_conv_config(conv_path=module_path)
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def interpolate(self, hidden_states):
         hidden_states = ttnn.upsample(hidden_states, (self.scale_factor, self.scale_factor))
@@ -83,6 +84,7 @@ class TtUpsample2D(nn.Module):
             slice_config=self.conv_slice_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv_params["output_channels"]
 
