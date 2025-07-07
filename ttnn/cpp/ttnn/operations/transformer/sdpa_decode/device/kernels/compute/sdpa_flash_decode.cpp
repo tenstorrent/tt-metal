@@ -114,7 +114,8 @@ void MAIN {
             cb_wait_front(cb_index_id, 1);
             volatile uint32_t* index_addr_ptr;
             cb_get_tile(cb_index_id, 0, &index_addr_ptr);
-            cur_pos = index_addr_ptr[4 + (cur_batch / q_heads_parallel_factor)];
+            uint32_t cb_get_tile_offset = 4;  // Using cb_get_tile, the first 4 elements do not have the data
+            cur_pos = index_addr_ptr[cb_get_tile_offset + (cur_batch / q_heads_parallel_factor)];
             cb_release_tile(cb_index_id);
         }
 

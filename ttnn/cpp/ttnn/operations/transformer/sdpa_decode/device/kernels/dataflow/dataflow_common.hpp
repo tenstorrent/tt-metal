@@ -423,7 +423,7 @@ void read_kv_mask_chunks(
         }
 
         // Read V chunk (tranpose of K)
-        if (reuse_k) {
+        if constexpr (reuse_k) {
             cb_reserve_back(cb_v_in, v_chunk_tiles);
             uint32_t v_write_ptr = get_write_ptr(cb_v_in);
             uint64_t k_read_ptr = k_base_read_ptr;
