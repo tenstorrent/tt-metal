@@ -514,6 +514,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tests-passed: ${{ steps.check-latest.outputs.tests-passed }}
+      pr-number: ${{ steps.check-latest.outputs.pr-number }}
     steps:
       - name: Checkout parent repo
         uses: actions/checkout@v4
@@ -535,6 +536,7 @@ jobs:
             exit 1
           fi
 
+          echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
           echo "🔍 Found LLK PR #$PR_NUMBER, reading workflow decisions from PR body..."
 
           # Get the original workflow decisions from the PR body
@@ -749,7 +751,12 @@ jobs:
         run: |
           echo "🚀 Finalizing PR merge..."
 
-          PR_NUMBER="${{ needs.llk-submodule-uplift.outputs.pr-number }}"
+          # Get PR number from the appropriate source
+          if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+            PR_NUMBER="${{ needs.recheck-tests.outputs.pr-number }}"
+          else
+            PR_NUMBER="${{ needs.llk-submodule-uplift.outputs.pr-number }}"
+          fi
 
           # Mark PR as ready if it was created as draft
           if [ "${{ inputs.skip_draft }}" != "true" ]; then
@@ -763,7 +770,10 @@ jobs:
           echo "📝 PR #$PR_NUMBER is ready for review and merge"
 
           # Determine the appropriate completion message
-          if [ "${{ needs.trigger-and-monitor-workflows.result }}" = "success" ]; then
+          if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+            COMPLETION_MESSAGE="🎉 **LLK submodule update test re-check completed successfully!**
+            All required workflows have passed on re-check. This PR is ready for review and merge."
+          elif [ "${{ needs.trigger-and-monitor-workflows.result }}" = "success" ]; then
             COMPLETION_MESSAGE="🎉 **LLK submodule update completed successfully!**
             All required workflows have passed. This PR is ready for review and merge."
           elif [ "${{ needs.trigger-and-monitor-workflows.result }}" = "skipped" ]; then
@@ -784,7 +794,57 @@ jobs:
           # Build test status from actual workflow results
           TEST_STATUS_LINES=""
 
-          if [ "${{ needs.trigger-and-monitor-workflows.result }}" = "skipped" ]; then
+          if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+            # For recheck scenario, get the workflow decisions and current run status
+            echo "🔄 Building test status for recheck scenario..."
+
+            # Get PR creation time to filter runs created after PR
+            PR_CREATED_AT=$(gh pr view "$PR_NUMBER" --json createdAt --jq '.createdAt' --repo "${{ github.repository }}")
+            echo "PR created at: $PR_CREATED_AT"
+
+            # Check if workflows were supposed to run by examining PR body
+            PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body' --repo "${{ github.repository }}")
+
+            SHOULD_RUN_WH=false
+            SHOULD_RUN_BH=false
+
+            if echo "$PR_BODY" | grep -q "WORKFLOW_DECISIONS:"; then
+              WORKFLOW_DECISIONS=$(echo "$PR_BODY" | grep -o "WORKFLOW_DECISIONS:[^>]*" | head -1)
+              if echo "$WORKFLOW_DECISIONS" | grep -q "should-run-wormhole=true"; then
+                SHOULD_RUN_WH=true
+              fi
+              if echo "$WORKFLOW_DECISIONS" | grep -q "should-run-blackhole=true"; then
+                SHOULD_RUN_BH=true
+              fi
+            fi
+
+            # Get actual run results for workflows that should have run
+            if [ "$SHOULD_RUN_WH" = "true" ]; then
+              WH_RUN=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json databaseId,url,conclusion,createdAt --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | .[0] // {}" --repo "${{ github.repository }}")
+              WH_URL=$(echo "$WH_RUN" | jq -r '.url // ""')
+              WH_CONCLUSION=$(echo "$WH_RUN" | jq -r '.conclusion // ""')
+              if [ "$WH_CONCLUSION" = "success" ]; then
+                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ✅ **All Post Commit Workflows** passed: [View run]($WH_URL)"
+              else
+                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ❌ **All Post Commit Workflows** failed (conclusion: \`$WH_CONCLUSION\`): [View run]($WH_URL)"
+              fi
+            fi
+
+            if [ "$SHOULD_RUN_BH" = "true" ]; then
+              BH_RUN=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json databaseId,url,conclusion,createdAt --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | .[0] // {}" --repo "${{ github.repository }}")
+              BH_URL=$(echo "$BH_RUN" | jq -r '.url // ""')
+              BH_CONCLUSION=$(echo "$BH_RUN" | jq -r '.conclusion // ""')
+              if [ "$BH_CONCLUSION" = "success" ]; then
+                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ✅ **Blackhole Post Commit** passed: [View run]($BH_URL)"
+              else
+                TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ❌ **Blackhole Post Commit** failed (conclusion: \`$BH_CONCLUSION\`): [View run]($BH_URL)"
+              fi
+            fi
+
+            if [ "$SHOULD_RUN_WH" = "false" ] && [ "$SHOULD_RUN_BH" = "false" ]; then
+              TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ℹ️ **No architecture-specific tests required** - No Wormhole or Blackhole tests were run"
+            fi
+          elif [ "${{ needs.trigger-and-monitor-workflows.result }}" = "skipped" ]; then
             TEST_STATUS_LINES="$TEST_STATUS_LINES"$'\n'"- ℹ️ **No architecture-specific tests required** - No Wormhole or Blackhole tests were run"
           else
             # Get PR creation time to filter runs created after PR
@@ -817,7 +877,11 @@ jobs:
 
           # Build final test status
           if [ -n "$TEST_STATUS_LINES" ]; then
-            TEST_STATUS="### 🧪 Test Status"$'\n'"**Workflow Results:**"$'\n'"$TEST_STATUS_LINES"
+            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+              TEST_STATUS="### 🧪 Test Status"$'\n'"**Workflow Results (Re-checked):**"$'\n'"$TEST_STATUS_LINES"
+            else
+              TEST_STATUS="### 🧪 Test Status"$'\n'"**Workflow Results:**"$'\n'"$TEST_STATUS_LINES"
+            fi
           else
             TEST_STATUS="### 🧪 Test Status"$'\n'"✅ **Workflow completed successfully** - Ready for review"
           fi
@@ -830,4 +894,9 @@ jobs:
           # Update PR body
           echo "$UPDATED_BODY" | gh pr edit "$PR_NUMBER" --body-file - --repo "${{ github.repository }}"
           echo "✅ Updated PR body with final test status"
-          echo "✅ Workflow completed successfully - PR #$PR_NUMBER is ready for manual review"
+
+          if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+            echo "✅ Test re-check completed successfully - PR #$PR_NUMBER is ready for manual review"
+          else
+            echo "✅ Workflow completed successfully - PR #$PR_NUMBER is ready for manual review"
+          fi
