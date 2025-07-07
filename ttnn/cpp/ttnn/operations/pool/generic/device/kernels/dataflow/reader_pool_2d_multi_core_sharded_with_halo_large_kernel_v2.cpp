@@ -63,7 +63,7 @@ FORCE_INLINE void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_r
                         if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
                             clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
                                 get_noc_addr(out_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
-                            }
+                        }
                     }
                 }
             }
@@ -117,31 +117,36 @@ FORCE_INLINE void fill_scalar(
  */
 void kernel_main() {
     constexpr uint32_t reader_nindices = get_compile_time_arg_val(0);
+    // DPRINT << "reader_nindices:" << reader_nindices << ENDL();
     constexpr uint32_t window_h = get_compile_time_arg_val(1);
     constexpr uint32_t window_w = get_compile_time_arg_val(2);
+    // DPRINT << "window_hw:" << window_h <<":"<<window_w << ENDL();
 
     constexpr int32_t pad_w = get_compile_time_arg_val(3);
-
-    // channel size in bytes
+    // DPRINT << "pad_w:" << pad_w  << ENDL();
+    //  channel size in bytes
     constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(4);
-
-    // input tensor height / width / channels
+    // DPRINT << "in_nbytes_c:" << in_nbytes_c  << ENDL();
+    //  input tensor height / width / channels
     constexpr int32_t in_w = get_compile_time_arg_val(5);
 
     constexpr uint32_t in_c = get_compile_time_arg_val(6);
-
+    // DPRINT << "in_wc:" << in_w <<":"<<in_c << ENDL();
     constexpr uint32_t split_reader = get_compile_time_arg_val(7);
     constexpr uint32_t reader_id = get_compile_time_arg_val(8);
 
     constexpr uint32_t bf16_scalar = get_compile_time_arg_val(9);
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(10);
     constexpr uint32_t bf16_init_value = get_compile_time_arg_val(11);
-
+    // DPRINT << "bf16_scalar:" << bf16_scalar <<":"<<bf16_one_u32<<":"<<bf16_init_value << ENDL();
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
+    // DPRINT << "in_nblocks_c:" << in_nblocks_c  << ENDL();
     constexpr uint32_t in_cb_sz = get_compile_time_arg_val(13);
+    // DPRINT << "in_cb_sz:" << in_cb_sz  << ENDL();
     constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(14);
+    // DPRINT << "max_rows_for_reduction:" << max_rows_for_reduction  << ENDL();
     constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
-
+    // DPRINT << "ceil_pad_w:" << ceil_pad_w  << ENDL();
     constexpr uint32_t TILE_HEIGHT = 32;
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
@@ -158,13 +163,14 @@ void kernel_main() {
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(26);
     constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
     constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(28);
+    // DPRINT << "multi_buffering_factor:" << multi_buffering_factor  << ENDL();
     constexpr uint32_t sync_cb_id1 = get_compile_time_arg_val(29);
     constexpr uint32_t sync_cb_id2 = get_compile_time_arg_val(30);
 
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
     constexpr uint32_t stride_w = get_compile_time_arg_val(31);
-
+    // DPRINT << "stride_w:" << stride_w  << ENDL();
     uint32_t scalar_index = 0;
     uint32_t scalar_start = 0;
     uint32_t scalar_end = 1;
@@ -258,6 +264,7 @@ void kernel_main() {
     }
 
     uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
+    // DPRINT << "num_segments:" << num_segments  << ENDL();
     bool first_row_value = reader_id == 0;
 
     uint32_t reader_indices_on_core = 0;
@@ -276,13 +283,14 @@ void kernel_main() {
         uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
         uint16_t start = start_end_segment & 0xffff;
         uint16_t end = start_end_segment >> 16;
-
+        // DPRINT << "start_end:" << start << ":" << end << ENDL();
         if (!first_row_value) {
             start += stride_w;
             first_row_value = true;
         }
 
-        for (uint16_t ind = start; ind <= end; ind += 2 * stride_w) {
+        constexpr uint32_t stride_multiple = split_reader ? 2 : 1;
+        for (uint16_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
             if constexpr (!one_scalar_per_core) {
                 fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, split_reader, TILE_WIDTH>(
                     scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
@@ -334,4 +342,5 @@ void kernel_main() {
             clear_value_cb_id,
             in_cb_ntiles>(0, in_l1_read_base_addr);
     }
+    // tt::data_movement::common ::print_bf16_pages(get_read_ptr(in_cb_id), 32 * 8, 1);
 }  // kernel_main()

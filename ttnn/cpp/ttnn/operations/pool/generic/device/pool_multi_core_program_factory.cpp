@@ -644,7 +644,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         out_nhw_per_core / nblocks,
         output_shape[3] / num_shards_c,
         in_nblocks_c,
-        in_ntiles_c};
+        in_ntiles_c,
+        out_h,
+        out_w};
 
     std::string cb_coppy_kernel_fname =
         "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"

@@ -29,7 +29,7 @@ template <
     uint32_t in_nbytes_c>
 FORCE_INLINE void read_window_with_top_left_index(
     uint64_t clear_value_addr, uint64_t in_l1_read_base_addr, uint64_t ind) {
-    DPRINT << "READER in_nbytes_c:" << in_nbytes_c << ENDL();
+    // DPRINT << "READER in_nbytes_c:" << in_nbytes_c << ENDL();
 
     if constexpr (is_wide_reduction) {
         for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
@@ -67,7 +67,7 @@ FORCE_INLINE void read_window_with_top_left_index(
             out_l1_write_addr += in_nbytes_c * window_w;
         }
         noc_async_read_barrier();
-        // DPRINT << "COMPUTE INPUT (READER OUTPUT):" << ENDL();
+        // //DPRINT << "COMPUTE INPUT (READER OUTPUT):" << ENDL();
         //  we print 64 rows here because multibuffering factor is 2 so we actually have 2 tile rows in the CB
         //  if shape of tensor is changed we need to update the number of tiles we're prinitng here
         // tt::data_movement::common ::print_bf16_pages(get_read_ptr(in_cb_id), 32 * 1, 64);
@@ -117,20 +117,21 @@ FORCE_INLINE void fill_scalar(
  */
 void kernel_main() {
     constexpr uint32_t reader_nindices = get_compile_time_arg_val(0);
-    DPRINT << "reader_nindices:" << reader_nindices << ENDL();
+    // DPRINT << "reader_nindices:" << reader_nindices << ENDL();
     constexpr uint32_t window_h = get_compile_time_arg_val(1);
     constexpr uint32_t window_w = get_compile_time_arg_val(2);
+    // DPRINT << "window_hw:" << window_h <<":"<<window_w << ENDL();
 
     constexpr int32_t pad_w = get_compile_time_arg_val(3);
-
-    // channel size in bytes, multiple of 32
+    // DPRINT << "pad_w:" << pad_w  << ENDL();
+    //  channel size in bytes, multiple of 32
     constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(4);
-
-    // input tensor height / width / channels
+    // DPRINT << "in_nbytes_c:" << in_nbytes_c  << ENDL();
+    //  input tensor height / width / channels
     constexpr int32_t in_w = get_compile_time_arg_val(5);
 
     constexpr uint32_t in_c = get_compile_time_arg_val(6);
-
+    // DPRINT << "in_wc:" << in_w <<":"<<in_c << ENDL();
     constexpr uint32_t split_reader = get_compile_time_arg_val(7);
     constexpr uint32_t reader_id = get_compile_time_arg_val(8);
 
@@ -138,11 +139,11 @@ void kernel_main() {
     // BF16 value packed in UINT32. For maxpool, value is 1, for avgpool value is 1/kernel_size.
     constexpr uint32_t bf16_scalar = get_compile_time_arg_val(9);
     constexpr uint32_t bf16_init_value = get_compile_time_arg_val(11);
-
+    // DPRINT << "bf16_scalar:" << bf16_scalar <<":"<<bf16_init_value << ENDL();
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
-
+    // DPRINT << "in_nblocks_c:" << in_nblocks_c  << ENDL();
     constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
-
+    // DPRINT << "ceil_pad_w:" << ceil_pad_w  << ENDL();
     constexpr uint32_t TILE_HEIGHT = 32;
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
@@ -161,7 +162,7 @@ void kernel_main() {
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
     constexpr uint32_t stride_w = get_compile_time_arg_val(31);
-
+    // DPRINT << "stride_w:" << stride_w  << ENDL();
     constexpr uint32_t in_nbytes_leftover = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) * BYTES_PER_DATUM;
 
     uint32_t scalar_index = 0;
@@ -288,4 +289,5 @@ void kernel_main() {
             in_w_padded,
             in_nbytes_c>(clear_value_addr, in_l1_read_base_addr, 0);
     }
+    // tt::data_movement::common ::print_bf16_pages(get_read_ptr(in_cb_id), 32 * max_tiles_per_iter, 1);
 }  // kernel_main()

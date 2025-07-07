@@ -19,17 +19,25 @@ void kernel_main() {
     constexpr uint32_t in_c = get_compile_time_arg_val(3);
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(4);
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(5);
+    constexpr uint32_t out_h = get_compile_time_arg_val(6);
+    constexpr uint32_t out_w = get_compile_time_arg_val(7);
     constexpr uint32_t BYTES_PER_ELEM = 2;  // bf16
-    DPRINT << "in_c:" << in_c << ENDL();
-    DPRINT << "num_top_left_indexes:" << num_top_left_indexes << ENDL();
+    // DPRINT << "num_top_left_indexes:" << num_top_left_indexes << ENDL();
+    // DPRINT << "in_c:" << in_c << ENDL();
+    // DPRINT << "in_nblocks_c:" << in_nblocks_c << ENDL();
+    // DPRINT << "in_ntiles_c:" << in_ntiles_c << ENDL();
+    // DPRINT << "out_h:" << out_h << ENDL();
+    // DPRINT << "out_w:" << out_w << ENDL();
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
     constexpr uint32_t max_tiles_per_iter =
         in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
+    constexpr uint32_t tile_size = in_c == 16 ? 16 : 32;
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
 
-    for (uint32_t i = 0; i < num_top_left_indexes; ++i) {
+    for (uint32_t i = 0; i < num_top_left_indexes;
+         ++i) {  // TODO: note: for nhw dim, read ele by ele instead of tile by tile
         for (uint32_t c_i = 0; c_i < in_nblocks_c - 1; ++c_i) {
             uint32_t in_l1_read_addr = get_read_ptr(cb_src);
             uint32_t out_l1_write_addr = get_write_ptr(cb_dst);
@@ -39,11 +47,14 @@ void kernel_main() {
             cb_wait_front(cb_src, max_tiles_per_iter);
             cb_reserve_back(cb_dst, max_tiles_per_iter);
 
-            noc_async_read_one_packet(get_noc_addr(in_l1_read_addr), out_l1_write_addr, in_c * BYTES_PER_ELEM);
-            noc_async_read_barrier();  // At this line, read is complete.
+            noc_async_read_one_packet(
+                get_noc_addr(in_l1_read_addr),
+                out_l1_write_addr,
+                max_tiles_per_iter * tile_size * BYTES_PER_ELEM);  // TODO: note: change.
+            noc_async_read_barrier();                              // At this line, read is complete.
 
-            cb_push_back(cb_dst, max_tiles_per_iter);
-            cb_pop_front(cb_src, max_tiles_per_iter);
+            cb_push_back(cb_dst, max_tiles_per_iter);  // TODO: note: move the out ptr
+            cb_pop_front(cb_src, max_tiles_per_iter);  // TODO: note: move the in ptr
         }
         uint32_t in_l1_read_addr = get_read_ptr(cb_src);
         uint32_t out_l1_write_addr = get_write_ptr(cb_dst);
@@ -53,8 +64,11 @@ void kernel_main() {
         cb_wait_front(cb_src, partial_iter_output_tiles);
         cb_reserve_back(cb_dst, partial_iter_output_tiles);
 
-        noc_async_read_one_packet(get_noc_addr(in_l1_read_addr), out_l1_write_addr, in_c * BYTES_PER_ELEM);
-        noc_async_read_barrier();  // At this line, read is complete.
+        noc_async_read_one_packet(
+            get_noc_addr(in_l1_read_addr),
+            out_l1_write_addr,
+            64 * tile_size * BYTES_PER_ELEM);  // TODO: note: change. take care partial block/tiles.
+        noc_async_read_barrier();              // At this line, read is complete.
 
         cb_push_back(cb_dst, partial_iter_output_tiles);
         cb_pop_front(cb_src, partial_iter_output_tiles);

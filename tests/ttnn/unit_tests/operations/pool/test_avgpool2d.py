@@ -89,7 +89,7 @@ def test_avg_pool2d_post_commit(
 ):
     run_avg_pool2d(
         device=device,
-        use_program_cache=use_program_cache,
+        # use_program_cache=use_program_cache,
         tensor_map=tensor_map,
         input_shape=input_shape,
         kernel_size=kernel_size,
