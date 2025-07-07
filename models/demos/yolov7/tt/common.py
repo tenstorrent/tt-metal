@@ -57,7 +57,6 @@ class TtYOLOv7Conv2D:
 
     def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
-            dtype=self.dtype,
             weights_dtype=ttnn.bfloat16,
             activation=self.activation,
             shard_layout=self.shard_layout,
@@ -100,6 +99,7 @@ class TtYOLOv7Conv2D:
             groups=self.groups,
             return_weights_and_bias=True,
             return_output_dim=True,
+            dtype=self.dtype,
         )
         if self.is_reshape:
             output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
