@@ -42,9 +42,19 @@ uint32_t select_link(
     uint32_t num_links,
     tt::tt_fabric::Topology topology);
 
+std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& indices_tensor,
+    const ttnn::Tensor& mapping_tensor,
+    std::optional<uint32_t> axis);
+
 }  // namespace detail
 
 struct AllToAllDispatchDeviceOperation {
+    enum AllToAllImpl {
+        FullPacket,  // All pages are sent to the intermediate buffer and then written to the output buffer later
+        PageByPage,  // Each page is sent directly to the output buffer to conserve L1 space via intermediates
+    };
     struct operation_attributes_t {
         const tt::tt_metal::SubDeviceId subdevice_id;
         const MemoryConfig output_mem_config;
@@ -52,6 +62,7 @@ struct AllToAllDispatchDeviceOperation {
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
         const std::optional<GlobalSemaphore> cross_device_semaphore;
+        const AllToAllImpl impl;
     };
     struct tensor_args_t {
         const Tensor input_tensor;
@@ -122,7 +133,8 @@ struct AllToAllDispatchDeviceOperation {
         tt::tt_fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,
         tt::tt_metal::SubDeviceId subdevice_id,
-        const std::optional<GlobalSemaphore>& global_semaphore);
+        const std::optional<GlobalSemaphore>& global_semaphore,
+        AllToAllImpl impl);
 };
 }  // namespace ttnn::operations::ccl
 

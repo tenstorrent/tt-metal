@@ -205,10 +205,7 @@ void kernel_main() {
 
     constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(37);
     constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(38);
-
-    // TODO: if the extra CB occupies too much L1, we can switch to writing page by page – keep code for now but
-    // implement the dynamic switch later
-    constexpr bool write_page_by_page = false;
+    constexpr uint32_t write_page_by_page = get_compile_time_arg_val(39);
 
     size_t rt_args_idx = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);

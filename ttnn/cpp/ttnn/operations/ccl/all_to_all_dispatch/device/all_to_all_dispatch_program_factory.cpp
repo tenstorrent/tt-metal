@@ -201,6 +201,50 @@ uint32_t select_link(
     }
 }
 
+std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& indices_tensor,
+    const ttnn::Tensor& mapping_tensor,
+    std::optional<uint32_t> axis) {
+    auto aligned_input_page_size = get_aligned_page_size(input_tensor);
+    auto aligned_indices_page_size = get_aligned_page_size(indices_tensor);
+    auto aligned_mapping_page_size = get_aligned_page_size(mapping_tensor);
+
+    auto indices_pages = get_num_pages(indices_tensor);
+    auto mapping_pages = get_num_pages(mapping_tensor);
+
+    auto mesh_view = input_tensor.mesh_device()->get_view();
+    uint32_t num_devices = mesh_view.num_devices();
+    uint32_t tokens_per_device = get_num_rows(input_tensor);
+    uint32_t dispatch_devices =
+        axis.has_value() ? (axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols()) : num_devices;
+
+    constexpr uint32_t buffering_factor = 2;
+
+    static constexpr auto num_packet_headers_storable = 8;
+    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+
+    std::array<uint32_t, 6> cb_sizes = {
+        buffering_factor * aligned_input_page_size,
+        indices_pages * aligned_indices_page_size,
+        mapping_pages * aligned_mapping_page_size,
+        tokens_per_device * num_devices * sizeof(uint8_t),
+        tokens_per_device * dispatch_devices * aligned_indices_page_size,
+        num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
+    };
+
+    std::array<uint32_t, 6> cb_page_sizes = {
+        aligned_input_page_size,
+        aligned_indices_page_size,
+        aligned_mapping_page_size,
+        tokens_per_device * sizeof(uint8_t),
+        aligned_indices_page_size,
+        packet_header_size_bytes,
+    };
+
+    return {cb_sizes, cb_page_sizes};
+}
+
 }  // namespace detail
 
 AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::cached_mesh_workload_t
@@ -306,7 +350,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     uint32_t packet_header_cb_id = tt::CBIndex::c_3;
     // book-keeping buffer to avoid sending the same token multiple times
     uint32_t send_preparation_buffer_id = tt::CBIndex::c_4;
-    // metadata buffer
+    // intermediate buffer for holding metadata before writing out to the device (for FullPacket impl)
     uint32_t metadata_buffer_id = tt::CBIndex::c_5;
 
     uint32_t aligned_input_page_size = detail::get_aligned_page_size(input_tensor);
@@ -354,39 +398,34 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         metadata_page_size,
         aligned_metadata_page_size);
 
+    auto [cb_sizes, cb_page_sizes] =
+        detail::get_cb_sizes(input_tensor, indices_tensor, mapping_tensor, operation_attributes.axis);
+
     tt::tt_metal::CircularBufferConfig cb_input_tensor_config =
-        tt::tt_metal::CircularBufferConfig(
-            buffering_factor * aligned_input_page_size, {{input_tensor_cb_id, input_data_format}})
-            .set_page_size(input_tensor_cb_id, aligned_input_page_size);
+        tt::tt_metal::CircularBufferConfig(cb_sizes[0], {{input_tensor_cb_id, input_data_format}})
+            .set_page_size(input_tensor_cb_id, cb_page_sizes[0]);
 
     tt::tt_metal::CircularBufferConfig cb_indices_tensor_config =
-        tt::tt_metal::CircularBufferConfig(
-            indices_pages * aligned_indices_page_size, {{indices_tensor_cb_id, indices_data_format}})
-            .set_page_size(indices_tensor_cb_id, aligned_indices_page_size);
+        tt::tt_metal::CircularBufferConfig(cb_sizes[1], {{indices_tensor_cb_id, indices_data_format}})
+            .set_page_size(indices_tensor_cb_id, cb_page_sizes[1]);
 
     tt::tt_metal::CircularBufferConfig cb_mapping_tensor_config =
-        tt::tt_metal::CircularBufferConfig(
-            mapping_pages * aligned_mapping_page_size, {{mapping_tensor_cb_id, mapping_data_format}})
-            .set_page_size(mapping_tensor_cb_id, aligned_mapping_page_size);
+        tt::tt_metal::CircularBufferConfig(cb_sizes[2], {{mapping_tensor_cb_id, mapping_data_format}})
+            .set_page_size(mapping_tensor_cb_id, cb_page_sizes[2]);
 
     tt::tt_metal::CircularBufferConfig cb_send_preparation_buffer_config =
-        tt::tt_metal::CircularBufferConfig(
-            tokens_per_device * num_devices * sizeof(uint8_t), {{send_preparation_buffer_id, tt::DataFormat::UInt8}})
-            .set_page_size(send_preparation_buffer_id, tokens_per_device * sizeof(uint8_t));
+        tt::tt_metal::CircularBufferConfig(cb_sizes[3], {{send_preparation_buffer_id, tt::DataFormat::UInt8}})
+            .set_page_size(send_preparation_buffer_id, cb_page_sizes[3]);
 
     tt::tt_metal::CircularBufferConfig cb_metadata_buffer_config =
-        tt::tt_metal::CircularBufferConfig(
-            tokens_per_device * dispatch_devices * aligned_indices_page_size,
-            {{metadata_buffer_id, mapping_data_format}})
-            .set_page_size(metadata_buffer_id, aligned_indices_page_size);
+        tt::tt_metal::CircularBufferConfig(cb_sizes[4], {{metadata_buffer_id, mapping_data_format}})
+            .set_page_size(metadata_buffer_id, cb_page_sizes[4]);
 
     static constexpr auto num_packet_headers_storable = 8;
     static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig packet_header_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
-            {{packet_header_cb_id, tt::DataFormat::RawUInt32}})
-            .set_page_size(packet_header_cb_id, packet_header_size_bytes);
+        tt::tt_metal::CircularBufferConfig(cb_sizes[5], {{packet_header_cb_id, tt::DataFormat::RawUInt32}})
+            .set_page_size(packet_header_cb_id, cb_page_sizes[5]);
 
     auto subdevice_core_range_set =
         mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id);
@@ -414,7 +453,9 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto packet_header_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, packet_header_cb_config);
     auto send_preparation_buffer_cb =
         tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_send_preparation_buffer_config);
-    auto metadata_buffer_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_metadata_buffer_config);
+    if (operation_attributes.impl == AllToAllImpl::FullPacket) {
+        auto metadata_buffer_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_metadata_buffer_config);
+    }
 
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {
@@ -477,6 +518,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
         (uint32_t)fabric_max_packet_size,
         metadata_buffer_id,
+        operation_attributes.impl == AllToAllImpl::PageByPage ? 1 : 0,
     };
 
     const auto& writer_compile_time_args = reader_compile_time_args;

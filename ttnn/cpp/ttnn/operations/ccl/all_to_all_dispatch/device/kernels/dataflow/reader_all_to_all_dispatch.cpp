@@ -39,9 +39,7 @@ void kernel_main() {
 
     constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(38);
 
-    // TODO: if the extra CB occupies too much L1, we can switch to writing page by page – keep code for now but
-    // implement the dynamic switch later
-    constexpr bool write_page_by_page = false;
+    constexpr bool write_page_by_page = get_compile_time_arg_val(39);
 
 #ifdef AXIS
     constexpr int axis = AXIS;
@@ -69,6 +67,7 @@ void kernel_main() {
 
     // read the expert mapping table
     cb_reserve_back(mapping_tensor_cb_id, mapping_pages);
+    uint32_t base_indices_addr = get_write_ptr(mapping_tensor_cb_id);
     for (uint32_t i = 0; i < mapping_pages; i++) {
         uint32_t l1_write_addr = get_write_ptr(mapping_tensor_cb_id) + i * aligned_mapping_page_size;
         noc_async_read_page(i, mapping_addr_gen, l1_write_addr);
@@ -94,6 +93,7 @@ void kernel_main() {
     }
 
     // wait for all other devices to finish dispatching their input tokens and metadata
+    uint32_t my_device_offset = tokens_per_device * dispatch_index;
     if constexpr (write_page_by_page) {
         // if the writer is directly sending the metadata to its output buffer, we just wait for the semaphore to be set
         noc_semaphore_wait((uint32_t*)global_semaphore_address, tokens_per_device * dispatch_devices);
