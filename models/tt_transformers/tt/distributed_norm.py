@@ -66,7 +66,11 @@ class DistributedNorm(LightweightModule):
                     compute_kernel_config=self.ln_cfg,
                 )
 
-        input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        input_mem_cfg = (
+            self.norm.sharded_output_config
+            if (mode == "decode" and self.norm.sharded_output_config is not None)
+            else ttnn.DRAM_MEMORY_CONFIG
+        )
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
