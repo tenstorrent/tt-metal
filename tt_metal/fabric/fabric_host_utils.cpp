@@ -224,20 +224,22 @@ void get_optimal_noc_for_edm(
     }
 }
 
-// Helper: BFS distance map from a start chip to all reachable chips using the
-// provided adjacency map. Returned distances are expressed in hop count.
 IntraMeshAdjacencyMap build_mesh_adjacency_map(
     const std::set<chip_id_t>& user_chip_ids,
     const tt::tt_metal::distributed::MeshShape& mesh_shape,
-    std::function<std::vector<chip_id_t>(chip_id_t)> get_adjacent_chips_func) {
+    std::function<std::vector<chip_id_t>(chip_id_t)> get_adjacent_chips_func,
+    std::optional<chip_id_t> start_chip_id /* = std::nullopt */) {
+    constexpr size_t CORNER_1D_ADJACENT_CHIPS = 1;
+    constexpr size_t CORNER_ADJACENT_CHIPS = 2;
+    constexpr size_t EDGE_ADJACENT_CHIPS = 3;
     IntraMeshAdjacencyMap topology_info;
 
     // Store mesh dimensions in topology info
     topology_info.ns_size = mesh_shape[0];
     topology_info.ew_size = mesh_shape[1];
 
-    // Determine the starting chip ID for BFS (use first chip from mesh container)
-    chip_id_t chip_0 = *user_chip_ids.begin();
+    // Determine the starting chip ID for BFS (use first chip from mesh container unless specified)
+    chip_id_t chip_0 = start_chip_id.has_value() ? *start_chip_id : *user_chip_ids.begin();
 
     // BFS to populate mesh of chips based on adjacency from chip 0
     std::queue<chip_id_t> chip_queue;
@@ -260,17 +262,17 @@ IntraMeshAdjacencyMap build_mesh_adjacency_map(
 
         if (is_1d_mesh) {
             // For 1D meshes, corners have exactly 1 adjacent chip (endpoints)
-            is_corner = (adjacent_chips.size() == 1);  // CORNER_1D_ADJACENT_CHIPS
+            is_corner = (adjacent_chips.size() == CORNER_1D_ADJACENT_CHIPS);
         } else {
             // For 2D meshes, corners have exactly 2 adjacent chips
-            is_corner = (adjacent_chips.size() == 2);  // CORNER_ADJACENT_CHIPS
+            is_corner = (adjacent_chips.size() == CORNER_ADJACENT_CHIPS);
         }
 
         if (is_corner) {
             // NOTE: First one added is the corner closest to chip 0
             //       this will be the pinned nw corner
             topology_info.corners.push_back(current_chip);
-        } else if (adjacent_chips.size() == 3) {  // EDGE_ADJACENT_CHIPS
+        } else if (adjacent_chips.size() == EDGE_ADJACENT_CHIPS) {
             topology_info.edges.push_back(current_chip);
         }
 
@@ -291,6 +293,7 @@ IntraMeshAdjacencyMap build_mesh_adjacency_map(
     return topology_info;
 }
 
+// Computes BFS distance map from a start chip to all reachable chips using the provided adjacency map.
 std::unordered_map<chip_id_t, std::uint32_t> compute_distances(
     chip_id_t start_chip, const std::unordered_map<chip_id_t, std::vector<chip_id_t>>& adjacency_map) {
     std::unordered_map<chip_id_t, std::uint32_t> dist;
@@ -315,7 +318,6 @@ std::unordered_map<chip_id_t, std::uint32_t> compute_distances(
     return dist;
 }
 
-// Helper: Convert 1D mesh adjacency map to row-major vector representation
 std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(const IntraMeshAdjacencyMap& topology_info) {
     // For 1D meshes, we expect exactly 2 corners (the endpoints)
     TT_FATAL(
@@ -353,7 +355,6 @@ std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(const Intra
     return physical_chip_ids;
 }
 
-// Helper: Convert 2D mesh adjacency map to row-major vector representation
 std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
     const IntraMeshAdjacencyMap& topology_info, std::optional<chip_id_t> nw_corner_chip_id) {
     // Check number of corners for 2D meshes

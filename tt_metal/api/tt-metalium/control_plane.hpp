@@ -166,11 +166,6 @@ public:
     uint64_t get_asic_id(chip_id_t chip_id) const;
 
 private:
-    // -----------------------------------------------------------------------------
-    // Helper: BFS distance map from a start chip to all reachable chips using the
-    // physical Ethernet topology. Returned distances are expressed in hop count.
-    // -----------------------------------------------------------------------------
-
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;

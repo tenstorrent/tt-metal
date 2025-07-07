@@ -42,12 +42,6 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "fabric_host_utils.hpp"
 
-// Mesh topology constants
-constexpr size_t CORNER_ADJACENT_CHIPS = 2;     // Corner chips have 2 adjacent neighbors
-constexpr size_t EDGE_ADJACENT_CHIPS = 3;       // Edge chips have 3 adjacent neighbors
-constexpr size_t INTERIOR_ADJACENT_CHIPS = 4;   // Interior chips have 4 adjacent neighbors
-constexpr size_t CORNER_1D_ADJACENT_CHIPS = 1;  // 1D mesh corner chips have 1 adjacent neighbor (endpoints)
-
 namespace tt::tt_fabric {
 
 namespace {
@@ -420,7 +414,7 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     auto topology_info =
         build_mesh_adjacency_map(user_chip_ids, mesh_container.shape(), [num_ports_per_side](chip_id_t chip_id) {
             return get_adjacent_chips_from_ethernet_connections(chip_id, num_ports_per_side);
-        });
+        }, nw_corner_chip_id);
 
     // Handle 1D meshes (1xN or Nx1)
     bool is_1d_mesh = (topology_info.ns_size == 1) || (topology_info.ew_size == 1);
@@ -1621,7 +1615,7 @@ void ControlPlane::generate_local_intermesh_link_table() {
     intermesh_link_table_.local_mesh_id = MeshId{0};
     const uint32_t remote_config_base_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO);
-    for (const auto& chip_id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+    for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
         if (this->has_intermesh_links(chip_id)) {
             for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
                 if (not this->is_intermesh_eth_link_trained(chip_id, eth_core)) {
