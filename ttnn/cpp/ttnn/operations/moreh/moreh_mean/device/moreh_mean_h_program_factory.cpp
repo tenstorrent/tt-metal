@@ -62,6 +62,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
     uint32_t num_input_tiles = 2;
+    uint32_t num_output_tiles = 2;
     CreateCircularBuffer(
         program,
         all_cores,
