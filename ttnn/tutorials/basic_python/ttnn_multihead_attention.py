@@ -20,8 +20,6 @@ def main():
     device_id = 0
     device = ttnn.open_device(device_id=device_id)
 
-    device.enable_program_cache()
-
     def multi_head_attention(
         hidden_states,
         attention_mask,
