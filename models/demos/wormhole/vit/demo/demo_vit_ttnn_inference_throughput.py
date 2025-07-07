@@ -129,7 +129,6 @@ def test_vit(device):
         output = ttnn_optimized_sharded_vit_wh.vit(
             config,
             pixel_values,
-            head_masks,
             cls_token,
             position_embeddings,
             parameters=parameters,

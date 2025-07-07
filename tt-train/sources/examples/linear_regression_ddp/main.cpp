@@ -58,14 +58,11 @@ int main() {
                 std::move(target.begin(), target.end(), std::back_inserter(targets));
             }
 
-            xt::xarray<float> data_xtensor = xt::adapt(data, std::vector<size_t>{batch_size, 1, 1, num_features});
-            xt::xarray<float> targets_xtensor = xt::adapt(targets, std::vector<size_t>{batch_size, 1, 1, num_targets});
-
-            auto mesh_shape = device->shape();
-            ttml::core::XTensorToMeshVariant<float> composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 0);
-            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_xtensor(data_xtensor, device, composer));
-            auto targets_tensor =
-                ttml::autograd::create_tensor(ttml::core::from_xtensor(targets_xtensor, device, composer));
+            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
+                data, ttnn::Shape{batch_size, 1, 1, num_features}, device, ttnn::Layout::TILE, mapper.get()));
+            auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
+                targets, ttnn::Shape{batch_size, 1, 1, num_targets}, device, ttnn::Layout::TILE, mapper.get()));
 
             return std::make_pair(data_tensor, targets_tensor);
         };

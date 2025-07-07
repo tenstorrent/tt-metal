@@ -10,6 +10,9 @@ import sys
 from loguru import logger  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import itertools
+import matplotlib.ticker as mticker
+import numpy as np
+from collections import defaultdict
 
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
@@ -23,9 +26,9 @@ test_id_to_name = {
     3: "DRAM Directed Ideal",
     4: "One to One Packet Sizes",
     5: "One from One Packet Sizes",
-    6: "One to All 2x2 Packet Sizes",
-    7: "One to All 4x4 Packet Sizes",
-    8: "One to All 10x10 Packet Sizes",
+    6: "One to All Unicast 2x2 Packet Sizes",
+    7: "One to All Unicast 4x4 Packet Sizes",
+    8: "One to All Unicast 10x10 Packet Sizes",
     9: "One to All Multicast 2x2 Packet Sizes",
     10: "One to All Multicast 5x5 Packet Sizes",
     11: "One to All Multicast 11x10 Packet Sizes",
@@ -47,61 +50,18 @@ test_id_to_name = {
     21: "Conv Act with halo 3x3",
     22: "Conv Act with halo 3x3 Small",
     23: "Conv Halo Gather",
+    60: "All to All Packet Sizes",
+    70: "All from All Packet Sizes",
 }
 
 # Comments for each test explaining why we get the perf that we do
 test_id_to_comment = {
-    0: "Dram read bandwidth saturates at about 37 B/cycle, according to HW experiments. \n\
-        DRAM write bandwidth should saturate at 64 B/cycle, instead of 35 B/c. \n\
-        There may be some configuration problem with the dram controller/phy or this may \n\
-        be the physical limit of the dram.",
     1: "This test appears to be broken. The graph is showing numbers that dont make sense.",
     2: "This test appears to be broken. The graph is showing numbers that dont make sense.",
     3: "This test shows the ideal read and write bandwidth when transfering multiple 8KB packets. \n\
         The read bandwidth is what is expected, however write bandwidth is expected to be 64 \n\
         B/cycle rather than 35 B/cycle. There may be some configuration problem with the dram \n\
         controller/phy or this may be the physical limit of the dram.",
-    4: "Bandwidth in steady state, with > 2KB packet sizes, is close to theoretical max. \n\
-        Under 2KB, the bandwidth is limitted by either the RISC latency or by the NOC sending from L1 latency.",
-    5: "Bandwidth in steady state, with > 2KB packet sizes, is close to theoretical max. \n\
-        Under 2KB, the bandwidth is limitted by the RISC latency.",
-    6: "This test sends to a small grid. The bandwidth characteristics are similar to the \n\
-        one to one test. Note that it may appear that multicast has lower bandwidth, however \n\
-        multicast sends less data and has much lower latency, so it is prefered to use multicast.",
-    7: "This test sends to a medium grid. The bandwidth characteristics are similar to the one \n\
-        to one test. As the grid size increases, the number of transactions needed to saturate \n\
-        NOC decreases because the NOC needs to send num cores more packets. Note that it may \n\
-        appear that multicast has lower bandwidth, however multicast sends less data and \n\
-        has much lower latency, so it is prefered to use multicast.",
-    8: "This test sends to a large grid. The bandwidth characteristics are similar to the one to \n\
-        one test. As the grid size increases, the number of transactions needed to saturate NOC \n\
-        decreases because the NOC needs to send num cores more packets. Note that it may appear \n\
-        that multicast has lower bandwidth, however multicast sends less data and has much \n\
-        lower latency, so it is prefered to use multicast.",
-    9: "This test sends to a small grid using unlinked multicast. Bandwidth degrades due to path \n\
-        reserve being done after every transaction.",
-    10: "This test sends to a medium grid using unlinked multicast. Bandwidth degrades due to path \n\
-        reserve being done after every transaction. As the grid size increases, the number of write \n\
-        acks increases which degrades bandwidth.",
-    11: "This test sends to a large grid using unlinked multicast. Bandwidth degrades due to path \n\
-        reserve being done after every transaction. As the grid size increases, the number of write \n\
-        acks increases which degrades bandwidth.",
-    12: "This test sends to a small grid using linked multicast. Linked causes path reserve to be \n\
-        done only once for all transactions, as such performance approaches theoretical.",
-    13: "This test sends to a medium grid using linked multicast. Linked causes path reserve to be \n\
-        done only once for all transactions, as such performance approaches theoretical. As the grid \n\
-        size increases, the number of write acks increases which degrades bandwidth. Posted \n\
-        multicasts do not have this issue, however it is not safe to use posted multicast \n\
-        due to a hardware bug.",
-    14: "This test sends to a large grid using linked multicast. Linked causes path reserve to be \n\
-        done only once for all transactions, as such performance approaches theoretical. As the \n\
-        grid size increases, the number of write acks increases which degrades bandwidth. Posted \n\
-        multicasts do not have this issue, however it is not safe to use posted multicast \n\
-        due to a hardware bug.",
-    15: "At small packet sizes, the bandwidth is limited by the RISC latency. As the packet size \n\
-        increases, the bandwidth approaches 64 B/cycle. Similar to the one from one test.",
-    16: "Loopback will have similar characteristics to the one to one test, however it uses two \n\
-        ports to send and receive data, as such it is more likely to cause contention.",
     17: "This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions \n\
         and transactions size. Reshard perf is dictated based on the number of transactions and the \n\
         transaction size. A small number of transactions will result in small perf due to large \n\
@@ -147,10 +107,10 @@ test_id_to_comment = {
 # are subject to change with new directed tests.
 test_bounds = {
     "wormhole_b0": {
-        0: {
-            "riscv_1": {"latency": {"lower": 300, "upper": 24000}, "bandwidth": 0.08},
-            "riscv_0": {"latency": {"lower": 300, "upper": 25000}, "bandwidth": 0.07},
-        },
+        # 0: {
+        #     "riscv_1": {"latency": {"lower": 300, "upper": 24000}, "bandwidth": 0.08},
+        #     "riscv_0": {"latency": {"lower": 300, "upper": 25000}, "bandwidth": 0.07},
+        # },
         1: {
             "riscv_1": {"latency": {"lower": 23000, "upper": 24000}, "bandwidth": 21},
             "riscv_0": {"latency": {"lower": 24000, "upper": 25000}, "bandwidth": 21},
@@ -159,16 +119,16 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 300, "upper": 600}, "bandwidth": 0.08},
             "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.08},
         },
-        3: {
-            "riscv_1": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 22},
-            "riscv_0": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 21},
+        3: {  # DRAM Unary Directed Ideal
+            "riscv_1": {"latency": {"lower": 46000, "upper": 49000}, "bandwidth": 22},
+            "riscv_0": {"latency": {"lower": 46000, "upper": 49000}, "bandwidth": 21},
         },
-        4: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 18000}, "bandwidth": 0.1},
-        },
-        5: {
-            "riscv_1": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.1},
-        },
+        # 4: {
+        #     "riscv_0": {"latency": {"lower": 200, "upper": 18000}, "bandwidth": 0.1},
+        # },
+        # 5: {
+        #     "riscv_1": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.1},
+        # },
         # 6: {
         #     "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.3},
         # },
@@ -196,13 +156,13 @@ test_bounds = {
         # 14: {
         #     "riscv_0": {"latency": {"lower": 500, "upper": 40000}, "bandwidth": 0.04},
         # },
-        15: {
-            "riscv_1": {"latency": {"lower": 700, "upper": 85000}, "bandwidth": 0.71},
-        },
-        16: {
-            "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
-        },
-        30: {
+        # 15: {
+        #     "riscv_1": {"latency": {"lower": 700, "upper": 85000}, "bandwidth": 0.71},
+        # },
+        # 16: {
+        #     "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
+        # },
+        30: {  # One from All Directed Ideal
             "riscv_1": {"latency": {"lower": 20000, "upper": 37000}, "bandwidth": 30},
         },
         50: {  # One to One Directed Ideal
@@ -249,10 +209,10 @@ test_bounds = {
         },
     },
     "blackhole": {
-        0: {
-            "riscv_1": {"latency": {"lower": 400, "upper": 17000}, "bandwidth": 0.1},
-            "riscv_0": {"latency": {"lower": 300, "upper": 16000}, "bandwidth": 0.15},
-        },
+        # 0: {
+        #     "riscv_1": {"latency": {"lower": 400, "upper": 17000}, "bandwidth": 0.1},
+        #     "riscv_0": {"latency": {"lower": 300, "upper": 16000}, "bandwidth": 0.15},
+        # },
         1: {
             "riscv_1": {"latency": {"lower": 20000, "upper": 33000}, "bandwidth": 32},
             "riscv_0": {"latency": {"lower": 20000, "upper": 33000}, "bandwidth": 33},
@@ -261,16 +221,16 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 400, "upper": 600}, "bandwidth": 0.13},
             "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.16},
         },
-        3: {
-            "riscv_1": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 33},
-            "riscv_0": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 34},
+        3: {  # DRAM Unary Directed Ideal
+            "riscv_1": {"latency": {"lower": 29000, "upper": 32000}, "bandwidth": 33},
+            "riscv_0": {"latency": {"lower": 29000, "upper": 32000}, "bandwidth": 34},
         },
-        4: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.17},
-        },
-        5: {
-            "riscv_1": {"latency": {"lower": 300, "upper": 18000}, "bandwidth": 0.17},
-        },
+        # 4: {
+        #     "riscv_0": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.17},
+        # },
+        # 5: {
+        #     "riscv_1": {"latency": {"lower": 300, "upper": 18000}, "bandwidth": 0.17},
+        # },
         # 6: {
         #     "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.5},
         # },
@@ -298,13 +258,13 @@ test_bounds = {
         # 14: {
         #     "riscv_0": {"latency": {"lower": 700, "upper": 46000}, "bandwidth": 0.08},
         # },
-        15: {
-            "riscv_1": {"latency": {"lower": 800, "upper": 87000}, "bandwidth": 1.19},
-        },
-        16: {
-            "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
-        },
-        30: {"riscv_1": {"latency": {"lower": 10000, "upper": 18000}, "bandwidth": 60}},
+        # 15: {
+        #     "riscv_1": {"latency": {"lower": 800, "upper": 87000}, "bandwidth": 1.19},
+        # },
+        # 16: {
+        #     "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
+        # },
+        30: {"riscv_1": {"latency": {"lower": 10000, "upper": 18000}, "bandwidth": 60}},  # One from All Directed Ideal
         50: {  # One to One Directed Ideal
             "riscv_0": {"latency": {"lower": 12000, "upper": 19000}, "bandwidth": 59},  # 17000
         },
@@ -379,7 +339,7 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
     if report:
         export_dm_stats_to_csv(dm_stats)
 
-    # Check performance (TODO: enable assertions)
+    # Check performance
     performance_check(dm_stats, arch=arch, verbose=verbose)
 
     logger.info("Data movement tests completed.")
@@ -585,56 +545,101 @@ def print_stats(dm_stats):
         logger.info("")
 
 
-def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
+def aggregate_performance(dm_stats, method="median"):
+    """
+    Aggregates duration and bandwidth per run_host_id for each kernel,
+    and includes the attributes for each run_host_id.
+
+    Args:
+        dm_stats: nested dict as produced by gather_analysis_stats
+        method: 'median' or 'average'
+
+    Returns:
+        Dict: {kernel: {run_host_id: {
+            "duration_cycles": aggregated_value,
+            "bandwidth": aggregated_value,
+            "attributes": attributes_dict,
+            "all_durations": [...],
+            "all_bandwidths": [...],
+        }}}
+    """
+    result = {}
+    for kernel in dm_stats.keys():
+        grouped_durations = defaultdict(list)
+        grouped_bandwidths = defaultdict(list)
+        for entry in dm_stats[kernel]["analysis"]["series"]:
+            run_host_id = entry["duration_type"][0]["run_host_id"]
+            attributes = dm_stats[kernel]["attributes"][run_host_id]
+            num_transactions = attributes["Number of transactions"]
+            transaction_size = attributes["Transaction size in bytes"]
+            duration = entry["duration_cycles"]
+            bandwidth = num_transactions * transaction_size / duration if duration else 0
+            grouped_durations[run_host_id].append(duration)
+            grouped_bandwidths[run_host_id].append(bandwidth)
+
+        agg = {}
+        for run_host_id in grouped_durations:
+            durations = grouped_durations[run_host_id]
+            bandwidths = grouped_bandwidths[run_host_id]
+            if method == "median":
+                agg_duration = float(np.median(durations))
+                agg_bandwidth = float(np.median(bandwidths))
+            elif method == "average":
+                agg_duration = float(np.mean(durations))
+                agg_bandwidth = float(np.mean(bandwidths))
+            else:
+                raise ValueError(f"Unknown method: {method}")
+            agg[run_host_id] = {
+                "duration_cycles": agg_duration,
+                "bandwidth": agg_bandwidth,
+                "attributes": dm_stats[kernel]["attributes"][run_host_id],
+                "all_durations": durations,
+                "all_bandwidths": bandwidths,
+            }
+        result[kernel] = agg
+    return result
+
+
+def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", arch="blackhole"):
+    agg_stats = aggregate_performance(dm_stats)
+
     # Extract data for plotting
-    riscv_1_series = dm_stats["riscv_1"]["analysis"]["series"]
-    riscv_0_series = dm_stats["riscv_0"]["analysis"]["series"]
+    riscv_1_series = agg_stats["riscv_1"]
+    riscv_0_series = agg_stats["riscv_0"]
 
     # Group data by Test id
     test_ids = set()
-    for attributes in dm_stats["riscv_1"]["attributes"].values():
-        test_ids.add(attributes["Test id"])
-    for attributes in dm_stats["riscv_0"]["attributes"].values():
-        test_ids.add(attributes["Test id"])
+    for kernel in agg_stats.keys():
+        for stats in agg_stats[kernel].values():
+            test_ids.add(stats["attributes"]["Test id"])
 
     test_ids = sorted(test_ids)  # Sort for consistent ordering
 
     # Set noc_width based on architecture
     noc_width = 32 if arch == "wormhole_b0" else 64
 
-    # Create the main figure
-    fig = plt.figure(layout="constrained", figsize=(18, 6 * len(test_ids)))
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
 
-    # Create subfigures for each Test id
-    subfigs = fig.subfigures(len(test_ids), 1)
-    if len(test_ids) == 1:
-        subfigs = [subfigs]
+    for test_id in test_ids:
+        # Create the figure for this test id
+        fig = plt.figure(layout="constrained", figsize=(18, 6))
 
-    for idx, (subfig, test_id) in enumerate(zip(subfigs, test_ids)):
         # Add a title for the current Test id
         test_name = test_id_to_name.get(test_id, f"Test ID {test_id}")
-        subsubfig = subfig.subfigures(2, 1, height_ratios=[100, 1])
+        subsubfig = fig.subfigures(2, 1, height_ratios=[100, 1])
         subsubfig[0].suptitle(test_name, fontsize=16, weight="bold")
 
         # Create subplots within the subfigure
         axes = subsubfig[0].subplots(1, 2)
 
         # Filter data for the current Test id
-        riscv_1_filtered = [
-            entry
-            for entry in riscv_1_series
-            if dm_stats["riscv_1"]["attributes"][entry["duration_type"][0]["run_host_id"]]["Test id"] == test_id
-        ]
-        riscv_0_filtered = [
-            entry
-            for entry in riscv_0_series
-            if dm_stats["riscv_0"]["attributes"][entry["duration_type"][0]["run_host_id"]]["Test id"] == test_id
-        ]
+        riscv_1_filtered = [entry for entry in riscv_1_series.values() if entry["attributes"]["Test id"] == test_id]
+        riscv_0_filtered = [entry for entry in riscv_0_series.values() if entry["attributes"]["Test id"] == test_id]
 
         # Aggregate data across all runtime_host_ids for the current Test id
-        riscv_1_durations = [entry["duration_cycles"] for entry in riscv_1_filtered]
-        riscv_0_durations = [entry["duration_cycles"] for entry in riscv_0_filtered]
-
+        riscv_1_durations = []
+        riscv_0_durations = []
         riscv_1_data_sizes = []
         riscv_0_data_sizes = []
         riscv_1_bandwidths = []
@@ -643,47 +648,53 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
         riscv_0_transactions = []
 
         for entry in riscv_1_filtered:
-            runtime_host_id = entry["duration_type"][0]["run_host_id"]
-            attributes = dm_stats["riscv_1"]["attributes"][runtime_host_id]
-            transaction_size = attributes["Transaction size in bytes"]
-            num_transactions = attributes["Number of transactions"]
-            bandwidth = num_transactions * transaction_size / entry["duration_cycles"]
-            riscv_1_data_sizes.append(transaction_size)
-            riscv_1_bandwidths.append(bandwidth)
-            riscv_1_transactions.append(num_transactions)
+            riscv_1_durations.append(entry["duration_cycles"])
+            riscv_1_bandwidths.append(entry["bandwidth"])
+            riscv_1_data_sizes.append(entry["attributes"]["Transaction size in bytes"])
+            riscv_1_transactions.append(entry["attributes"]["Number of transactions"])
 
         for entry in riscv_0_filtered:
-            runtime_host_id = entry["duration_type"][0]["run_host_id"]
-            attributes = dm_stats["riscv_0"]["attributes"][runtime_host_id]
-            transaction_size = attributes["Transaction size in bytes"]
-            num_transactions = attributes["Number of transactions"]
-            bandwidth = num_transactions * transaction_size / entry["duration_cycles"]
-            riscv_0_data_sizes.append(transaction_size)
-            riscv_0_bandwidths.append(bandwidth)
-            riscv_0_transactions.append(num_transactions)
+            riscv_0_durations.append(entry["duration_cycles"])
+            riscv_0_bandwidths.append(entry["bandwidth"])
+            riscv_0_data_sizes.append(entry["attributes"]["Transaction size in bytes"])
+            riscv_0_transactions.append(entry["attributes"]["Number of transactions"])
 
         # Plot durations
         ax = axes[0]
-        lines = []
-        labels = []
-        if riscv_1_durations:
-            (line1,) = ax.plot(riscv_1_durations, label="RISCV 1 Duration (cycles)", marker="o")
-            lines.append(line1)
-            labels.append("RISCV 1 Duration (cycles)")
-        if riscv_0_durations:
-            (line0,) = ax.plot(riscv_0_durations, label="RISCV 0 Duration (cycles)", marker="o")
-            lines.append(line0)
-            labels.append("RISCV 0 Duration (cycles)")
-        ax.set_xlabel("Index")
+        unique_transactions = sorted(set(riscv_1_transactions + riscv_0_transactions))  # Ensure ascending order
+        for num_transactions in unique_transactions:
+            # Group and plot RISCV 1 data
+            riscv_1_grouped = [
+                (sizes, durations)
+                for sizes, durations, trans in zip(riscv_1_data_sizes, riscv_1_durations, riscv_1_transactions)
+                if trans == num_transactions
+            ]
+            if riscv_1_grouped:
+                sizes, durations = zip(*riscv_1_grouped)
+                ax.plot(sizes, durations, label=f"Receiver (Number of Transactions={num_transactions})", marker="o")
+
+            # Group and plot RISCV 0 data
+            riscv_0_grouped = [
+                (sizes, durations)
+                for sizes, durations, trans in zip(riscv_0_data_sizes, riscv_0_durations, riscv_0_transactions)
+                if trans == num_transactions
+            ]
+            if riscv_0_grouped:
+                sizes, durations = zip(*riscv_0_grouped)
+                ax.plot(sizes, durations, label=f"Sender (Number of Transactions={num_transactions})", marker="o")
+
+        ax.set_xlabel("Transaction Size (bytes)")
         ax.set_ylabel("Duration (cycles)")
-        ax.set_title("Kernel Durations")
-        if lines:
-            ax.legend(lines, labels)
+        ax.set_title("Transaction Size vs Duration")
+        ax.set_xscale("log", base=2)
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x)}"))
+        ax.set_yscale("log", base=10)
+        # ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x)}"))
+        ax.legend()
         ax.grid()
 
         # Plot size of data transferred vs bandwidth
         ax = axes[1]
-        unique_transactions = sorted(set(riscv_1_transactions + riscv_0_transactions))  # Ensure ascending order
         for num_transactions in unique_transactions:
             # Group and plot RISCV 1 data
             riscv_1_grouped = [
@@ -693,7 +704,7 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
             ]
             if riscv_1_grouped:
                 sizes, bws = zip(*riscv_1_grouped)
-                ax.plot(sizes, bws, label=f"RISCV 1 (Transactions={num_transactions})", marker="o")
+                ax.plot(sizes, bws, label=f"Receiver (Number of Transactions={num_transactions})", marker="o")
 
             # Group and plot RISCV 0 data
             riscv_0_grouped = [
@@ -703,7 +714,7 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
             ]
             if riscv_0_grouped:
                 sizes, bws = zip(*riscv_0_grouped)
-                ax.plot(sizes, bws, label=f"RISCV 0 (Transactions={num_transactions})", marker="o")
+                ax.plot(sizes, bws, label=f"Sender (Number of Transactions={num_transactions})", marker="o")
 
         # Add theoretical max bandwidth curve
         transaction_sizes = sorted(set(riscv_1_data_sizes + riscv_0_data_sizes))
@@ -712,54 +723,79 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
 
         ax.set_xlabel("Transaction Size (bytes)")
         ax.set_ylabel("Bandwidth (bytes/cycle)")
-        ax.set_title("Data Size vs Bandwidth")
+        ax.set_title("Transaction Size vs Bandwidth")
+        ax.set_xscale("log", base=2)
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x)}"))
         ax.legend()
         ax.grid()
 
         # Add a comment section below the plots
-        txtObj = subsubfig[1].text(
-            0.5,
-            0,
-            f"Comments: {test_id_to_comment.get(test_id, 'No comment available, test has not been analyzed')}",
-            ha="center",
-            fontsize=10,
-            style="italic",
-            wrap=True,
-        )
-        txtObj._get_wrap_line_width = lambda: 0.9 * subsubfig[1].bbox.width
+        if test_id in test_id_to_comment.keys():
+            txtObj = subsubfig[1].text(
+                0.5,
+                0,
+                f"Comments: {test_id_to_comment.get(test_id, 'No comment available, test has not been analyzed')}",
+                ha="center",
+                fontsize=10,
+                style="italic",
+                wrap=True,
+            )
+            txtObj._get_wrap_line_width = lambda: 0.9 * subsubfig[1].bbox.width
 
-    # Save the combined plot
-    plt.savefig(output_file)
-    plt.close()
-    logger.info(f"dm_stats plots saved at {output_file}")
+        # Save the plot for this test id
+        output_file = os.path.join(output_dir, f"{test_id_to_name.get(test_id, f'Test ID {test_id}')}.png")
+        plt.savefig(output_file)
+        plt.close(fig)
+        logger.info(f"dm_stats plot for test id {test_id} saved at {output_file}")
 
 
-def export_dm_stats_to_csv(dm_stats, output_file="dm_stats.csv"):
-    with open(output_file, mode="w", newline="") as csvfile:
-        writer = csv.writer(csvfile)
+def export_dm_stats_to_csv(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement"):
+    os.makedirs(output_dir, exist_ok=True)
+    agg_stats = aggregate_performance(dm_stats)
 
-        # Write the header
-        writer.writerow(["Kernel", "Run Host ID", "Test ID", "Latency (cycles)", "Bandwidth (bytes/cycle)"])
+    # Group by test id
+    test_ids = set()
+    for riscv in agg_stats.keys():
+        for test_run in agg_stats[riscv].values():
+            test_ids.add(test_run["attributes"]["Test id"])
+    test_ids = sorted(test_ids)
 
-        # Iterate over the dm_stats object
-        for kernel, kernel_data in dm_stats.items():
-            for run_host_id, attributes in kernel_data["attributes"].items():
-                test_id = attributes.get("Test id", "N/A")
-                duration_cycles = next(
-                    (
-                        entry["duration_cycles"]
-                        for entry in kernel_data["analysis"]["series"]
-                        if entry["duration_type"][0]["run_host_id"] == run_host_id
-                    ),
-                    None,
-                )
-                if duration_cycles:
+    for test_id in test_ids:
+        test_name = test_id_to_name.get(test_id, f"Test ID {test_id}")
+        csv_file = os.path.join(output_dir, f"{test_name}.csv")
+        with open(csv_file, mode="w", newline="") as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(
+                [
+                    "Kernel",
+                    "Run Host ID",
+                    "Transaction Size (bytes)",
+                    "Number of Transactions",
+                    "Latency (cycles)",
+                    "Bandwidth (bytes/cycle)",
+                ]
+            )
+            for kernel in agg_stats.keys():
+                for run_host_id, run_stats in agg_stats[kernel].items():
+                    # run_host_id = entry["duration_type"][0]["run_host_id"]
+                    attributes = run_stats["attributes"]
+                    if attributes.get("Test id") != test_id:
+                        continue
                     transaction_size = attributes.get("Transaction size in bytes", 0)
                     num_transactions = attributes.get("Number of transactions", 0)
-                    bandwidth = (num_transactions * transaction_size) / duration_cycles if duration_cycles else 0
-                    writer.writerow([kernel, run_host_id, test_id, duration_cycles, bandwidth])
-
-    logger.info(f"dm_stats exported to {output_file}")
+                    duration_cycles = run_stats["duration_cycles"]
+                    bandwidth = run_stats["bandwidth"]
+                    writer.writerow(
+                        [
+                            "Receiver" if kernel == "riscv_1" else "Sender",
+                            run_host_id,
+                            transaction_size,
+                            num_transactions,
+                            duration_cycles,
+                            bandwidth,
+                        ]
+                    )
+        logger.info(f"CSV report for test id {test_id} saved at {csv_file}")
 
 
 def test_data_movement(

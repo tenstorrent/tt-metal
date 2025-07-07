@@ -5,6 +5,7 @@
 #include "scatter_program_factory.hpp"
 
 #include "scatter_device_operation_types.hpp"
+#include "tt-metalium/device.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -21,6 +22,14 @@ uint64_t ceil32(const uint64_t& number) {
 
 bool is_pow2_min32(const uint64_t& number) { return ((number & (number - 1)) == 0) && number >= 32; }
 }  // namespace
+
+// maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
+// BH available L1 mem size of nearly 1.5 MB...
+// ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
+// tensors)
+// ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
+// ... minimized by ~20% to account for reserved memory
+uint32_t calculate_optimal_chunk_size(IDevice* device) { return ceil32(device->l1_size_per_core() / 4 / 4 * 0.8 - 32); }
 
 ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
@@ -71,21 +80,25 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
         [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, work_units);
 
+    // input dtype byte sizes
     const uint32_t& input_datum_size = input_tensor.element_size();
     const uint32_t& index_datum_size = index_tensor.element_size();
     const uint32_t& source_datum_size = src_tensor.element_size();
     const uint32_t& output_datum_size = output_tensor.element_size();
 
+    // input row byte sizes
     const uint32_t& input_stick_size_bytes = input_stick_size * input_datum_size;
     const uint32_t& index_stick_size_bytes = index_stick_size * index_datum_size;
     const uint32_t& source_stick_size_bytes = source_stick_size * source_datum_size;
     const uint32_t& output_stick_size_bytes = output_stick_size * output_datum_size;
 
+    // check if row byte sizes are at least 32 and a power of 2 (for InterleavedAddrGen)
     const uint32_t is_input_stick_size_bytes_pow2_min_32 = is_pow2_min32(input_stick_size_bytes);
     const uint32_t is_index_stick_size_bytes_pow2_min_32 = is_pow2_min32(index_stick_size_bytes);
     const uint32_t is_source_stick_size_bytes_pow2_min_32 = is_pow2_min32(source_stick_size_bytes);
     const uint32_t is_output_stick_size_bytes_pow2_min_32 = is_pow2_min32(output_stick_size_bytes);
 
+    // for InterleavedAddrGen
     const uint32_t input_stick_size_bytes_log2 =
         is_input_stick_size_bytes_pow2_min_32 ? std::log2(input_stick_size_bytes) : 0;
     const uint32_t index_stick_size_bytes_log2 =
@@ -95,9 +108,13 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t output_stick_size_bytes_log2 =
         is_output_stick_size_bytes_pow2_min_32 ? std::log2(output_stick_size_bytes) : 0;
 
-    const uint64_t L1_max_available_memory_bytes = device->l1_size_per_core();
-    constexpr uint64_t L1_reserve_bytes = (1 << 8) * (1 << 10);
-    const uint32_t input_and_output_max_chunk_size = 76800;
+    // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
+    // BH available L1 mem size of nearly 1.5 MB...
+    // ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
+    // tensors)
+    // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
+    // ... minimized by ~20% to account for reserved memory
+    const uint32_t input_and_output_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
     const uint32_t index_and_source_max_chunk_size = input_and_output_max_chunk_size;
     const uint32_t input_and_output_chunk_size = std::min(input_stick_size, input_and_output_max_chunk_size);
     const uint32_t index_and_source_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
