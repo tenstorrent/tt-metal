@@ -69,23 +69,25 @@ def check_uniform_distribution(data, value_range=(0, 1), is_discrete=False):
     return False
 
 
-@pytest.mark.xfail(reason="BFLOAT4_B/UINT8 are not uniformly distributed")
+@pytest.mark.xfail(reason="BFLOAT4_B/UINT8 and `uint32/int32/BFLOAT8_B` for row major layout are not supported.")
 @pytest.mark.parametrize("dtype", ALL_TYPES)
-def test_tensor_dtype_and_value_range(device, dtype):
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_tensor_dtype_and_value_range(device, dtype, layout):
     shape = (1024, 1024)
     if is_ttnn_float_type(dtype):
-        tensor = ttnn.rand(shape, dtype=dtype, device=device)
+        tensor = ttnn.rand(shape, dtype=dtype, device=device, layout=layout)
         low = 0
         high = 1
     elif dtype == ttnn.int32:
         low = -100
         high = 100
-        tensor = ttnn.rand(shape, low=low, high=high, dtype=dtype, device=device)
+        tensor = ttnn.rand(shape, low=low, high=high, dtype=dtype, device=device, layout=layout)
     else:
         low = 0
         high = 100
-        tensor = ttnn.rand(shape, low=low, high=high, dtype=dtype, device=device)
+        tensor = ttnn.rand(shape, low=low, high=high, dtype=dtype, device=device, layout=layout)
 
+    assert tensor.layout == layout
     assert tensor.dtype == dtype
     assert tuple(tensor.shape) == tuple(shape)
 
@@ -118,15 +120,6 @@ def test_rand_dims(dim, device):
     shape = (dim, dim)
     tensor = ttnn.rand(shape, device=device)
     assert tuple(tensor.shape) == tuple(shape)
-
-
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-def test_rand_with_layout(device, layout):
-    size = DEFAULT_SHAPE
-    tensor = ttnn.rand(size, device=device, layout=layout)
-
-    assert tensor.layout == layout
-    assert tuple(tensor.shape) == tuple(size)
 
 
 @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
