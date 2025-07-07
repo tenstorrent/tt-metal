@@ -36,34 +36,35 @@ protected:
         }
         return {};
     }
+
+    // Helper function to verify physical chip ID mapping
+    void verify_physical_chip_ids(
+        const std::vector<chip_id_t>& physical_chip_ids,
+        size_t expected_size,
+        const std::vector<std::pair<size_t, chip_id_t>>& expected_mappings = {}) {
+        // Basic size verification
+        EXPECT_EQ(physical_chip_ids.size(), expected_size);
+    
+        // Verify first chip is mapped to 0
+        EXPECT_EQ(physical_chip_ids[0], 0);
+    
+        // Verify no unmapped chips (no -1 values)
+        for (size_t i = 0; i < physical_chip_ids.size(); ++i) {
+            EXPECT_NE(physical_chip_ids[i], static_cast<chip_id_t>(-1)) << "Chip at index " << i << " is not mapped";
+        }
+    
+        // Verify no duplicate chip IDs
+        std::unordered_set<chip_id_t> unique_chips(physical_chip_ids.begin(), physical_chip_ids.end());
+        EXPECT_EQ(unique_chips.size(), physical_chip_ids.size()) << "Duplicate chip IDs found in mapping";
+    
+        // Verify specific mappings if provided
+        for (const auto& [index, expected_chip_id] : expected_mappings) {
+            EXPECT_EQ(physical_chip_ids[index], expected_chip_id)
+                << "Chip at index " << index << " should be " << expected_chip_id;
+        }
+    }
 };
 
-// Helper function to verify physical chip ID mapping
-void verify_physical_chip_ids(
-    const std::vector<chip_id_t>& physical_chip_ids,
-    size_t expected_size,
-    const std::vector<std::pair<size_t, chip_id_t>>& expected_mappings = {}) {
-    // Basic size verification
-    EXPECT_EQ(physical_chip_ids.size(), expected_size);
-
-    // Verify first chip is mapped to 0
-    EXPECT_EQ(physical_chip_ids[0], 0);
-
-    // Verify no unmapped chips (no -1 values)
-    for (size_t i = 0; i < physical_chip_ids.size(); ++i) {
-        EXPECT_NE(physical_chip_ids[i], static_cast<chip_id_t>(-1)) << "Chip at index " << i << " is not mapped";
-    }
-
-    // Verify no duplicate chip IDs
-    std::unordered_set<chip_id_t> unique_chips(physical_chip_ids.begin(), physical_chip_ids.end());
-    EXPECT_EQ(unique_chips.size(), physical_chip_ids.size()) << "Duplicate chip IDs found in mapping";
-
-    // Verify specific mappings if provided
-    for (const auto& [index, expected_chip_id] : expected_mappings) {
-        EXPECT_EQ(physical_chip_ids[index], expected_chip_id)
-            << "Chip at index " << index << " should be " << expected_chip_id;
-    }
-}
 
 TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsWithConfigurableMock) {
     // Test 3x3 square mesh shape
