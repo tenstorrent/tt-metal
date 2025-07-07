@@ -890,12 +890,14 @@ class TT_CCL:
             assert buffer_key is not None, "buffer_key is None"
             persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
-        semaphores = self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0]
-        if self.use_ring_ag_prefill
-        else [
-            self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-            self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs],
-        ]
+        semaphores = (
+            self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0]
+            if self.use_ring_ag_prefill
+            else [
+                self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+                self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs],
+            ]
+        )
         ttnn_tensor_out = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
