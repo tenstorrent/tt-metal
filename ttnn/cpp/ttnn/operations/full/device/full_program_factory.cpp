@@ -49,7 +49,6 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         tt::tt_metal::split_work_to_cores(grid, num_tiles);
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(data_format);
 
     // Create program
     Program program = Program();
