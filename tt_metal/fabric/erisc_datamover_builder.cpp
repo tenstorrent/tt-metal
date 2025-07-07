@@ -649,6 +649,8 @@ void get_runtime_args_for_edm_termination_infos(
     }
 }
 
+// TODO: will be deprecated. currently for ethernet dispatch case
+//       ethernet core need to have same memory mapping as worker
 void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
     size_t sender_worker_flow_control_semaphore_id,
@@ -671,6 +673,88 @@ void append_worker_to_fabric_edm_sender_rt_args(
         connection.edm_worker_location_info_addr,
         connection.buffer_size_bytes,
         connection.buffer_index_semaphore_id,
+        sender_worker_flow_control_semaphore_id,
+        sender_worker_terminate_semaphore_id,
+        sender_worker_buffer_index_semaphore_id};
+    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    std::ranges::copy(values, std::back_inserter(args_out));
+}
+
+void append_worker_to_fabric_edm_sender_rt_args(
+    chan_id_t eth_channel,
+    size_t sender_worker_flow_control_semaphore_id,
+    size_t sender_worker_terminate_semaphore_id,
+    size_t sender_worker_buffer_index_semaphore_id,
+    std::vector<uint32_t>& args_out) {
+    TT_FATAL(
+        (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
+        "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
+
+    const std::vector<uint32_t> values = {
+        eth_channel,
+        sender_worker_flow_control_semaphore_id,
+        sender_worker_terminate_semaphore_id,
+        sender_worker_buffer_index_semaphore_id};
+    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    std::ranges::copy(values, std::back_inserter(args_out));
+}
+
+// TODO: will be deprecated. non device init fabric case
+void append_worker_to_fabric_edm_sender_rt_args(
+    const SenderWorkerAdapterSpec& connection,
+    chip_id_t chip_id,
+    const CoreRangeSet& worker_cores,
+    size_t sender_worker_flow_control_semaphore_id,
+    size_t sender_worker_terminate_semaphore_id,
+    size_t sender_worker_buffer_index_semaphore_id,
+    std::vector<uint32_t>& args_out) {
+    TT_FATAL(
+        (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
+        "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
+
+    chan_id_t eth_channel =
+        tt::tt_metal::MetalContext::instance()
+            .get_cluster()
+            .get_logical_ethernet_core_from_virtual(chip_id, CoreCoord(connection.edm_noc_x, connection.edm_noc_y))
+            .y;
+
+    // copy "only" connections[eth_channel] to L1, not the whole tensix_fabric_connections_l1_info_t
+    // because this function is called several times for same device which overwrites info written by previous calls
+    tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_connections = {};
+    auto& connection_info = fabric_connections.connections[eth_channel];
+    connection_info.edm_direction = connection.edm_direction;
+    connection_info.edm_noc_xy = tt::tt_fabric::WorkerXY(connection.edm_noc_x, connection.edm_noc_y).to_uint32();
+    connection_info.edm_buffer_base_addr = connection.edm_buffer_base_addr;
+    connection_info.num_buffers_per_channel = connection.num_buffers_per_channel;
+    connection_info.edm_l1_sem_addr = connection.edm_l1_sem_addr;
+    connection_info.edm_connection_handshake_addr = connection.edm_connection_handshake_addr;
+    connection_info.edm_worker_location_info_addr = connection.edm_worker_location_info_addr;
+    connection_info.buffer_size_bytes = connection.buffer_size_bytes;
+    connection_info.buffer_index_semaphore_id = connection.buffer_index_semaphore_id;
+    // NOTE: valid_connections_mask is not copied to L1 from performance reason
+    //       because this callstack will be deprecated and not used in WorkerToFabricEdmSenderImpl yet
+    //       we want to reduce the number of write_core calls
+    fabric_connections.valid_connections_mask |= (1u << eth_channel);
+
+    size_t connection_offset = offsetof(tt::tt_fabric::tensix_fabric_connections_l1_info_t, connections) +
+                               eth_channel * sizeof(tt::tt_fabric::fabric_connection_info_t);
+    // Write to Tensix cores
+    std::vector<CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);
+    for (const auto& logical_core : worker_core_coords) {
+        CoreCoord tensix_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                chip_id, logical_core, CoreType::WORKER);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            &connection_info,
+            sizeof(tt::tt_fabric::fabric_connection_info_t),
+            tt_cxy_pair(chip_id, tensix_core),
+            tt_metal::MetalContext::instance().hal().get_dev_addr(
+                tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS) +
+                connection_offset);
+    }
+
+    const std::vector<uint32_t> values = {
+        eth_channel,
         sender_worker_flow_control_semaphore_id,
         sender_worker_terminate_semaphore_id,
         sender_worker_buffer_index_semaphore_id};
