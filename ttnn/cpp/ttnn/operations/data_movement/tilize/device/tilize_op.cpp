@@ -72,7 +72,13 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> Tilize::
     std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    int ideal_dev_clock_cycles_bw = common_tm_bw_model(input_tensor, output_tensor);
+    uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
+    uint32_t num_tiles = input_tensor.physical_volume() / single_tile_size;
+    int compute_cycles = num_tiles * 75;  // tilize_block llk gives 75 cycles per tile
+    int ideal_dev_clock_cycles = std::max(compute_cycles, ideal_dev_clock_cycles_bw);
     tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
         input_tensors, output_tensors, ideal_dev_clock_cycles);
     return result;

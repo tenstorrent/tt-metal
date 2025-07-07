@@ -114,8 +114,6 @@ uint32_t get_cycles_for_transaction_size(
     uint32_t num_cores,
     int index,
     bool is_read) {
-    // for wh, add for other machines
-
     std::map<uint32_t, std::array<float, 2>> dram_bw = {
         {16, {0.436, 0.651}},
         {32, {0.868, 1.295}},
@@ -200,6 +198,7 @@ uint32_t get_cycles_for_transaction_size(
     // uint32_t transaction_size_mul_32 = result.second;
     //  double check  this value
     float device_frequency_hz = index == 0 ? 1e9 : 1.2e9;
+    printf("device frequency hz: %f\n", device_frequency_hz);
     printf("num transactions: %u\n", num_transactions);
     printf("transaction bw: %f\n", transaction_bw);
     uint32_t cycles = 1;
@@ -214,7 +213,7 @@ uint32_t get_cycles_for_transaction_size(
     return cycles + latency_cyles;
 }
 
-int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor) {
+int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, bool output_only) {
     printf("In common tm bw model\n");
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         log_warning(tt::LogOp, "Input tensor not on DEVICE?!");
@@ -237,8 +236,9 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor) 
     bool input_is_tiled = input_tensor.layout() == Layout::TILE;
     printf("is tiled: %s\n", input_is_tiled ? "true" : "false");
 
-    uint32_t input_size_bytes = input_is_tiled ? input_tensor.physical_volume() * element_size_bytes
-                                               : input_shape.volume() * element_size_bytes;
+    uint32_t input_size_bytes = input_shape.volume() * element_size_bytes;
+    printf("input_tensor.physical_volume(): %lu\n", input_tensor.physical_volume());
+    printf("input shape volume: %lu\n", input_shape.volume());
     printf("input size bytes: %u\n", input_size_bytes);
 
     auto arch = input_tensor.device()->arch();
@@ -283,8 +283,7 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor) 
     printf("out is sharded: %s\n", output_is_sharded ? "true" : "false");
 
     const auto& output_shape = output_tensor.padded_shape();
-    uint32_t output_size_bytes = output_is_tiled ? output_tensor.physical_volume() * element_size_bytes
-                                                 : output_shape.volume() * element_size_bytes;
+    uint32_t output_size_bytes = output_shape.volume() * element_size_bytes;
 
     if (output_shape.rank() == 4) {
         printf("output shape: %u %u %u %u\n", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);
@@ -319,6 +318,7 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor) 
         num_cores = std::min(num_cores, num_dram_channels);
     }
 
+    // use aggregate bw instead
     printf("FINAL num cores: %d\n", num_cores);
     bool input_is_local = input_is_sharded && num_cores == input_num_cores;
     bool output_is_local = output_is_sharded && num_cores == output_num_cores;
@@ -339,8 +339,7 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor) 
     printf("total write cycles: %u\n", total_write_cycles);
 
     // Use max(read, write) to account for overlap
-    int ideal_dev_clock_cycles = std::max(total_read_cycles, total_write_cycles);
-    // int ideal_dev_clock_cycles = total_read_cycles + total_write_cycles;
+    int ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
     return ideal_dev_clock_cycles;
 }
 uint32_t get_estimated_size_of_cbs(

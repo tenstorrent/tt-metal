@@ -32,7 +32,7 @@ uint32_t get_cycles_for_transaction_size(
     uint32_t num_cores,
     int index,
     bool is_read);
-int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor);
+int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, bool output_only = false);
 
 uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,
