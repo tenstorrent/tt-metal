@@ -33,7 +33,7 @@ def test_mixtral_attention_inference(t3k_mesh_device, reset_seeds):
     reference_model.load_state_dict(partial_state_dict)
 
     tt_ccl = TT_CCL(t3k_mesh_device)
-    tt_model = TtMixtralAttention(t3k_mesh_device, state_dict, args=model_args, layer_num=0, dtype=dtype)
+    tt_model = TtMixtralAttention(t3k_mesh_device, tt_ccl, state_dict, args=model_args, layer_num=0, dtype=dtype)
 
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
