@@ -425,7 +425,11 @@ bool Device::initialize(
     ZoneScoped;
     // Every initialization call should enable program cache
     this->program_cache_.enable();
-    log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache_.is_enabled() ? "": "NOT ");
+    log_debug(
+        tt::LogMetal,
+        "Initializing device {}. Program cache is {}enabled",
+        this->id_,
+        this->program_cache_.is_enabled() ? "" : "NOT ");
     log_debug(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
     TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS, "num_hw_cqs can be between 1 and {}", dispatch_core_manager::MAX_NUM_HW_CQS);
     this->using_fast_dispatch_ = false;
@@ -465,7 +469,7 @@ bool Device::initialize(
 }
 
 bool Device::close() {
-    log_info(tt::LogMetal, "Closing device {}", this->id_);
+    log_trace(tt::LogMetal, "Closing device {}", this->id_);
     if (not this->initialized_) {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
@@ -780,7 +784,7 @@ void Device::clear_program_cache() {
 }
 
 void Device::disable_and_clear_program_cache() {
-    log_info(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
+    log_trace(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
     if (this->program_cache_.is_enabled()) {
         program_cache_.disable();
     }
