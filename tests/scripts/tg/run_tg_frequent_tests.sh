@@ -42,7 +42,8 @@ run_tg_tests() {
     pytest -n auto tests/ttnn/distributed/test_data_parallel_example_TG.py --timeout=900 ; fail+=$?
     pytest -n auto tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
     pytest -n auto tests/ttnn/unit_tests/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
-    pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_post_commit.py --timeout=300 ; fail+=$?
+    ## Force IRAM disabled because this mixes fabric and non-fabric ccl tests.
+    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_post_commit.py --timeout=300 ; fail+=$?
     pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_TG.py --timeout=500 ; fail+=$?
 
   else
