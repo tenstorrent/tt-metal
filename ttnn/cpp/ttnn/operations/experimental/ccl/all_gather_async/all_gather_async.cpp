@@ -17,9 +17,17 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_optimal_ccl_for_llama) {
     return ttnn::operations::experimental::ccl::all_gather_async(
-        input_tensor, dim, multi_device_global_semaphore, num_links, memory_config, topology, subdevice_id);
+        input_tensor,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        memory_config,
+        topology,
+        subdevice_id,
+        use_optimal_ccl_for_llama);
 }
 
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
@@ -31,7 +39,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    bool use_optimal_ccl_for_llama) {
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensor,
         persistent_output_buffer,
@@ -41,7 +50,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         memory_config,
         topology,
         subdevice_id,
-        cluster_axis);
+        cluster_axis,
+        use_optimal_ccl_for_llama);
 }
 
 std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
@@ -51,9 +61,17 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_optimal_ccl_for_llama) {
     return ttnn::operations::experimental::ccl::all_gather_async(
-        input_tensors, dim, multi_device_global_semaphore, num_links, memory_config, topology, subdevice_id);
+        input_tensors,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        memory_config,
+        topology,
+        subdevice_id,
+        use_optimal_ccl_for_llama);
 }
 
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
@@ -66,7 +84,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_optimal_ccl_for_llama) {
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensor,
         dim,
@@ -77,7 +96,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         persistent_output_tensor,
         memory_config,
         num_preferred_links,
-        subdevice_id);
+        subdevice_id,
+        use_optimal_ccl_for_llama);
 }
 
 std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
@@ -90,7 +110,8 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_optimal_ccl_for_llama) {
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensors,
         dim,
@@ -101,7 +122,8 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
         persistent_output_tensor,
         memory_config,
         num_preferred_links,
-        subdevice_id);
+        subdevice_id,
+        use_optimal_ccl_for_llama);
 }
 
 }  // namespace ttnn::operations::experimental::ccl
