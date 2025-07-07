@@ -48,7 +48,7 @@ void MAIN {
                 cb_wait_front(intermediate_cb, tile_granularity);
                 cb_reserve_back(output_cb, tile_granularity);
                 acquire_dst();
-                for (uint32_t tile_id = 0; tile_id < tile_granularity; tile_id++) {
+                for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
                     add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
                     pack_tile(tile_id, output_cb);
                 }
