@@ -22,35 +22,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::distributed {
-namespace {
-
-// Shared implementation for `combine_device_tensors` and `aggregate_as_tensor`.
-// TODO: #23287 - This won't be necessary, once `aggregate_as_tensor` API is removed.
-Tensor combine_device_tensors_impl(const std::vector<Tensor>& tensor_shards, const Tensor& reference_shard) {
-    auto mesh_buffer = std::get<DeviceStorage>(reference_shard.storage()).mesh_buffer;
-    TT_FATAL(
-        mesh_buffer != nullptr,
-        "Error aggregating multichip tensors: tensors shards must be allocated on a mesh buffer.");
-    std::vector<MeshCoordinate> coords;
-    for (const auto& shard : tensor_shards) {
-        const auto& shard_storage = std::get<DeviceStorage>(shard.storage());
-        TT_FATAL(
-            shard_storage.mesh_buffer == mesh_buffer,
-            "Error aggregating multichip tensors: tensor shards must be allocated on the same mesh buffer. "
-            "Consider moving tensors to host, aggregating, and re-uploading on device storage.");
-        for (const auto& coord : shard_storage.coords) {
-            coords.push_back(coord);
-        }
-    }
-    std::sort(coords.begin(), coords.end());
-    auto duplicate =
-        std::adjacent_find(coords.begin(), coords.end(), [](const auto& a, const auto& b) { return a == b; });
-    TT_FATAL(duplicate == coords.end(), "Found a tensor shard at duplicate coordinate {}", *duplicate);
-    return Tensor(
-        DeviceStorage(std::move(mesh_buffer), std::move(coords)), reference_shard.tensor_spec(), AllGatherTensor{});
-}
-
-}  // namespace
 
 std::shared_ptr<MeshDevice> open_mesh_device(
     const MeshShape& mesh_shape,
@@ -99,40 +70,6 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
     }
 }
 
-Tensor aggregate_as_tensor(
-    const std::vector<Tensor>& tensor_shards, const tt::tt_metal::DistributedTensorConfig& config) {
-    TT_ASSERT(tensor_shards.size() > 0, "At least one tensor shard must be provided");
-    const auto& reference_shard = tensor_shards.at(0);
-    for (const auto& shard : tensor_shards) {
-        TT_FATAL(
-            shard.storage_type() == reference_shard.storage_type(),
-            "All tensor shards must have the same storage type");
-        TT_FATAL(
-            shard.tensor_spec() == reference_shard.tensor_spec(), "All tensor shards must have the same tensor spec");
-    }
-
-    // Based whether the first tensor shard has Host or Device buffer,
-    // we want to use MultiDeviceHostStorage or MultiDeviceStorage
-    StorageType storage_type = reference_shard.storage_type();
-    if (storage_type == StorageType::HOST) {
-        std::vector<HostBuffer> buffers;
-        for (const auto& shard : tensor_shards) {
-            buffers.push_back(std::get<HostStorage>(shard.get_storage()).buffer);
-            TT_FATAL(
-                shard.get_tensor_spec() == reference_shard.get_tensor_spec(),
-                "Error aggregating multichip tensors: Attempting to aggregate tensors with different tensor specs.");
-        }
-        auto storage = MultiDeviceHostStorage{std::move(buffers)};
-        return Tensor(std::move(storage), reference_shard.get_tensor_spec(), config);
-    } else if (storage_type == StorageType::DEVICE) {
-        return combine_device_tensors_impl(tensor_shards, reference_shard);
-    } else {
-        TT_THROW(
-            "Unsupported storage type for multi-device tensor: {}",
-            tt::stl::get_active_type_name_in_variant(reference_shard.storage()));
-    }
-}
-
 Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShape& mesh_shape) {
     TT_FATAL(tensor_shards.size() == mesh_shape.mesh_size(), "Number of tensor shards must match mesh size");
     const auto& reference_shard = tensor_shards.at(0);
@@ -165,7 +102,27 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
             "All tensor shards must have the same tensor spec");
     }
 
-    return combine_device_tensors_impl(tensor_shards, reference_shard);
+    auto mesh_buffer = std::get<DeviceStorage>(reference_shard.storage()).mesh_buffer;
+    TT_FATAL(
+        mesh_buffer != nullptr,
+        "Error aggregating multichip tensors: tensors shards must be allocated on a mesh buffer.");
+    std::vector<MeshCoordinate> coords;
+    for (const auto& shard : tensor_shards) {
+        const auto& shard_storage = std::get<DeviceStorage>(shard.storage());
+        TT_FATAL(
+            shard_storage.mesh_buffer == mesh_buffer,
+            "Error aggregating multichip tensors: tensor shards must be allocated on the same mesh buffer. "
+            "Consider moving tensors to host, aggregating, and re-uploading on device storage.");
+        for (const auto& coord : shard_storage.coords) {
+            coords.push_back(coord);
+        }
+    }
+    std::sort(coords.begin(), coords.end());
+    auto duplicate =
+        std::adjacent_find(coords.begin(), coords.end(), [](const auto& a, const auto& b) { return a == b; });
+    TT_FATAL(duplicate == coords.end(), "Found a tensor shard at duplicate coordinate {}", *duplicate);
+    return Tensor(
+        DeviceStorage(std::move(mesh_buffer), std::move(coords)), reference_shard.tensor_spec(), AllGatherTensor{});
 }
 
 std::vector<int> get_t3k_physical_device_ids_ring() {

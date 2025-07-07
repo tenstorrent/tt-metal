@@ -27,12 +27,6 @@ void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device);
 // Given a multi-device tensor, returns a list of individual per-device tensors.
 std::vector<Tensor> get_device_tensors(const Tensor& tensor);
 
-// Given a list of per-device shards, returns multi-device tensor.
-// Deprecated: to combine on-device shards, prefer `combine_device_tensors`. For on-host shards, use
-// `from_host_shards` instead.
-[[deprecated("Use from_host_shards / combine_device_tensors instead")]] Tensor aggregate_as_tensor(
-    const std::vector<Tensor>& tensor_shards, const tt::tt_metal::DistributedTensorConfig& config);
-
 // Given a list of host shards, returns a multi-device tensor.
 // Tensor specs (including shapes) must match for all shards, and the number of shards must match the mesh size.
 Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShape& mesh_shape);

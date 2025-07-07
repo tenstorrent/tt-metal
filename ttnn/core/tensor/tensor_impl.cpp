@@ -746,7 +746,7 @@ DeviceStorage replicate_to_mesh_buffer(
     return DeviceStorage(mesh_buffer, std::move(coords));
 }
 
-DeviceStorage shard_to_mesh_buffer(
+DeviceStorage write_to_mesh_buffer(
     const DistributedHostBuffer& distributed_host_buffer,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     ttnn::QueueId cq_id) {
@@ -777,43 +777,13 @@ DeviceStorage to_device_mesh_buffer(
                 return replicate_to_mesh_buffer(storage, mesh_buffer->device(), mesh_buffer, tensor_spec, cq_id);
             },
             [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes](const MultiDeviceHostStorage& storage) {
-                // Shard multi device host shards across devices in a mesh.
-                if (storage.distributed_buffer().shape() == mesh_buffer->device()->shape()) {
-                    return shard_to_mesh_buffer(storage.distributed_buffer(), mesh_buffer, cq_id);
-                } else {
-                    // Reshape distributed host buffer.
-                    // TODO: #24115 - there are 2 reasons for this code path - legacy serialization path that stored
-                    // multi device host tensors without the necessary metadata, and `aggregate_as_tensor` calls that
-                    // similarly lack the metadata to properly distribute the shards across the mesh.
-                    auto* mesh_device = mesh_buffer->device();
-
-                    TT_FATAL(
-                        storage.distributed_buffer().shape().mesh_size() <= mesh_device->shape().mesh_size(),
-                        "Distributed host buffer has more shards than the mesh device");
-
-                    auto dst_distributed_host_buffer = DistributedHostBuffer::create(mesh_device->shape());
-
-                    const auto dst_range = [mesh_device, &host_tensor_attributes]() {
-                        if (auto* shard2d_strategy =
-                                std::get_if<ShardTensor2D>(&host_tensor_attributes.get_distributed_tensor_config())) {
-                            distributed::MeshShape distribution_shape(
-                                shard2d_strategy->shard_mesh.y, shard2d_strategy->shard_mesh.x);
-                            return distributed::MeshCoordinateRange(distribution_shape);
-                        } else {
-                            return distributed::MeshCoordinateRange(mesh_device->shape());
-                        }
-                    }();
-
-                    std::vector<HostBuffer> shards;
-                    storage.distributed_buffer().apply([&](const HostBuffer& shard) { shards.push_back(shard); });
-
-                    auto dst_coord_it = dst_range.begin();
-                    for (int i = 0; i < shards.size(); ++i, ++dst_coord_it) {
-                        dst_distributed_host_buffer.emplace_shard(
-                            *dst_coord_it, [&shards, i]() { return std::move(shards[i]); });
-                    }
-                    return shard_to_mesh_buffer(dst_distributed_host_buffer, mesh_buffer, cq_id);
-                }
+                // Sharded write from distributed host buffer.
+                TT_FATAL(
+                    storage.distributed_buffer().shape() == mesh_buffer->device()->shape(),
+                    "Distributed host buffer has different shape {} than the mesh device {}",
+                    storage.distributed_buffer().shape(),
+                    mesh_buffer->device()->shape());
+                return write_to_mesh_buffer(storage.distributed_buffer(), mesh_buffer, cq_id);
             },
             [](const auto& s) -> DeviceStorage { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
         host_storage);
