@@ -169,7 +169,7 @@ The ``InterleavedAddrGenFast`` object handles bank addressing and page size auto
     }
 
 .. note::
-  ``InterleavedAddrGenFast`` is a helper class that automatically handles address generation for interleaved buffers. For more complex data distribution patterns or when you need manual control over addressing, you can calculate addresses directly. Without using ``InterleavedAddrGenFast``, the kernel would look like this:
+  ``InterleavedAddrGenFast`` handles address generation for tiled interleaved buffers automatically. For none tiled layouts or when manual address control is needed, use ``InterleavedAddrGen`` or calculate addresses manually. Without the helper, the kernel implementation would be:
 
   .. code-block:: cpp
 
