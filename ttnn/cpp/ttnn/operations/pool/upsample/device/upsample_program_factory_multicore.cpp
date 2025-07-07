@@ -33,11 +33,11 @@ static Tensor create_config_tensor(
     const uint32_t scale_factor_h,
     const uint32_t scale_factor_w,
     const bool is_height_sharded) {
-    uint16_t core_idx = 0;        // Tracks the current core being processed
+    uint16_t core_idx = 0;  // Tracks the current core being processed
     uint16_t core_idx_start = 0;
-    uint16_t stick_offset = 0;    // Tracks the current stick offset within the core
+    uint16_t stick_offset = 0;        // Tracks the current stick offset within the core
     uint16_t stick_offset_start = 0;  // Tracks the current stick offset within the core
-    uint16_t stick_cnt = 0;
+    uint32_t stick_cnt = 0;
     uint16_t ch_start_core = 0;   // Starting core index where channels are distributed
     uint16_t ch_end_core = 0;     // Ending core index where channels are distributed
     uint16_t nhw_start_core = 0;  // Starting core index for NHW distribution
@@ -77,24 +77,13 @@ static Tensor create_config_tensor(
                         stick_offset = 0;
                         core_idx++;
                     }
-                    if (stick_cnt != 0 && stick_cnt % output_nsticks_per_core == 0) {
-                        dst_core_end_idx_map.push_back(logical_core_to_stick_map.size());  // didn't -1, < later
-
-                        if (is_height_sharded) {
-                            auto& c = logical_cores[core_idx];
-                            logical_core_to_stick_map.push_back(c.x);
-                            logical_core_to_stick_map.push_back(c.y);
-                        } else {
-                            logical_core_to_stick_map.push_back(nhw_start_core + core_idx);
-                            logical_core_to_stick_map.push_back(0);
+                    if (stick_offset == 0 || stick_cnt % output_nsticks_per_core == 0 || do_insert) {
+                        if (stick_cnt != 0 && stick_cnt % output_nsticks_per_core == 0) {
+                            dst_core_end_idx_map.push_back(logical_core_to_stick_map.size());  // didn't -1, < later
                         }
-                        logical_core_to_stick_map.push_back(stick_offset);  // stick_offset_start
-                        logical_core_to_stick_map.push_back(stick_offset);  // stick_offset_end, updated later
-                    } else if (stick_offset == 0 || do_insert) {
                         if (do_insert) {
                             do_insert = false;
                         }
-                        // Insert new entry
                         if (is_height_sharded) {
                             auto& c = logical_cores[core_idx];
                             logical_core_to_stick_map.push_back(c.x);
@@ -151,14 +140,34 @@ static Tensor create_config_tensor(
         if (remainder != 0) {
             // uint16_t last4 = config_vector[config_vector.size() - 4];
             // uint16_t last2 = config_vector[config_vector.size() - 2];
+            // log_info(tt::LogOp,"Config vector size before: {},",config_vector.size());
+            // log_info(tt::LogOp, "Padding for core: {}", remainder/config_buffer_entry_size);
             for (int i = 0; i < remainder / config_buffer_entry_size; i++) {
                 config_vector.push_back(0);  // core
                 config_vector.push_back(1);  // stick offset start
                 config_vector.push_back(0);  // stick offset end
                 config_vector.push_back(0);  // pad
             }
+            // log_info(tt::LogOp,"Config vector size after: {},",config_vector.size());
         }
     };
+
+    for (size_t ind = 0, j = 0; ind < dst_core_end_idx_map.size(); ind++) {
+        const size_t chan_slice_begin = config_vector.size();
+        for (; j < dst_core_end_idx_map[ind]; j += 4) {
+            core_coords = device->worker_core_from_logical_core(
+                CoreCoord(logical_core_to_stick_map[j], logical_core_to_stick_map[j + 1]));
+            // Combine the x and y coordinates of the core into a single 16-bit value.
+            const uint16_t cores = (core_coords.x << 8) + core_coords.y;
+            log_info(
+                tt::LogOp,
+                "Core: {}, stick offset: {}, stick offset end: {}",
+                cores,
+                logical_core_to_stick_map[j + 2],
+                logical_core_to_stick_map[j + 3]);
+        }
+        log_info(tt::LogOp, "\n");
+    }
 
     if (is_height_sharded) {
         for (size_t ind = 0, j = 0; ind < dst_core_end_idx_map.size(); ind++) {
@@ -199,6 +208,13 @@ static Tensor create_config_tensor(
         config_vector.size(),
         elems_per_core);
 
+    log_info(
+        tt::LogOp,
+        "Config vector size: {}, elems_per_core: {}, output sticks per core: {}, dst_core vector size: {}",
+        config_vector.size(),
+        elems_per_core / 4,
+        output_nsticks_per_core,
+        dst_core_end_idx_map.size());
     ttnn::Shape config_shape({tt::div_up(config_vector.size(), elems_per_core), elems_per_core});
     auto config_buffer = HostBuffer(std::move(config_vector));
     return Tensor(std::move(config_buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
