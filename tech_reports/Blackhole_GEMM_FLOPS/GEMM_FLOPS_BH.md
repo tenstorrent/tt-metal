@@ -66,7 +66,7 @@ Ideal cycles = (m * k * n) / (tile_height * tile_width * tile_height) * (cycle_p
 ```
 - Cycle_per_tile is the ideal compute cycle for each tile, which depends on math fidelity (LoFi: 16, HiFi2: 32, HiFi3: 48, HiFi4: 64).
 - For utilization of user-specified grid size, num_cores is the user-specified number of cores.
-- For utilization of full grid size, num_cores is the maximum number of cores available for compute. Currently the max available is 8x8 for Wormhole cards, but can be up to 12x10 for Blackhole cards. 
+- For utilization of full grid size, num_cores is the maximum number of cores available for compute. Currently the max available is 8x8 for Wormhole cards, but can be up to 12x10 for Blackhole cards.
 
 ### Results
 
@@ -117,4 +117,3 @@ When a Tensix core executes an operation, it does so by reading data from SRAM, 
 In this report, the developed Python scripts evaluate three separate configurations: (1) all matrices stored on L1 (SRAM), (2) one matrix on L1 and one on DRAM, and (3) both matrices on DRAM. In most cases, if possible, storing all matrices on L1 is ideal, as it completely avoids accessing the slower DRAM. The configuration with one matrix on L1 and one on DRAM incurs a small performance penalty, typically in the single-digit percentage range at worst. DRAM-only performance is highly variable: small matrices suffer the largest performance penalty when stored in DRAM, while larger tensors achieve performance closer to an L1-only configuration.
 
 Additionally, due to the interconnected nature of the WH ASIC, a clever programmer may observe that the output of one Tensix core is often needed as the input for another. Instead of writing this data back to device memory, it can be forwarded directly over the NOC, enabling more efficient data movement between cores.
-
