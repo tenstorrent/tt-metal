@@ -24,6 +24,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include "ttnn/tensor/xtensor/partition.hpp"
+#include "ttnn/distributed/topology_config.hpp"
 
 namespace ttnn::distributed {
 namespace {
@@ -339,10 +340,13 @@ private:
         using XTensorViewKey = decltype(&sharded_xtensor_views.values().front()->get());
         std::unordered_map<XTensorViewKey, tt::tt_metal::HostBuffer> converted_buffers;
 
+        std::vector<MeshCoordinate> buffer_coords;
         for (const auto& [coord, xtensor_view] : sharded_xtensor_views) {
             if (xtensor_view.has_value()) {
+                const auto mapped_coord = remap_fn(coord);
+                buffer_coords.push_back(mapped_coord);
                 distributed_buffer.emplace_shard(
-                    remap_fn(coord), [&converted_buffers, &xtensor_view, &shard_spec, &coord, pad_value]() {
+                    mapped_coord, [&converted_buffers, &xtensor_view, &shard_spec, &coord, pad_value]() {
                         // The callable makes a copy from the strided xtensor view to a vector; on multi-host systems,
                         // executed only for shards that are local to this host.
 
@@ -365,7 +369,14 @@ private:
             }
         }
 
-        return Tensor(tt::tt_metal::MultiDeviceHostStorage(std::move(distributed_buffer)), shard_spec, config());
+        // const auto topology_config = ttnn::distributed::TopologyConfig{
+        //     .mesh_shape = distribution_shape_,
+        //     .coords = buffer_coords,
+        //     .placements = config_.placements
+        // };
+
+        return Tensor(
+            tt::tt_metal::MultiDeviceHostStorage(std::move(distributed_buffer)), shard_spec, config(), std::nullopt);
     }
 
     // MeshDevice parameters.

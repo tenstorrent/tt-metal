@@ -64,6 +64,16 @@ TEST_F(TensorDistributionTest, SingleDeviceTensorReplication) {
     }
 }
 
+TEST_F(TensorDistributionTest, SingleDeviceTensorTopology) {
+    Tensor input_tensor = Tensor::from_vector(
+        std::vector<float>{42.F, 13.F, -99.F}, get_tensor_spec(ttnn::Shape{1, 1, 1, 3}, DataType::FLOAT32));
+
+    auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
+    Tensor replicated_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+
+    std::cout << input_tensor.topology_config().has_value() << std::endl;
+}
+
 TEST_F(TensorDistributionT3000Test, Shard1DInvalidDim) {
     const int num_devices = mesh_device_->num_devices();
     Tensor input_tensor = Tensor::from_vector(

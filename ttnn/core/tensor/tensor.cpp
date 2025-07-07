@@ -90,19 +90,32 @@ Tensor::Tensor(
             logical_shape,
             TensorLayout::fromPaddedShape(
                 dtype, PageConfig(layout, tile), MemoryConfig{}, logical_shape, padded_shape)),
-        ReplicateTensor{});
+        ReplicateTensor{},
+        std::nullopt);
 }
 
 Tensor::Tensor(HostBuffer storage, TensorSpec tensor_spec) :
     Tensor(Storage(std::move(storage)), std::move(tensor_spec), ReplicateTensor{}) {}
 
-Tensor::Tensor(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config) {
-    init(Storage(std::move(storage)), std::move(tensor_spec), std::move(distributed_tensor_config));
+Tensor::Tensor(
+    Storage storage,
+    TensorSpec tensor_spec,
+    DistributedTensorConfig distributed_tensor_config,
+    std::optional<TopologyConfig> topology_config) {
+    init(
+        Storage(std::move(storage)),
+        std::move(tensor_spec),
+        std::move(distributed_tensor_config),
+        std::move(topology_config));
 }
 
-void Tensor::init(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config) {
+void Tensor::init(
+    Storage storage,
+    TensorSpec tensor_spec,
+    DistributedTensorConfig distributed_tensor_config,
+    std::optional<TopologyConfig> topology_config) {
     tensor_attributes = std::make_shared<TensorAttributes>(
-        std::move(storage), std::move(tensor_spec), std::move(distributed_tensor_config));
+        std::move(storage), std::move(tensor_spec), std::move(distributed_tensor_config), std::move(topology_config));
 
     if (auto* device_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
         device_storage != nullptr && device_storage->mesh_buffer != nullptr) {
@@ -860,6 +873,10 @@ const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->m
 
 const DistributedTensorConfig& Tensor::distributed_tensor_config() const {
     return this->tensor_attributes->get_distributed_tensor_config();
+}
+
+const std::optional<TopologyConfig>& Tensor::topology_config() const {
+    return this->tensor_attributes->get_topology_config();
 }
 
 }  // namespace tt::tt_metal

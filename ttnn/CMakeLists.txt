@@ -48,6 +48,7 @@ target_sources(
         core/device.cpp
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp
+        core/distributed/topology_config.cpp
         core/distributed/distributed_tensor_config.cpp
         core/distributed/distributed_tensor_config.cpp
         core/events.cpp
