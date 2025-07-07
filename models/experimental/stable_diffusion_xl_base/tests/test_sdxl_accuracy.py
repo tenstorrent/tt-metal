@@ -13,6 +13,7 @@ import statistics
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 import json
+from models.utility_functions import profiler
 
 test_demo.__test__ = False
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
@@ -108,6 +109,15 @@ def test_accuracy_sdxl(
             {
                 "device": "N150",
                 "model": "sdxl",
+                "average_denoising_time": profiler.get("denoising_loop"),
+                "average_vae_time": profiler.get("vae_decode"),
+                "average_inference_time": profiler.get("denoising_loop") + profiler.get("vae_decode"),
+                "min_inference_time": min(
+                    i + j for i, j in zip(profiler.times["denoising_loop"], profiler.times["vae_decode"])
+                ),
+                "max_inference_time": max(
+                    i + j for i, j in zip(profiler.times["denoising_loop"], profiler.times["vae_decode"])
+                ),
                 "average_clip": average_clip_score,
                 "deviation_clip": deviation_clip_score,
                 "fid_score": fid_score,
