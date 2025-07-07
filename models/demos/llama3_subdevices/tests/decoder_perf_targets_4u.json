@@ -13,9 +13,9 @@
         },
         "AllGatherConcat_0": {
             "op_name": "AllGatherConcat",
-            "kernel_duration": 11884.732638888889 ,
+            "kernel_duration": 10079.010416666666 ,
             "op_to_op": 909.3484848484849,
-            "first_to_last_start": 2055.777777777778,
+            "first_to_last_start": 262.77777777777777,
             "non-overlapped-dispatch-time": 12462.644444444442,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
@@ -24,7 +24,7 @@
         },
         "AllReduceAsync_0": {
             "op_name": "AllReduceAsync_DO",
-            "kernel_duration": 23027,
+            "kernel_duration": 19107.13888888889,
             "op_to_op": 727.929292929293,
             "first_to_last_start": 1748.0404040404042,
             "non-overlapped-dispatch-time": 7015.244444444444,
@@ -35,7 +35,7 @@
         },
         "AllReduceAsync_1": {
             "op_name": "AllReduceAsync_FF2",
-            "kernel_duration": 21813.768308080806,
+            "kernel_duration": 18900.375,
             "op_to_op": 679.8888888888888,
             "first_to_last_start": 1823.388888888889,
             "non-overlapped-dispatch-time": 6926.338888888889,
@@ -60,7 +60,7 @@
             "kernel_duration": 9728.607323232323,
             "op_to_op": 867.4696969696969,
             "first_to_last_start": 2031.6565656565656,
-            "non-overlapped-dispatch-time": 6127.527777777778,
+            "non-overlapped-dispatch-time": 8155.0,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.4,
             "first_to_last_start_relative_margin": 0.2,
@@ -191,7 +191,7 @@
     "model_tail": {
         "AllGatherAsync_0": {
             "op_name": "AllGatherAsync_0",
-            "kernel_duration": 10227.444602272728,
+            "kernel_duration": 18323.4375,
             "op_to_op": 715.7727272727273,
             "non-overlapped-dispatch-time": 2901.95,
             "kernel_duration_relative_margin": 0.2,
@@ -200,7 +200,7 @@
         },
         "AllGatherAsync_1": {
             "op_name": "AllGatherAsync_1",
-            "kernel_duration": 11966.91903409091,
+            "kernel_duration": 19229.59375,
             "op_to_op": 2422.0,
             "non-overlapped-dispatch-time": 3521.8,
             "kernel_duration_relative_margin": 0.2,
