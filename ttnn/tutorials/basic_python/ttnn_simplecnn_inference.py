@@ -23,19 +23,23 @@ def main():
 
     if os.path.exists("simple_cnn_cifar10_weights.pt"):
         weights = torch.load("simple_cnn_cifar10_weights.pt")
+        weights = {
+            k: ttnn.from_torch(v, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
+            for k, v in weights.items()
+        }
         logger.info("Loaded pretrained weights")
     else:
         logger.warning("Weights not found, using random weights")
         torch.manual_seed(0)
         weights = {
-            "conv1.weight": torch.randn((16, 3, 3, 3)),
-            "conv1.bias": torch.randn((16,)),
-            "conv2.weight": torch.randn((32, 16, 3, 3)),
-            "conv2.bias": torch.randn((32,)),
-            "fc1.weight": torch.randn((128, 2048)),
-            "fc1.bias": torch.randn((128,)),
-            "fc2.weight": torch.randn((10, 128)),
-            "fc2.bias": torch.randn((10,)),
+            "conv1.weight": ttnn.rand((16, 3, 3, 3), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device),
+            "conv1.bias": ttnn.rand((16,), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device),
+            "conv2.weight": ttnn.rand((32, 16, 3, 3), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device),
+            "conv2.bias": ttnn.rand((32,), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device),
+            "fc1.weight": ttnn.rand((128, 2048), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device),
+            "fc1.bias": ttnn.rand((128,), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device),
+            "fc2.weight": ttnn.rand((10, 128), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device),
+            "fc2.bias": ttnn.rand((10,), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device),
         }
 
     def conv_pool_stage(
@@ -48,7 +52,7 @@ def main():
         activation_str: str,
         device: ttnn.Device,
         log_first_sample: bool = False,
-    ):
+    ) -> ttnn.Tensor:
         """
         Perform convolution + activation + max pooling using TT-NN.
         Args:
@@ -67,11 +71,7 @@ def main():
         # Extract weight and bias tensors from weights dictionary
         W = weights[weight_str]
         B = weights[bias_str]
-        B = B.view(1, 1, 1, -1)  # Reshape bias for broadcast compatibility
-
-        # Convert weights and bias to TT tensor format (bfloat16, row-major)
-        W_ttnn = ttnn.from_torch(W, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
-        B_ttnn = ttnn.from_torch(B, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+        B = ttnn.reshape(B, (1, 1, 1, -1))  # Ensure bias is in correct shape for TT-NN
 
         # Define convolution parameters
         conv_kernel_size = (3, 3)
@@ -86,8 +86,8 @@ def main():
             logger.info("=====================================================================")
             logger.info("Input parameters to conv2d:")
             logger.info(f"  input_tensor shape: {input_tensor.shape}")
-            logger.info(f"  weight_tensor shape: {W_ttnn.shape}")
-            logger.info(f"  bias_tensor shape: {B_ttnn.shape}")
+            logger.info(f"  weight_tensor shape: {W.shape}")
+            logger.info(f"  bias_tensor shape: {B.shape}")
             logger.info(f"  in_channels: {input_BHWC[3]}")
             logger.info(f"  out_channels: {conv_outchannels}")
             logger.info(f"  device: {device}")
@@ -103,8 +103,8 @@ def main():
         # Perform convolution
         conv1_out = ttnn.conv2d(
             input_tensor=input_tensor,
-            weight_tensor=W_ttnn,
-            bias_tensor=B_ttnn,
+            weight_tensor=W,
+            bias_tensor=B,
             in_channels=input_BHWC[3],
             out_channels=conv_outchannels,
             device=device,
@@ -207,29 +207,24 @@ def main():
 
         # Prepare fully connected layers
         W3 = weights["fc1.weight"]
-        B3 = weights["fc1.bias"]
+        B3 = weights["fc1.bias"].reshape((1, -1))  # Reshape bias for broadcast compatibility
         W4 = weights["fc2.weight"]
         B4 = weights["fc2.bias"]
 
         # Convert to TT format for FC1
-        W3_tt = ttnn.from_torch(W3.T, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        W3_tt = ttnn.to_layout(W3_tt, ttnn.TILE_LAYOUT)
-        B3_tt = ttnn.from_torch(B3.view(1, -1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        B3_tt = ttnn.to_layout(B3_tt, ttnn.TILE_LAYOUT)
+        W3_tt = ttnn.to_layout(ttnn.transpose(W3, 0, 1), ttnn.TILE_LAYOUT)
+        B3_tt = ttnn.to_layout(B3.reshape((1, -1)), ttnn.TILE_LAYOUT)
 
         # Convert input to TT format
-        x_tt = ttnn.from_torch(out_flat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        x_tt = ttnn.to_layout(x_tt, ttnn.TILE_LAYOUT)
+        x_tt = ttnn.from_torch(out_flat, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
         # Apply FC1 + ReLU
         out = ttnn.linear(x_tt, W3_tt, bias=B3_tt)
         out = ttnn.relu(out)
 
         # Convert to TT format for FC2
-        W4_tt = ttnn.from_torch(W4.T, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        W4_tt = ttnn.to_layout(W4_tt, ttnn.TILE_LAYOUT)
-        B4_tt = ttnn.from_torch(B4.view(1, -1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        B4_tt = ttnn.to_layout(B4_tt, ttnn.TILE_LAYOUT)
+        W4_tt = ttnn.to_layout(ttnn.transpose(W4, 0, 1), ttnn.TILE_LAYOUT)
+        B4_tt = ttnn.to_layout(B4.reshape((1, -1)), ttnn.TILE_LAYOUT)
 
         # Apply FC2 (output logits)
         out = ttnn.linear(out, W4_tt, bias=B4_tt)
