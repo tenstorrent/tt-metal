@@ -133,7 +133,7 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         (uint32_t)datatype_to_dataformat_converter(input_dtype),
         (uint32_t)datatype_to_dataformat_converter(output_dtype));
 
-    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
         all_cores,

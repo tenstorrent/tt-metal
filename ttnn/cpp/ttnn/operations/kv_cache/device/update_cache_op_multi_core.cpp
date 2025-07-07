@@ -200,7 +200,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
         granularity,
         u_count};
 
-    auto compute_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/compute/update_cache.cpp",
         core_group_1,
@@ -208,7 +208,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
 
     if (!core_group_2.ranges().empty()) {
         compute_kernel_args[6] = num_batched_heads_per_core_group_2;
-        auto compute_kernel_group_2_id = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/compute/update_cache.cpp",
             core_group_2,

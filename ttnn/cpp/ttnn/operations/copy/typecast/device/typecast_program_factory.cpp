@@ -98,7 +98,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
 
     auto path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
-    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         path,
         core_group_1,
@@ -118,7 +118,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
             src0_cb_index,
             output_cb_index};
 
-        auto eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             path,
             core_group_2,
@@ -291,7 +291,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
 
     auto path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
-    auto typecast_compute_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         path,
         all_cores,
