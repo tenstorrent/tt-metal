@@ -11,16 +11,14 @@ void kernel_main() {
     constexpr uint32_t pages_per_transaction = get_compile_time_arg_val(2);
     constexpr uint32_t bytes_per_page = get_compile_time_arg_val(3);
     constexpr uint32_t dram_addr = get_compile_time_arg_val(4);
-    constexpr uint32_t packed_dram_virtual_coords = get_compile_time_arg_val(5);
+    constexpr uint32_t dram_channel = get_compile_time_arg_val(5);
     constexpr uint32_t local_l1_addr = get_compile_time_arg_val(6);
     constexpr uint32_t sem_id = get_compile_time_arg_val(7);
 
     constexpr uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
 
-    uint32_t dram_virtual_coord_x = packed_dram_virtual_coords >> 16 & 0xFFF;
-    uint32_t dram_virtual_coord_y = packed_dram_virtual_coords & 0xFFF;
-
-    uint64_t dram_noc_addr = get_noc_addr(dram_virtual_coord_x, dram_virtual_coord_y, dram_addr);
+    constexpr bool dram = true;
+    uint64_t dram_noc_addr = get_noc_addr_from_bank_id<dram>(dram_channel, dram_addr);
 
     uint32_t sem_addr = get_semaphore(sem_id);
     auto sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);

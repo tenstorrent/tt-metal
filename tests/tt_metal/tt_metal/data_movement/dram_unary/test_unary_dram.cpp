@@ -52,10 +52,6 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
     // Redundant but as an extra measure add a check to ensure both addresses are within DRAM bounds
     // Checks also needed for L1 maybe
 
-    CoreCoord dram_logical_coords = device->logical_core_from_dram_channel(test_config.dram_channel);
-    CoreCoord dram_virtual_coords = device->virtual_core_from_logical_core(dram_logical_coords, CoreType::DRAM);
-    uint32_t packed_dram_virtual_coords = dram_virtual_coords.x << 16 | dram_virtual_coords.y;
-
     // Initialize semaphore ID
     CoreRangeSet core_range_set = CoreRangeSet({CoreRange(test_config.core_coord)});
     const uint32_t sem_id = CreateSemaphore(program, core_range_set, 0);
@@ -67,7 +63,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
         (uint32_t)test_config.pages_per_transaction,
         (uint32_t)test_config.bytes_per_page,
         (uint32_t)input_dram_address,
-        (uint32_t)packed_dram_virtual_coords,
+        (uint32_t)test_config.dram_channel,
         (uint32_t)l1_address,
         (uint32_t)sem_id};
 
@@ -77,7 +73,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
         (uint32_t)test_config.pages_per_transaction,
         (uint32_t)test_config.bytes_per_page,
         (uint32_t)output_dram_address,
-        (uint32_t)packed_dram_virtual_coords,
+        (uint32_t)test_config.dram_channel,
         (uint32_t)l1_address,
         (uint32_t)sem_id};
 
@@ -88,7 +84,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
         test_config.core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_0_default,
+            .noc = NOC::RISCV_1_default,
             .compile_args = reader_compile_args});
 
     auto writer_kernel = CreateKernel(
