@@ -222,6 +222,19 @@ jobs:
           COMMIT_COUNT=$(git log --oneline ${OLD_SHA}..${NEW_SHA} | wc -l)
           FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l)
 
+          # Determine commit and file count labels
+          if [ "$COMMIT_COUNT" -eq 1 ]; then
+            COMMIT_LABEL="$COMMIT_COUNT commit"
+          else
+            COMMIT_LABEL="$COMMIT_COUNT commits"
+          fi
+
+          if [ "$FILE_COUNT" -eq 1 ]; then
+            FILE_LABEL="$FILE_COUNT file"
+          else
+            FILE_LABEL="$FILE_COUNT files"
+          fi
+
           # Generate updated PR body with PR link (use commits table from step output)
           cat > ../../../updated_llk_commit_log.txt << EOF
 
@@ -232,10 +245,10 @@ jobs:
           |---------|---------|
           | tt-llk | [\`$OLD_SHA\`](https://github.com/tenstorrent/tt-llk/commit/$OLD_SHA) [->](https://github.com/tenstorrent/tt-llk/compare/$OLD_SHA...$NEW_SHA) [\`$NEW_SHA\`](https://github.com/tenstorrent/tt-llk/commit/$NEW_SHA) |
 
-          ### 📝 Changelog ($COMMIT_COUNT commits)
+          ### 📝 Changelog ($COMMIT_LABEL)
           ${{ steps.analyze-changes.outputs.commits-table }}
 
-          ### 📁 Files Changed ($FILE_COUNT files)
+          ### 📁 Files Changed ($FILE_LABEL)
           <details>
           <summary>Click to expand file list</summary>
 
