@@ -485,7 +485,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 
 bool MeshDevice::close() {
     ZoneScoped;
-    log_info(tt::LogMetal, "Closing mesh device {}", this->id());
+    log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
     // We only dump profile results for mesh devices that don't have any submeshes as they have active mesh command
     // queues, whereas mesh devices with submeshes don't.
