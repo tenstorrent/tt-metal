@@ -1258,7 +1258,7 @@ class Generator:
         """
         Returns the maximum batch size per model and a list of batch sizes for each model.
         """
-        max_batch_size_per_model = (batch_size + self.data_parallel - 1) // self.data_parallel
+        max_batch_size_per_model = self.model_args[0].max_batch_size
 
         # The logic ensures that the total batch size is divided as evenly as possible
         # among the models, with any remainder distributed to the earlier models in the list.
