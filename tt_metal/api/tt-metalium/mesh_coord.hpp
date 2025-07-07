@@ -80,8 +80,10 @@ public:
     // Returns the coordinate values as a span.
     tt::stl::Span<const uint32_t> coords() const;
 
-    // Returns the coordinate value at the given index.
-    uint32_t operator[](size_t dim) const;
+    // Provides access to the coordinate value at the given index.
+    // Supports negative indexing.
+    uint32_t operator[](int32_t dim) const;
+    uint32_t& operator[](int32_t dim);
 
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");
@@ -105,6 +107,18 @@ std::ostream& operator<<(std::ostream& os, const MeshCoordinate& shape);
 // Converts a MeshCoordinate to a linear index.
 // Throws if `coord` is out of bounds of `shape`.
 size_t to_linear_index(const MeshShape& shape, const MeshCoordinate& coord);
+
+// Returns a neighbor along the given dimension.
+// `BoundaryMode` specifies how to handle coordinates that are out of bounds.
+// Negative offsets and dim are allowed, and the input coordinate must be within bounds.
+enum class BoundaryMode { WRAP, CLAMP, NONE };
+
+std::optional<MeshCoordinate> get_neighbor(
+    const MeshShape& shape,
+    const MeshCoordinate& coord,
+    int32_t offset,
+    int32_t dim,
+    BoundaryMode mode = BoundaryMode::WRAP);
 
 // Represents a range of MeshCoordinates. Requires that mesh coordinates have the same dimensionality.
 class MeshCoordinateRange {
@@ -144,6 +158,7 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("start", "end");
     auto attribute_values() const { return std::forward_as_tuple(start_, end_); }
 
+    // Iterator over the range, provides access to coordinates in row-major order.
     class Iterator {
     public:
         Iterator& operator++();

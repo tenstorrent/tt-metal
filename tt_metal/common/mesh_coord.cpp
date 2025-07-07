@@ -65,6 +65,21 @@ bool check_mergeable(const MeshCoordinateRange& a, const MeshCoordinateRange& b)
     }
 }
 
+int32_t normalize_index(int32_t index, int32_t size) {
+    int32_t normalized_index = index;
+    if (normalized_index < 0) {
+        normalized_index += size;
+    }
+    TT_FATAL(
+        normalized_index >= 0 && normalized_index < size,
+        "Index out of bounds: {} not in [{}, {})",
+        index,
+        -size,
+        size);
+
+    return normalized_index;
+}
+
 }  // namespace
 
 MeshShape::MeshShape(uint32_t s) : MeshShape({s}) {}
@@ -124,7 +139,41 @@ MeshCoordinate MeshCoordinate::zero_coordinate(size_t dimensions) {
 
 size_t MeshCoordinate::dims() const { return value_.size(); }
 tt::stl::Span<const uint32_t> MeshCoordinate::coords() const { return value_; }
-uint32_t MeshCoordinate::operator[](size_t dim) const { return value_[dim]; }
+uint32_t MeshCoordinate::operator[](int32_t dim) const { return value_[normalize_index(dim, dims())]; }
+uint32_t& MeshCoordinate::operator[](int32_t dim) { return value_[normalize_index(dim, dims())]; }
+
+std::optional<MeshCoordinate> get_neighbor(
+    const MeshShape& shape, const MeshCoordinate& coord, int32_t offset, int32_t dim, BoundaryMode mode) {
+    TT_FATAL(
+        shape.dims() == coord.dims(),
+        "Shape and coordinate dimensions do not match: {} != {}",
+        shape.dims(),
+        coord.dims());
+    dim = normalize_index(dim, shape.dims());
+
+    for (size_t i = 0; i < coord.dims(); ++i) {
+        TT_FATAL(coord[i] < shape[i], "Coordinate {} is out of bounds for shape {}", coord, shape);
+    }
+
+    const auto boundary = static_cast<int32_t>(shape[dim]);
+    const int32_t current_pos = static_cast<int32_t>(coord[dim]);
+    const int32_t new_pos = current_pos + offset;
+
+    MeshCoordinate result = coord;
+
+    switch (mode) {
+        case BoundaryMode::WRAP: result[dim] = ((new_pos % boundary) + boundary) % boundary; break;
+        case BoundaryMode::CLAMP: result[dim] = std::clamp(new_pos, 0, boundary - 1); break;
+        case BoundaryMode::NONE:
+            if (new_pos < 0 || new_pos >= boundary) {
+                return std::nullopt;
+            }
+            result[dim] = new_pos;
+            break;
+    }
+
+    return result;
+}
 
 bool operator==(const MeshCoordinate& lhs, const MeshCoordinate& rhs) {
     return lhs.dims() == rhs.dims() && std::equal(lhs.coords().begin(), lhs.coords().end(), rhs.coords().begin());
@@ -239,17 +288,13 @@ MeshCoordinateRange::Iterator MeshCoordinateRange::Iterator::operator++(int) {
 
 MeshCoordinateRange::Iterator& MeshCoordinateRange::Iterator::operator++() {
     ++linear_index_;
-
-    tt::stl::SmallVector<uint32_t> new_coords(current_coord_.coords().begin(), current_coord_.coords().end());
-    for (int i = new_coords.size() - 1; i >= 0; --i) {
-        auto& dimension_value = new_coords[i];
-        if (++dimension_value > range_->end_coord()[i]) {
-            dimension_value = range_->start_coord()[i];
+    for (int i = current_coord_.dims() - 1; i >= 0; --i) {
+        if (++current_coord_[i] > range_->end_coord()[i]) {
+            current_coord_[i] = range_->start_coord()[i];
         } else {
             break;
         }
     }
-    current_coord_ = MeshCoordinate(new_coords);
     return *this;
 }
 const MeshCoordinate& MeshCoordinateRange::Iterator::operator*() const { return current_coord_; }
