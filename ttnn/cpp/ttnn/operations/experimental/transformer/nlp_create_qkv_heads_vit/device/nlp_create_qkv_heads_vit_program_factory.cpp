@@ -103,7 +103,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
     std::map<string, string> writer_defines;
     if (transpose_k_heads) {
         std::vector<uint32_t> compute_args_core_group_1 = {num_blocks_per_core_group_1 * kv_num_tiles};
-        auto compute_kernel_id_group_1 = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/transpose_wh.cpp",
             core_group_1,
@@ -111,7 +111,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
 
         if (core_group_2.num_cores() > 0) {
             std::vector<uint32_t> compute_args_core_group_2 = {num_blocks_per_core_group_2 * kv_num_tiles};
-            auto compute_kernel_id_group_2 = tt_metal::CreateKernel(
+            tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/transpose_wh.cpp",
                 core_group_2,

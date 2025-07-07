@@ -308,7 +308,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
              (std::uint32_t)retilized_sin_cb_index});
     }
 
-    auto rotary_embedding_kernel_group_1_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/"
         "rotary_embedding.cpp",
@@ -317,7 +317,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     if (!core_group_2.ranges().empty()) {
         compute_kernel_args[9] = num_rows_per_core_group_2;
 
-        auto rotary_embedding_kernel_group_2_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/"
             "rotary_embedding.cpp",

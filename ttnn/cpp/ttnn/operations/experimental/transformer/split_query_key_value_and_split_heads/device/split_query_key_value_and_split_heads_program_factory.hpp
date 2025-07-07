@@ -124,7 +124,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
 
     // Dummy compute kernel
     std::vector<uint32_t> compute_args = {num_tiles_per_tensor};
-    auto compute_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/transpose_wh.cpp",
         all_cores,
@@ -276,7 +276,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
         (std::uint32_t)out_block_wt * single_tile_size,
         (std::uint32_t)num_tiles_per_tensor,
         (std::uint32_t)block_wt * single_tile_size / num_tensors};
-    auto reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/"
         "dataflow/reader_tm_tile_layout_create_qkv_heads_sharded.cpp",
@@ -292,7 +292,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
         (std::uint32_t)out_block_wt * single_tile_size,
         (std::uint32_t)num_tiles_per_tensor,
         (std::uint32_t)block_wt * single_tile_size / num_tensors};
-    auto writer_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/"
         "dataflow/writer_tm_tile_layout_create_qkv_heads_sharded.cpp",
@@ -300,7 +300,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     // compute kernel
     std::vector<uint32_t> compute_args = {num_tiles_per_tensor};
-    auto compute_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/"
         "compute/transpose_wh_sharded.cpp",

@@ -134,7 +134,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
     if (transpose_k) {
         reader_defines["TRANSPOSE_K_HEADS"] = "1";
     }
-    auto reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/create_qkv_heads/device/kernels/"
         "reader_create_qkv_heads_sharded.cpp",
@@ -145,7 +145,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
         std::vector<uint32_t> compute_args = {
             (std::uint32_t)block_ht * num_tiles_per_group[1] * groups_per_block,  // number of K tiles
         };
-        auto compute_kernel_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/"
             "compute/transpose_wh_sharded.cpp",
