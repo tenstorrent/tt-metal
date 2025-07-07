@@ -271,7 +271,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
     const uint32_t kernel_size_hw_padded = tt::round_up(kernel_size_hw, tt::constants::TILE_HEIGHT);
-    const uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / tt::constants::TILE_HEIGHT);
     const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
     const uint32_t out_ntiles_c =
         (uint32_t)std::ceil((float)output_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
@@ -531,11 +530,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      * output cb
      */
     std::vector<uint32_t> compute_ct_args = {
-        in_ntiles_hw,
         in_ntiles_c,
         kernel_size_hw,
-        out_h,
-        out_w,
         split_reader,                // enable split reader
         out_nhw_per_core / nblocks,  // loop count with blocks
         input_shape[3] / num_shards_c,
