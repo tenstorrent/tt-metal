@@ -194,7 +194,6 @@ class TestEltwiseUnary:
     def test_run_eltwise_rsqrt_op(
         self,
         input_shapes,
-        fast_and_approx,
         device,
         function_level_defaults,
         input_mem_config,
