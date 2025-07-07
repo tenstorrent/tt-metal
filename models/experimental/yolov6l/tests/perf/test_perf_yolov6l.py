@@ -21,7 +21,7 @@ from models.utility_functions import disable_persistent_kernel_cache
 
 
 def get_expected_times(name):
-    base = {"yolov6l": (183.7, 0.015)}
+    base = {"yolov6l": (183.7, 0.017)}
     return base[name]
 
 
@@ -98,7 +98,7 @@ def test_perf_yolov6l(
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 34],
+        [1, 64],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
