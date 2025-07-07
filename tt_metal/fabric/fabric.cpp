@@ -161,38 +161,48 @@ void append_fabric_connection_rt_args(
         forwarding_links);
 
     const auto fabric_router_channel = candidate_eth_chans[link_idx];
-    const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
-
-    // src_chip_id is still required to get the fabric_router_virtual_core from tt_cluster
-    chip_id_t src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-
-    CoreCoord fabric_router_virtual_core =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-            src_chip_id, fabric_router_channel);
-
-    const auto& edm_config = fabric_context.get_fabric_router_config();
-    const auto sender_channel = is_2d_fabric ? router_direction : 0;
-    tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
-        .edm_noc_x = fabric_router_virtual_core.x,
-        .edm_noc_y = fabric_router_virtual_core.y,
-        .edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel],
-        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel],
-        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
-        .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
-        .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
-        .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
-        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
-        .edm_direction = router_direction};
-
     auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
     auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
     auto worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
-    append_worker_to_fabric_edm_sender_rt_args(
-        edm_connection,
-        worker_flow_control_semaphore_id,
-        worker_teardown_semaphore_id,
-        worker_buffer_index_semaphore_id,
-        worker_args);
+    if (core_type == CoreType::WORKER) {
+        append_worker_to_fabric_edm_sender_rt_args(
+            fabric_router_channel,
+            worker_flow_control_semaphore_id,
+            worker_teardown_semaphore_id,
+            worker_buffer_index_semaphore_id,
+            worker_args);
+    } else {
+        // TODO: will be deprecated. currently for ethernet dispatch case
+        //       ethernet core need to have same memory mapping as worker
+        const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
+
+        // src_chip_id is still required to get the fabric_router_virtual_core from tt_cluster
+        chip_id_t src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+
+        CoreCoord fabric_router_virtual_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+                src_chip_id, fabric_router_channel);
+
+        const auto& edm_config = fabric_context.get_fabric_router_config();
+        const auto sender_channel = is_2d_fabric ? router_direction : 0;
+        tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
+            .edm_noc_x = fabric_router_virtual_core.x,
+            .edm_noc_y = fabric_router_virtual_core.y,
+            .edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel],
+            .num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel],
+            .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
+            .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
+            .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
+            .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
+            .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
+            .edm_direction = router_direction};
+        append_worker_to_fabric_edm_sender_rt_args(
+            edm_connection,
+            worker_flow_control_semaphore_id,
+            worker_teardown_semaphore_id,
+            worker_buffer_index_semaphore_id,
+            worker_args);
+    }
 }
 
 std::vector<uint32_t> get_forwarding_link_indices(

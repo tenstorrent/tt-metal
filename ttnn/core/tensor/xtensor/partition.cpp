@@ -230,6 +230,40 @@ XtensorAdapter<typename Expression::value_type> concat(const std::vector<Express
     return concat_ndim<Expression>(v, {v.size()}, {dim});
 }
 
+// Adaptor APIs from xtensor to ttnn::Tensor.
+namespace adaptor {
+namespace {
+
+template <typename T>
+Tensor concat_impl(const std::vector<Tensor>& tensors, const tt::tt_metal::TensorLayout& layout, int dim) {
+    std::vector<xt::xarray<T>> xtensors;
+    xtensors.reserve(tensors.size());
+    for (const auto& tensor : tensors) {
+        xtensors.push_back(to_xtensor<T>(tensor));
+    }
+    xt::xarray<T> result(concat(xtensors, dim).expr());
+    return from_xtensor<T>(result, TensorSpec(get_shape_from_xarray(result), layout));
+}
+
+}  // namespace
+}  // namespace adaptor
+
+Tensor concat(const std::vector<Tensor>& tensors, int dim) {
+    TT_FATAL(tensors.size() > 0, "Cannot concatenate an empty list of tensors");
+    const auto& reference_layout = tensors.front().tensor_spec().tensor_layout();
+    switch (reference_layout.get_data_type()) {
+        case tt::tt_metal::DataType::BFLOAT4_B:
+        case tt::tt_metal::DataType::BFLOAT8_B:
+        case tt::tt_metal::DataType::FLOAT32: return adaptor::concat_impl<float>(tensors, reference_layout, dim);
+        case tt::tt_metal::DataType::BFLOAT16: return adaptor::concat_impl<bfloat16>(tensors, reference_layout, dim);
+        case tt::tt_metal::DataType::INT32: return adaptor::concat_impl<int32_t>(tensors, reference_layout, dim);
+        case tt::tt_metal::DataType::UINT8: return adaptor::concat_impl<uint8_t>(tensors, reference_layout, dim);
+        case tt::tt_metal::DataType::UINT16: return adaptor::concat_impl<uint16_t>(tensors, reference_layout, dim);
+        case tt::tt_metal::DataType::UINT32: return adaptor::concat_impl<uint32_t>(tensors, reference_layout, dim);
+        default: TT_THROW("Unsupported data type: {}", reference_layout.get_data_type());
+    }
+}
+
 // Explicit instantiations for the public API.
 #define EXPLICIT_INSTANTIATIONS_FOR_TYPE(T)                                                                          \
     template StridedViews<xt::xarray<T>> chunk(const xt::xexpression<xt::xarray<T>>&, int, int);                     \
