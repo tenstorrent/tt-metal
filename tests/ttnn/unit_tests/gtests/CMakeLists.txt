@@ -39,7 +39,7 @@ target_link_libraries(
 
 add_library(unit_tests_ttnn_basic OBJECT)
 add_library(TTNN::Test::Basic ALIAS unit_tests_ttnn_basic)
-TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_basic)
+# TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_basic)
 target_sources(
     unit_tests_ttnn_basic
     PRIVATE
