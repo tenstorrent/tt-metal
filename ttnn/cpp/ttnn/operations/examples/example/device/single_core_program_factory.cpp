@@ -28,10 +28,7 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
 
     uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
 
-    tt::tt_metal::IDevice* device = input_tensor.device();
-
     CoreCoord compute_with_storage_grid_size = {1, 1};
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
@@ -41,7 +38,7 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = 2;
@@ -49,7 +46,7 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
         tt::tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size_output, {{output_cb_index, cb_data_format_output}})
             .set_page_size(output_cb_index, single_tile_size_output);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
@@ -74,7 +71,7 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
     };
 
     bool math_approx_mode = false;
-    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
         core_group_1,
@@ -89,7 +86,7 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
             1                            // per_core_block_size
         };
 
-        auto eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
             core_group_2,
