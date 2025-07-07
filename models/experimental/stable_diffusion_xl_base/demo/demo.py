@@ -292,9 +292,11 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
             iter,
         )
 
-        logger.info(f"Denoising loop for {batch_size} promts completed in {profiler.get('denoising_loop'):.2f} seconds")
         logger.info(
-            f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.get('vae_decode'):.2f} seconds"
+            f"Denoising loop for {batch_size} promts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
+        )
+        logger.info(
+            f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
         )
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
