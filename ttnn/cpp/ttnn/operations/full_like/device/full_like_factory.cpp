@@ -73,7 +73,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
 
     auto cb_value_config = tt::tt_metal::CircularBufferConfig(single_tile_size, {{cb_fill_value_id, data_format}})
                                .set_page_size(cb_fill_value_id, single_tile_size);
-    auto cb_fill_value = CreateCircularBuffer(program, all_cores, cb_value_config);
+    CreateCircularBuffer(program, all_cores, cb_value_config);
     std::map<string, string> writer_defines;
 
     switch (dtype) {

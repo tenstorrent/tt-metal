@@ -183,7 +183,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
     if (transpose_k) {
         auto c_im0_config = tt::tt_metal::CircularBufferConfig(k_size, {{CBIndex::c_24, data_format}})
                                 .set_page_size(CBIndex::c_24, single_tile_size);
-        auto cb_im0_id = CreateCircularBuffer(program, all_cores, c_im0_config);
+        CreateCircularBuffer(program, all_cores, c_im0_config);
     }
 
     auto override_runtime_args_callback = [cb_in0_id, cb_out0_id, cb_out1_id, cb_out2_id](

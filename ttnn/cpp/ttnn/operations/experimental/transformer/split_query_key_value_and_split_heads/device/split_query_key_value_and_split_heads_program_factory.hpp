@@ -316,7 +316,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
     // im
     auto c_im0_config = CircularBufferConfig(im0_CB_size, {{CBIndex::c_24, cb_data_format}})
                             .set_page_size(CBIndex::c_24, single_tile_size);
-    auto cb_im0_id = CreateCircularBuffer(program, all_cores, c_im0_config);
+    CreateCircularBuffer(program, all_cores, c_im0_config);
     // q sharded
     auto c_out0_config = CircularBufferConfig(out_CB_size, {{CBIndex::c_16, cb_data_format}})
                              .set_page_size(CBIndex::c_16, single_tile_size)

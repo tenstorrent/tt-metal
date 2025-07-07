@@ -129,7 +129,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
                                                 .set_page_size(reader_cb_index, reader_cb_single_tile_size)
                                                 .set_globally_allocated_address(global_cb_buffer);
 
-    auto reader_cb = CreateCircularBuffer(program, reader_core_range, reader_cb_config);
+    CreateCircularBuffer(program, reader_core_range, reader_cb_config);
 
     uint32_t sync_cb_index = tt::CBIndex::c_3;
     uint32_t sync_cb_page_size = hal::get_l1_alignment();
@@ -137,7 +137,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         CircularBufferConfig(sync_cb_page_size, {{sync_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(sync_cb_index, sync_cb_page_size);
 
-    auto sync_cb = CreateCircularBuffer(program, reader_core_range, sync_cb_confg);
+    CreateCircularBuffer(program, reader_core_range, sync_cb_confg);
 
     /* tensor addresses cb setup */
     uint32_t tensor_addrs_single_tile_size = sizeof(uint32_t);
