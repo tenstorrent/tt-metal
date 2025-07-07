@@ -11,7 +11,6 @@ from models.utility_functions import is_wormhole_b0, is_blackhole, skip_for_blac
 from tests.ttnn.unit_tests.operations.prefetcher_common import run_prefetcher_mm
 
 
-@skip_for_blackhole("Hangs on Blackhole. Issue #21304")
 @pytest.mark.parametrize(
     "num_reader_cores, num_tensors, input_shapes, dtypes, num_layers",
     [
