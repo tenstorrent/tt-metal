@@ -53,7 +53,7 @@ def _get_batch_rep_idxr(replication_axis, batch):
     return _idxr
 
 
-def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping, mesh_shape, axis):
+def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping, mesh_shape, axis, apply_fake_expert=True):
     # sparse tokens is [devices, batch, seq, hidden_size]
     # note, in the actual op batch*=replication_dim but the reference `sparse_tokens` is not doing that here
     # desired expert contributions tensor is [experts[/devices], batch*replicate_dim, seq, hidden_size]
@@ -88,9 +88,10 @@ def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping, mes
                     local_expert_idx = d * experts_per_device + experts_on_device.index(expert_idx)
 
                     # multiply by expert index to mock application of expert
-                    input_contribs_tensor[local_expert_idx, b, s, :] = sparse_tokens[d, b, s, :] * (
-                        -1 if expert_idx == 0 else expert_idx
-                    )
+                    input_contribs_tensor[local_expert_idx, b, s, :] = sparse_tokens[d, b, s, :]
+                    if apply_fake_expert:
+                        input_contribs_tensor[local_expert_idx, b, s, :] *= -1 if expert_idx == 0 else expert_idx
+
                     token_expert_count += 1
 
     assert token_expert_count == batch * seq * selected_experts_k
