@@ -304,6 +304,9 @@ IDEAS:
 /* ======== PACKET SIZES ======== */
 
 TEST_F(DeviceFixture, TensixDataMovementAllToAllPacketSizes) {
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
+    }
     uint32_t test_case_id = 0;
 
     /* Parameters */
@@ -324,6 +327,9 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAllPacketSizes) {
 
 /* ======== All to All ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllToAllDirectedIdeal) {
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
+    }
     uint32_t test_case_id = 1;
 
     /* Parameters */
