@@ -1418,10 +1418,10 @@ void run_receiver_channel_step_impl(
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
             if constexpr (is_2d_fabric) {
-#if defined(DYNAMIC_ROUTING_ENABLED)
+#if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
                 receiver_forward_packet<receiver_channel>(
                     packet_header, cached_routing_fields, downstream_edm_interface, trid, port_direction_table);
-#else
+#elif defined(FABRIC_2D)
                 receiver_forward_packet<receiver_channel>(
                     packet_header, cached_routing_fields, downstream_edm_interface, trid, hop_cmd);
 #endif
