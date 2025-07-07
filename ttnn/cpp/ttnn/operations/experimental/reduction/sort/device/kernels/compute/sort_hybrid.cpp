@@ -10,11 +10,6 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/binary_max_min.h"
 
-#include "debug/dprint.h"
-#include "debug/waypoint.h"
-#include "debug/pause.h"
-#include "debug/dprint_tensix.h"
-
 #include "sort_common.hpp"
 
 #include <cstdint>
