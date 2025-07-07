@@ -26,7 +26,6 @@ class TtBepC3:
             conv_pth=parameters.cv1.block.conv,
             shard_layout=shard_layout_cv2 if shard_layout == None else shard_layout,
             activation="silu",
-            reshape=True,
         )
         self.cv2 = Yolov6l_Conv2D(
             device=device,
@@ -34,7 +33,6 @@ class TtBepC3:
             conv_pth=parameters.cv2.block.conv,
             shard_layout=shard_layout_cv2 if shard_layout == None else shard_layout,
             activation="silu",
-            reshape=True,
         )
         self.cv3 = Yolov6l_Conv2D(
             device=device,
@@ -55,10 +53,11 @@ class TtBepC3:
 
     def __call__(self, x):
         conv1 = self.cv1(x)
-        rep = self.repblock(conv1)
+        rep, _, _ = self.repblock(conv1)
         conv2 = self.cv2(x)
         conv2 = ttnn.to_memory_config(conv2, memory_config=ttnn.L1_MEMORY_CONFIG)
         conv2 = ttnn.to_layout(conv2, layout=ttnn.TILE_LAYOUT)
+        rep = ttnn.to_memory_config(rep, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         concat_output = ttnn.concat([rep, conv2], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         conv3 = self.cv3(concat_output)

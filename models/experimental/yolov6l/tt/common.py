@@ -31,6 +31,7 @@ class Yolov6l_Conv2D:
         act_blocks=False,
         act_block_h=None,
         batch_size=1,
+        return_height_width=False,
     ):
         self.conv = conv
         self.device = device
@@ -51,6 +52,7 @@ class Yolov6l_Conv2D:
             math_approx_mode=True,
         )
         self.batch_size = batch_size
+        self.return_height_width = return_height_width
 
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
@@ -112,6 +114,8 @@ class Yolov6l_Conv2D:
             output = ttnn.reshape(
                 output, (x.shape[0], output_height, output_width, output.shape[3]), memory_config=ttnn.L1_MEMORY_CONFIG
             )
+        if self.return_height_width:
+            return output, output_height, output_width
         return output
 
 

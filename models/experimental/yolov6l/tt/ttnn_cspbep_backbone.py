@@ -16,8 +16,6 @@ class TtCSPBepBackbone:
             device=device,
             conv=model_params.stem.block.conv,
             conv_pth=parameters.stem.block.conv,
-            # shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            # auto_shard=True,
             activation="silu",
             activation_dtype=ttnn.bfloat16,
             reshape=True,
@@ -27,8 +25,6 @@ class TtCSPBepBackbone:
             device=device,
             conv=model_params.ERBlock_2[0].block.conv,
             conv_pth=parameters.ERBlock_2[0].block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
             reshape=True,
         )
@@ -38,8 +34,6 @@ class TtCSPBepBackbone:
             device=device,
             conv=model_params.ERBlock_3[0].block.conv,
             conv_pth=parameters.ERBlock_3[0].block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
             reshape=True,
         )
@@ -49,11 +43,7 @@ class TtCSPBepBackbone:
             device=device,
             conv=model_params.ERBlock_4[0].block.conv,
             conv_pth=parameters.ERBlock_4[0].block.conv,
-            # act_block_h=True,
-            # act_blocks=32*8,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
             reshape=True,
         )
@@ -64,8 +54,6 @@ class TtCSPBepBackbone:
             conv=model_params.ERBlock_5[0].block.conv,
             conv_pth=parameters.ERBlock_5[0].block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
             reshape=True,
         )

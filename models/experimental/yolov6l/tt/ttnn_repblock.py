@@ -35,8 +35,8 @@ class TtRepBlock:
             )
 
     def __call__(self, inpur_tensor):
-        output = self.conv1(inpur_tensor)
+        output, out_h, out_w = self.conv1(inpur_tensor)
         for i in range(self.n_blocks):
             block = getattr(self, f"bottle_rep{i}")
-            output = block(output)
-        return output
+            output, out_h, out_w = block(output)
+        return output, out_h, out_w
