@@ -362,7 +362,7 @@ jobs:
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
         env:
-          CIBW_BUILD: "cp310-manylinux_x86_64* cp312-manylinux_x86_64*"
+          CIBW_BUILD: "cp312-manylinux_x86_64*"
           CIBW_BUILD_FRONTEND: build
           CIBW_ENVIRONMENT: >-
             CCACHE_REMOTE_ONLY=true
@@ -370,6 +370,17 @@ jobs:
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
           CIBW_BEFORE_BUILD: |
+            echo "=== Checking Clang version ==="
+            clang --version || echo "clang not found"
+            clang++ --version || echo "clang++ not found"
+            which clang || echo "clang not in PATH"
+            which clang++ || echo "clang++ not in PATH"
+            echo "=== Checking available compilers ==="
+            ls -la /usr/bin/clang* || echo "No clang binaries found in /usr/bin"
+            ls -la /usr/bin/gcc* || echo "No gcc binaries found in /usr/bin"
+            echo "=== Environment variables ==="
+            echo "CC=${CC:-not set}"
+            echo "CXX=${CXX:-not set}"
             echo "=== Installing pybind11 ==="
             python -m pip install pybind11
             echo "=== Verify pybind11 installation ==="
