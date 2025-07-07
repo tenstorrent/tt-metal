@@ -69,11 +69,13 @@ void append_fabric_mux_connection_ct_args(
 }
 
 void append_fabric_mux_connection_rt_args(
+    const bool& mux_connection_valid,
     const CoreCoord& worker_logical_core,
     tt::tt_metal::Program& program,
     CoreCoord termination_master_virtual_core,
     uint32_t num_workers_per_direction,
     std::vector<uint32_t>& worker_rt_args) {
+    worker_rt_args.push_back(mux_connection_valid);
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
@@ -759,7 +761,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     std::vector<KernelHandle> writer_kernel_ids;
     std::vector<KernelHandle> reduce_kernel_ids;
     std::vector<KernelHandle> mux_kernel_ids;
-
     if (fuse_op) {
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
     }
@@ -781,12 +782,12 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             auto num_header_only_channels = 0;
             uint32_t payload_size_bytes = tiles_to_write_per_packet * op_config.get_page_size();
             uint32_t num_buffers_full_size_channels = num_full_size_channels * 8;
-            size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_max_buffer_size_bytes_full_size_channel();
+            size_t buffer_size_bytes_full_size_channel =
+                tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
             const uint32_t l1_unreserved_base_address =
                 sender_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
             const size_t mux_base_l1_address = l1_unreserved_base_address;
             uint32_t num_full_size_channel_iters = 1;
-
             auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
                 num_full_size_channels,
                 num_header_only_channels,
@@ -798,31 +799,34 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 mux_kernel_config.set_num_full_size_channel_iters(num_full_size_channel_iters);
             }
 
-            auto mux_kernel_id = tt::tt_metal::CreateKernel(
-                program,
-                "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-                {mux_logical_core},
-                tt::tt_metal::DataMovementConfig{
-                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt::tt_metal::NOC::RISCV_0_default,
-                    .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-                    .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-            mux_kernel_ids.push_back(mux_kernel_id);
-
-            std::vector<uint32_t> mux_rt_args = {};
-            const auto src_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-            if (dir) {  // forward
-                const auto dst_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
-                mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, program, {mux_logical_core});
-            } else {
-                const auto dst_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
-                mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, program, {mux_logical_core});
+            const bool mux_connection_valid =
+                (dir && forward_device.has_value()) || (!dir && backward_device.has_value());
+            if (mux_connection_valid) {
+                auto mux_kernel_id = tt::tt_metal::CreateKernel(
+                    program,
+                    "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+                    {mux_logical_core},
+                    tt::tt_metal::DataMovementConfig{
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt::tt_metal::NOC::RISCV_0_default,
+                        .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+                        .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+                mux_kernel_ids.push_back(mux_kernel_id);
+                std::vector<uint32_t> mux_rt_args = {};
+                const auto src_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+                if (dir) {  // forward
+                    const auto dst_node_id =
+                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                    mux_kernel_config.get_fabric_mux_run_time_args(
+                        src_node_id, dst_node_id, link, program, {mux_logical_core});
+                } else {
+                    const auto dst_node_id =
+                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                    mux_kernel_config.get_fabric_mux_run_time_args(
+                        src_node_id, dst_node_id, link, program, {mux_logical_core});
+                }
+                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
             }
-            tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
 
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
@@ -853,7 +857,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 const bool do_final_reduction = !is_first_device_in_direction;
                 const int num_total_reduction_steps = num_intermediate_reduction_steps + (do_final_reduction ? 1 : 0);
                 const bool sync_with_other_direction = !(is_first_chip || is_last_chip);
-
                 // Reader
 		std::vector<uint32_t> sender_reader_compile_args = {
                     ring_index,                                              // my_chip_id
@@ -915,8 +918,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 if (fuse_op) {
                     fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
                 }
-                tt::tt_metal::SetRuntimeArgs(program, reader_kernel_ids[dir], {core}, reader_rt_args);
-
+                tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
                 CoreCoord termination_master_logical_core =
                     all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + 0];
                 CoreCoord termination_master_virtual_core =
@@ -992,15 +994,19 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     : 0
 		};
                 append_fabric_mux_connection_rt_args(
-                    core, program, termination_master_virtual_core, num_workers_per_direction, writer_rt_args);
-		if (intermediate_is_sharded) {
+                    mux_connection_valid,
+                    core,
+                    program,
+                    termination_master_virtual_core,
+                    num_workers_per_direction,
+                    writer_rt_args);
+	        if (intermediate_is_sharded) {
 		  shard_builder::extend_sharding_run_time_args(intermediate_tensor, writer_rt_args);
 		}
 		if (output_is_sharded) {
 		  shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
 		}
-                tt::tt_metal::SetRuntimeArgs(program, writer_kernel_ids[dir], {core}, writer_rt_args);
-
+                tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
                 // Reduce kernel
                 auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
                 sender_reduce_kernel_config.compile_args = {
@@ -1013,7 +1019,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     num_batches,
                     num_links * num_workers_per_direction,
                     num_total_reduction_steps};
-
                 auto reduce_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
@@ -1023,7 +1028,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 reduce_kernel_ids.push_back(reduce_kernel_id);
 
                 std::vector<uint32_t> reduce_rt_args = {link * num_workers_per_direction + worker};
-                tt::tt_metal::SetRuntimeArgs(program, reduce_kernel_ids[dir], {core}, reduce_rt_args);
+                tt::tt_metal::SetRuntimeArgs(program, reduce_kernel_id, {core}, reduce_rt_args);
             }
         }
     }
