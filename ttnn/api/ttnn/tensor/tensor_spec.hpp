@@ -32,8 +32,8 @@ public:
     Tile tile() const { return tensor_layout_.get_tile(); }
 
     Strides compute_strides() const { return tensor_layout_.compute_strides(logical_shape_); }
-    std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>> compute_distribution_spec() const {
-        return tensor_layout_.compute_distribution_spec(logical_shape_);
+    BufferShardingArgs compute_buffer_sharding_args() const {
+        return tensor_layout_.compute_buffer_sharding_args(logical_shape_);
     }
     size_t compute_packed_buffer_size_bytes() const {
         return tensor_layout_.compute_packed_buffer_size_bytes(logical_shape_);
@@ -47,7 +47,7 @@ public:
 
 private:
     void populate_sharding_specs();
-    std::optional<MemoryConfig> populate_nd_shard_spec_from_legacy() const;
+    MemoryConfig populate_nd_shard_spec_from_legacy() const;
     std::optional<MemoryConfig> populate_legacy_shard_spec_from_nd() const;
 
     ttnn::Shape logical_shape_;

@@ -103,7 +103,7 @@ def test_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_confi
     run_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, device)
 
 
-def test_nlp_create_qkv_heads_falcon7b_with_program_cache(device, use_program_cache):
+def test_nlp_create_qkv_heads_falcon7b_with_program_cache(device):
     dtype = ttnn.bfloat8_b
     mem_config = ttnn.DRAM_MEMORY_CONFIG
     for _ in range(2):
@@ -354,7 +354,7 @@ def test_nlp_create_qkv_heads_llama_test(
         )
 
 
-def test_nlp_create_qkv_heads_with_program_cache(device, use_program_cache):
+def test_nlp_create_qkv_heads_with_program_cache(device):
     dtype = ttnn.bfloat8_b
     mem_config = ttnn.L1_MEMORY_CONFIG
     for _ in range(2):
@@ -521,7 +521,7 @@ def test_sharded_nlp_create_qkv_heads_test(
     )
 
 
-def test_sharded_nlp_create_qkv_heads_with_program_cache(device, use_program_cache):
+def test_sharded_nlp_create_qkv_heads_with_program_cache(device):
     dtype = ttnn.bfloat8_b
     mem_config = ttnn.L1_MEMORY_CONFIG
     for _ in range(2):

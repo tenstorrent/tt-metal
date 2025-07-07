@@ -37,7 +37,7 @@ import torch
 )
 @pytest.mark.parametrize(
     "packer_l1_acc",
-    [False],
+    [True, False],
 )
 @pytest.mark.parametrize(
     "filter, padding",
@@ -52,7 +52,6 @@ import torch
 def test_conv_features(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -77,9 +76,6 @@ def test_conv_features(
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
-    if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat16 and packer_l1_acc and fp32_accum:
-        pytest.skip("skipping due to pack_untilize_dst issue!")
-
     run_conv(
         device,
         torch_tensor_map,
@@ -102,7 +98,6 @@ def test_conv_features(
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
-        preprocess_weights_on_device=True,
         run_twice=True,
         input_layout=ttnn.TILE_LAYOUT if input_dtype == ttnn.bfloat8_b else None,
         input_dtype=input_dtype,
@@ -184,7 +179,6 @@ def test_conv_dram(
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
-        preprocess_weights_on_device=False,
         input_layout=input_layout,
         run_twice=True,
         fast_compare=True,

@@ -32,7 +32,6 @@ from ..tt.utils import assert_quality, from_torch_fast, to_torch
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192 * 2}], indirect=True)
-@pytest.mark.usefixtures("use_program_cache")
 def test_conv2d(
     *,
     mesh_device: ttnn.Device,

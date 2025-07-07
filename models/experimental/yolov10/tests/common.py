@@ -35,14 +35,24 @@ def image_to_tensor(image):
     return torch.autograd.Variable(image)
 
 
-def load_torch_model(use_weights_from_ultralytics=True, module=None):
+def load_torch_model(use_weights_from_ultralytics=True, module=None, model_task="segment"):
     state_dict = None
-    model = YOLOv10()
-    if use_weights_from_ultralytics:
-        pretrained_model = YOLO("yolov10x.pt")
-        model.load_state_dict(pretrained_model.state_dict(), strict=False)
 
-    new_state_dict = {name: param for name, param in model.state_dict().items() if isinstance(param, torch.FloatTensor)}
+    weights = "yolov10x.pt"
+
+    if use_weights_from_ultralytics:
+        torch_model = YOLO(weights)  # Use "yolov10x.pt" weight for detection
+        torch_model.eval()
+        state_dict = torch_model.state_dict()
+
+    model = YOLOv10()
+    state_dict = model.state_dict() if state_dict is None else state_dict
+
+    ds_state_dict = {k: v for k, v in state_dict.items()}
+    new_state_dict = {}
+    for (name1, parameter1), (name2, parameter2) in zip(model.state_dict().items(), ds_state_dict.items()):
+        if isinstance(parameter2, torch.FloatTensor):
+            new_state_dict[name1] = parameter2
 
     model.load_state_dict(new_state_dict)
     model.eval()

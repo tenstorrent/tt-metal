@@ -42,8 +42,8 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
         "Operands to bcast need to be on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to bcast need to be on the same device!");
 
-    const auto input_shape_a = input_tensor_a.padded_shape();
-    const auto input_shape_b = input_tensor_b.padded_shape();
+    const auto& input_shape_a = input_tensor_a.padded_shape();
+    const auto& input_shape_b = input_tensor_b.padded_shape();
 
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Error");
     TT_FATAL(input_tensor_b.layout() == Layout::TILE, "Error");

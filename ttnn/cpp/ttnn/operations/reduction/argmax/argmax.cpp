@@ -21,8 +21,6 @@ namespace ttnn::operations::reduction {
 */
 static Tensor zero_volume_argmax(
     const Tensor& input_tensor, const std::optional<int> dim, const bool keepdim, const MemoryConfig& memory_config) {
-    auto input_shape = input_tensor.logical_shape();
-
     auto argmax_op = ArgMax{
         tt::tt_metal::DataType::UINT32,
         dim,

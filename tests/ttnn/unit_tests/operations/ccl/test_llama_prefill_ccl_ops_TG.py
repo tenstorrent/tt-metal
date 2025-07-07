@@ -17,7 +17,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 from tests.ttnn.unit_tests.operations.ccl.test_llama_prefill_ccl_ops import padded_shape
 
-NUM_BUFFERS = 8
+NUM_BUFFERS = 16
 
 
 def run_ag_with_trace(
@@ -45,7 +45,7 @@ def run_ag_with_trace(
         dim=dim,
         cluster_axis=cluster_axis,
         persistent_intermediate_buffer=persistent_intermediate_buffer,
-        multi_device_global_semaphore=ccl_semaphore_handles[NUM_BUFFERS - 1],
+        multi_device_global_semaphore=[ccl_semaphore_handles[NUM_BUFFERS - 1], ccl_semaphore_handles[NUM_BUFFERS - 2]],
         persistent_output_buffer=persistent_output_tensor,
         num_links=num_links,
         memory_config=output_mem_config,
@@ -66,7 +66,10 @@ def run_ag_with_trace(
                 dim=dim,
                 cluster_axis=cluster_axis,
                 persistent_intermediate_buffer=persistent_intermediate_buffer,
-                multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS],
+                multi_device_global_semaphore=[
+                    ccl_semaphore_handles[(2 * i) % NUM_BUFFERS],
+                    ccl_semaphore_handles[(2 * i + 1) % NUM_BUFFERS],
+                ],
                 persistent_output_buffer=persistent_output_tensor,
                 num_links=num_links,
                 memory_config=output_mem_config,
@@ -118,7 +121,6 @@ def run_all_gather_on_TG(
     input_dtype,
     layout,
     buffer_type: ttnn.BufferType,
-    use_program_cache,
     function_level_defaults,
     input_shard_spec: ttnn.ShardSpec = None,
     output_shard_spec: ttnn.ShardSpec = None,
@@ -402,7 +404,6 @@ def run_reduce_scatter_on_TG(
     input_dtype,
     layout,
     buffer_type: ttnn.BufferType,
-    use_program_cache,
     function_level_defaults,
     input_shard_spec: ttnn.ShardSpec = None,
     num_reduce_scatter_instances: int = 1,
@@ -640,7 +641,6 @@ def test_all_gather_TG(
     layout,
     buffer_type,
     cluster_axis,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters,
@@ -657,7 +657,6 @@ def test_all_gather_TG(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         warmup_iters=warmup_iters,
         num_iters=num_iters,
@@ -709,7 +708,6 @@ def test_reduce_scatter_TG(
     layout,
     buffer_type,
     cluster_axis,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters,
@@ -727,7 +725,6 @@ def test_reduce_scatter_TG(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         warmup_iters=warmup_iters,

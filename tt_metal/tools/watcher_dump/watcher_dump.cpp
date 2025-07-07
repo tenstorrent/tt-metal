@@ -108,6 +108,7 @@ int main(int argc, char* argv[]) {
     // Default devices is all of them.
     vector<chip_id_t> device_ids;
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+    device_ids.reserve(num_devices);
     for (chip_id_t id = 0; id < num_devices; id++) {
         device_ids.push_back(id);
     }

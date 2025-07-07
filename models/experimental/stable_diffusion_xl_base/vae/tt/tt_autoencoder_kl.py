@@ -9,7 +9,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare
 
 
 class TtAutoencoderKL(nn.Module):
-    def __init__(self, device, state_dict, model_config, gn_fallback=False):
+    def __init__(self, device, state_dict, model_config, batch_size=1, gn_fallback=False):
         super().__init__()
 
         self.device = device
@@ -20,7 +20,7 @@ class TtAutoencoderKL(nn.Module):
         self.dilation = (1, 1)
         self.groups = 1
 
-        self.decoder = TtDecoder(device, state_dict, model_config, gn_fallback=gn_fallback)
+        self.decoder = TtDecoder(device, state_dict, model_config, batch_size=batch_size, gn_fallback=gn_fallback)
 
         post_quant_conv_weights = state_dict[f"post_quant_conv.weight"]
         post_quant_conv_bias = state_dict[f"post_quant_conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
@@ -39,6 +39,7 @@ class TtAutoencoderKL(nn.Module):
             math_fidelity=ttnn.MathFidelity.LoFi,
         )
         self.conv_config = model_config.get_conv_config(conv_path="decoder.post_quant_conv")
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, hidden_states, input_shape):
         B, C, H, W = input_shape
@@ -64,6 +65,7 @@ class TtAutoencoderKL(nn.Module):
             memory_config=None,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv_params["output_channels"]
         ttnn.deallocate(pre_conv_hidden_states)

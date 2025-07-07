@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -1519,6 +1520,7 @@ bool validation_single_core(
     }
 
     std::vector<float> result_vec;
+    result_vec.reserve(result_untilized.size());
     for (int i = 0; i < result_untilized.size(); ++i) {
         result_vec.push_back(to_float(static_cast<bfloat16>(result_untilized[i])));
     }

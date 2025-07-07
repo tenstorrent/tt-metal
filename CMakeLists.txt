@@ -165,7 +165,7 @@ add_compile_options(
     -Wno-deprecated-declarations
     # Vars that are used only in Asserts will appear as dead stores in builds
     # where the preprocessor has stripped away the assert.
-    "$<$<OR:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU>>:-Wno-unused-but-set-variable>"
+    -Wno-unused-but-set-variable
     -Wno-unused-function
     -Wno-unused-variable
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
@@ -195,6 +195,9 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overread>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-unused-local-typedefs>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-volatile>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-pessimizing-move>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-dangling-reference>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-overloaded-virtual>"
 )
 
 # Planned to be temporary, remove later.

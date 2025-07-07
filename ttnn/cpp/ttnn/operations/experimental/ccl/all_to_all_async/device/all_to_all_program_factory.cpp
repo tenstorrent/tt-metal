@@ -73,10 +73,11 @@ auto create_sender_buffers(
     auto cb_src0_handle = CreateCircularBuffer(program, sender_core_range, cb_src0_config);
 
     // Packet header buffer
-    auto header_buffer_config = tt::tt_metal::CircularBufferConfig(
-                                    PACKET_HEADER_BUFFER_SIZE * sizeof(tt::tt_fabric::PacketHeader) * 2,
-                                    {{tt::CB::c_in1, tt::DataFormat::RawUInt32}})
-                                    .set_page_size(tt::CB::c_in1, sizeof(tt::tt_fabric::PacketHeader));
+    auto header_buffer_config =
+        tt::tt_metal::CircularBufferConfig(
+            PACKET_HEADER_BUFFER_SIZE * tt::tt_fabric::get_tt_fabric_packet_header_size_bytes() * 2,
+            {{tt::CB::c_in1, tt::DataFormat::RawUInt32}})
+            .set_page_size(tt::CB::c_in1, tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
 
     auto header_buffer_handle = CreateCircularBuffer(program, sender_core_range, header_buffer_config);
 
@@ -379,7 +380,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         receiver_reader_kernel_config);
 
     // Determine output shape and fracturing
-    const auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     const auto in_row_tiles = input_shape[2] / tt::constants::TILE_HEIGHT;
     const auto in_col_tiles = input_shape[3] / tt::constants::TILE_WIDTH;
     auto output_shape = output_buffer.padded_shape();
@@ -485,13 +486,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         }
         writer_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
+            const auto sender_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+            const auto forward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }
         writer_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
+            const auto sender_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+            const auto backward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
 

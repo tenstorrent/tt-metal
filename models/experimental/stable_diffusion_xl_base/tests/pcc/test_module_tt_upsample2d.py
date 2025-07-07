@@ -22,11 +22,8 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 @pytest.mark.parametrize("stride", [(1, 1)])
 @pytest.mark.parametrize("padding", [(1, 1)])
 @pytest.mark.parametrize("dilation", [(1, 1)])
-@pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_upsample2d(
-    device, input_shape, conv_weights_dtype, up_block_id, stride, padding, dilation, use_program_cache, reset_seeds
-):
+def test_upsample2d(device, input_shape, up_block_id, stride, padding, dilation, reset_seeds):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
@@ -36,7 +33,7 @@ def test_upsample2d(
     torch_upsample = unet.up_blocks[up_block_id].upsamplers[0]
     groups = 1
 
-    model_config = ModelOptimisations(conv_w_dtype=conv_weights_dtype)
+    model_config = ModelOptimisations()
     tt_upsample = TtUpsample2D(
         device,
         state_dict,
@@ -56,7 +53,6 @@ def test_upsample2d(
     )
 
     ttnn_output_tensor, output_shape = tt_upsample.forward(ttnn_input_tensor)
-    model_config.clear_weight_preprocess()
 
     output_tensor = from_channel_last_ttnn(
         ttnn_output_tensor, [input_shape[0], output_shape[1], output_shape[2], output_shape[0]]

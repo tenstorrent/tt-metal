@@ -128,7 +128,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     }
 
     if (on_device) {
-        auto memory_config = output_tensor.memory_config();
+        const auto& memory_config = output_tensor.memory_config();
 
         // Check for in-place unpad optimization
         if (input.is_sharded() && input.memory_config() == memory_config && padded_input_shape.rank() > 1) {

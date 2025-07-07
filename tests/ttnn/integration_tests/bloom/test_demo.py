@@ -24,9 +24,7 @@ from models.demos.grayskull.functional_bloom.demo.demo_qa import test_demo_squad
 )
 @skip_for_grayskull(reason_str="#10797: OOM")
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-def test_demo_batch_7_cg(
-    input_path, ttnn_model, model_location_generator, device, use_program_cache, batch_size, reset_seeds
-):
+def test_demo_batch_7_cg(input_path, ttnn_model, model_location_generator, device, batch_size, reset_seeds):
     expected_answers = {
         0: "A man is sitting on a roof. He is wearing a hat",
         1: "A boy is running down a track. He is a man who",
@@ -37,9 +35,7 @@ def test_demo_batch_7_cg(
         6: "In home pet groomers demonstrate how to make a pet’s",
     }
     NUM_RUNS = 5
-    measurements, answers = demo_cg_json(
-        input_path, ttnn_model, model_location_generator, device, use_program_cache, batch_size, NUM_RUNS
-    )
+    measurements, answers = demo_cg_json(input_path, ttnn_model, model_location_generator, device, batch_size, NUM_RUNS)
 
     logger.info(measurements)
     logger.info(answers)
@@ -55,14 +51,10 @@ def test_demo_batch_7_cg(
 )
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @skip_for_grayskull(reason_str="#10797: OOM")
-def test_demo_squadv2_batch_7_cg(
-    model_location_generator, ttnn_model, device, use_program_cache, batch_size, ref_accuracy, reset_seeds
-):
+def test_demo_squadv2_batch_7_cg(model_location_generator, ttnn_model, device, batch_size, ref_accuracy, reset_seeds):
     loop_count = 2
     NUM_RUNS = 5
-    acc = demo_cg_hellaswag(
-        model_location_generator, ttnn_model, device, use_program_cache, loop_count, batch_size, NUM_RUNS
-    )
+    acc = demo_cg_hellaswag(model_location_generator, ttnn_model, device, loop_count, batch_size, NUM_RUNS)
     assert acc["accuracy"] >= ref_accuracy
 
 
@@ -78,9 +70,7 @@ def test_demo_squadv2_batch_7_cg(
 )
 @skip_for_grayskull(reason_str="#10797: OOM")
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-def test_demo_batch_7_qa(
-    input_path, ttnn_model, model_location_generator, device, use_program_cache, reset_seeds, batch_size
-):
+def test_demo_batch_7_qa(input_path, ttnn_model, model_location_generator, device, reset_seeds, batch_size):
     expected_answers = {
         0: "Chopin's performances were",
         1: "The first is the composer",
@@ -92,7 +82,7 @@ def test_demo_batch_7_qa(
     }
     NUM_RUNS = 5
     measurements, answers = demo_qa_json(
-        input_path, ttnn_model, model_location_generator, device, use_program_cache, reset_seeds, batch_size, NUM_RUNS
+        input_path, ttnn_model, model_location_generator, device, reset_seeds, batch_size, NUM_RUNS
     )
     logger.info(measurements)
     logger.info(answers)
@@ -108,12 +98,11 @@ def test_demo_batch_7_qa(
 )
 @skip_for_grayskull(reason_str="#10797: OOM")
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-def test_demo_squadv2_batch_6_qa(ttnn_model, device, use_program_cache, reset_seeds, batch_size, f1):
+def test_demo_squadv2_batch_6_qa(ttnn_model, device, reset_seeds, batch_size, f1):
     loop_count = 5
     eval_score = demo_qa_squadv2(
         ttnn_model,
         device,
-        use_program_cache,
         reset_seeds,
         batch_size,
         loop_count,
