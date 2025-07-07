@@ -20,7 +20,7 @@ inline void llk_math_eltwise_unary_sfpu_rand_init(uint32_t seed = 0) {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_rand(uint32_t dst_index, uint32_t from, uint32_t scale) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::rand<APPROXIMATE>, dst_index, VectorMode::RC, from, scale);
 }
 
