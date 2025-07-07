@@ -88,23 +88,23 @@ def test_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc, p_value):
     run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc=is_out_alloc, p_value=p_value)
 
 
-# @skip_for_grayskull("Requires wormhole_b0 to run")
-# # @skip_for_blackhole("Requires wormhole_b0 to run")
-# @pytest.mark.parametrize(
-#     "shape",
-#     [
-#         [1, 21, 123, 24],
-#     ],
-# )
+@skip_for_grayskull("Requires wormhole_b0 to run")
+# @skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 21, 123, 24],
+    ],
+)
+# TODO: Re-enable this test when we return to fixed seed testing
 # @pytest.mark.parametrize("seed", [1408])
 # @pytest.mark.parametrize("in_dtype", ["float32"])
 # @pytest.mark.parametrize("out_dtype", ["float32"])
 # @pytest.mark.parametrize("is_out_alloc", [True, False])
 # def test_bernoulli_callback(shape, seed, in_dtype, out_dtype, device, is_out_alloc):
-#     torch.manual_seed(seed)
 #     num_program_cache_entries_list = []
 #     for _ in range(2):
-#         run_bernoulli(shape, in_dtype, out_dtype, device, seed=seed, is_out_alloc=is_out_alloc)
+#         run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc=is_out_alloc)
 #         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
 #         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
 #         num_program_cache_entries_list.append(device.num_program_cache_entries())
@@ -116,16 +116,15 @@ def test_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc, p_value):
 #     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-# @skip_for_grayskull("Requires wormhole_b0 to run")
-# # @skip_for_blackhole("Requires wormhole_b0 to run")
-# @pytest.mark.parametrize(
-#     "shape",
-#     [[512, 512], [5, 8, 70, 40]],
-# )
-# @pytest.mark.parametrize("in_dtype", ["float32"])
-# @pytest.mark.parametrize("out_dtype", ["float32"])
-# @pytest.mark.parametrize("seed", [1408])
-# @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-# def test_bernoulli_with_compute_kernel_options(shape, seed, in_dtype, out_dtype, device, compute_kernel_options):
-#     torch.manual_seed(seed)
-#     run_bernoulli(shape, in_dtype, out_dtype, device, seed=seed, compute_kernel_options=compute_kernel_options)
+@skip_for_grayskull("Requires wormhole_b0 to run")
+# @skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "shape",
+    [[512, 512], [5, 8, 70, 40]],
+)
+@pytest.mark.parametrize("in_dtype", ["float32"])
+@pytest.mark.parametrize("out_dtype", ["float32"])
+@pytest.mark.parametrize("seed", [1408])
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_bernoulli_with_compute_kernel_options(shape, seed, in_dtype, out_dtype, device, compute_kernel_options):
+    run_bernoulli(shape, in_dtype, out_dtype, device, compute_kernel_options=compute_kernel_options)
