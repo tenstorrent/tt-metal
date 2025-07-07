@@ -1339,11 +1339,11 @@ uint16_t DeviceProfiler::hash16CT(const std::string& str) {
     return ((res & 0xFFFF) ^ ((res & 0xFFFF0000) >> 16)) & 0xFFFF;
 }
 
-void DeviceProfiler::generateZoneSourceLocationsHashes() {
-    ZoneScoped;
-    std::ifstream log_file(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG);
+void DeviceProfiler::populateZoneSrcLocations(
+    const std::string& new_log_name, const std::string& log_name, const bool push_new) {
+    std::ifstream log_file_read(new_log_name);
     std::string line;
-    while (std::getline(log_file, line)) {
+    while (std::getline(log_file_read, line)) {
         std::string delimiter = "'#pragma message: ";
         int delimiter_index = line.find(delimiter) + delimiter.length();
         std::string zone_src_location = line.substr(delimiter_index, line.length() - delimiter_index - 1);
@@ -1352,9 +1352,7 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
 
         auto did_insert = zone_src_locations.insert(zone_src_location);
         if (did_insert.second && (hash_to_zone_src_locations.find(hash_16bit) != hash_to_zone_src_locations.end())) {
-            log_warning(
-                tt::LogAlways,
-                "Source location hashes are colliding, two different locations are having the same hash");
+            TT_THROW("Source location hashes are colliding, two different locations are having the same hash");
         }
 
         std::stringstream ss(zone_src_location);
@@ -1367,8 +1365,23 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
 
         ZoneDetails details(zone_name, source_file, std::stoull(line_num_str));
 
-        hash_to_zone_src_locations.emplace(hash_16bit, details);
+        auto ret = hash_to_zone_src_locations.emplace(hash_16bit, details);
+        if (ret.second && push_new) {
+            std::ofstream log_file_write(log_name, std::ios::app);
+            log_file_write << line << std::endl;
+            log_file_write.close();
+        }
     }
+    log_file_read.close();
+}
+
+void DeviceProfiler::generateZoneSourceLocationsHashes() {
+    // Load existing zones from previous runs
+    populateZoneSrcLocations(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG);
+
+    // Load new zones from the current run
+    populateZoneSrcLocations(
+        tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG, true);
 }
 
 void DeviceProfiler::dumpResults(
