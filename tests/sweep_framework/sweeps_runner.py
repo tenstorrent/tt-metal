@@ -9,7 +9,6 @@ import importlib
 import datetime as dt
 import os
 import json
-import uuid
 import enlighten
 from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
@@ -919,32 +918,38 @@ def get_initiated_by():
 
 
 def map_test_status_to_run_status(test_statuses):
-    """Map test statuses to overall run status"""
+    """Reduce individual testcase DB statuses to an overall test (suite) status.
+
+    Input: list like ["pass", "fail_assert_exception", "skipped", ...]
+    Output must be one of the allowed values for the `tests` table:
+        "success" | "failure" | "error" | "cancelled" | "skipped"
+    """
     if not test_statuses:
         return "error"
 
-    # If any test failed, the run failed
-    if any(status in ["failure", "error"] for status in test_statuses):
+    # Any explicit failure or error ⇒ overall failure
+    if any(status.startswith("fail") or status == "error" for status in test_statuses):
         return "failure"
-    # If any test was cancelled, the run was cancelled
+    # Any cancellation ⇒ overall cancelled
     elif any(status == "cancelled" for status in test_statuses):
         return "cancelled"
-    # If all tests passed or were skipped, the run succeeded
-    elif all(status in ["success", "skipped"] for status in test_statuses):
-        return "success"
+    # All skipped ⇒ overall skipped
+    elif all(status == "skipped" for status in test_statuses):
+        return "skipped"
+    # Otherwise (all pass or mixture of pass & skipped) ⇒ success
     else:
-        return "error"
+        return "success"
 
 
 def map_test_status_to_db_status(test_status):
     """Map TestStatus enum to database status string"""
     status_mapping = {
-        TestStatus.PASS: "success",
-        TestStatus.FAIL_ASSERT_EXCEPTION: "failure",
-        TestStatus.FAIL_L1_OUT_OF_MEM: "failure",
-        TestStatus.FAIL_WATCHER: "failure",
-        TestStatus.FAIL_CRASH_HANG: "failure",
-        TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "failure",
+        TestStatus.PASS: "pass",
+        TestStatus.FAIL_ASSERT_EXCEPTION: "fail_assert_exception",
+        TestStatus.FAIL_L1_OUT_OF_MEM: "fail_l1_out_of_mem",
+        TestStatus.FAIL_WATCHER: "fail_watcher",
+        TestStatus.FAIL_CRASH_HANG: "fail_crash_hang",
+        TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
         TestStatus.NOT_RUN: "skipped",
     }
     return status_mapping.get(test_status, "error")
