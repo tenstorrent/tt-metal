@@ -857,6 +857,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
 }
 #endif
 
+#if defined(FABRIC_2D)
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_packet(
@@ -1175,6 +1176,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         default: __builtin_unreachable();
     }
 }
+#endif
 
 template <typename EdmChannelWorkerIFs>
 FORCE_INLINE void establish_edm_connection(
