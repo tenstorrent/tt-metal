@@ -101,7 +101,7 @@ struct OldInfraDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
 
-    static auto create_op_performance_model(
+    static OpPerformanceModelGeneral<OutputTensors> create_op_performance_model(
         const operation_attributes_t& attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
