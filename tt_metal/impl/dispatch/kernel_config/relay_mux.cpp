@@ -99,20 +99,38 @@ void RelayMux::GenerateStaticConfigs() {
     }
     const auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device_id_);
     const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(destination_device_id);
-    const auto& available_links = tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
-    TT_ASSERT(!available_links.empty());
 
-    // TG Gateway is connected differently. All tunnels from the MMIO are for dispatch use are we index the link by the
-    // tunnel index
-    int link_index = available_links.back();
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device_->is_mmio_capable()) {
-        link_index = tunnel_id_;
-    }
+    auto get_link_idx = [&](tt::tt_fabric::FabricNodeId src_fabric_node_id,
+                            tt::tt_fabric::FabricNodeId dst_fabric_node_id) -> uint32_t {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device_->is_mmio_capable()) {
+            const auto forwarding_direction =
+                control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+            TT_ASSERT(forwarding_direction.has_value());
+            const auto& fabric_channels =
+                control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, *forwarding_direction);
 
+            for (auto i = 0; i < fabric_channels.size(); i++) {
+                const auto fabric_route =
+                    control_plane.get_fabric_route(src_fabric_node_id, dst_fabric_node_id, fabric_channels[i]);
+                if (fabric_route.size() == 1) {
+                    return i;
+                }
+            }
+        } else {
+            const auto& available_links =
+                tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
+            TT_ASSERT(!available_links.empty());
+            return available_links.back();
+        }
+
+        TT_THROW("Unable to find forwarding link from {} to {}", src_fabric_node_id, dst_fabric_node_id);
+    };
+
+    auto link_index = get_link_idx(src_fabric_node_id, dst_fabric_node_id);
     log_debug(
         tt::LogMetal,
         "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {} Channel Size: {}, Num "
-        "Slots: {}, L1 Size: {}, Src: {}, Dst: {}, Links: {}, Link Index: {}",
+        "Slots: {}, L1 Size: {}, Src: {}, Dst: {}, Link Index: {}",
         device_->id(),
         kernels_requiring_header_only_channel,
         kernels_requiring_full_size_channel,
@@ -125,8 +143,7 @@ void RelayMux::GenerateStaticConfigs() {
         l1_size,
         src_fabric_node_id,
         dst_fabric_node_id,
-        available_links,
-        available_links.back());
+        link_index);
 
     tt_fabric::append_fabric_connection_rt_args(
         src_fabric_node_id, dst_fabric_node_id, link_index, *program_, {logical_core_}, mux_rt_args_, GetCoreType());
