@@ -260,6 +260,8 @@ jobs:
           $(if echo "$CHANGED_FILES" | grep -q "^tt_llk_blackhole/"; then echo "- ⚠️ **Blackhole** changes detected - will trigger blackhole-post-commit tests"; fi)
           $(if ! echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/\|^tt_llk_blackhole/"; then echo "- ℹ️ No architecture-specific changes detected"; fi)
 
+          <!-- WORKFLOW_DECISIONS:should-run-wormhole=${{ steps.analyze-changes.outputs.should-run-wormhole }},should-run-blackhole=${{ steps.analyze-changes.outputs.should-run-blackhole }} -->
+
           ### 🤖 Automation Status
           - **Created by:** LLK Auto-Uplift Workflow
           - **Trigger:** $(if [ "${{ github.event_name }}" = "schedule" ]; then echo "Scheduled ($(date))"; elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then echo "Repository Dispatch"; else echo "Manual/Workflow Call"; fi)
@@ -533,49 +535,77 @@ jobs:
             exit 1
           fi
 
-          echo "🔍 Found LLK PR #$PR_NUMBER, determining which workflows should have run..."
+          echo "🔍 Found LLK PR #$PR_NUMBER, reading workflow decisions from PR body..."
 
-          # Determine which workflows should have been triggered by analyzing the LLK changes
-          cd ${{ env.SUBMODULE_PATH }}
+          # Get the original workflow decisions from the PR body
+          PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body' --repo "${{ github.repository }}")
 
-          # Get the LLK commit range from the PR (find the merge commit and its parents)
-          MERGE_COMMIT=$(gh pr view "$PR_NUMBER" --json mergeCommit --jq '.mergeCommit.oid // empty' --repo "${{ github.repository }}")
-          if [ -n "$MERGE_COMMIT" ]; then
-            # PR is merged, get the range from merge commit
-            PARENT_COMMITS=$(git log --pretty=format:"%H" -n 2 "$MERGE_COMMIT")
-            OLD_SHA=$(echo "$PARENT_COMMITS" | tail -n 1 | cut -c1-7)
-            NEW_SHA=$(echo "$PARENT_COMMITS" | head -n 1 | cut -c1-7)
+          # Extract workflow decisions from the hidden comment in PR body
+          if echo "$PR_BODY" | grep -q "WORKFLOW_DECISIONS:"; then
+            WORKFLOW_DECISIONS=$(echo "$PR_BODY" | grep -o "WORKFLOW_DECISIONS:[^-]*" | head -1)
+            echo "Found workflow decisions: $WORKFLOW_DECISIONS"
+
+            # Parse the decisions
+            if echo "$WORKFLOW_DECISIONS" | grep -q "should-run-wormhole=true"; then
+              SHOULD_RUN_WORMHOLE=true
+              echo "✅ Wormhole workflows should have run (from original analysis)"
+            else
+              SHOULD_RUN_WORMHOLE=false
+              echo "ℹ️ Wormhole workflows should NOT have run (from original analysis)"
+            fi
+
+            if echo "$WORKFLOW_DECISIONS" | grep -q "should-run-blackhole=true"; then
+              SHOULD_RUN_BLACKHOLE=true
+              echo "✅ Blackhole workflows should have run (from original analysis)"
+            else
+              SHOULD_RUN_BLACKHOLE=false
+              echo "ℹ️ Blackhole workflows should NOT have run (from original analysis)"
+            fi
           else
-            # PR is not merged, get range from PR branch vs main
-            git fetch origin main
-            OLD_SHA=$(git merge-base HEAD origin/main | cut -c1-7)
-            NEW_SHA=$(git rev-parse HEAD | cut -c1-7)
+            echo "⚠️ No workflow decisions found in PR body, falling back to change analysis..."
+
+            # Fallback to analyzing changes (original logic)
+            cd ${{ env.SUBMODULE_PATH }}
+
+            MERGE_COMMIT=$(gh pr view "$PR_NUMBER" --json mergeCommit --jq '.mergeCommit.oid // empty' --repo "${{ github.repository }}")
+            if [ -n "$MERGE_COMMIT" ]; then
+              PARENT_COMMITS=$(git log --pretty=format:"%H" -n 2 "$MERGE_COMMIT")
+              OLD_SHA=$(echo "$PARENT_COMMITS" | tail -n 1 | cut -c1-7)
+              NEW_SHA=$(echo "$PARENT_COMMITS" | head -n 1 | cut -c1-7)
+            else
+              git fetch origin main
+              OLD_SHA=$(git merge-base HEAD origin/main | cut -c1-7)
+              NEW_SHA=$(git rev-parse HEAD | cut -c1-7)
+            fi
+
+            echo "🔍 Analyzing LLK changes: $OLD_SHA -> $NEW_SHA"
+            CHANGED_FILES=$(git diff --name-only ${OLD_SHA}..${NEW_SHA})
+
+            SHOULD_RUN_WORMHOLE=false
+            SHOULD_RUN_BLACKHOLE=false
+
+            if echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/"; then
+              SHOULD_RUN_WORMHOLE=true
+              echo "✅ Wormhole changes detected - should check all-post-commit-workflows"
+            fi
+
+            if echo "$CHANGED_FILES" | grep -q "^tt_llk_blackhole/"; then
+              SHOULD_RUN_BLACKHOLE=true
+              echo "✅ Blackhole changes detected - should check blackhole-post-commit"
+            fi
+
+            if [ "$SHOULD_RUN_WORMHOLE" = false ] && [ "$SHOULD_RUN_BLACKHOLE" = false ]; then
+              echo "ℹ️ No architecture-specific changes detected, checking both workflows"
+              SHOULD_RUN_WORMHOLE=true
+              SHOULD_RUN_BLACKHOLE=true
+            fi
+
+            cd - > /dev/null
           fi
 
-          echo "🔍 Analyzing LLK changes: $OLD_SHA -> $NEW_SHA"
-          CHANGED_FILES=$(git diff --name-only ${OLD_SHA}..${NEW_SHA})
-
-          # Determine which workflows should run based on changes
-          SHOULD_RUN_WORMHOLE=false
-          SHOULD_RUN_BLACKHOLE=false
-
-          if echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/"; then
-            SHOULD_RUN_WORMHOLE=true
-            echo "✅ Wormhole changes detected - should check all-post-commit-workflows"
-          fi
-
-          if echo "$CHANGED_FILES" | grep -q "^tt_llk_blackhole/"; then
-            SHOULD_RUN_BLACKHOLE=true
-            echo "✅ Blackhole changes detected - should check blackhole-post-commit"
-          fi
-
-          if [ "$SHOULD_RUN_WORMHOLE" = false ] && [ "$SHOULD_RUN_BLACKHOLE" = false ]; then
-            echo "ℹ️ No architecture-specific changes detected, checking both workflows"
-            SHOULD_RUN_WORMHOLE=true
-            SHOULD_RUN_BLACKHOLE=true
-          fi
-
-          cd - > /dev/null
+          echo "🔍 Final workflow check decisions:"
+          echo "  - Should run Wormhole: $SHOULD_RUN_WORMHOLE"
+          echo "  - Should run Blackhole: $SHOULD_RUN_BLACKHOLE"
 
           # Check latest runs for workflows that should have been triggered
           ALL_PASSED=true
@@ -646,19 +676,29 @@ jobs:
           fi
 
           if [ "$CHECKED_WORKFLOWS" -eq 0 ]; then
-            echo "❌ No workflows were expected to run - this shouldn't happen"
-            ALL_PASSED=false
+            if [ "$SHOULD_RUN_WORMHOLE" = false ] && [ "$SHOULD_RUN_BLACKHOLE" = false ]; then
+              echo "ℹ️ No workflows were expected to run for this change set"
+              ALL_PASSED=true
+            else
+              echo "❌ No workflows were expected to run - this shouldn't happen"
+              ALL_PASSED=false
+            fi
           fi
 
           echo "tests-passed=$ALL_PASSED" >> $GITHUB_OUTPUT
 
           # Build detailed comment with results
           if [ "$ALL_PASSED" == "true" ]; then
-            echo "🎉 All required test runs passed!"
-            COMMENT_BODY="✅ **Test Re-check Successful**: All required workflow runs have passed after manual rerun."$'\n\n'"### ✅ Successful Runs"
-            for workflow in "${SUCCEEDED_WORKFLOWS[@]}"; do
-              COMMENT_BODY="$COMMENT_BODY"$'\n'"- $workflow"
-            done
+            if [ "$CHECKED_WORKFLOWS" -eq 0 ]; then
+              echo "ℹ️ No workflows were required to run"
+              COMMENT_BODY="ℹ️ **Test Re-check**: No workflows were required to run for this LLK change set."$'\n\n'"Based on the original analysis, this update did not require any architecture-specific testing."
+            else
+              echo "🎉 All required test runs passed!"
+              COMMENT_BODY="✅ **Test Re-check Successful**: All required workflow runs have passed after manual rerun."$'\n\n'"### ✅ Successful Runs"
+              for workflow in "${SUCCEEDED_WORKFLOWS[@]}"; do
+                COMMENT_BODY="$COMMENT_BODY"$'\n'"- $workflow"
+              done
+            fi
           else
             echo "❌ Some required test runs still failing"
             COMMENT_BODY="❌ **Test Re-check Failed**: Some required workflows are still failing."$'\n\n'"### ❌ Failed Runs"
