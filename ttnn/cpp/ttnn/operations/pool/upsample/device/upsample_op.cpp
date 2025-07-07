@@ -95,6 +95,15 @@ operation::ProgramWithCallbacks UpSample::create_program(
             if (mode_ == "nearest") {
                 return upsample_single_core(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
             } else {
+                // Ovde bi trebalo da se napravi upsample_single_core_bilinear ?
+                // How do?
+                // Ovo vec pravi program factory, koji ukljucuje kernele i svasta, mozda je bolje negde
+                // Pre kada se skonta da je parallelization_strat SINGLE_CORE i bilinear da se uradi
+                // Sharding (takodje, da li je ovo korektno, da li pisati kernel + host za single core ili
+                // kako, tehnicki nije single core ako uradim composite operaciju i shardujem ga?
+
+                // Ajde da probam da ga shardujem ?
+
                 TT_THROW("Unsupported mode");
             }
     };

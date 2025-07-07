@@ -13,160 +13,40 @@ import ttnn
 from models.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 
+from tests.ttnn.unit_tests.operations.pool.test_upsample import (
+    upsample_multicore_common,
+    get_shard_grid_from_num_cores,
+    convert_input_to_sharded,
+)
+
 TILE_WIDTH = 32
 
+SDXL_SHAPES = [
+    # [1, 1280, 32, 32],  # Shapes required by SDXL
+    # [1, 640 , 64, 64],
+    # [1, 512, 128, 128],
+    [1, 512, 256, 256],
+    # [1, 256, 512, 512]
+]
 
-def get_shard_grid_from_num_cores(device, ncores: Union[int, Tuple[int, int]]) -> ttnn.CoreRangeSet:
-    device_grid = device.compute_with_storage_grid_size()
-    max_grid_size = (device_grid.y, device_grid.x)
-    if isinstance(ncores, int):
-        if ncores % max_grid_size[1] == 0:
-            core_grid = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
-            grid_coord = ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1)
-            return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        else:
-            if ncores < max_grid_size[1]:
-                core_grid = ttnn.CoreGrid(y=1, x=ncores)
-                grid_coord = ttnn.CoreCoord(core_grid.x - 1, 0)
-                return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-            else:
-                core_grid_1 = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
-                core_grid_2 = ttnn.CoreGrid(y=ncores // max_grid_size[1] + 1, x=ncores % max_grid_size[1])
-                grid_coord_1 = ttnn.CoreCoord(core_grid_1.x - 1, core_grid_1.y - 1)
-                grid_coord_2 = ttnn.CoreCoord(core_grid_2.x - 1, core_grid_2.y - 1)
-                return ttnn.CoreRangeSet(
-                    {
-                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord_1),
-                        ttnn.CoreRange(ttnn.CoreCoord(0, grid_coord_2.y), grid_coord_2),
-                    }
-                )
-    elif isinstance(ncores, tuple):
-        ncores_h, ncores_w = ncores
-        assert ncores_h <= max_grid_size[0]
-        assert ncores_w <= max_grid_size[1]
-        return ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(ncores_w - 1, ncores_h - 1),
-                )
-            }
-        )
-    else:
-        raise ValueError("Invalid ncores")
-
-
-def convert_input_to_sharded(
-    device,
-    input_tensor,
-    mode,
-    shard_strategy=ttnn.ShardStrategy.HEIGHT,
-    shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    core_range=None,
-):
-    ncores = None
-    shard_grid = None
-    device_grid = device.compute_with_storage_grid_size()
-    batch_size, height, width, num_channels = input_tensor.shape
-    max_grid_size = (device_grid.y, device_grid.x)
-    num_bytes = 2
-
-    if core_range != None:
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(ttnn.CoreCoord(core[0][0], core[0][1]), ttnn.CoreCoord(core[1][0], core[1][1]))
-                for core in core_range
-            }
-        )
-        if shard_strategy == ttnn.ShardStrategy.BLOCK:
-            if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
-                ncores = (core_range[0][1][0] - core_range[0][0][0] + 1, core_range[0][1][1] - core_range[0][0][1] + 1)
-            elif shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
-                ncores = (core_range[0][1][1] - core_range[0][0][1] + 1, core_range[0][1][0] - core_range[0][0][0] + 1)
-        elif shard_strategy == ttnn.ShardStrategy.HEIGHT:
-            ncores = shard_grid.num_cores()
-        else:
-            raise ValueError("Invalid shard strategy")
-
-    else:
-        if shard_strategy == ttnn.ShardStrategy.HEIGHT:
-            max_nshards = min(batch_size * height * width, max_grid_size[0] * max_grid_size[1])
-            nshards = max_nshards
-            if mode == "bilinear":
-                # For bilinear, sticks per core must be divisible by width
-                while nshards > 0:
-                    if batch_size * height % nshards == 0 and (batch_size * height * width // nshards) % width == 0:
-                        break
-                    nshards -= 1
-            else:
-                # For nearest, just need total elements divisible by nshards
-                while nshards > 0:
-                    if batch_size * height * width % nshards == 0:
-                        break
-                    nshards -= 1
-            ncores = nshards
-        elif shard_strategy == ttnn.ShardStrategy.BLOCK:
-            max_nshards_h = min(batch_size * height * width, max_grid_size[0])  ## height along NHW
-            max_nshards_w = min(num_channels, max_grid_size[1])  ## width along C
-            ## find nshards_h along NHW
-            nshards_h = max_nshards_h
-            while nshards_h > 0:
-                if batch_size * height % nshards_h == 0:
-                    break
-                nshards_h -= 1
-            ## find nshards_w along C
-            nshards_w = max_nshards_w
-            while nshards_w > 0:
-                ## make sure: 1. nshards_w divides num_channels, and 2. shard_shape[1] is aligned to 32B
-                if num_channels % nshards_w == 0 and math.ceil(num_channels * num_bytes / nshards_w) % TILE_WIDTH == 0:
-                    break
-                nshards_w -= 1
-            if nshards_w == 0 or nshards_h == 0:
-                raise ValueError("nshards_h or nshards_w is 0")
-            ncores = (nshards_h, nshards_w)
-        shard_grid = get_shard_grid_from_num_cores(device, ncores)
-
-    if shard_strategy == ttnn.ShardStrategy.BLOCK:
-        tensor_memory_layout = ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
-    elif shard_strategy == ttnn.ShardStrategy.HEIGHT:
-        tensor_memory_layout = ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED
-
-    ## input shard
-    if shard_strategy == ttnn.ShardStrategy.BLOCK:
-        shard_height = math.ceil(batch_size * height * width / ncores[0])
-        shard_width = math.ceil(num_channels / ncores[1])
-    elif shard_strategy == ttnn.ShardStrategy.HEIGHT:
-        shard_height = math.ceil(batch_size * height * width / ncores)
-        shard_width = num_channels
-    shard_shape = (shard_height, shard_width)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
-    in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
-
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
-
-    input_tensor = ttnn.from_torch(input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    input_tensor = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config)
-
-    return input_tensor
+SD_14_SHAPES = [
+    # [2, 1280, 8, 8],
+    # [2, 1280, 16, 16],
+    # [2, 640, 32, 32],
+    # [2, 512, 64, 64],
+    # [2, 512, 128, 128],
+    # [2, 256, 256, 256]
+]
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shapes",
-    [
-        [1, 1280, 8, 8],
-        [2, 1280, 8, 8],
-        [2, 640, 16, 16],
-        [2, 1280, 8, 8],
-        [2, 1280, 16, 16],
-        [2, 1280, 16, 16],
-        [1, 256, 28, 28],
-        [1, 512, 14, 14],
-    ],
+    SDXL_SHAPES + SD_14_SHAPES,
 )
 @pytest.mark.parametrize("scale_h", [2])
 @pytest.mark.parametrize("scale_w", [2])
-@pytest.mark.parametrize("mode", ["bilinear"])  # , "nearest"])
+@pytest.mark.parametrize("mode", ["nearest"])  # , "bilinear"])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("math_approx_mode", [True, False])
 def test_upsample_single_core(device, input_shapes, mode, scale_h, scale_w, math_fidelity, math_approx_mode):
@@ -192,8 +72,8 @@ def test_upsample_single_core(device, input_shapes, mode, scale_h, scale_w, math
         tt_input = input.permute(0, 2, 3, 1)
         input_tensor = ttnn.from_torch(tt_input, device=device)
     scale_factor = (scale_h, scale_w)
-    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode=mode)
-    torch_result = torch_upsample(input)
+    m = nn.Upsample(scale_factor=scale_factor, mode=mode)
+    torch_result = m(input)
 
     scale_factor = (scale_h, scale_w)
 
@@ -368,24 +248,7 @@ def upsample_multicore_common(
 
 @pytest.mark.parametrize(
     "input_shape",
-    [
-        # [2, 1280, 4, 4],  # 256x256
-        # [2, 640, 16, 16],
-        # [2, 1280, 8, 8],  # 512x512
-        # [2, 1280, 16, 16],
-        # [1, 64, 132, 10],
-        # [1, 32, 8, 8],
-        # [2, 640, 32, 32],
-        # # some random shapes
-        # [1, 32, 5, 4],
-        # [3, 32, 4, 4],
-        # [5, 64, 5, 5],
-        # [1, 128, 5, 8],
-        # [1, 32, 5, 4],
-        # [1, 64, 128, 17],
-        # [1, 64, 132, 19],
-        [1, 512, 256, 256],
-    ],
+    SD_14_SHAPES + SDXL_SHAPES,
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("scale_h", [2, 3])
@@ -415,9 +278,7 @@ def test_upsample_multicore(device, input_shape, scale_h, scale_w, shard_strateg
 
 @pytest.mark.parametrize(
     "input_shape",
-    [
-        [1, 192, 12, 12],
-    ],
+    SD_14_SHAPES + SDXL_SHAPES,
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("scale_h", [2, 3])
@@ -461,20 +322,11 @@ def test_upsample_multicore_corerange(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, num_channels, height, width, scale_h, scale_w",
-    (
-        # (1, 256, 16, 16, 8, 8),  # 256x256
-        # (1, 256, 32, 32, 4, 4),  # 256x256
-        # (1, 256, 64, 64, 2, 2),  # 256x256
-        # (1, 256, 128, 128, 1, 1),  # 256x256
-        # (1, 72, 8, 8, 2, 2),
-        # (1, 288, 8, 8, 2, 2),
-        # (1, 1024, 8, 8, 2, 2),
-        # (1, 256, 28, 28, 2, 2),
-        # (1, 512, 14, 14, 2, 2),
-        (1, 512, 128, 128, 2, 2),
-    ),
+    "batch_size, num_channels, height, width",
+    SDXL_SHAPES + SD_14_SHAPES,
 )
+@pytest.mark.parametrize("scale_h", [2])
+@pytest.mark.parametrize("scale_w", [2])
 @pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("math_approx_mode", [True, False])

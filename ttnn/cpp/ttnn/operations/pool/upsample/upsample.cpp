@@ -39,6 +39,12 @@ ttnn::Tensor ExecuteUpSample::invoke(
     // DEBUG
     // fmt::print("scale_h: {}, scale_w: {}\n", scale_h, scale_w);
 
+    // Mozda mogu i ovde nesto da stavim? U fazonu ako je non sharded a bilinear je, ovde da ga shardujem
+    // Verovatno ima vise smisla tbh
+
+    if (!input_tensor.is_sharded() && mode == "bilinear") {
+    }
+
     if (input_tensor.is_sharded()) {
         // TT_FATAL(not input_tensor.is_sharded(), "Error");
         int shard_height = input_tensor.memory_config().shard_spec().value().shape[0];
