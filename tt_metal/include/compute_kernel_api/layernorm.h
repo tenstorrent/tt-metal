@@ -5,3 +5,4 @@
 #pragma once
 
 #include "compute_kernel_api.h"
+#include "compute_kernel_api/eltwise_unary/rsqrt.h"
