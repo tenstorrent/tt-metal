@@ -236,6 +236,7 @@ class CMakeBuild(build_ext):
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
         lib_patterns = [
             "_ttnn.so",
+            "_ttnncpp.so",
             "libtt_metal.so",
             "libdevice.so",
         ]
@@ -273,9 +274,12 @@ class CMakeBuild(build_ext):
         ttnn_cpp_patterns = [
             "ttnn/deprecated/**/kernels/**/*",
             "ttnn/operations/**/kernels/**/*",
+            "ttnn/operations/**/kernels_ng/**/*",
+            "ttnn/operations/kernel_helper_functions/*",
             "ttnn/operations/ccl/**/*",
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
+            "ttnn/kernel/*",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",

@@ -47,6 +47,7 @@ class YOLOv10PerformanceRunnerInfra:
         weight_dtype,
         model_location_generator=None,
         resolution=(640, 640),
+        torch_input_tensor=None,
     ):
         torch.manual_seed(0)
         self.resolution = resolution
@@ -57,10 +58,16 @@ class YOLOv10PerformanceRunnerInfra:
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
+        self.torch_input_tensor = torch_input_tensor
 
         self.torch_model = load_torch_model()
 
-        self.torch_input_tensor = torch.randn((1, 3, 640, 640), dtype=torch.float32)
+        self.torch_input_tensor = (
+            torch.randn((1, 3, 640, 640), dtype=torch.float32)
+            if self.torch_input_tensor is None
+            else self.torch_input_tensor
+        )
+
         model_type = f"torch_model"
 
         self.torch_output_tensor = self.torch_model(self.torch_input_tensor)

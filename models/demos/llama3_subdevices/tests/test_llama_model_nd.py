@@ -5,7 +5,6 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-import os
 from models.demos.llama3_subdevices.tt.llama_common import (
     HostEmbedding,
     PagedAttentionConfig,
@@ -15,8 +14,6 @@ from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.sampling import TTSampling
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import skip_for_blackhole
-
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 
 @torch.no_grad()
@@ -40,7 +37,9 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 )
 @pytest.mark.parametrize(
     "sampling_params",
-    [{"top_k": 1, "top_p": 0.00, "seed": 42}],
+    [
+        {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},
+    ],
 )
 @pytest.mark.parametrize(
     "page_params",
@@ -74,7 +73,7 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": True,
         }
     ],
     indirect=True,
@@ -88,7 +87,6 @@ def test_llama_model_inference(
     page_params,
     optimizations,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):
@@ -96,6 +94,18 @@ def test_llama_model_inference(
     mode_accuracy = optimizations == LlamaOptimizations.accuracy
     instruct = True
     dummy_weights = True
+
+    top_k = sampling_params["top_k"]
+    if isinstance(top_k, int):
+        top_k = [top_k] * batch_size
+    top_p = sampling_params["top_p"]
+    if isinstance(top_p, float):
+        top_p = [top_p] * batch_size
+    temperature = sampling_params["temperature"]
+    if isinstance(temperature, float):
+        temperature = [temperature] * batch_size
+    seed = sampling_params["seed"]
+
     model_args = TtModelArgs(
         mesh_device,
         instruct=instruct,
@@ -160,7 +170,7 @@ def test_llama_model_inference(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        sampling_params=sampling_params,
+        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     logger.info("Model and caches loaded.")
@@ -208,7 +218,7 @@ def test_llama_model_inference(
                 page_table=page_table_tt,
             )
             # Sampling
-            tt_out_tok = tt_sampling(tt_out[0])
+            tt_out_tok = tt_sampling(tt_out[0], top_k, top_p, seed)
 
             tt_out_tok_device0 = ttnn.get_device_tensors(tt_out_tok)[0]
             tt_out_tok_cpu = tt_out_tok_device0.cpu(blocking=True, cq_id=0)

@@ -96,6 +96,7 @@ def test_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc, p_value):
         [1, 21, 123, 24],
     ],
 )
+
 # TODO: Re-enable this test when we return to fixed seed testing
 # @pytest.mark.parametrize("seed", [1408])
 # @pytest.mark.parametrize("in_dtype", ["float32"])

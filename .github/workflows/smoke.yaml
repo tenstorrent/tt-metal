@@ -60,6 +60,7 @@ jobs:
           GTEST_COLOR: yes
           GTEST_OUTPUT: xml:/work/test-reports/
           TT_METAL_HOME: /usr/libexec/tt-metalium # TODO: Need to get away from env vars!
+          LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
           TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
         run: |

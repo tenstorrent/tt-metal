@@ -40,7 +40,7 @@ class Emb(torch.nn.Module):
         1024 * 32,
     ),
 )
-def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_seeds, seq_len, is_ci_env):
+def test_mixtral_model_inference_CI(t3k_mesh_device, reset_seeds, seq_len, is_ci_env):
     # Set additional Mistral flag for CI
     if is_ci_env:
         os.environ["MIXTRAL_REF_OUTPUT_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/prefill/"

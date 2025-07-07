@@ -20,6 +20,7 @@ public:
     static void create(int argc, char** argv);
     static const ContextPtr& get_current_world();
     static void set_current_world(const ContextPtr&);
+    static bool is_initialized();
 
     // destructor – no-op
     ~SingleHostContext() override = default;
@@ -69,6 +70,9 @@ public:
     [[nodiscard]] ContextPtr split(Color color, Key key) const override;
     [[nodiscard]] ContextPtr create_sub_context(tt::stl::Span<int> ranks) const override;
     void revoke_and_shrink() override;
+
+    /* ------------- message snooping ------------- */
+    std::size_t snoop_incoming_msg_size(Rank source, Tag tag) const override;
 
 private:
     int rank_{0};

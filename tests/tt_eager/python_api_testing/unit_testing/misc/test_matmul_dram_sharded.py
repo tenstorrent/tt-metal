@@ -69,7 +69,6 @@ def run_test_matmul_in1_dram_sharded(
     in1_dtype,
     out_dtype,
     function_level_defaults,
-    use_program_cache,
 ):
     if is_blackhole():
         num_banks = device.dram_grid_size().x  # need to match harvesting of dram
@@ -238,7 +237,6 @@ def test_matmul_in1_dram_sharded_with_program_cache(
     in1_dtype,
     out_dtype,
     function_level_defaults,
-    use_program_cache,
 ):
     for _ in range(2):
         run_test_matmul_in1_dram_sharded(
@@ -257,7 +255,6 @@ def test_matmul_in1_dram_sharded_with_program_cache(
             in1_dtype,
             out_dtype,
             function_level_defaults,
-            use_program_cache,
         )
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
@@ -286,7 +283,6 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     in1_dtype,
     out_dtype,
     function_level_defaults,
-    use_program_cache,
 ):
     if is_blackhole():
         num_banks = device.dram_grid_size().x  # need to match harvesting of dram
@@ -411,7 +407,6 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
     in1_dtype,
     out_dtype,
     function_level_defaults,
-    use_program_cache,
 ):
     M = 32
     K = 4096
@@ -433,7 +428,6 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
         in1_dtype,
         out_dtype,
         function_level_defaults,
-        use_program_cache,
     )
 
 

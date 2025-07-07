@@ -24,9 +24,7 @@ from models.utility_functions import torch_random
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae_resnetblock2d(
-    device, input_shape, block_id, resnet_id, conv_shortcut, block, pcc, use_program_cache, reset_seeds
-):
+def test_vae_resnetblock2d(device, input_shape, block_id, resnet_id, conv_shortcut, block, pcc, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
     )

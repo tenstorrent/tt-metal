@@ -31,7 +31,7 @@ os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": true}'
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-def test_vit(device, use_program_cache):
+def test_vit(device):
     torch.manual_seed(0)
 
     model_name = "google/vit-base-patch16-224"

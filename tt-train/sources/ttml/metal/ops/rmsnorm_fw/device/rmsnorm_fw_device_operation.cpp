@@ -127,7 +127,7 @@ tensor_return_value_t RMSNormForwardDeviceOperation::create_output_tensors(
     return output_tensors;
 }
 
-tt::stl::hash::hash_t RMSNormForwardDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RMSNormForwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();

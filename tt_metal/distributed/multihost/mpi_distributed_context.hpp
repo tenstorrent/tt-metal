@@ -58,6 +58,7 @@ public:
     // factory (initialises MPI environment once per process)
     static void create(int argc, char** argv);
     static const ContextPtr& get_current_world();
+    static bool is_initialized();
 
     // destructor – communicator MPI_COMM_WORLD is freed automatically by MPI_Finalize
     // All other communicators are freed here
@@ -105,6 +106,9 @@ public:
     void abort(int error_code) const override;
     void revoke_and_shrink() override;
     [[nodiscard]] bool is_revoked() override;
+
+    /* ------------- message snooping ------------- */
+    std::size_t snoop_incoming_msg_size(Rank source, Tag tag) const override;
 
     /* ----------------- mpi constructors ---------------- */
     explicit MPIContext(MPI_Comm comm);
