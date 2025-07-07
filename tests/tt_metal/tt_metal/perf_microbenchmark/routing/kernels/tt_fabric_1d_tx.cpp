@@ -150,10 +150,10 @@ void kernel_main() {
     // routing info
     uint32_t ew_dim = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t my_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t fwd_start_distance = get_arg_val<uint32_t>(rt_args_idx++); // for 1d only
-    uint32_t fwd_range = get_arg_val<uint32_t>(rt_args_idx++);  // for multicast only
-    uint32_t fwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);   // for 2d unicast only
-    uint32_t fwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);  // for 2d unicast only
+    uint32_t fwd_start_distance = get_arg_val<uint32_t>(rt_args_idx++);  // for 1d only
+    uint32_t fwd_range = get_arg_val<uint32_t>(rt_args_idx++);           // for multicast only
+    uint32_t fwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);          // for 2d unicast only
+    uint32_t fwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);         // for 2d unicast only
     uint32_t bwd_start_distance;
     uint32_t bwd_range;
     uint32_t bwd_dev_id;
@@ -191,10 +191,10 @@ void kernel_main() {
     /***************** setup bawkward dir *****************/
     if constexpr (additional_dir) {
         // routing info for additional direction
-        bwd_start_distance = get_arg_val<uint32_t>(rt_args_idx++); // for 1d only
-        bwd_range = get_arg_val<uint32_t>(rt_args_idx++);  // for multicast only
-        bwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);   // for 2d unicast only
-        bwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);  // for 2d unicast only
+        bwd_start_distance = get_arg_val<uint32_t>(rt_args_idx++);  // for 1d only
+        bwd_range = get_arg_val<uint32_t>(rt_args_idx++);           // for multicast only
+        bwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);          // for 2d unicast only
+        bwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);         // for 2d unicast only
 
         bwd_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);

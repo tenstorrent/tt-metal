@@ -67,9 +67,8 @@ class TtYolov10Conv2D:
                 if use_1d_systolic_array
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED
             )
-
+        self.conv_output_dtype = activation_dtype
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=activation_dtype,
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
@@ -126,6 +125,7 @@ class TtYolov10Conv2D:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         return x
 

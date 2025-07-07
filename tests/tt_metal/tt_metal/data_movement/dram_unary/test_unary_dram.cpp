@@ -262,7 +262,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMChannels) {
 TEST_F(DeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
     // Test ID (Arbitrary)
     uint32_t test_id = 3;
-
+  
     unit_tests::dm::dram::directed_ideal_test(arch_, devices_, num_devices_, test_id);
 }
 
