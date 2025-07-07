@@ -47,7 +47,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
     num_links,
     input_num_cores,
     output_num_cores,
-    use_program_cache=False,
     num_iters=1,
     warmup_iters=0,
     trace_mode=True,
@@ -337,6 +336,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
 
 
 # Test 1: test_all_reduce_create_qkv_heads_fuse
+@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_iters, warmup_iters", [[1, 0]])
 @pytest.mark.parametrize("trace_mode", [False])
@@ -386,7 +386,6 @@ def test_all_reduce_qkv_heads_fuse(
     num_links,
     input_num_cores,
     output_num_cores,
-    use_program_cache,
     num_iters,
     warmup_iters,
     trace_mode,
@@ -404,7 +403,6 @@ def test_all_reduce_qkv_heads_fuse(
         num_links,
         input_num_cores,
         output_num_cores,
-        use_program_cache,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         trace_mode=trace_mode,
@@ -414,6 +412,7 @@ def test_all_reduce_qkv_heads_fuse(
 
 
 # Test 2: test_all_reduce_create_qkv_heads_fuse_perf
+@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_iters, warmup_iters", [[30, 10]])
 @pytest.mark.parametrize("trace_mode", [True])
@@ -463,7 +462,6 @@ def test_all_reduce_qkv_heads_fuse_perf(
     num_links,
     input_num_cores,
     output_num_cores,
-    use_program_cache,
     num_iters,
     warmup_iters,
     trace_mode,
@@ -481,7 +479,6 @@ def test_all_reduce_qkv_heads_fuse_perf(
         num_links,
         input_num_cores,
         output_num_cores,
-        use_program_cache,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         trace_mode=trace_mode,
@@ -491,6 +488,7 @@ def test_all_reduce_qkv_heads_fuse_perf(
 
 
 # Test 2: test_all_reduce_create_qkv_heads_fuse_perf
+@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_iters, warmup_iters", [[30, 10]])
 @pytest.mark.parametrize("trace_mode", [True])
@@ -548,8 +546,6 @@ def test_all_reduce_qkv_heads_fuse_perf_6U(
 ):
     if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
-    if not is_RING_6U:
-        pytest.skip("This test is only for 6U TG devices")
     profiler = BenchmarkProfiler()
     run_all_reduce_qkv_heads_fuse_perf_impl(
         mesh_device,

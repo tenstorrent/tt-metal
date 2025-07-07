@@ -53,6 +53,15 @@ struct ProgramDispatchMetadata {
     } prefetcher_cache_info;
 };
 
+struct ExpectedNumWorkerUpdates {
+    // Worker count before the update
+    uint32_t previous = 0;
+    // Worker count after the update
+    uint32_t current = 0;
+    // Indicates if a wrapping occurred
+    bool wrapped = false;
+};
+
 uint32_t configure_rta_offsets_for_kernel_groups(
     uint32_t programmable_core_type_index,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
@@ -171,6 +180,20 @@ void set_num_worker_sems_on_dispatch(
 
 void set_go_signal_noc_data_on_dispatch(
     IDevice* device, const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);
+
+// Wait for number of workers to complete and then reset the counter on the device
+void reset_expected_num_workers_completed_on_device(
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::SubDeviceId sub_device_id,
+    uint32_t num_expected_workers,
+    uint8_t cq_id);
+
+//
+// Get the expected number of workers completed values for the given Program to run on the sub device.
+// Expected number of workers is used for the wait command to stall until all workers are completed.
+//
+ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
+    uint32_t num_workers, uint32_t num_additional_workers);
 
 }  // namespace program_dispatch
 

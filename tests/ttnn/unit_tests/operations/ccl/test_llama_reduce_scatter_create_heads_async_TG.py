@@ -83,7 +83,6 @@ def run_reduce_scatter_test(
     dtype=ttnn.bfloat8_b,
     profiler=BenchmarkProfiler(),
 ):
-    mesh_device.enable_program_cache()
     num_pages_per_packet = 4
     cyclic_buffer_size = 8
 
@@ -388,13 +387,14 @@ def run_reduce_scatter_test(
         assert eq, f"{first_failed_tensor_index} FAILED: {output_results}"
 
 
+@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
 @pytest.mark.parametrize(
     "device_params",
     [
         {
             "trace_region_size": 269312,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         }
     ],
     indirect=True,
@@ -413,8 +413,6 @@ def test_rs_create_heads_6u_trace(mesh_device, trace_mode, dtype, use_program_ca
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
         pytest.skip("Not TG!")
-    if not is_RING_6U:
-        pytest.skip("This test is only for 6U TG devices")
 
     dim = 3
     shard_height = 32
@@ -443,6 +441,7 @@ def test_rs_create_heads_6u_trace(mesh_device, trace_mode, dtype, use_program_ca
     )
 
 
+@pytest.mark.skipif(is_RING_6U, reason="This test is only for TG devices")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -463,7 +462,7 @@ def test_rs_create_heads_6u_trace(mesh_device, trace_mode, dtype, use_program_ca
     ],
     indirect=True,
 )
-def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype, use_program_cache):
+def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -496,6 +495,7 @@ def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype, use_program_ca
     )
 
 
+@pytest.mark.skipif(is_RING_6U, reason="This test is only for TG devices")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
@@ -510,7 +510,7 @@ def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype, use_program_ca
     ],
     indirect=True,
 )
-def test_rs_create_heads_tg_no_trace(mesh_device, trace_mode, dtype, use_program_cache):
+def test_rs_create_heads_tg_no_trace(mesh_device, trace_mode, dtype):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):

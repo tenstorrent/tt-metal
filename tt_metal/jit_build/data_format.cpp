@@ -47,7 +47,7 @@ bool is_exp_b_format(DataFormat data_format) {
         (data_format == DataFormat::Bfp2_b));
 }
 
-ExpPrecision get_exp_precison(DataFormat data_format) {
+ExpPrecision get_exp_precision(DataFormat data_format) {
     return (is_exp_b_format(data_format) ? ExpPrecision::B : ExpPrecision::A);
 }
 
@@ -105,7 +105,7 @@ DataFormat check_valid_formats_in_out_data_formats(DataFormat data_format[NUM_CI
 
 ExpPrecision get_data_exp_precision(DataFormat data_formats[NUM_CIRCULAR_BUFFERS]) {
     DataFormat last_valid_format = check_consistent_format_across_buffers(data_formats);
-    return get_exp_precison(last_valid_format);
+    return get_exp_precision(last_valid_format);
 }
 
 std::vector<DataFormat> get_unpack_src_formats(DataFormat data_formats[NUM_CIRCULAR_BUFFERS]) {
@@ -203,9 +203,9 @@ DataFormat get_single_pack_src_format(
     }
 
     DataFormat pack_src_format;
-    const ExpPrecision input_exp_width = get_exp_precison(data_format);
-    const ExpPrecision output_exp_width = get_exp_precison(data_format);
-    const ExpPrecision fp32_condition_exp_width = get_exp_precison(unpack_conditional_dst_format);
+    const ExpPrecision input_exp_width = get_exp_precision(data_format);
+    const ExpPrecision output_exp_width = get_exp_precision(data_format);
+    const ExpPrecision fp32_condition_exp_width = get_exp_precision(unpack_conditional_dst_format);
 
     bool is_input_or_output_float32 = data_format == DataFormat::Float32;
     bool condition_exp_float32_match_output =
@@ -296,7 +296,7 @@ DataFormat get_single_pack_src_format(
             pack_src_format = CONVERT_EXP_WIDTH.at(pack_src_format_tmp);
             if (data_format != DataFormat::Float32) {
                 TT_FATAL(
-                    input_exp_width == get_exp_precison(pack_src_format),
+                    input_exp_width == get_exp_precision(pack_src_format),
                     "Input format exponent width = {}, must match pack src format exponent width = {}",
                     data_format,
                     pack_src_format);

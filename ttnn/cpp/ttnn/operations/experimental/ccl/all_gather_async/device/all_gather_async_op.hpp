@@ -27,9 +27,8 @@ using ccl::EriscDatamoverBuilder;
 
 enum class AllGatherAsyncVersion {
     GENERIC = 0,
-    MINIMAL_INTERLEAVED_32 = 1,
-    LLAMA_MINIMAL_SHARDED = 2,
-    MINIMAL_INTERLEAVED_ANY = 3,
+    LLAMA_MINIMAL_SHARDED = 1,
+    MINIMAL_INTERLEAVED = 2,
 };
 
 struct AllGatherAsync {
@@ -117,20 +116,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
     ccl::Topology topology,
     GlobalSemaphore semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
-    const Tensor& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
-    Tensor& output_tensor,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_any_any(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved(
     const Tensor& input_tensor,
     IDevice* target_device,
     std::optional<IDevice*> forward_device,
@@ -143,7 +129,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_any_any_helper(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     IDevice* target_device,

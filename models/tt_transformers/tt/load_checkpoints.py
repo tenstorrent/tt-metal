@@ -12,6 +12,17 @@ from safetensors.torch import load_file as safetensors_load_file
 from tqdm import tqdm
 
 
+def _get_known_prefixes_mapping():
+    return {
+        # Llama Vision
+        "text_model.": "",
+        "vision_model.": "",
+        # Gemma3
+        "model.language_model.": "model.",
+        "model.vision_tower.": "model.",
+    }
+
+
 # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
 def load_hf_state_dict(ckpt_dir):
     # First check if index file exists
@@ -42,9 +53,17 @@ def load_hf_state_dict(ckpt_dir):
 
 
 def standardize_hf_keys(state_dict):
-    if not "lm_head.weight" in state_dict:
+    key_meta = "lm_head.weight"
+    key_hf = "model.embed_tokens.weight"
+
+    # Check if the key_meta exists with any known prefix
+    if not any(f"{prefix}{key_meta}" in state_dict for prefix in _get_known_prefixes_mapping().keys()):
         # Assume tied to the embeddings if not present
-        state_dict["lm_head.weight"] = state_dict["model.embed_tokens.weight"]
+        for prefix in _get_known_prefixes_mapping().keys():
+            if f"{prefix}{key_hf}" in state_dict:
+                state_dict[f"{prefix}{key_meta}"] = state_dict[f"{prefix}{key_hf}"]
+                break
+
     return state_dict
 
 
@@ -111,6 +130,10 @@ def map_hf_to_meta_keys(loaded_weights):
 
     meta_state_dict = {}
     for key, tensor in loaded_weights.items():
+        # Remove known prefix if present
+        prefix = next((p for p in _get_known_prefixes_mapping().keys() if key.startswith(p)), "")
+        key = key.replace(prefix, _get_known_prefixes_mapping().get(prefix, ""), 1)
+
         if key in hf_to_meta:
             # Direct match for top-level keys
             meta_state_dict[hf_to_meta[key]] = tensor

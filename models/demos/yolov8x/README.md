@@ -29,7 +29,7 @@ The entry point to yolov8x model is YOLOv8x in
 pytest models/demos/yolov8x/demo/demo.py
 ```
 
-- e2e perf with trace(40 fps):
+- e2e perf with trace(45 fps):
 ```bash
 pytest models/demos/yolov8x/tests/test_e2e_performant.py
 ```
@@ -44,3 +44,6 @@ A runs folder will be created inside the `models/demos/yolov8x/demo/` directory.
 
 ## Additional Information:
 The tests can be run with  randomly initialized weights and pre-trained real weights.  To run only for the pre-trained weights, specify pretrained_weight_true when running the tests.
+
+### Web Demo
+- Try the interactive web demo [instructions](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov8x/README.md)

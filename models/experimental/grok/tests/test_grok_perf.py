@@ -43,7 +43,6 @@ def test_grok_model_perf(
     generation_start_pos,
     expected_compile_time,
     expected_inference_time,
-    use_program_cache,
     reset_seeds,
 ):
     dtype = ttnn.bfloat8_b

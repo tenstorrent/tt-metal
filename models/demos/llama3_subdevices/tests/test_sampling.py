@@ -22,8 +22,6 @@ from scipy.stats import entropy
 import numpy as np
 from collections import Counter
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
-
 
 def counts_to_vector(*samples, return_prob=True, dtype=float):
     """
@@ -123,6 +121,7 @@ def sample_top_p(values: torch.Tensor, p: float):
 
 
 def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_size, max_top_k):
+    k = sampling_params["top_k"]
     tt_indices_device_offsets = torch.ones([1, 1, 32, max_top_k * num_devices], dtype=torch.int32)
     per_device_offset = input_tensor.shape[-1] // num_devices
     for device_id in range(num_devices):
@@ -146,10 +145,15 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
 
     # Apply temperature
     for i in range(32):
-        topk_values_tensor[:, :, i, :] = topk_values_tensor[:, :, i, :] / sampling_params["temperature"]
+        topk_values_tensor[:, :, i, :] = (
+            topk_values_tensor[:, :, i, :] / sampling_params["temperature"]
+            if sampling_params["temperature"] != 0.0
+            else 1.0
+        )
+        k = sampling_params["top_k"] if sampling_params["temperature"] != 0.0 else 1
 
     # Do topk on gathered
-    topk_values_gathered, topk_indices_gathered = torch.topk(topk_values_tensor, k=sampling_params["top_k"], dim=-1)
+    topk_values_gathered, topk_indices_gathered = torch.topk(topk_values_tensor, k=k, dim=-1)
     topk_indices_gathered = torch.gather(topk_indices_tensor, dim=-1, index=topk_indices_gathered)
     topk_values_gathered = topk_values_gathered[0, 0, :, :]
 
@@ -176,7 +180,7 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
         # Test top-p settings
         # {"temperature": 1.0, "top_k": 32, "top_p": 0.00, "seed": 42}, # argmax
         # {"temperature": 1.0, "top_k": 32, "top_p": 1.00, "seed": 42}, # multinomial sampling from all tok-k tokens
-        {"temperature": 1.0, "top_k": 1, "top_p": 0.0, "seed": 42},  # typical top-p parameter in LLMs
+        # {"temperature": 1.0, "top_k": 1, "top_p": 0.0, "seed": 42},  # typical top-p parameter in LLMs
         # {"temperature": 1.0, "top_k": 32, "top_p": 0.08, "seed": 42}, # small top-p
         # {"temperature": 1.0, "top_k": 32, "top_p": 0.5, "seed": 42}, # mid top-p
         # {"temperature": 1.0, "top_k": 32, "top_p": 0.99, "seed": 42}, # large top-p
@@ -184,6 +188,7 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
         # {"temperature": 1.0, "top_k": 1, "top_p": 0.95, "seed": 42},  # top-k=1
         # # {"temperature": 1.0, "top_k": 64, "top_p": 0.95, "seed": 42}, # top-k=64 (max is 64) # Sampling op currently does't support top-k>32
         # Test temperature settings
+        {"temperature": 0.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # temperature 0.0 (argmax)
         # {"temperature": 0.001, "top_k": 32, "top_p": 0.95, "seed": 42},  # temperature 0.001
         # {"temperature": 0.7, "top_k": 32, "top_p": 0.95, "seed": 42},  # temperature 0.7
         # {"temperature": 1.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # temperature 1.0
@@ -205,14 +210,14 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 31744,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": True,
         }
     ],
     indirect=True,
 )
-def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_device, use_program_cache, reset_seeds):
+def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_device, reset_seeds):
     use_tracing = False
-    load_cached_outputs = True
+    load_cached_outputs = False
     num_samples = 10
     num_compile_steps = 1
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=32, dummy_weights=True)

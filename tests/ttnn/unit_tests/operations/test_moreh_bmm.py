@@ -246,7 +246,7 @@ def test_moreh_bmm_ttnn_dtype(ttnn_dtype, device):
     "shape",
     [[10, 191, 447, 159]],
 )
-def test_moreh_bmm_callback(shape, device, use_program_cache):
+def test_moreh_bmm_callback(shape, device):
     """
     PyTest wrapper for running BMM tests with multiple configurations.
     AssertionError: If the number of program cache entries differs between runs with the same settings.
@@ -325,7 +325,7 @@ def test_moreh_bmm_backward_ttnn_dtype(ttnn_dtype, device):
         [True, True],
     ],
 )
-def test_moreh_bmm_backward_callback(requires_grad, device, use_program_cache):
+def test_moreh_bmm_backward_callback(requires_grad, device):
     """
     PyTest wrapper for running BMM backward tests with multiple configurations.
     AssertionError: If the number of program cache entries differs between runs with the same settings.

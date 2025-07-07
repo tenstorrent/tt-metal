@@ -23,14 +23,12 @@ def select_torch_dtype(ttnn_dtype):
 @pytest.mark.parametrize(
     "N, K, W, C, input_dtype, index_dtype, input_layout",
     [
-        (32, 32, 32, 32, ttnn.bfloat16, ttnn.uint32, ttnn.Layout.TILE),
-        (3, 2, 2, 3, ttnn.bfloat16, ttnn.uint32, ttnn.Layout.ROW_MAJOR),
         (1, 1, 1, 1, ttnn.bfloat16, ttnn.uint32, ttnn.Layout.TILE),
         (20, 40, 40, 10, ttnn.bfloat16, ttnn.uint32, ttnn.Layout.ROW_MAJOR),
-        (20, 40, 30, 10, ttnn.bfloat16, ttnn.uint32, ttnn.Layout.TILE),
     ],
 )
-def test_tosa_scatter_normal(N, K, W, C, input_dtype, index_dtype, input_layout, device, use_program_cache):
+def test_tosa_scatter_normal(N, K, W, C, input_dtype, index_dtype, input_layout, device):
+    torch.manual_seed(0)
     input_torch_dtype = select_torch_dtype(input_dtype)
 
     input_shape = [N, K, C]

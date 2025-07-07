@@ -52,7 +52,6 @@ import torch
 def test_conv_features(
     device,
     torch_tensor_map,
-    use_program_cache,
     math_fidelity,
     output_dtype,
     weights_dtype,
@@ -102,7 +101,6 @@ def test_conv_features(
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
-        preprocess_weights_on_device=True,
         run_twice=True,
         input_layout=ttnn.TILE_LAYOUT if input_dtype == ttnn.bfloat8_b else None,
         input_dtype=input_dtype,
@@ -184,7 +182,6 @@ def test_conv_dram(
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
-        preprocess_weights_on_device=False,
         input_layout=input_layout,
         run_twice=True,
         fast_compare=True,

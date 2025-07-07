@@ -213,8 +213,9 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
                 offset += chunk_size;
             }
         } break;
+#else
+        case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE:
 #endif
-
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE:
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
         default: {

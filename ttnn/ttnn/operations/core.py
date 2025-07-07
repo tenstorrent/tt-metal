@@ -314,7 +314,7 @@ def to_torch(
     dtype: Optional["torch.dtype"] = None,
     *,
     torch_rank: Optional[int] = None,
-    mesh_composer: Optional[ttnn.MeshToTensor] = None,
+    mesh_composer: Optional[ttnn.CppMeshToTensor] = None,
     device: Optional[ttnn.MeshDevice] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> "torch.Tensor":
@@ -329,7 +329,7 @@ def to_torch(
     Keyword Args:
         torch_rank (int, optional): Desired rank of the `torch.Tensor`. Defaults to `None`.
             Will use `torch.squeeze` operation to remove dimensions until the desired rank is reached. If not possible, the operation will raise an error.
-        mesh_composer (ttnn.MeshToTensor, optional): The desired `ttnn` mesh composer. Defaults to `None`.
+        mesh_composer (ttnn.CppMeshToTensor, optional): The desired `ttnn` mesh composer. Defaults to `None`.
         device (ttnn.MeshDevice, optional): The `ttnn` device of the input tensor. Defaults to `None`.
         cq_id (int, optional): The command queue ID to use. Defaults to `0`.
 
@@ -348,29 +348,7 @@ def to_torch(
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
-    if mesh_composer:
-        return mesh_composer.compose(tensor)
-
-    if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
-        raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
-
-    memory_config = tensor.memory_config()
-    if memory_config.is_sharded() and memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
-        raise RuntimeError("ttnn.to_torch: Shard spec must not be None for sharded tensors")
-
-    if (
-        memory_config.is_sharded()
-        and memory_config.shard_spec is not None
-        and memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL
-    ):
-        tensor = tensor.to_torch()
-    else:
-        if (tensor.layout != ttnn.ROW_MAJOR_LAYOUT) and not (
-            tensor.dtype == ttnn.bfloat8_b or tensor.dtype == ttnn.bfloat4_b
-        ):
-            tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT)
-
-        tensor = tensor.to_torch()
+    tensor = tensor.to_torch(mesh_composer=mesh_composer)
 
     if torch_rank is not None:
         while len(tensor.shape) > torch_rank:

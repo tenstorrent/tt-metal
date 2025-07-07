@@ -120,7 +120,6 @@ def test_tt_model_acc(
     optimizations,
     mesh_device,
     use_reference_file,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
     is_ci_env,
