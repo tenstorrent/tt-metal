@@ -55,7 +55,6 @@ Tensor Typecast::invoke(
             "If both output dtype and output tensor provided dtype should match");
     }
 
-    DataType input_dtype = input.dtype();
     return detail::typecast_impl(
         queue_id, input, output_dtype, memory_config_arg, optional_output_tensor, sub_core_grids);
 }

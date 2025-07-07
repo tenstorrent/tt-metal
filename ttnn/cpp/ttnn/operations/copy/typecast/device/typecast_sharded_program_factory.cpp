@@ -27,7 +27,6 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     const auto& output_dtype = args.output_dtype;
 
     tt::tt_metal::Program program = CreateProgram();
-    tt::tt_metal::IDevice* device = input.device();
 
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
@@ -133,7 +132,7 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         (uint32_t)datatype_to_dataformat_converter(input_dtype),
         (uint32_t)datatype_to_dataformat_converter(output_dtype));
 
-    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
         all_cores,
