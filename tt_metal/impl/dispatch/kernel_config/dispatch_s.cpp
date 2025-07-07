@@ -102,25 +102,6 @@ void DispatchSKernel::CreateKernel() {
             .size();
     bool virtualize_num_eth_cores = num_virtual_active_eth_cores > num_physical_active_eth_cores;
 
-    std::vector<uint32_t> compile_args = {
-        static_config_.cb_base.value(),
-        static_config_.cb_log_page_size.value(),
-        static_config_.cb_size.value(),
-        static_config_.my_dispatch_cb_sem_id.value(),
-        dependent_config_.upstream_dispatch_cb_sem_id.value(),
-        static_config_.dispatch_s_sync_sem_base_addr.value(),
-        static_config_.mcast_go_signal_addr.value(),
-        static_config_.unicast_go_signal_addr.value(),
-        static_config_.distributed_dispatcher.value(),
-        static_config_.first_stream_used.value(),
-        static_config_.max_num_worker_sems.value(),
-        static_config_.max_num_go_signal_noc_data_entries.value(),
-        virtualize_num_eth_cores,
-        num_virtual_active_eth_cores,
-        num_physical_active_eth_cores,
-    };
-
-    TT_ASSERT(compile_args.size() == 15);
     auto my_virtual_core = device_->virtual_core_from_logical_core(logical_core_, GetCoreType());
     auto upstream_virtual_core =
         device_->virtual_core_from_logical_core(dependent_config_.upstream_logical_core.value(), GetCoreType());
@@ -146,8 +127,24 @@ void DispatchSKernel::CreateKernel() {
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},  // Unused, remove later
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},  // Unused, remove later
+        {"CB_BASE", std::to_string(static_config_.cb_base.value())},
+        {"CB_LOG_PAGE_SIZE", std::to_string(static_config_.cb_log_page_size.value())},
+        {"CB_SIZE", std::to_string(static_config_.cb_size.value())},
+        {"MY_DISPATCH_CB_SEM_ID", std::to_string(static_config_.my_dispatch_cb_sem_id.value())},
+        {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(dependent_config_.upstream_dispatch_cb_sem_id.value())},
+        {"DISPATCH_S_SYNC_SEM_BASE_ADDR", std::to_string(static_config_.dispatch_s_sync_sem_base_addr.value())},
+        {"MCAST_GO_SIGNAL_ADDR", std::to_string(static_config_.mcast_go_signal_addr.value())},
+        {"UNICAST_GO_SIGNAL_ADDR", std::to_string(static_config_.unicast_go_signal_addr.value())},
+        {"DISTRIBUTED_DISPATCHER", std::to_string(static_config_.distributed_dispatcher.value())},
+        {"FIRST_STREAM_USED", std::to_string(static_config_.first_stream_used.value())},
+        {"MAX_NUM_WORKER_SEMS", std::to_string(static_config_.max_num_worker_sems.value())},
+        {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES",
+         std::to_string(static_config_.max_num_go_signal_noc_data_entries.value())},
+        {"VIRTUALIZE_UNICAST_CORES", std::to_string(virtualize_num_eth_cores)},
+        {"NUM_VIRTUAL_UNICAST_CORES", std::to_string(num_virtual_active_eth_cores)},
+        {"NUM_PHYSICAL_UNICAST_CORES", std::to_string(num_physical_active_eth_cores)},
     };
-    configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], compile_args, defines, false, false, false);
+    configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines, false, false, false);
 }
 
 void DispatchSKernel::ConfigureCore() {

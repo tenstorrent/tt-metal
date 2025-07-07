@@ -2349,66 +2349,75 @@ void configure_for_single_chip(
             .dispatch_mem_map(DISPATCH_CORE_TYPE)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
 
-    std::vector<uint32_t> dispatch_compile_args = {
-        dispatch_buffer_base,
-        DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE,
-        DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS *
-            MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).dispatch_buffer_block_size_pages(),
-        dispatch_cb_sem,  // overridden below for h
-        split_prefetcher_g ? prefetch_d_downstream_cb_sem
-                           : prefetch_downstream_cb_sem,  // overridden below for dispatch_h
-        DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS,
-        prefetch_sync_sem,
-        0,  // true base of hugepage
-        dev_hugepage_completion_buffer_base,
-        DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
-        dispatch_buffer_base,
-        (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages,
-        0,  // unused on hd, filled in below for h and d
-        0,  // unused on hd, filled in below for h and d
-        0,  // unused unless tunneler is between h and d
-        split_prefetcher_g,
-        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
-        prefetch_downstream_cb_sem,
-        prefetch_downstream_buffer_pages,
-        num_compute_cores,  // max_write_packed_cores
-        0,
-        DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
-        DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
-        0,
-        0,
-        0,
-        host_completion_queue_wr_ptr,
-        dev_completion_queue_wr_ptr,
-        dev_completion_queue_rd_ptr,
-        MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).get_dispatch_stream_index(0),
-        0,  // unused for single device - used to "virtualize" the number of eth cores across devices
-        0,  // unused for single device - used to "virtualize" the number of eth cores across devices
-        0,  // unused for single device - used to "virtualize" the number of eth cores across devices
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
+    std::map<string, string> dispatch_defines = {
+        {"DISPATCH_CB_BASE", std::to_string(dispatch_buffer_base)},
+        {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
+        {"DISPATCH_CB_PAGES",
+         std::to_string(
+             DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS *
+             MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).dispatch_buffer_block_size_pages())},
+        {"MY_DISPATCH_CB_SEM_ID", std::to_string(dispatch_cb_sem)},  // will be overridden for variants
+        {"UPSTREAM_DISPATCH_CB_SEM_ID",
+         std::to_string(
+             split_prefetcher_g ? prefetch_d_downstream_cb_sem
+                                : prefetch_downstream_cb_sem)},  // will be overridden for variants
+        {"DISPATCH_CB_BLOCKS", std::to_string(DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS)},
+        {"UPSTREAM_SYNC_SEM", std::to_string(prefetch_sync_sem)},
+        {"COMMAND_QUEUE_BASE_ADDR", "0"},  // true base of hugepage
+        {"COMPLETION_QUEUE_BASE_ADDR", std::to_string(dev_hugepage_completion_buffer_base)},
+        {"COMPLETION_QUEUE_SIZE", std::to_string(DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE)},
+        {"DOWNSTREAM_CB_BASE", std::to_string(dispatch_buffer_base)},
+        {"DOWNSTREAM_CB_SIZE",
+         std::to_string((1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages)},
+        {"MY_DOWNSTREAM_CB_SEM_ID", "0"},            // unused on hd, filled in below for h and d
+        {"DOWNSTREAM_CB_SEM_ID", "0"},               // unused on hd, filled in below for h and d
+        {"SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE", "0"},  // unused unless tunneler is between h and d
+        {"SPLIT_PREFETCH", std::to_string(split_prefetcher_g)},
+        {"PREFETCH_H_NOC_XY",
+         std::to_string(tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(
+             phys_prefetch_core_g.x, phys_prefetch_core_g.y))},
+        {"PREFETCH_H_LOCAL_DOWNSTREAM_SEM_ADDR", std::to_string(prefetch_downstream_cb_sem)},
+        {"PREFETCH_H_MAX_CREDITS", std::to_string(prefetch_downstream_buffer_pages)},
+        {"PACKED_WRITE_MAX_UNICAST_SUB_CMDS", std::to_string(num_compute_cores)},  // max_write_packed_cores
+        {"DISPATCH_S_SYNC_SEM_BASE_ADDR", "0"},
+        {"MAX_NUM_WORKER_SEMS", std::to_string(DispatchSettings::DISPATCH_MESSAGE_ENTRIES)},
+        {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES", std::to_string(DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES)},
+        {"MCAST_GO_SIGNAL_ADDR", "0"},
+        {"UNICAST_GO_SIGNAL_ADDR", "0"},
+        {"DISTRIBUTED_DISPATCHER", "0"},
+        {"HOST_COMPLETION_Q_WR_PTR", std::to_string(host_completion_queue_wr_ptr)},
+        {"DEV_COMPLETION_Q_WR_PTR", std::to_string(dev_completion_queue_wr_ptr)},
+        {"DEV_COMPLETION_Q_RD_PTR", std::to_string(dev_completion_queue_rd_ptr)},
+        {"FIRST_STREAM_USED",
+         std::to_string(MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).get_dispatch_stream_index(0))},
+        {"VIRTUALIZE_UNICAST_CORES", "0"},    // unused for single device
+        {"NUM_VIRTUAL_UNICAST_CORES", "0"},   // unused for single device
+        {"NUM_PHYSICAL_UNICAST_CORES", "0"},  // unused for single device
+        {"FABRIC_HEADER_RB_BASE", "0"},
+        {"FABRIC_HEADER_RB_ENTRIES", "0"},
+        {"MY_FABRIC_SYNC_STATUS_ADDR", "0"},
+        {"FABRIC_MUX_X", "0"},
+        {"FABRIC_MUX_Y", "0"},
+        {"FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL", "0"},
+        {"FABRIC_MUX_CHANNEL_BUFFER_SIZE_BYTES", "0"},
+        {"FABRIC_MUX_CHANNEL_BASE_ADDRESS", "0"},
+        {"FABRIC_MUX_CONNECTION_INFO_ADDRESS", "0"},
+        {"FABRIC_MUX_CONNECTION_HANDSHAKE_ADDRESS", "0"},
+        {"FABRIC_MUX_FLOW_CONTROL_ADDRESS", "0"},
+        {"FABRIC_MUX_BUFFER_INDEX_ADDRESS", "0"},
+        {"FABRIC_MUX_STATUS_ADDRESS", "0"},
+        {"FABRIC_MUX_TERMINATION_SIGNAL_ADDRESS", "0"},
+        {"WORKER_CREDITS_STREAM_ID", "0"},
+        {"FABRIC_WORKER_FLOW_CONTROL_SEM", "0"},
+        {"FABRIC_WORKER_TEARDOWN_SEM", "0"},
+        {"FABRIC_WORKER_BUFFER_INDEX_SEM", "0"},
+        {"NUM_HOPS", "0"},
+        {"MY_DEV_ID", "0"},
+        {"EW_DIM", "0"},
+        {"TO_MESH_ID", "0"},
+        {"TO_DEV_ID", "0"},
+        {"ROUTER_DIRECTION", "0"},
+        {"FABRIC_2D", "0"},
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
@@ -2417,18 +2426,24 @@ void configure_for_single_chip(
 
         // dispatch_hd and dispatch_d
         uint32_t dispatch_d_preamble_size = packetized_path_en_g ? sizeof(dispatch_packet_header_t) : 0;
-        dispatch_compile_args[12] = dispatch_downstream_cb_sem;
-        dispatch_compile_args[13] = dispatch_h_cb_sem;
-        dispatch_compile_args[14] = dispatch_d_preamble_size;
-        dispatch_compile_args[21] = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
-        dispatch_compile_args[22] = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         CoreCoord phys_dispatch_d_downstream_core =
             packetized_path_en_g ? phys_dispatch_relay_mux_core : phys_dispatch_h_core;
+
+        std::map<string, string> dispatch_d_defines = dispatch_defines;
+        dispatch_d_defines["MY_DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_downstream_cb_sem);
+        dispatch_d_defines["DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_h_cb_sem);
+        dispatch_d_defines["SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE"] = std::to_string(dispatch_d_preamble_size);
+        dispatch_d_defines["MAX_NUM_WORKER_SEMS"] = std::to_string(DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
+        dispatch_d_defines["MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES"] =
+            std::to_string(DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
+        dispatch_d_defines["IS_D_VARIANT"] = "1";
+        dispatch_d_defines["IS_H_VARIANT"] = "0";
+
         configure_kernel_variant<true, false>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            dispatch_d_defines,
             {},
-            dispatch_compile_args,
             dispatch_core,
             phys_dispatch_core,
             phys_upstream_from_dispatch_core,
@@ -2439,22 +2454,27 @@ void configure_for_single_chip(
             my_noc_index);
 
         // dispatch_h
-        dispatch_compile_args[3] = dispatch_h_cb_sem;
-        dispatch_compile_args[4] = dispatch_downstream_cb_sem;
-        dispatch_compile_args[12] = dispatch_h_cb_sem;
-        dispatch_compile_args[13] = dispatch_downstream_cb_sem;
-        dispatch_compile_args[14] = 0;  // preamble size
-        dispatch_compile_args[21] =
-            1;  // max_num_worker_sems is used for array sizing, set to 1 even if array isn't used
-        dispatch_compile_args[22] =
-            1;  // max_num_go_signal_noc_data_entries is used for array sizing, set to 1 even if array isn't used
         CoreCoord phys_dispatch_h_upstream_core =
             packetized_path_en_g ? phys_dispatch_relay_demux_core : phys_dispatch_core;
+
+        std::map<string, string> dispatch_h_defines = dispatch_defines;
+        dispatch_h_defines["MY_DISPATCH_CB_SEM_ID"] = std::to_string(dispatch_h_cb_sem);
+        dispatch_h_defines["UPSTREAM_DISPATCH_CB_SEM_ID"] = std::to_string(dispatch_downstream_cb_sem);
+        dispatch_h_defines["MY_DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_h_cb_sem);
+        dispatch_h_defines["DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_downstream_cb_sem);
+        dispatch_h_defines["SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE"] = "0";  // preamble size
+        dispatch_h_defines["MAX_NUM_WORKER_SEMS"] =
+            "1";  // max_num_worker_sems is used for array sizing, set to 1 even if array isn't used
+        dispatch_h_defines["MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES"] =
+            "1";  // max_num_go_signal_noc_data_entries is used for array sizing, set to 1 even if array isn't used
+        dispatch_h_defines["IS_D_VARIANT"] = "0";
+        dispatch_h_defines["IS_H_VARIANT"] = "1";
+
         configure_kernel_variant<false, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            dispatch_h_defines,
             {},
-            dispatch_compile_args,
             dispatch_h_core,
             phys_dispatch_h_core,
             phys_dispatch_h_upstream_core,
@@ -2631,8 +2651,8 @@ void configure_for_single_chip(
         configure_kernel_variant<true, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            dispatch_defines,
             {},
-            dispatch_compile_args,
             dispatch_core,
             phys_dispatch_core,
             phys_upstream_from_dispatch_core,
@@ -3292,37 +3312,74 @@ void configure_for_multi_chip(
         MetalContext::instance()
             .dispatch_mem_map(DISPATCH_CORE_TYPE)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-    std::vector<uint32_t> dispatch_compile_args = {
-        dispatch_buffer_base,
-        DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE,
-        DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS *
-            MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).dispatch_buffer_block_size_pages(),
-        dispatch_cb_sem,  // overridden below for h
-        split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
-        DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS,
-        prefetch_sync_sem,
-        0,  // true base of hugepage
-        dev_hugepage_completion_buffer_base,
-        DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
-        dispatch_buffer_base,
-        (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages,
-        0,  // unused on hd, filled in below for h and d
-        0,  // unused on hd, filled in below for h and d
-        0,  // unused unless tunneler is between h and d
-        split_prefetcher_g,
-        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
-        prefetch_downstream_cb_sem,
-        prefetch_downstream_buffer_pages,
-        num_compute_cores,
-        0,
-        DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
-        DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
-        0,
-        0,
-        0,
-        host_completion_queue_wr_ptr,
-        dev_completion_queue_wr_ptr,
-        dev_completion_queue_rd_ptr};
+
+    std::map<string, string> dispatch_defines = {
+        {"DISPATCH_CB_BASE", std::to_string(dispatch_buffer_base)},
+        {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
+        {"DISPATCH_CB_PAGES",
+         std::to_string(
+             DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS *
+             MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).dispatch_buffer_block_size_pages())},
+        {"MY_DISPATCH_CB_SEM_ID", std::to_string(dispatch_cb_sem)},
+        {"UPSTREAM_DISPATCH_CB_SEM_ID",
+         std::to_string(split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem)},
+        {"DISPATCH_CB_BLOCKS", std::to_string(DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS)},
+        {"UPSTREAM_SYNC_SEM", std::to_string(prefetch_sync_sem)},
+        {"COMMAND_QUEUE_BASE_ADDR", std::to_string(0)},
+        {"COMPLETION_QUEUE_BASE_ADDR", std::to_string(dev_hugepage_completion_buffer_base)},
+        {"COMPLETION_QUEUE_SIZE", std::to_string(DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE)},
+        {"DOWNSTREAM_CB_BASE", std::to_string(dispatch_buffer_base)},
+        {"DOWNSTREAM_CB_SIZE",
+         std::to_string((1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages)},
+        {"MY_DOWNSTREAM_CB_SEM_ID", std::to_string(0)},            // will be overridden for specific variants
+        {"DOWNSTREAM_CB_SEM_ID", std::to_string(0)},               // will be overridden for specific variants
+        {"SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE", std::to_string(0)},  // will be overridden for specific variants
+        {"SPLIT_PREFETCH", std::to_string(split_prefetcher_g)},
+        {"PREFETCH_H_NOC_XY",
+         std::to_string(tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(
+             phys_prefetch_core_g.x, phys_prefetch_core_g.y))},
+        {"PREFETCH_H_LOCAL_DOWNSTREAM_SEM_ADDR", std::to_string(prefetch_downstream_cb_sem)},
+        {"PREFETCH_H_MAX_CREDITS", std::to_string(prefetch_downstream_buffer_pages)},
+        {"PACKED_WRITE_MAX_UNICAST_SUB_CMDS", std::to_string(num_compute_cores)},
+        {"DISPATCH_S_SYNC_SEM_BASE_ADDR", std::to_string(0)},
+        {"MAX_NUM_WORKER_SEMS", std::to_string(DispatchSettings::DISPATCH_MESSAGE_ENTRIES)},
+        {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES", std::to_string(DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES)},
+        {"MCAST_GO_SIGNAL_ADDR", std::to_string(0)},
+        {"UNICAST_GO_SIGNAL_ADDR", std::to_string(0)},
+        {"DISTRIBUTED_DISPATCHER", std::to_string(0)},
+        {"HOST_COMPLETION_Q_WR_PTR", std::to_string(host_completion_queue_wr_ptr)},
+        {"DEV_COMPLETION_Q_WR_PTR", std::to_string(dev_completion_queue_wr_ptr)},
+        {"DEV_COMPLETION_Q_RD_PTR", std::to_string(dev_completion_queue_rd_ptr)},
+        {"FIRST_STREAM_USED", std::to_string(0)},
+        {"VIRTUALIZE_UNICAST_CORES", std::to_string(0)},
+        {"NUM_VIRTUAL_UNICAST_CORES", std::to_string(0)},
+        {"NUM_PHYSICAL_UNICAST_CORES", std::to_string(0)},
+        {"FABRIC_HEADER_RB_BASE", std::to_string(0)},
+        {"FABRIC_HEADER_RB_ENTRIES", std::to_string(0)},
+        {"MY_FABRIC_SYNC_STATUS_ADDR", std::to_string(0)},
+        {"FABRIC_MUX_X", std::to_string(0)},
+        {"FABRIC_MUX_Y", std::to_string(0)},
+        {"FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL", std::to_string(0)},
+        {"FABRIC_MUX_CHANNEL_BUFFER_SIZE_BYTES", std::to_string(0)},
+        {"FABRIC_MUX_CHANNEL_BASE_ADDRESS", std::to_string(0)},
+        {"FABRIC_MUX_CONNECTION_INFO_ADDRESS", std::to_string(0)},
+        {"FABRIC_MUX_CONNECTION_HANDSHAKE_ADDRESS", std::to_string(0)},
+        {"FABRIC_MUX_FLOW_CONTROL_ADDRESS", std::to_string(0)},
+        {"FABRIC_MUX_BUFFER_INDEX_ADDRESS", std::to_string(0)},
+        {"FABRIC_MUX_STATUS_ADDRESS", std::to_string(0)},
+        {"FABRIC_MUX_TERMINATION_SIGNAL_ADDRESS", std::to_string(0)},
+        {"WORKER_CREDITS_STREAM_ID", std::to_string(0)},
+        {"FABRIC_WORKER_FLOW_CONTROL_SEM", std::to_string(0)},
+        {"FABRIC_WORKER_TEARDOWN_SEM", std::to_string(0)},
+        {"FABRIC_WORKER_BUFFER_INDEX_SEM", std::to_string(0)},
+        {"NUM_HOPS", std::to_string(0)},
+        {"MY_DEV_ID", std::to_string(0)},
+        {"EW_DIM", std::to_string(0)},
+        {"TO_MESH_ID", std::to_string(0)},
+        {"TO_DEV_ID", std::to_string(0)},
+        {"ROUTER_DIRECTION", std::to_string(0)},
+        {"FABRIC_2D", std::to_string(0)},
+    };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
     if (split_dispatcher_g) {
@@ -3330,18 +3387,22 @@ void configure_for_multi_chip(
 
         // dispatch_hd and dispatch_d
         uint32_t dispatch_d_preamble_size = packetized_path_en_g ? sizeof(dispatch_packet_header_t) : 0;
-        dispatch_compile_args[12] = dispatch_downstream_cb_sem;
-        dispatch_compile_args[13] = dispatch_h_cb_sem;
-        dispatch_compile_args[14] = dispatch_d_preamble_size;
-        dispatch_compile_args[21] = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
-        dispatch_compile_args[22] = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         CoreCoord phys_dispatch_d_downstream_core =
             packetized_path_en_g ? phys_dispatch_relay_mux_core : phys_dispatch_h_core;
+        std::map<string, string> dispatch_d_defines_multi = dispatch_defines;
+        dispatch_d_defines_multi["MY_DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_downstream_cb_sem);
+        dispatch_d_defines_multi["DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_h_cb_sem);
+        dispatch_d_defines_multi["SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE"] = std::to_string(dispatch_d_preamble_size);
+        dispatch_d_defines_multi["MAX_NUM_WORKER_SEMS"] = std::to_string(DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
+        dispatch_d_defines_multi["MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES"] =
+            std::to_string(DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
+        dispatch_d_defines_multi["IS_D_VARIANT"] = "1";
+        dispatch_d_defines_multi["IS_H_VARIANT"] = "0";
         configure_kernel_variant<true, false>(
             program_r,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            dispatch_d_defines_multi,
             {},
-            dispatch_compile_args,
             dispatch_core,
             phys_dispatch_core,
             phys_upstream_from_dispatch_core,
@@ -3352,21 +3413,24 @@ void configure_for_multi_chip(
             my_noc_index);
 
         // dispatch_h
-        dispatch_compile_args[3] = dispatch_h_cb_sem;
-        dispatch_compile_args[12] = dispatch_h_cb_sem;
-        dispatch_compile_args[13] = dispatch_downstream_cb_sem;
-        dispatch_compile_args[14] = 0;  // preamble size
-        dispatch_compile_args[21] =
-            1;  // max_num_worker_sems is used for array sizing, set to 1 even if array isn't used
-        dispatch_compile_args[22] =
-            1;  // max_num_go_signal_noc_data_entries is used for array sizing, set to 1 even if array isn't used
         CoreCoord phys_dispatch_h_upstream_core =
             packetized_path_en_g ? phys_dispatch_relay_demux_core : phys_dispatch_core;
+        std::map<string, string> dispatch_h_defines_multi = dispatch_defines;
+        dispatch_h_defines_multi["MY_DISPATCH_CB_SEM_ID"] = std::to_string(dispatch_h_cb_sem);
+        dispatch_h_defines_multi["MY_DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_h_cb_sem);
+        dispatch_h_defines_multi["DOWNSTREAM_CB_SEM_ID"] = std::to_string(dispatch_downstream_cb_sem);
+        dispatch_h_defines_multi["SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE"] = std::to_string(0);  // preamble size
+        dispatch_h_defines_multi["MAX_NUM_WORKER_SEMS"] =
+            std::to_string(1);  // max_num_worker_sems is used for array sizing, set to 1 even if array isn't used
+        dispatch_h_defines_multi["MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES"] = std::to_string(
+            1);  // max_num_go_signal_noc_data_entries is used for array sizing, set to 1 even if array isn't used
+        dispatch_h_defines_multi["IS_D_VARIANT"] = "0";
+        dispatch_h_defines_multi["IS_H_VARIANT"] = "1";
         configure_kernel_variant<false, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            dispatch_h_defines_multi,
             {},
-            dispatch_compile_args,
             dispatch_h_core,
             phys_dispatch_h_core,
             phys_dispatch_h_upstream_core,
@@ -3548,11 +3612,15 @@ void configure_for_multi_chip(
         }
 
     } else {
+        std::map<string, string> dispatch_hd_defines = dispatch_defines;
+        dispatch_hd_defines["IS_D_VARIANT"] = "1";
+        dispatch_hd_defines["IS_H_VARIANT"] = "1";
+
         configure_kernel_variant<true, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            dispatch_hd_defines,
             {},
-            dispatch_compile_args,
             dispatch_core,
             phys_dispatch_core,
             phys_upstream_from_dispatch_core,
