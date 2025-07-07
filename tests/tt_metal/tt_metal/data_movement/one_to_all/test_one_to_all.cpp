@@ -10,6 +10,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include "test_one_to_all.hpp"
 
 namespace tt::tt_metal {
 
@@ -40,23 +41,23 @@ struct OneToAllConfig {
     bool is_multicast = false;
     bool is_linked = false;
 
+    uint32_t multicast_scheme_type = 0;
+
     // TODO: Add the following parameters
     //  1. Virtual Channel (only useful for unicast)
     //  2. Posted flag (posted multicast has much better performance at larger grid sizes, than non-posted due to
     //  response packets) (60, 45, 23, vs 60, 60, 60 at posted)
 };
 
-/// @brief Does L1 Sender Core --> L1 Receiver Cores
-/// @param device
-/// @param test_config - Configuration of the test -- see struct
-/// @return
 bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     /* ================ SETUP ================ */
 
     // Program
     Program program = CreateProgram();
 
-    assert(test_config.is_multicast || (!test_config.is_multicast && !test_config.is_linked));
+    // assert(
+    //    (test_config.is_multicast && test_config.loopback) ||
+    //    (!test_config.is_multicast && !test_config.is_linked));
 
     // Parameters
     const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
@@ -84,7 +85,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     uint32_t num_subordinates = sub_logical_core_set.num_cores();
     auto sub_core_list = corerange_to_cores(sub_logical_core_set);
 
-    // Subordinate Physical
+    // Subordinate Physical (only needed for unicast)
     CoreCoord sub_worker_start_coord = device->worker_core_from_logical_core(sub_logical_start_coord);
     CoreCoord sub_worker_end_coord = device->worker_core_from_logical_core(sub_logical_end_coord);
     vector<uint32_t> sub_worker_coordinates = {};
@@ -143,24 +144,32 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
              (uint32_t)sub_worker_start_coord.x,
              (uint32_t)sub_worker_start_coord.y,
              (uint32_t)sub_worker_end_coord.x,
-             (uint32_t)sub_worker_end_coord.y});
+             (uint32_t)sub_worker_end_coord.y,
+             (uint32_t)test_config.multicast_scheme_type,
+             (uint32_t)test_config.sub_grid_size.x,
+             (uint32_t)test_config.sub_grid_size.y});
+
         sender_kernel_path += "sender_multicast.cpp";
+
     } else {  // Unicast Sender Kernel
-        sender_kernel_path += "sender.cpp";
+        sender_kernel_path += "sender_unicast.cpp";
     }
 
+    DataMovementProcessor data_movement_processor = DataMovementProcessor::RISCV_0;
     auto sender_kernel = CreateKernel(
         program,
         sender_kernel_path,
         mst_logical_core_set,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = test_config.noc_id,
-            .compile_args = sender_compile_args});
+            .processor = data_movement_processor, .noc = test_config.noc_id, .compile_args = sender_compile_args});
 
     // Runtime Arguments
-    vector<uint32_t> sender_runtime_args = {};
-    sender_runtime_args.insert(sender_runtime_args.end(), sub_worker_coordinates.begin(), sub_worker_coordinates.end());
+    std::vector<uint32_t> sender_runtime_args = {};
+
+    if (!test_config.is_multicast) {  // Unicast Sender Runtime Arguments
+        sender_runtime_args.insert(
+            sender_runtime_args.end(), sub_worker_coordinates.begin(), sub_worker_coordinates.end());
+    }
 
     SetRuntimeArgs(program, sender_kernel, mst_logical_core_set, sender_runtime_args);
 
@@ -218,11 +227,10 @@ void directed_ideal_test(
     bool is_linked,
     CoreCoord mst_core_coord,
     CoreCoord sub_start_core_coord,
-    CoreCoord sub_grid_size) {
-    // Parameters
-    NOC noc_id = NOC::NOC_0;
-    bool loopback = true;
-
+    CoreCoord sub_grid_size,
+    bool loopback,
+    NOC noc_id,
+    uint32_t multicast_scheme_type) {
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
         unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
@@ -248,6 +256,7 @@ void directed_ideal_test(
         .loopback = loopback,
         .is_multicast = is_multicast,
         .is_linked = is_linked,
+        .multicast_scheme_type = multicast_scheme_type,
     };
 
     // Run
@@ -556,6 +565,9 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 52;  // Arbitrary test id
 
+    bool loopback = true;
+    NOC noc_id = NOC::NOC_1;
+
     bool is_multicast = false;
     bool is_linked = false;
 
@@ -573,13 +585,18 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
         is_linked,
         mst_core_coord,
         sub_start_core_coord,
-        sub_grid_size);
+        sub_grid_size,
+        loopback,
+        noc_id);
 }
 
 /* ========== MULTICAST ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 53;  // Arbitrary test id
+
+    bool loopback = true;
+    NOC noc_id = NOC::NOC_1;
 
     bool is_multicast = true;
     bool is_linked = false;
@@ -598,13 +615,18 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
         is_linked,
         mst_core_coord,
         sub_start_core_coord,
-        sub_grid_size);
+        sub_grid_size,
+        loopback,
+        noc_id);
 }
 
 /* ========== MULTICAST LINKED ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 54;  // Arbitrary test id
+
+    bool loopback = true;
+    NOC noc_id = NOC::NOC_1;
 
     bool is_multicast = true;
     bool is_linked = true;
@@ -623,7 +645,9 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
         is_linked,
         mst_core_coord,
         sub_start_core_coord,
-        sub_grid_size);
+        sub_grid_size,
+        loopback,
+        noc_id);
 }
 
 }  // namespace tt::tt_metal
