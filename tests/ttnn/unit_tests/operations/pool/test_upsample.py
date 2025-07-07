@@ -83,8 +83,8 @@ def test_upsample_single_core(device, input_shapes, mode, scale_h, scale_w):
     tt_input = input.permute(0, 2, 3, 1)
 
     scale_factor = (scale_h, scale_w)
-    m = nn.Upsample(scale_factor=scale_factor, mode=mode)
-    torch_result = m(input)
+    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode=mode)
+    torch_result = torch_upsample(input)
 
     scale_factor = (scale_h, scale_w)
     input_tensor = ttnn.from_torch(tt_input, device=device)
