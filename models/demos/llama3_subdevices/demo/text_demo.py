@@ -165,7 +165,7 @@ def create_tt_model(
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, pcc_check, num_layers",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, pcc_check, num_layers, run_on_6U",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
@@ -181,6 +181,7 @@ def create_tt_model(
             False,  # ci_only
             False,  # pcc_check
             80,  # num layers
+            True,  # run on 6U
         ),
         (  # Batch-1 run (Throughput) - 1 user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -196,6 +197,7 @@ def create_tt_model(
             False,  # ci_only
             False,  # pcc_check
             80,  # num layers
+            True,  # run on 6U
         ),
         (  # Repeat-5 Batch-1 run (Throughput) - 1 user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -211,6 +213,7 @@ def create_tt_model(
             False,  # ci_only,
             False,  # pcc_check
             80,  # num layers
+            True,  # run on 6U
         ),
         (  # Long-context run - multiple users, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -226,6 +229,7 @@ def create_tt_model(
             False,  # ci_only,
             False,  # pcc_check
             80,  # num layers
+            True,  # run on 6U
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
@@ -241,6 +245,7 @@ def create_tt_model(
             False,  # ci_only,
             False,  # pcc_check
             80,  # num layers
+            False,  # run on 6U
         ),
         (  # CI Run for PCC check for 1 Layer: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
@@ -256,6 +261,7 @@ def create_tt_model(
             False,  # ci_only
             True,  # pcc_check
             1,  # num layers
+            True,  # run on 6U
         ),
         (  # CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
@@ -271,6 +277,7 @@ def create_tt_model(
             False,  # ci_only
             True,  # pcc_check
             80,  # num layers
+            True,  # run on 6U
         ),
     ],
     ids=[
@@ -333,6 +340,8 @@ def test_demo_text(
     pcc_decode_len,
     reset_seeds,
     request,
+    galaxy_type,
+    run_on_6U,
 ):
     """
     Simple demo with limited dependence on reference code.
@@ -345,6 +354,19 @@ def test_demo_text(
     prefill_enable_trace = True  # repeat_batches > 1
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 80 and instruct  # if using instruct weights it must be full model
+    input_lenghts = (
+        [
+            534,
+            1008,
+            1111 * 4,
+            3333 * 4,
+        ]
+        * 8
+        if batch_size == 32
+        else [15384 * 8]
+    )
+    if galaxy_type == "6U" and not run_on_6U:
+        pytest.skip("Skipping test as persistent buffers for ring ccl ops are stored only for seqlens up to 8k")
 
     # Creat batch output file
     benchmark_data = BenchmarkData()
@@ -395,15 +417,7 @@ def test_demo_text(
     profiler.start("loading_inputs")
     input_prompts = load_inputs(
         input_prompts,
-        [
-            534,
-            1008,
-            1111 * 4,
-            3333 * 4,
-        ]
-        * 8
-        if batch_size == 32
-        else [15384 * 8],
+        input_lenghts,
         input_prompts,
     )
     profiler.end("loading_inputs")
@@ -424,7 +438,7 @@ def test_demo_text(
                     )
                 else:
                     f.seek(0)
-                    loaded_json = json.load(f)
+                    loaded_json = json.load(f)[galaxy_type]
                     if isinstance(loaded_json, list) and all(isinstance(item, str) for item in loaded_json):
                         expected_outputs_data = loaded_json
                         logger.info(
