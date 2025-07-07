@@ -190,7 +190,7 @@ def main(ctx: click.Context, rank_binding: Path, dry_run: bool, verbose: bool, m
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
     tt-run is a lightweight wrapper around `mpirun` that simplifies launching
-    TT-Metal and TTNN distributed applications by automatically mapping
+    TT-Metal and TT-NN distributed applications by automatically mapping
     MPI ranks to target MeshId and HostRankId as defined in the mesh graph descriptor.
 
     \b
