@@ -369,53 +369,7 @@ jobs:
             CCACHE_TEMPDIR=/tmp/ccache
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
-          CIBW_BEFORE_BUILD: |
-            echo "=== Checking Clang version ==="
-            clang --version || echo "clang not found"
-            clang++ --version || echo "clang++ not found"
-            which clang || echo "clang not in PATH"
-            which clang++ || echo "clang++ not in PATH"
-            echo "=== Checking available compilers ==="
-            ls -la /usr/bin/clang* || echo "No clang binaries found in /usr/bin"
-            ls -la /usr/bin/gcc* || echo "No gcc binaries found in /usr/bin"
-            echo "=== Environment variables ==="
-            echo "CC=${CC:-not set}"
-            echo "CXX=${CXX:-not set}"
-            echo "=== Installing pybind11 ==="
-            python -m pip install pybind11
-            echo "=== Verify pybind11 installation ==="
-            python -c "import pybind11; print('pybind11 version:', pybind11.__version__)"
-            python -c "import pybind11; print('pybind11 location:', pybind11.__file__)"
-            echo "=== Python Library Search ==="
-            echo "Looking for Python library files..."
-            find /opt/python/cp312-cp312/lib -name "libpython*" 2>/dev/null || echo "No libpython found in cp312 lib"
-            find /opt/_internal -name "libpython*" 2>/dev/null || echo "No libpython found in _internal"
-            find /usr/lib -name "libpython*" 2>/dev/null | head -5 || echo "No libpython found in /usr/lib"
-            echo "=== CMake Python Test ==="
-            cmake --find-package -DNAME=Python -DCOMPILER_ID=GNU -DLANGUAGE=C -DMODE=EXIST
-            echo "=== CMake Version Check ==="
-            cmake --version
-            echo "=== Detailed Python Environment Debug ==="
-            python -c "
-            import sys, sysconfig
-            print('Python executable:', sys.executable)
-            print('Python version:', sys.version)
-            print('Include dir:', sysconfig.get_path('include'))
-            print('Stdlib dir:', sysconfig.get_path('stdlib'))
-            print('Platlib dir:', sysconfig.get_path('platlib'))
-            print('Python library dir:', sysconfig.get_config_var('LIBDIR'))
-            print('Python library file:', sysconfig.get_config_var('LIBRARY'))
-            print('Python config dir:', sysconfig.get_config_var('LIBPC'))
-            "
-            echo "=== File System Check ==="
-            ls -la $(python -c "import sysconfig; print(sysconfig.get_path('include'))")
-            find $(python -c "import sysconfig; print(sysconfig.get_path('include'))") -name "*.h" | head -5
-            export PYTHON_EXECUTABLE=$(which python)
-            export Python_EXECUTABLE=$PYTHON_EXECUTABLE
-            export Python3_EXECUTABLE=$PYTHON_EXECUTABLE
-            echo "Building with Python: $PYTHON_EXECUTABLE"
-            python --version
-            mkdir -p /tmp/ccache && ccache -z && ccache -p
+          CIBW_BEFORE_BUILD: mkdir -p /tmp/ccache && ccache -z && ccache -p
           CIBW_BEFORE_TEST: ccache -s
           CIBW_TEST_COMMAND: ${{ env.CIBW_TEST_CMD }}
           CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
