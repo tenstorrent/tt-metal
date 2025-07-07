@@ -13,6 +13,7 @@
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn {
 namespace operations::conv {
@@ -39,6 +40,7 @@ Result conv_transpose2d(
     std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
@@ -47,6 +49,7 @@ Result conv_transpose2d(
     bool return_output_dim,
     bool return_weights_and_bias) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    const DataType output_dtype = dtype.value_or(input_tensor.dtype());
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
     // Inverse of sliding_window.get_output_shape()
@@ -123,6 +126,7 @@ Result conv_transpose2d(
             compute_grid_size,
             input_tensor.layout(),
             input_tensor.dtype(),
+            output_dtype,
             tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                          : std::nullopt,
             kernel_size,
@@ -229,8 +233,8 @@ Result conv_transpose2d(
             transform_weights_for_conv_transpose2d(weight_tensor, mirror_kernel), bias_tensor, params, device);
     }
     if (mm_conv) {
-        input_tensor_post_tm = ttnn::to_layout(
-            input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config());
+        input_tensor_post_tm =
+            ttnn::to_layout(input_tensor_post_tm, Layout::TILE, output_dtype, input_tensor_post_tm.memory_config());
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
         std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
 
@@ -283,7 +287,7 @@ Result conv_transpose2d(
         opt_conv_op_parallel_config,
         opt_conv_op_block_config,
         conv_out_memory_config,
-        conv_config.dtype,
+        output_dtype,
         {batch_size, input_height, input_width, in_channels},
         compute_config,
         conv_config.enable_act_double_buffer,
@@ -321,6 +325,7 @@ Result ConvTranpose2dOperation::invoke(
     std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
@@ -343,6 +348,7 @@ Result ConvTranpose2dOperation::invoke(
         output_padding,
         dilation,
         groups,
+        std::move(dtype),
         std::move(bias_tensor),
         std::move(conv_config_),
         std::move(compute_config_),
@@ -368,6 +374,7 @@ Result ConvTranpose2dOperation::invoke(
     std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
@@ -390,6 +397,7 @@ Result ConvTranpose2dOperation::invoke(
         output_padding,
         dilation,
         groups,
+        std::move(dtype),
         std::move(bias_tensor),
         std::move(conv_config_),
         std::move(compute_config_),

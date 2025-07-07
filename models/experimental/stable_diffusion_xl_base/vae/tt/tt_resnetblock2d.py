@@ -85,6 +85,7 @@ class TtResnetBlock2D(nn.Module):
         )
         self.conv1_slice_config = get_DRAM_conv_config(module_path, 1)
         self.conv1_config = model_config.get_conv_config(conv_path=f"{module_path}.conv1")
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
 
         (
             self.compute2_config,
@@ -189,6 +190,7 @@ class TtResnetBlock2D(nn.Module):
             slice_config=self.conv1_slice_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv1_params["output_channels"]
 
@@ -262,6 +264,7 @@ class TtResnetBlock2D(nn.Module):
             slice_config=self.conv2_slice_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv2_params["output_channels"]
 
@@ -292,6 +295,7 @@ class TtResnetBlock2D(nn.Module):
                 memory_config=None,
                 return_output_dim=True,
                 return_weights_and_bias=True,
+                dtype=self.conv_output_dtype,
             )
             C = self.conv3_params["output_channels"]
 
