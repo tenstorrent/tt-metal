@@ -24,77 +24,78 @@
 
 CQWriteInterface cq_write_interface;
 
-constexpr uint32_t dispatch_cb_base = get_compile_time_arg_val(0);
-constexpr uint32_t dispatch_cb_log_page_size = get_compile_time_arg_val(1);
-constexpr uint32_t dispatch_cb_pages = get_compile_time_arg_val(2);
-constexpr uint32_t my_dispatch_cb_sem_id = get_compile_time_arg_val(3);
-constexpr uint32_t upstream_dispatch_cb_sem_id = get_compile_time_arg_val(4);
-constexpr uint32_t dispatch_cb_blocks = get_compile_time_arg_val(5);
-constexpr uint32_t upstream_sync_sem = get_compile_time_arg_val(6);
-constexpr uint32_t command_queue_base_addr = get_compile_time_arg_val(7);
-constexpr uint32_t completion_queue_base_addr = get_compile_time_arg_val(8);
-constexpr uint32_t completion_queue_size = get_compile_time_arg_val(9);
-constexpr uint32_t downstream_cb_base = get_compile_time_arg_val(10);
-constexpr uint32_t downstream_cb_size = get_compile_time_arg_val(11);
-constexpr uint32_t my_downstream_cb_sem_id = get_compile_time_arg_val(12);
-constexpr uint32_t downstream_cb_sem_id = get_compile_time_arg_val(13);
-constexpr uint32_t split_dispatch_page_preamble_size = get_compile_time_arg_val(14);
-constexpr uint32_t split_prefetch = get_compile_time_arg_val(15);
-constexpr uint32_t prefetch_h_noc_xy = get_compile_time_arg_val(16);
-constexpr uint32_t prefetch_h_local_downstream_sem_addr = get_compile_time_arg_val(17);
-constexpr uint32_t prefetch_h_max_credits = get_compile_time_arg_val(18);
-constexpr uint32_t packed_write_max_unicast_sub_cmds = get_compile_time_arg_val(19);  // Number of cores in compute grid
-constexpr uint32_t dispatch_s_sync_sem_base_addr = get_compile_time_arg_val(20);
-constexpr uint32_t max_num_worker_sems = get_compile_time_arg_val(21);  // maximum number of worker semaphores
+constexpr uint32_t dispatch_cb_base = DISPATCH_CB_BASE;
+constexpr uint32_t dispatch_cb_log_page_size = DISPATCH_CB_LOG_PAGE_SIZE;
+constexpr uint32_t dispatch_cb_pages = DISPATCH_CB_PAGES;
+constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
+constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
+constexpr uint32_t dispatch_cb_blocks = DISPATCH_CB_BLOCKS;
+constexpr uint32_t upstream_sync_sem = UPSTREAM_SYNC_SEM;
+constexpr uint32_t command_queue_base_addr = COMMAND_QUEUE_BASE_ADDR;
+constexpr uint32_t completion_queue_base_addr = COMPLETION_QUEUE_BASE_ADDR;
+constexpr uint32_t completion_queue_size = COMPLETION_QUEUE_SIZE;
+constexpr uint32_t downstream_cb_base = DOWNSTREAM_CB_BASE;
+constexpr uint32_t downstream_cb_size = DOWNSTREAM_CB_SIZE;
+constexpr uint32_t my_downstream_cb_sem_id = MY_DOWNSTREAM_CB_SEM_ID;
+constexpr uint32_t downstream_cb_sem_id = DOWNSTREAM_CB_SEM_ID;
+constexpr uint32_t split_dispatch_page_preamble_size = SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE;
+constexpr uint32_t split_prefetch = SPLIT_PREFETCH;
+constexpr uint32_t prefetch_h_noc_xy = PREFETCH_H_NOC_XY;
+constexpr uint32_t prefetch_h_local_downstream_sem_addr = PREFETCH_H_LOCAL_DOWNSTREAM_SEM_ADDR;
+constexpr uint32_t prefetch_h_max_credits = PREFETCH_H_MAX_CREDITS;
+constexpr uint32_t packed_write_max_unicast_sub_cmds =
+    PACKED_WRITE_MAX_UNICAST_SUB_CMDS;  // Number of cores in compute grid
+constexpr uint32_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
+constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;  // maximum number of worker semaphores
 constexpr uint32_t max_num_go_signal_noc_data_entries =
-    get_compile_time_arg_val(22);  // maximum number of go signal data words
-constexpr uint32_t mcast_go_signal_addr = get_compile_time_arg_val(23);
-constexpr uint32_t unicast_go_signal_addr = get_compile_time_arg_val(24);
-constexpr uint32_t distributed_dispatcher = get_compile_time_arg_val(25);
-constexpr uint32_t host_completion_q_wr_ptr = get_compile_time_arg_val(26);
-constexpr uint32_t dev_completion_q_wr_ptr = get_compile_time_arg_val(27);
-constexpr uint32_t dev_completion_q_rd_ptr = get_compile_time_arg_val(28);
+    MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES;  // maximum number of go signal data words
+constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
+constexpr uint32_t unicast_go_signal_addr = UNICAST_GO_SIGNAL_ADDR;
+constexpr uint32_t distributed_dispatcher = DISTRIBUTED_DISPATCHER;
+constexpr uint32_t host_completion_q_wr_ptr = HOST_COMPLETION_Q_WR_PTR;
+constexpr uint32_t dev_completion_q_wr_ptr = DEV_COMPLETION_Q_WR_PTR;
+constexpr uint32_t dev_completion_q_rd_ptr = DEV_COMPLETION_Q_RD_PTR;
 
-constexpr uint32_t first_stream_used = get_compile_time_arg_val(29);
+constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
 
-constexpr uint32_t virtualize_unicast_cores = get_compile_time_arg_val(30);
-constexpr uint32_t num_virtual_unicast_cores = get_compile_time_arg_val(31);
-constexpr uint32_t num_physical_unicast_cores = get_compile_time_arg_val(32);
+constexpr uint32_t virtualize_unicast_cores = VIRTUALIZE_UNICAST_CORES;
+constexpr uint32_t num_virtual_unicast_cores = NUM_VIRTUAL_UNICAST_CORES;
+constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
 
 // fabric mux connection
-constexpr uint32_t fabric_header_rb_base = get_compile_time_arg_val(33);
-constexpr uint32_t fabric_header_rb_entries = get_compile_time_arg_val(34);
-constexpr uint32_t my_fabric_sync_status_addr = get_compile_time_arg_val(35);
+constexpr uint32_t fabric_header_rb_base = FABRIC_HEADER_RB_BASE;
+constexpr uint32_t fabric_header_rb_entries = FABRIC_HEADER_RB_ENTRIES;
+constexpr uint32_t my_fabric_sync_status_addr = MY_FABRIC_SYNC_STATUS_ADDR;
 
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(36);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(37);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(38);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(39);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(40);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(41);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(42);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(43);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(44);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(45);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(46);
-constexpr size_t worker_credits_stream_id = get_compile_time_arg_val(47);
+constexpr uint8_t fabric_mux_x = FABRIC_MUX_X;
+constexpr uint8_t fabric_mux_y = FABRIC_MUX_Y;
+constexpr uint8_t fabric_mux_num_buffers_per_channel = FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL;
+constexpr size_t fabric_mux_channel_buffer_size_bytes = FABRIC_MUX_CHANNEL_BUFFER_SIZE_BYTES;
+constexpr size_t fabric_mux_channel_base_address = FABRIC_MUX_CHANNEL_BASE_ADDRESS;
+constexpr size_t fabric_mux_connection_info_address = FABRIC_MUX_CONNECTION_INFO_ADDRESS;
+constexpr size_t fabric_mux_connection_handshake_address = FABRIC_MUX_CONNECTION_HANDSHAKE_ADDRESS;
+constexpr size_t fabric_mux_flow_control_address = FABRIC_MUX_FLOW_CONTROL_ADDRESS;
+constexpr size_t fabric_mux_buffer_index_address = FABRIC_MUX_BUFFER_INDEX_ADDRESS;
+constexpr size_t fabric_mux_status_address = FABRIC_MUX_STATUS_ADDRESS;
+constexpr size_t fabric_mux_termination_signal_address = FABRIC_MUX_TERMINATION_SIGNAL_ADDRESS;
+constexpr size_t worker_credits_stream_id = WORKER_CREDITS_STREAM_ID;
 
-constexpr size_t fabric_worker_flow_control_sem = get_compile_time_arg_val(48);
-constexpr size_t fabric_worker_teardown_sem = get_compile_time_arg_val(49);
-constexpr size_t fabric_worker_buffer_index_sem = get_compile_time_arg_val(50);
+constexpr size_t fabric_worker_flow_control_sem = FABRIC_WORKER_FLOW_CONTROL_SEM;
+constexpr size_t fabric_worker_teardown_sem = FABRIC_WORKER_TEARDOWN_SEM;
+constexpr size_t fabric_worker_buffer_index_sem = FABRIC_WORKER_BUFFER_INDEX_SEM;
 
-constexpr uint8_t num_hops = static_cast<uint8_t>(get_compile_time_arg_val(51));
+constexpr uint8_t num_hops = static_cast<uint8_t>(NUM_HOPS);
 
-constexpr uint32_t my_dev_id = get_compile_time_arg_val(52);
-constexpr uint32_t ew_dim = get_compile_time_arg_val(53);
-constexpr uint32_t to_mesh_id = get_compile_time_arg_val(54);
-constexpr uint32_t to_dev_id = get_compile_time_arg_val(55);
-constexpr uint32_t router_direction = get_compile_time_arg_val(56);
+constexpr uint32_t my_dev_id = MY_DEV_ID;
+constexpr uint32_t ew_dim = EW_DIM;
+constexpr uint32_t to_mesh_id = TO_MESH_ID;
+constexpr uint32_t to_dev_id = TO_DEV_ID;
+constexpr uint32_t router_direction = ROUTER_DIRECTION;
 
 constexpr bool is_2d_fabric = static_cast<bool>(FABRIC_2D);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(57);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(58);
+constexpr uint32_t is_d_variant = IS_D_VARIANT;
+constexpr uint32_t is_h_variant = IS_H_VARIANT;
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
