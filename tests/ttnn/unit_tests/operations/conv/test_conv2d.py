@@ -37,7 +37,7 @@ import torch
 )
 @pytest.mark.parametrize(
     "packer_l1_acc",
-    [True],
+    [True, False],
 )
 @pytest.mark.parametrize(
     "filter, padding",
