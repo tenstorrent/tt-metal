@@ -13,6 +13,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -36,8 +37,6 @@ namespace ttnn {
 using namespace ccl;
 
 struct llama_config {
-    CoreRange sem_drain_core_3 = CoreRange({1, 0}, {1, 0});
-    CoreRange sem_drain_core_4 = CoreRange({3, 0}, {3, 0});
     CoreRange nlp_only_core_range_1 = CoreRange({1, 1}, {3, 1});  // cores that are used for NLP op only
     CoreRange nlp_only_core_range_2 = CoreRange({1, 2}, {2, 2});
     uint32_t num_cores_input_tensor = 8;
@@ -136,14 +135,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
+    auto [sender_worker_core_range, sender_worker_cores] = llama_specific::get_custom_worker_core_placement(num_links);
 
-    CoreRangeSet sender_worker_core_range;
-    if (num_links == 4) {
-        sender_worker_core_range = CoreRangeSet(CoreRange({3, 0}, {3, num_links - 1}));
-    } else {
-        sender_worker_core_range = CoreRangeSet(CoreRange({1, 0}, {num_links, 0}));
-    }
-    auto sender_worker_cores = corerange_to_cores(sender_worker_core_range, num_links, true);
     // Tensor Info
     const uint32_t logical_dim_2 = std::min(input_tensor.logical_shape()[2], num_heads);
     const auto input_tensor_num_pages =
@@ -245,9 +238,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const auto& q_cores_updated = CoreRangeSet(q_cores_vector);
     std::vector<CoreRange> sem_cores_vector;
     if (num_links == 4) {
-        sem_cores_vector.push_back(llama_configuration.sem_drain_core_4);
+        sem_cores_vector.push_back(CoreRange(sender_worker_cores[0], sender_worker_cores[0]));
     } else {
-        sem_cores_vector.push_back(llama_configuration.sem_drain_core_3);
+        sem_cores_vector.push_back(CoreRange(sender_worker_cores[0], sender_worker_cores[0]));
     }
     range_count = 0;
     for (auto cr : ring_core_ranges) {

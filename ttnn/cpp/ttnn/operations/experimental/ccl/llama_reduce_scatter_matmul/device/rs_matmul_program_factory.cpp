@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
@@ -40,8 +41,9 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
     tt::tt_metal::Program program{};
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
     tt::tt_metal::SubDeviceId sub_device_id = operation_attributes.rs_op.subdevice_id.value();
-    CoreRangeSet rs_cores =
-        CoreRangeSet(std::set{::CoreRange{{1, 1}, {3, 2}}, ::CoreRange{{1, 3}, {2, 3}}, ::CoreRange{{1, 6}, {2, 7}}});
+    CoreRangeSet ccl_cores = llama_specific::get_custom_cores(operation_attributes.rs_op.num_links);
+    CoreRangeSet rs_cores = CoreRangeSet(std::set{::CoreRange{{1, 1}, {3, 2}}, ::CoreRange{{1, 3}, {2, 3}}});
+    rs_cores = rs_cores.merge(ccl_cores);
     std::optional<CoreRangeSet> optional_core_range = rs_cores;
     return {
         std::move(program),

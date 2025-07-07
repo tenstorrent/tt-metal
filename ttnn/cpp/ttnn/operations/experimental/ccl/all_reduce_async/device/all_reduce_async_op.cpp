@@ -153,7 +153,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
         this->topology,
         this->semaphore,
         this->sub_device_id,
-        this->use_noc1_only);
+        this->use_noc1_only,
+        this->use_optimal_ccl_for_llama);
 }
 
 tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -190,7 +191,8 @@ Tensor all_reduce_async_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool use_noc1_only) {
+    bool use_noc1_only,
+    bool use_optimal_ccl_for_llama) {
     const auto mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");
@@ -206,6 +208,7 @@ Tensor all_reduce_async_impl(
                    multi_device_global_semaphore,
                    subdevice_id,
                    use_noc1_only,
+                   use_optimal_ccl_for_llama,
                    cluster_axis,
                    &mesh_device},
                {input_tensor, buffer_tensor})
@@ -224,7 +227,8 @@ Tensor all_reduce_async(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool use_noc1_only) {
+    bool use_noc1_only,
+    bool use_optimal_ccl_for_llama) {
     return all_reduce_async_impl(
         input_tensor,
         buffer_tensor,
@@ -236,7 +240,8 @@ Tensor all_reduce_async(
         memory_config,
         num_preferred_links,
         subdevice_id,
-        use_noc1_only);
+        use_noc1_only,
+        use_optimal_ccl_for_llama);
 }
 
 std::vector<Tensor> all_reduce_async(
@@ -250,7 +255,8 @@ std::vector<Tensor> all_reduce_async(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool use_noc1_only) {
+    bool use_noc1_only,
+    bool use_optimal_ccl_for_llama) {
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (size_t i = 0; i < input_tensors.size(); ++i) {
@@ -265,7 +271,8 @@ std::vector<Tensor> all_reduce_async(
             memory_config,
             num_preferred_links,
             subdevice_id,
-            use_noc1_only));
+            use_noc1_only,
+            use_optimal_ccl_for_llama));
     }
     return output_tensors;
 }
