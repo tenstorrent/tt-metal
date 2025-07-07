@@ -14,6 +14,7 @@ class TtBepC3:
         parameters,
         model_params,
         n=6,
+        shard_layout=None,
         shard_layout_cv2=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         shard_layout_rep_block_first_two=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ):
@@ -23,9 +24,7 @@ class TtBepC3:
             device=device,
             conv=model_params.cv1.block.conv,
             conv_pth=parameters.cv1.block.conv,
-            shard_layout=shard_layout_cv2,
-            # shard_layout=None,
-            # auto_shard=True,
+            shard_layout=shard_layout_cv2 if shard_layout == None else shard_layout,
             activation="silu",
             reshape=True,
         )
@@ -33,9 +32,7 @@ class TtBepC3:
             device=device,
             conv=model_params.cv2.block.conv,
             conv_pth=parameters.cv2.block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
-            shard_layout=shard_layout_cv2,
+            shard_layout=shard_layout_cv2 if shard_layout == None else shard_layout,
             activation="silu",
             reshape=True,
         )
@@ -43,14 +40,17 @@ class TtBepC3:
             device=device,
             conv=model_params.cv3.block.conv,
             conv_pth=parameters.cv3.block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="silu",
-            shard_layout=shard_layout_cv2,
+            shard_layout=shard_layout_cv2 if shard_layout == None else shard_layout,
             reshape=True,
         )
         self.repblock = TtRepBlock(
-            device, parameters.m, model_params.m, n=n, shard_layout_rep_block_first_two=shard_layout_rep_block_first_two
+            device,
+            parameters.m,
+            model_params.m,
+            n=n,
+            shard_layout_rep_block_first_two=shard_layout_rep_block_first_two if shard_layout == None else shard_layout,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if shard_layout == None else shard_layout,
         )
 
     def __call__(self, x):

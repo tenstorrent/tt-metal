@@ -16,8 +16,6 @@ class TtCSPRepBiFPANNeck:
             device=device,
             conv=model_params.reduce_layer0.block.conv,
             conv_pth=parameters.reduce_layer0.block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="relu",
             reshape=True,
         )
@@ -28,8 +26,6 @@ class TtCSPRepBiFPANNeck:
             device=device,
             conv=model_params.reduce_layer1.block.conv,
             conv_pth=parameters.reduce_layer1.block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="relu",
             reshape=True,
         )
@@ -40,8 +36,6 @@ class TtCSPRepBiFPANNeck:
             device=device,
             conv=model_params.downsample2.block.conv,
             conv_pth=parameters.downsample2.block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="relu",
             reshape=True,
         )
@@ -51,12 +45,12 @@ class TtCSPRepBiFPANNeck:
             device=device,
             conv=model_params.downsample1.block.conv,
             conv_pth=parameters.downsample1.block.conv,
-            # shard_layout=None,
-            # auto_shard=True,
             activation="relu",
             reshape=True,
         )
-        self.Rep_n4 = TtBepC3(device, parameters.Rep_n4, model_params.Rep_n4, n=12)
+        self.Rep_n4 = TtBepC3(
+            device, parameters.Rep_n4, model_params.Rep_n4, n=12, shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        )
 
     def __call__(self, input_list):
         (input_tensor_3, input_tensor_2, input_tensor_1, input_tensor_0) = input_list
