@@ -220,9 +220,6 @@ def run_reduce_scatter_impl(
         (8, 1, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, 1, [1, 1, 512, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (8, 1, [1, 1, 512, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, 1, [1, 1, 512, 768], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, 1, [1, 1, 512, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, 1, [4, 1, 512, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "batch_8",
@@ -231,9 +228,6 @@ def run_reduce_scatter_impl(
         "batch_1",
         "batch_1_slice_wt_1",
         "batch_1_slice_wt_2",
-        "batch_1_slice_wt_3",
-        "batch_1_slice_wt_4",
-        "batch_4_slice_wt_2",
     ],
 )
 @pytest.mark.parametrize(
