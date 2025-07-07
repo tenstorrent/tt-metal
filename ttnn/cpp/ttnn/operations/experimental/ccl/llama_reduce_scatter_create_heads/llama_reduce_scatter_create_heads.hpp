@@ -28,7 +28,8 @@ struct ExecuteLlamaReduceScatterCreateHeads {
         uint32_t num_kv_heads,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& qkv_memory_config = std::nullopt,
-        bool use_noc1_only = false);
+        bool use_noc1_only = false,
+        bool use_optimal_ccl_for_llama = false);
 };
 
 }  // namespace operations::experimental::ccl
