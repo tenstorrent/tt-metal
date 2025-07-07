@@ -607,7 +607,6 @@ def aggregate_performance(dm_stats, method="median"):
 
 
 def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", arch="blackhole"):
-    
     # Set noc_width based on architecture
     noc_width = 32 if arch == "wormhole_b0" else 64
     multicast_schemes_test_ids = [100, 101]
@@ -811,7 +810,7 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
     nrows_per_figure = 1  # Number of rows of plots per figure
     ncols_per_figure = 2  # Number of columns of plots per figure
     comment_section_height_ratio = 0.2  # Height ratio for the comment section
-    
+
     agg_stats = aggregate_performance(dm_stats)
 
     # Extract data for plotting
@@ -827,9 +826,9 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
     test_ids = sorted(test_ids)  # Sort for consistent ordering
 
     # Extract test IDs
-    #test_ids = sorted(
+    # test_ids = sorted(
     #    {attributes["Test id"] for riscv in RISCV_LIST for attributes in dm_stats[riscv]["attributes"].values()}
-    #)
+    # )
 
     # Extract data for plotting
     series = {riscv: dm_stats[riscv]["analysis"]["series"] for riscv in RISCV_LIST}
