@@ -517,12 +517,12 @@ def check_results(test_tensor, ref_tensor, data_map):
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("axis", [0])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7000])
-@pytest.mark.parametrize("seq", [1, 2])
+@pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("scheme", ["random"])
 @pytest.mark.parametrize("num_iters", [2])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])

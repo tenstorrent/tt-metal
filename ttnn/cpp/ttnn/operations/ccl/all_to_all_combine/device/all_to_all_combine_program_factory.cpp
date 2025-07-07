@@ -2,15 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "all_to_all_combine_device_operation.hpp"
-#include "ttnn/operations/ccl/all_to_all_dispatch/device/all_to_all_dispatch_device_operation.hpp"
-
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
@@ -236,12 +234,12 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         dest_mesh_id.push_back(*fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)fabric_node_id.chip_id);
     }
-    const auto [neighbors, directions] = detail::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
+    const auto [neighbors, directions] = common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
 
     std::map<std::string, std::string> writer_defines = {
-        {"DEST_CHIP_ID", detail::stringify_vector(dest_chip_id)},
-        {"DEST_MESH_ID", detail::stringify_vector(dest_mesh_id)},
-        {"DIRECTIONS", detail::stringify_array(directions)}};
+        {"DEST_CHIP_ID", common::stringify(dest_chip_id)},
+        {"DEST_MESH_ID", common::stringify(dest_mesh_id)},
+        {"DIRECTIONS", common::stringify(directions)}};
 
     if (axis.has_value()) {
         writer_defines["REPLICATE_GROUP_AXIS"] = std::to_string(axis.value());
@@ -271,7 +269,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     };
     for (auto& neighbor : neighbors) {
         auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
-        uint32_t link_id = detail::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
+        uint32_t link_id = common::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
         const auto neighbor_fabric_id = get_fabric_node_id_from_physical_chip_id(neighbor->id());
         append_fabric_connection_rt_args(
             fabric_node_id, neighbor_fabric_id, link_id, program, sender_core, writer_runtime_args);
