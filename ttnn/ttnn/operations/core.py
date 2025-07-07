@@ -287,7 +287,7 @@ def from_torch(
     if memory_config is not None and device is None:
         raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
 
-    ttnn_dtype_to_torch_dtype = {
+    ttnn_fallback_type_mapping = {
         ttnn.uint8: torch.uint8,
         ttnn.uint16: torch.int16,
         ttnn.int32: torch.int32,
@@ -298,8 +298,28 @@ def from_torch(
         ttnn.bfloat16: torch.bfloat16,
     }
 
-    if not device and dtype in ttnn_dtype_to_torch_dtype:
-        tensor = tensor.to(ttnn_dtype_to_torch_dtype[dtype])
+    ttnn_unsupported_type_mapping = {
+        torch.int64: torch.int32,
+        torch.float16: torch.bfloat16,
+    }
+
+    host_type_conversion = False
+
+    if not device and dtype in ttnn_fallback_type_mapping:
+        tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
+        host_type_conversion = True
+
+    elif tensor.dtype in ttnn_unsupported_type_mapping:
+        # ttnn tensor cannot hold the original host data without losses --
+        # need to perform the conversion while on host.
+        if dtype in ttnn_fallback_type_mapping:
+            tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
+        else:
+            tensor = tensor.to(ttnn_unsupported_type_mapping[dtype])
+
+        host_type_conversion = True
+
+    print(f"from_torch::tensor:\n{tensor} {tensor.dtype} {tensor.shape}")
 
     result = ttnn.Tensor(
         tensor=tensor,
@@ -307,7 +327,7 @@ def from_torch(
         device=device,
         # If dtype is specified explicitly create the tensor in tile layout for the
         # typecast operation.
-        layout=ttnn.TILE_LAYOUT if dtype else layout,
+        layout=layout if host_type_conversion else ttnn.TILE_LAYOUT,
         mem_config=memory_config,
         tile=tile,
         cq_id=cq_id,
@@ -315,11 +335,17 @@ def from_torch(
         mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
     )
 
-    if dtype and device:
+    print(f"from_torch::result:\n{result} {result.dtype} {result.shape} {result.padded_shape}")
+
+    if not host_type_conversion:
         assert result.layout == ttnn.TILE_LAYOUT
+        assert ttnn.is_tensor_storage_on_device(result)
         result = ttnn.typecast(result, dtype=dtype)
-        if layout != ttnn.TILE_LAYOUT:
+        assert ttnn.is_tensor_storage_on_device(result)
+        print(f"from_torch::typecast:\n{result} {result.dtype} {result.shape} {result.padded_shape}")
+        if layout != result.layout:
             result = ttnn.to_layout(result, layout)
+            print(f"from_torch::to_layout:\n{result} {result.dtype} {result.shape} {result.padded_shape}")
 
     return result
 
@@ -381,11 +407,7 @@ def to_torch(
         torch.float32: ttnn.float32,
     }
 
-    # `torch.float64` has no ttnn mapping, so the `typecast` operation
-    # might not be applicable in 100% of cases -- if that happens, some
-    # data conversion still has to be performed on host.
     on_device_typecast = False
-
     if dtype in torch_dtype_to_ttnn_dtype and (ttnn.is_tensor_storage_on_device(tensor) or device):
         if not ttnn.is_tensor_storage_on_device(tensor) and device:
             tensor = ttnn.to_device(tensor, device=device)

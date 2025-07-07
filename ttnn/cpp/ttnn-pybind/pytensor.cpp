@@ -187,12 +187,48 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
             TT_THROW("Unsupported DataType: {}", std::string(py::repr(py_dtype)));
         }
 
-        return PreprocessedPyTensor{
+        PreprocessedPyTensor result{
             .data_type = data_type,
             .contiguous_py_tensor = contiguous_py_tensor,
             .num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("numel")()),
             .py_data_ptr = py::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")()),
         };
+
+        {
+            auto dtype = contiguous_py_tensor.attr("dtype");
+            auto data_ptr = reinterpret_cast<void*>(result.py_data_ptr);
+
+            py::list elements;
+
+            if (dtype.is(py::module_::import("torch").attr("float32"))) {
+                float* float_data = static_cast<float*>(data_ptr);
+                for (std::size_t i = 0; i < result.num_elements; ++i) {
+                    elements.append(float_data[i]);
+                }
+            } else if (dtype.is(py::module_::import("torch").attr("float16"))) {
+                py::object struct_module = py::module_::import("struct");
+                uint16_t* half_data = static_cast<uint16_t*>(data_ptr);
+                for (std::size_t i = 0; i < result.num_elements; ++i) {
+                    py::bytes packed = py::bytes(reinterpret_cast<const char*>(&half_data[i]), 2);
+                    py::object unpacked = struct_module.attr("unpack")("e", packed);
+                    elements.append(unpacked[py::int_(0)]);
+                }
+            } else if (dtype.is(py::module_::import("torch").attr("int32"))) {
+                int32_t* int_data = static_cast<int32_t*>(data_ptr);
+                for (std::size_t i = 0; i < result.num_elements; ++i) {
+                    elements.append(int_data[i]);
+                }
+            } else if (dtype.is(py::module_::import("torch").attr("int64"))) {
+                int64_t* long_data = static_cast<int64_t*>(data_ptr);
+                for (std::size_t i = 0; i < result.num_elements; ++i) {
+                    elements.append(long_data[i]);
+                }
+            }
+
+            py::print("Tensor data:", elements, "input dtype: ", dtype);
+        }
+
+        return result;
     } else if (py::object np = py::module_::import("numpy"); py::isinstance(py_tensor, np.attr("ndarray"))) {
         py::object contiguous_py_tensor = np.attr("ascontiguousarray")(py_tensor);
         DataType data_type = DataType::INVALID;

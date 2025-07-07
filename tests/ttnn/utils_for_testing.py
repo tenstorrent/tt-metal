@@ -41,10 +41,10 @@ tt_dtype_to_np_dtype = {
 def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorch_result):
     messages = []
     messages.append(message)
-    # messages.append("Expected")
-    # messages.append(str(expected_pytorch_result))
-    # messages.append("Actual")
-    # messages.append(str(actual_pytorch_result))
+    messages.append("Expected")
+    messages.append(f"{expected_pytorch_result}, {expected_pytorch_result.dtype}, {expected_pytorch_result.shape}")
+    messages.append("Actual")
+    messages.append(f"{actual_pytorch_result}, {actual_pytorch_result.dtype}, {actual_pytorch_result.shape}")
     messages = [str(m) for m in messages]
     return "\n".join(messages)
 
