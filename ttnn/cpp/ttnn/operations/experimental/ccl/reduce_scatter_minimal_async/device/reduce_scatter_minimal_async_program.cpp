@@ -817,12 +817,12 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 if (dir) {  // forward
                     const auto dst_node_id =
                         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
-                    mux_kernel_config.get_fabric_mux_run_time_args(
+                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                         src_node_id, dst_node_id, link, program, {mux_logical_core});
                 } else {
                     const auto dst_node_id =
                         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
-                    mux_kernel_config.get_fabric_mux_run_time_args(
+                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                         src_node_id, dst_node_id, link, program, {mux_logical_core});
                 }
                 tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
@@ -950,7 +950,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 append_fabric_mux_connection_ct_args(
                     false,  // is_2d_fabric
                     true,   // terminate_from_kernel
-                    worker,
+                    worker == 0,
                     mux_virtual_core,
                     num_buffers_full_size_channels,
                     buffer_size_bytes_full_size_channel,
