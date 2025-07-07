@@ -1,7 +1,11 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import torch.nn as nn
-from VADv2.reference.encoder import BEVFormerEncoder
-from VADv2.reference.decoder import DetectionTransformerDecoder, MapDetectionTransformerDecoder
+from models.experimental.vadv2.reference.encoder import BEVFormerEncoder
+from models.experimental.vadv2.reference.decoder import DetectionTransformerDecoder, MapDetectionTransformerDecoder
 import numpy as np
 
 
@@ -55,13 +59,11 @@ class VADPerceptionTransformer(nn.Module):
             operation_order=("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
         )
         if decoder is not None:
-            self.decoder = DetectionTransformerDecoder(num_layers=3, embed_dim=_dim_, num_heads=4)
+            self.decoder = DetectionTransformerDecoder(num_layers=3, embed_dim=_dim_, num_heads=8)
         else:
             self.decoder = None
         if map_decoder is not None:
-            self.map_decoder = MapDetectionTransformerDecoder(
-                num_layers=3, embed_dim=_dim_, num_heads=num_feature_levels
-            )
+            self.map_decoder = MapDetectionTransformerDecoder(num_layers=3, embed_dim=_dim_, num_heads=8)
         else:
             self.map_decoder = None
 
@@ -314,8 +316,8 @@ class VADPerceptionTransformer(nn.Module):
                 value=bev_embed,
                 query_pos=map_query_pos,
                 reference_points=map_reference_points,
-                reg_branches=map_reg_branches,
-                cls_branches=map_cls_branches,
+                reg_branches=reg_branches,
+                cls_branches=cls_branches,
                 spatial_shapes=torch.tensor([[bev_h, bev_w]], device=map_query.device),
                 level_start_index=torch.tensor([0], device=map_query.device),
                 **kwargs,
