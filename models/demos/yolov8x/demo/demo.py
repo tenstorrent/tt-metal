@@ -1,82 +1,227 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
-from datetime import datetime
 
-import cv2
+import fiftyone
 import pytest
 import torch
 from loguru import logger
 from ultralytics import YOLO
 
 import ttnn
-from models.demos.yolov8x.demo.demo_utils import LoadImages, load_coco_class_names, postprocess, preprocess
+from models.demos.yolov8x.demo.demo_utils import (
+    LoadImages,
+    get_mesh_mappers,
+    load_coco_class_names,
+    postprocess,
+    preprocess,
+    save_yolo_predictions_by_model,
+)
+from models.demos.yolov8x.reference import yolov8x
 from models.demos.yolov8x.runner.performant_runner import YOLOv8xPerformantRunner
 from models.utility_functions import disable_persistent_kernel_cache
 
 
-def save_yolo_predictions(result, save_dir, image_path, model_name):
-    model_dir = os.path.join(save_dir, model_name)
-    os.makedirs(model_dir, exist_ok=True)
+def init_model_and_runner(device, model_type, use_weights_from_ultralytics, batch_size_per_device):
+    disable_persistent_kernel_cache()
 
-    image = cv2.imread(image_path)
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    num_devices = device.get_num_devices()
+    batch_size = batch_size_per_device * num_devices
 
-    box_color = (0, 255, 0) if model_name == "torch_model" else (255, 0, 0)
-    label_color = (0, 255, 0) if model_name == "torch_model" else (255, 255, 0)
+    logger.info(f"Running with batch_size={batch_size} across {num_devices} devices")
 
-    for box, score, cls in zip(result["boxes"]["xyxy"], result["boxes"]["conf"], result["boxes"]["cls"]):
-        x1, y1, x2, y2 = map(int, box)
-        label = f"{result['names'][int(cls)]} {score.item():.2f}"
-        cv2.rectangle(image, (x1, y1), (x2, y2), box_color, 3)
-        cv2.putText(image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 2)
+    inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
 
-    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = os.path.join(model_dir, f"prediction_{timestamp}.jpg")
-    cv2.imwrite(output_path, image)
+    if use_weights_from_ultralytics:
+        torch_model = YOLO("yolov8x.pt").model
+        model = torch_model.eval()
+    else:
+        model = yolov8x.DetectionModel()
 
-    logger.info(f"Predictions saved to {output_path}")
+    performant_runner = None
+    if model_type == "tt_model":
+        performant_runner = YOLOv8xPerformantRunner(
+            device,
+            batch_size,
+            inputs_mesh_mapper=inputs_mesh_mapper,
+            weights_mesh_mapper=weights_mesh_mapper,
+            outputs_mesh_composer=outputs_mesh_composer,
+        )
+
+    return model, performant_runner, outputs_mesh_composer, batch_size
+
+
+def process_images(dataset, res, batch_size):
+    torch_images, orig_images, paths_images = [], [], []
+
+    for paths, im0s, _ in dataset:
+        assert len(im0s) == batch_size, f"Expected batch of size {batch_size}, but got {len(im0s)}"
+
+        paths_images.extend(paths)
+        orig_images.extend(im0s)
+
+        for idx, img in enumerate(im0s):
+            if img is None:
+                raise ValueError(f"Could not read image: {paths[idx]}")
+            tensor = preprocess([img], res=res)
+            torch_images.append(tensor)
+
+        if len(torch_images) >= batch_size:
+            break
+
+    torch_input_tensor = torch.cat(torch_images, dim=0)
+    return torch_input_tensor, orig_images, paths_images
+
+
+def run_inference_and_save(
+    model, runner, model_type, outputs_mesh_composer, im_tensor, orig_images, paths_images, save_dir, names
+):
+    if model_type == "torch_model":
+        preds = model(im_tensor)
+    else:
+        preds = runner.run(im_tensor)
+        preds = ttnn.to_torch(preds, dtype=torch.float32, mesh_composer=outputs_mesh_composer)
+
+    results = postprocess(preds, im_tensor, orig_images, paths_images, names)
+
+    for result, image_path in zip(results, paths_images):
+        save_yolo_predictions_by_model(result, save_dir, image_path, model_type)
+
+
+def run_yolov8x_demo(device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device):
+    model, runner, mesh_composer, batch_size = init_model_and_runner(
+        device, model_type, use_weights_from_ultralytics, batch_size_per_device
+    )
+
+    dataset = LoadImages(path=os.path.abspath(input_loc), batch=batch_size)
+    im_tensor, orig_images, paths_images = process_images(dataset, res, batch_size)
+    names = load_coco_class_names()
+    save_dir = "models/demos/yolov8x/demo/runs"
+
+    run_inference_and_save(
+        model, runner, model_type, mesh_composer, im_tensor, orig_images, paths_images, save_dir, names
+    )
+
+    if runner:
+        runner.release()
+    logger.info("Inference done")
+
+
+def run_yolov8x_demo_dataset(device, model_type, use_weights_from_ultralytics, res, batch_size_per_device):
+    model, runner, mesh_composer, batch_size = init_model_and_runner(
+        device, model_type, use_weights_from_ultralytics, batch_size_per_device
+    )
+
+    dataset = fiftyone.zoo.load_zoo_dataset("coco-2017", split="validation", max_samples=batch_size)
+    filepaths = [sample["filepath"] for sample in dataset]
+    image_loader = LoadImages(filepaths, batch=batch_size)
+    im_tensor, orig_images, paths_images = process_images(image_loader, res, batch_size)
+
+    with open(os.path.expanduser("~") + "/fiftyone/coco-2017/info.json") as f:
+        names = json.load(f)["classes"]
+
+    save_dir = "models/demos/yolov8x/demo/runs"
+    run_inference_and_save(
+        model, runner, model_type, mesh_composer, im_tensor, orig_images, paths_images, save_dir, names
+    )
+
+    if runner:
+        runner.release()
+    logger.info("Inference done")
 
 
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
-    "source, model_type",
-    [
-        ("models/demos/yolov8x/demo/images/bus.jpg", "torch_model"),
-        ("models/demos/yolov8x/demo/images/bus.jpg", "tt_model"),
-    ],
+    "model_type",
+    (
+        # "torch_model", # Uncomment to run the demo with torch model
+        "tt_model",
+    ),
+)
+@pytest.mark.parametrize(
+    "use_weights_from_ultralytics",
+    [True],
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_demo(device, source, model_type, res):
-    disable_persistent_kernel_cache()
+@pytest.mark.parametrize(
+    "input_loc, batch_size_per_device ",
+    [
+        (
+            "models/demos/yolov8x/demo/images",
+            1,
+        ),
+    ],
+)
+def test_demo(device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device):
+    run_yolov8x_demo(device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device)
 
-    if model_type == "torch_model":
-        model = YOLO("yolov8x.pt").model.eval()
-    else:
-        runner = YOLOv8xPerformantRunner(device, device_batch_size=1)
 
-    dataset = LoadImages(path=source)
-    class_names = load_coco_class_names()
-    save_dir = "models/demos/yolov8x/demo/runs"
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "model_type",
+    (
+        # "torch_model", # Uncomment to run the demo with torch model
+        "tt_model",
+    ),
+)
+@pytest.mark.parametrize(
+    "use_weights_from_ultralytics",
+    [True],
+)
+@pytest.mark.parametrize("res", [(640, 640)])
+@pytest.mark.parametrize(
+    "input_loc, batch_size_per_device ",
+    [
+        (
+            "models/demos/yolov8x/demo/images",
+            1,
+        ),
+    ],
+)
+def test_demo_dp(mesh_device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device):
+    run_yolov8x_demo(mesh_device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device)
 
-    for batch in dataset:
-        _, im0s, _ = batch
-        im = preprocess(im0s, res=res)
 
-        if model_type == "torch_model":
-            preds = model(im)
-        else:
-            preds = runner.run(im.clone())
-            preds = ttnn.to_torch(preds, dtype=torch.float32)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "model_type",
+    (
+        # "torch_model", # Uncomment to run the demo with torch model
+        "tt_model",
+    ),
+)
+@pytest.mark.parametrize(
+    "use_weights_from_ultralytics",
+    [True],
+)
+@pytest.mark.parametrize("res", [(640, 640)])
+def test_demo_dataset(device, model_type, use_weights_from_ultralytics, res):
+    run_yolov8x_demo_dataset(device, model_type, use_weights_from_ultralytics, res, batch_size_per_device=1)
 
-        results = postprocess(preds, im, im0s, batch, class_names)[0]
-        save_yolo_predictions(results, save_dir, source, model_type)
 
-    if model_type == "tt_model":
-        runner.release()
-
-    logger.info(f"Inference completed for {model_type}")
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "model_type",
+    (
+        # "torch_model", # Uncomment to run the demo with torch model
+        "tt_model",
+    ),
+)
+@pytest.mark.parametrize(
+    "use_weights_from_ultralytics",
+    [True],
+)
+@pytest.mark.parametrize("res", [(640, 640)])
+def test_demo_dataset_dp(mesh_device, model_type, use_weights_from_ultralytics, res):
+    run_yolov8x_demo_dataset(mesh_device, model_type, use_weights_from_ultralytics, res, batch_size_per_device=1)
