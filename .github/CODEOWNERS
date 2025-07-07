@@ -42,7 +42,7 @@ tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNij
 tt_metal/graph/ @dmakoviichuk-tt @sminakov-tt
 tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT @tt-dma # this should go away
 tt_metal/hw @abhullar-tt @jbaumanTT @pgkeller @nathan-TT
-tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
+tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT @amahmudTT
 tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
@@ -52,7 +52,7 @@ tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT 
 tt_metal/impl/allocator/ @abhullar-tt @tt-aho
 tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT @cfjchu @omilyutin-tt @sminakov-tt @TT-BrianLiu
 tt_metal/impl/context/ @tt-dma @jbaumanTT @aliuTT @cfjchu @omilyutin-tt
-tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
+tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT @amahmudTT
 tt_metal/impl/debug/ @tt-dma @pgkeller
 tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @tt-dma @cfjchu @omilyutin-tt
 tt_metal/impl/dispatch/ @pgkeller @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho
