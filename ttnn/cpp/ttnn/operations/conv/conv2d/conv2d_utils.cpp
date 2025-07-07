@@ -1052,6 +1052,8 @@ ttnn::Tensor fold_tensor(
         dtype = tensor.dtype();
     }
     TT_FATAL(dtype.value() != tt_metal::DataType::BFLOAT8_B, "Conv2D DRAM folding currently doesn't support BFLOAT8_B");
+    TT_FATAL(
+        stride[0] <= kernel_size[0] && stride[1] <= kernel_size[1], "Stride must be less than or equal to kernel size");
 
     // Move to device if needed
     ttnn::Tensor tensor_on_device = tensor;
@@ -1081,8 +1083,8 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
     input_width = input_width / stride[1];
     in_channels = in_channels * stride[0] * stride[1];
 
-    auto kernel_h = (kernel_size[0] + kernel_size[0] % stride[0]) / stride[0];
-    auto kernel_w = (kernel_size[1] + kernel_size[1] % stride[1]) / stride[1];
+    auto kernel_h = tt::div_up(kernel_size[0], stride[0]);
+    auto kernel_w = tt::div_up(kernel_size[1], stride[1]);
 
     return KernelStrideFoldingResult{
         .input_height = input_height,
