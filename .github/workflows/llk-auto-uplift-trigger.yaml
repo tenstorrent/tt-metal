@@ -542,7 +542,7 @@ jobs:
 
           # Extract workflow decisions from the hidden comment in PR body
           if echo "$PR_BODY" | grep -q "WORKFLOW_DECISIONS:"; then
-            WORKFLOW_DECISIONS=$(echo "$PR_BODY" | grep -o "WORKFLOW_DECISIONS:[^-]*" | head -1)
+            WORKFLOW_DECISIONS=$(echo "$PR_BODY" | grep -o "WORKFLOW_DECISIONS:[^>]*" | head -1)
             echo "Found workflow decisions: $WORKFLOW_DECISIONS"
 
             # Parse the decisions
