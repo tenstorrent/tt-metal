@@ -62,7 +62,6 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     uint32_t single_tile_size = TileSize(data_format);
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =

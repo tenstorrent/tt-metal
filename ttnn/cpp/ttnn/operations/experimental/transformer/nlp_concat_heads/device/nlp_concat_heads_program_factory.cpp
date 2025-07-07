@@ -64,7 +64,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
     }
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup

@@ -216,7 +216,6 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     }
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
 
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
@@ -415,7 +414,6 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
 
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 

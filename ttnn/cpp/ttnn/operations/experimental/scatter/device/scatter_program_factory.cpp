@@ -68,7 +68,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
 
     auto device = input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
 
     const uint32_t& input_stick_size = input_shape[-1];
     const uint32_t& index_stick_size = index_shape[-1];
