@@ -74,6 +74,26 @@ def has_file_changed(file: Path) -> bool:
     return result.returncode != 0
 
 
+def filter_modified_files(files: list[Path]) -> list[Path]:
+    """
+    Filter files that have changed since last commit
+    """
+
+    # Make sure that untracked files are also added to the index
+    # Otherwise, `git diff` will not show them
+    subprocess.run(["git", "add", "--intent-to-add"] + [str(f) for f in files], check=True)
+
+    # Check if any files have changed since last commit
+    result = subprocess.run(
+        ["git", "diff", "--name-only"] + [str(f) for f in files],
+        stdout=subprocess.PIPE,
+        text=True,
+        check=True,
+    )
+
+    return [Path(f) for f in result.stdout.splitlines()]
+
+
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -126,7 +146,7 @@ def main() -> None:
         subprocess.run(["black"] + [str(f) for f in files_to_add])
 
     # Only add files that have changed since last commit
-    files_to_add = [f for f in files_to_add if has_file_changed(f)]
+    files_to_add = filter_modified_files(files_to_add)
     print(f"files to add: {files_to_add}")
 
     if files_to_add:
