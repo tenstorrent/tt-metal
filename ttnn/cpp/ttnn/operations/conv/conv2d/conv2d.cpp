@@ -362,7 +362,7 @@ Result conv2d_DRAM(
                 compute_config);
         }
 
-        TT_ASSERT(conv_config.shard_layout.has_value(), " Conv2D DRAM Slicing must have a shard layout set.");
+        TT_FATAL(conv_config.shard_layout.has_value(), " Conv2D DRAM Slicing must have a shard layout set.");
 
         Tensor sliced_input_tensor;
         if (conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
