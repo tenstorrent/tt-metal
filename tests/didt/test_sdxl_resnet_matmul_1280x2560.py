@@ -11,7 +11,7 @@ import ttnn
 from models.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
 
 
-class AttnTest(OpTestBase):
+class ResnetTest(OpTestBase):
     def __init__(
         self,
         mesh_device,
@@ -58,14 +58,6 @@ class AttnTest(OpTestBase):
     ],
 )
 @pytest.mark.parametrize(
-    "memory_storage",
-    [
-        ttnn.BufferType.L1,
-        ttnn.BufferType.DRAM,
-    ],
-    ids=["in0_l1", "in0_dram"],
-)
-@pytest.mark.parametrize(
     "mesh_device",
     [
         pytest.param(1, id="1chips"),
@@ -75,10 +67,9 @@ class AttnTest(OpTestBase):
     ],
     indirect=["mesh_device"],
 )
-def test_sdxl_attn_matmul(
+def test_sdxl_resnet_matmul(
     mesh_device,
     math_fidelity,
-    memory_storage,
     didt_workload_iterations,
     determinism_check_interval,
     grid_size=(8, 8),
@@ -96,9 +87,9 @@ def test_sdxl_attn_matmul(
         compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
     logger.info(f"Running on {compute_grid} cores")
 
-    in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, memory_storage)
+    in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
 
     # Initialize matmul configurations
     out_subblock_h = 1
@@ -106,7 +97,7 @@ def test_sdxl_attn_matmul(
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(compute_grid.x, compute_grid.y),
-        in0_block_w=5,
+        in0_block_w=2,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
         per_core_M=per_core_M,
@@ -124,10 +115,10 @@ def test_sdxl_attn_matmul(
         packer_l1_acc=True,
     )
 
-    in0_shape = [1, 1, 32 * per_core_M * compute_grid.y, 1280]
-    in1_shape = [1, 1, 1280, 32 * per_core_N * compute_grid.x]
+    in0_shape = [1, 1, 32 * per_core_M * compute_grid.y, 320 * compute_grid.x]
+    in1_shape = [1, 1, 320 * compute_grid.x, 32 * per_core_N * compute_grid.x]
 
-    sdxl_attn_test = AttnTest(
+    sdxl_resnet_test = ResnetTest(
         mesh_device,
         in0_shape=in0_shape,
         in1_shape=in1_shape,
@@ -147,7 +138,7 @@ def test_sdxl_attn_matmul(
     )
 
     # Run test
-    sdxl_attn_test.run_op_test()
+    sdxl_resnet_test.run_op_test()
 
 
 @skip_for_blackhole("Multi-chip Blackhole has not been tested")
@@ -168,7 +159,7 @@ def test_sdxl_attn_matmul(
     ],
     indirect=["mesh_device"],
 )
-def test_specific_chip__sdxl_attn_matmul(
+def test_specific_chip_sdxl_resnet_matmul(
     mesh_device,
     logical_chip_id,
     math_fidelity,
@@ -177,7 +168,7 @@ def test_specific_chip__sdxl_attn_matmul(
 ):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
-    test_sdxl_attn_matmul(
+    test_sdxl_resnet_matmul(
         mesh_device.get_device(logical_chip_id),
         math_fidelity,
         didt_workload_iterations,
@@ -199,13 +190,13 @@ def test_specific_chip__sdxl_attn_matmul(
     ids=[f"board_id_{i}" for i in range(4)],
     indirect=["t3k_single_board_mesh_device"],
 )
-def test_specific_board_sdxl_attn_matmul(
+def test_specific_board_sdxl_resnet_matmul(
     t3k_single_board_mesh_device,
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
 ):
-    test_sdxl_attn_matmul(
+    test_sdxl_resnet_matmul(
         t3k_single_board_mesh_device,
         math_fidelity,
         didt_workload_iterations,
@@ -236,10 +227,10 @@ def test_specific_board_sdxl_attn_matmul(
     ],
     indirect=["mesh_device"],
 )
-def test_grid_size_sdxl_attn_matmul(
+def test_grid_size_sdxl_resnet_matmul(
     mesh_device, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval
 ):
-    test_sdxl_attn_matmul(
+    test_sdxl_resnet_matmul(
         mesh_device,
         math_fidelity,
         didt_workload_iterations,
@@ -272,10 +263,10 @@ def test_grid_size_sdxl_attn_matmul(
     ],
     indirect=["mesh_device"],
 )
-def test_blackhole_grid_size_ff1_matmul(
+def test_blackhole_grid_size_sdxl_resnet_matmul(
     mesh_device, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval
 ):
-    test_sdxl_attn_matmul(
+    test_sdxl_resnet_matmul(
         mesh_device,
         math_fidelity,
         didt_workload_iterations,
