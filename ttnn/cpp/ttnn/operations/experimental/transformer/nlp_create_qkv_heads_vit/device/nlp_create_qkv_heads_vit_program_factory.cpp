@@ -142,7 +142,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(cb0_num_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     // If we transpose_k_heads:
     // - reader will write to cb0, instead of cb1
@@ -154,14 +154,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(cb0_num_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
                 .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
         uint32_t out_cb_index = 16;
         uint32_t out_cb_num_tiles = per_tensor_tiles * 2;  // double buffer
         tt_metal::CircularBufferConfig cb_out_config =
             tt_metal::CircularBufferConfig(out_cb_num_tiles * single_tile_size, {{out_cb_index, cb_data_format}})
                 .set_page_size(out_cb_index, single_tile_size);
-        auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
     }
 
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
