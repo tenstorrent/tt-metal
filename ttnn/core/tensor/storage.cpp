@@ -54,13 +54,6 @@ bool DeviceStorage::is_uniform_storage() const {
 
 const DistributedHostBuffer& MultiDeviceHostStorage::distributed_buffer() const { return distributed_buffer_; }
 
-MultiDeviceHostStorage::MultiDeviceHostStorage(std::vector<HostBuffer> buffers) :
-    distributed_buffer_(DistributedHostBuffer::create(tt::tt_metal::distributed::MeshShape(buffers.size()))) {
-    for (size_t i = 0; i < buffers.size(); ++i) {
-        distributed_buffer_.emplace_shard(
-            tt::tt_metal::distributed::MeshCoordinate(i), [&buffers, i]() { return std::move(buffers[i]); });
-    }
-}
 MultiDeviceHostStorage::MultiDeviceHostStorage(DistributedHostBuffer buffer) : distributed_buffer_(std::move(buffer)) {}
 
 }  // namespace tt::tt_metal
