@@ -9,6 +9,7 @@ import ttnn
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     get_default_compute_config,
     get_default_conv_config,
+    get_default_conv_output_dtype,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_utils import (
     prepare_split_conv_weights_bias,
@@ -75,6 +76,7 @@ def test_split_conv(
         conv_out_channel_split_factor,
         get_default_compute_config(device),
         get_default_conv_config(),
+        get_default_conv_output_dtype(),
     )
 
     ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
