@@ -38,3 +38,4 @@ Available tutorials:
    tutorials/2025_dx_rework/ttnn_basic_operations.ipynb
    tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.ipynb
    tutorials/2025_dx_rework/ttnn_multihead_attention.ipynb
+   tutorials/2025_dx_rework/ttnn_basic_conv.ipynb
