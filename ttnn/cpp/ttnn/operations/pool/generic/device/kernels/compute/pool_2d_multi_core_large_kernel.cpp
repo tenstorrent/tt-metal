@@ -55,7 +55,6 @@ void MAIN {
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
 
-    constexpr bool is_avg_pool = REDUCE_OP == PoolType::SUM;
     static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX or Sum");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
@@ -73,7 +72,6 @@ void MAIN {
     if constexpr (one_scalar_per_core) {
         cb_wait_front(in_scalar_cb_id_0, 1);
     }
-    cb_wait_front(sync_cb_id1, 2);
 
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
         const bool reader0 = !(split_reader && (n & 0x1));

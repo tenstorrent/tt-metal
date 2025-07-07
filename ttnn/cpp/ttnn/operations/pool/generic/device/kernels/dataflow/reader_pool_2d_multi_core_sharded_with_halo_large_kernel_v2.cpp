@@ -24,7 +24,6 @@
 template <
     uint32_t in_nblocks_c,
     uint32_t in_cb_id,
-    uint32_t compute_sync_cb_id,
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
@@ -236,8 +235,6 @@ void kernel_main() {
         reader_indices_on_core = reader_nindices;
     }
 
-    uint32_t out_l1_write_addr = get_write_ptr(out_cb_id);
-    out_l1_write_addr += (split_reader && reader_id == 1) ? in_nbytes_c : 0;
     while (num_segments--) {
         uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
         uint16_t start = start_end_segment & 0xffff;
@@ -258,7 +255,6 @@ void kernel_main() {
             read_window_with_top_left_index<
                 in_nblocks_c,
                 in_cb_id,
-                compute_sync_cb_id,
                 window_h,
                 window_w,
                 in_w_padded,
@@ -286,7 +282,6 @@ void kernel_main() {
         read_window_with_top_left_index<
             in_nblocks_c,
             in_cb_id,
-            compute_sync_cb_id,
             window_h,
             window_w,
             in_w_padded,
