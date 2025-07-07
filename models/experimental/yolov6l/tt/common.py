@@ -41,6 +41,7 @@ class Yolov6l_Conv2D:
         self.groups = conv.groups
         self.use_1d_systolic_array = use_1d_systolic_array
         self.deallocate_activation = deallocate_activation
+        self.activation_dtype = activation_dtype
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -50,7 +51,6 @@ class Yolov6l_Conv2D:
         )
 
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=activation_dtype,
             weights_dtype=weights_dtype,
             shard_layout=shard_layout if not auto_shard else None,
             deallocate_activation=self.deallocate_activation,
@@ -107,6 +107,7 @@ class Yolov6l_Conv2D:
             return_output_dim=True,
             return_weights_and_bias=False,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=self.activation_dtype,
         )
 
         if self.reshape:
@@ -173,8 +174,8 @@ class Yolov6x_Conv_T_2D:
                 if use_1d_systolic_array
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED
             )
+        self.activations_dtype = activations_dtype
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=activations_dtype,
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=False,
@@ -226,6 +227,7 @@ class Yolov6x_Conv_T_2D:
             mirror_kernel=True,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.activations_dtype,
         )
 
         if self.reshape:

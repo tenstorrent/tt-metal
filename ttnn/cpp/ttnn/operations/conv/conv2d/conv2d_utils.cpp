@@ -792,6 +792,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     const CoreCoord& compute_grid_size,
     Layout input_layout,
     tt_metal::DataType input_datatype,
+    tt_metal::DataType output_datatype,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
     const uint32_t groups,
@@ -891,6 +892,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             kernel_size,
             conv_config,
             input_datatype,
+            output_datatype,
             enable_bias,
             conv_is_1d_deptwise);
 
@@ -899,7 +901,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         uint32_t input_nhw = tt::div_up(batch_size * input_height * input_width, tt::constants::TILE_HEIGHT);
         uint32_t input_c = tt::div_up(in_channels_aligned, tt::constants::TILE_WIDTH);
         uint32_t approx_input_size =
-            input_nhw * input_c * tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
+            input_nhw * input_c * tt::tile_size(datatype_to_dataformat_converter(output_datatype));
         uint32_t approx_input_size_per_core = approx_input_size / input_parallel_config.grid.num_cores();
 
         l1_usage.tensor_allocation_size += approx_input_size_per_core;
@@ -995,6 +997,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
     const DataType input_datatype,
+    const DataType output_datatype,
     const bool enable_bias,
     bool is_1d_depthwise_conv) {
     // Input shard doesn't affect L1 usage calculation.
@@ -1007,6 +1010,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         kernel_size,
         conv_config,
         input_datatype,
+        output_datatype,
         dummy_input_shard_shape,
         enable_bias,
         is_1d_depthwise_conv);

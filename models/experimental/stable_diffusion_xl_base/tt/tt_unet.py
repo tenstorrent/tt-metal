@@ -127,6 +127,7 @@ class TtUNet2DConditionModel(nn.Module):
         conv_weights_out = state_dict["conv_out.weight"]
         conv_bias_out = state_dict["conv_out.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
         self.conv1_config = model_config.get_conv_config(conv_path="conv_in")
         (
             self.compute1_config,
@@ -204,6 +205,7 @@ class TtUNet2DConditionModel(nn.Module):
             memory_config=None,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv1_params["output_channels"]
 
@@ -298,6 +300,7 @@ class TtUNet2DConditionModel(nn.Module):
             memory_config=None,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv2_params["output_channels"]
 
