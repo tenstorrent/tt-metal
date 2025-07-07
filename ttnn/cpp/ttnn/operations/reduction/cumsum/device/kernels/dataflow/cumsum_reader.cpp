@@ -22,6 +22,7 @@ void kernel_main() {
     constexpr uint32_t product_high_dims = get_compile_time_arg_val(2);
     constexpr uint32_t product_low_dims = get_compile_time_arg_val(3);
     constexpr uint32_t flip = get_compile_time_arg_val(4);
+    constexpr bool is_dram = get_compile_time_arg_val(5) == 1;
 
     constexpr uint32_t cb_out = tt::CBIndex::c_0;
     constexpr uint32_t cb_zero = tt::CBIndex::c_2;
@@ -33,7 +34,7 @@ void kernel_main() {
     uint32_t l1_addr_out = get_write_ptr(cb_out);
     const uint32_t input_tile_bytes = ublock_size_bytes;
 
-    InterleavedAddrGenFast<true> dram_input_addrg = {
+    InterleavedAddrGenFast<is_dram> dram_input_addrg = {
         .bank_base_address = input_dram_base_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
 
     union {
