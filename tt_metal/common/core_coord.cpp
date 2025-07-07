@@ -634,6 +634,19 @@ CoreRangeSet select_from_corerange(const CoreRangeSet& crs, uint32_t start_index
     }
     return CoreRangeSet(selected_cores);
 }
+std::optional<CoreRange> select_contiguous_range_from_corerange(
+    const CoreRangeSet& crs, uint32_t x, uint32_t y, bool row_wise) {
+    for (const auto& core_range : crs.ranges()) {
+        const auto& start_coord = core_range.start_coord;
+        const auto& end_coord = core_range.end_coord;
+        if (start_coord.x + x > end_coord.x || start_coord.y + y > end_coord.y) {
+            continue;
+        }
+        CoreCoord new_end_coord = {start_coord.x + x, start_coord.y + y};
+        return CoreRange(start_coord, new_end_coord);
+    }
+    return std::nullopt;
+}
 
 bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b) { return !(a == b); }
 
