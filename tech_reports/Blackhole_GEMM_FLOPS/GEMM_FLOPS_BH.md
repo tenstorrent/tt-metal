@@ -106,7 +106,7 @@ As expected, since the Blackhole card has a larger available compute grid, utili
 
 ![alt text](images/12x10utilizationHiFi.png "Title")
 
-As observed, utilization on the Blackhole cards is similar to, if not slightly lower than, previous generations. This is expected, as the larger NOC grid may introduce additional data transfer delays due to the need to move data across more Tensix cores.
+As observed, utilization on the Blackhole cards is similar to the previous generations, but slightly lower. This is expected, as the larger NOC grid may introduce additional data transfer delays due to the need to move data across more Tensix cores.
 
 
 
