@@ -74,7 +74,7 @@ struct ExecuteFlashMultiLatentAttentionDecode {
         QueueId queue_id,
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
-        const uint32_t head_dim_v,
+        uint32_t head_dim_v,
         bool is_causal = true,
         const std::optional<const Tensor>& attn_mask = std::nullopt,
         const std::vector<uint32_t>& cur_pos = std::vector<uint32_t>(),
@@ -87,7 +87,7 @@ struct ExecuteFlashMultiLatentAttentionDecode {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
-        const uint32_t head_dim_v,
+        uint32_t head_dim_v,
         bool is_causal = true,
         const std::optional<const Tensor>& attn_mask = std::nullopt,
         const std::vector<uint32_t>& cur_pos = std::vector<uint32_t>(),
