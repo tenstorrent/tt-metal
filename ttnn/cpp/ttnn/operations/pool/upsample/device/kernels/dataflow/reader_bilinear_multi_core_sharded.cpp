@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+// #include "dataflow_api.h"
 #include <algorithm>
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "debug/dprint.h"
 
 #define ALWI inline __attribute__((always_inline))
 
@@ -30,9 +31,9 @@ void kernel_main() {
     uint32_t scale_w = get_arg_val<uint32_t>(3);
     uint32_t in_w = get_arg_val<uint32_t>(4);
     uint32_t out_w = get_arg_val<uint32_t>(5);
-    uint32_t src1_addr = get_arg_val<uint32_t>(6);
-    uint32_t read_offset = get_arg_val<uint32_t>(8);
-    uint32_t is_last_row = get_arg_val<uint32_t>(9);
+    uint32_t start_input_row_in_image_id = get_arg_val<uint32_t>(6);
+    uint32_t in_h = get_arg_val<uint32_t>(7);
+
     constexpr bool src1_is_dram = false;
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(1);
@@ -59,31 +60,55 @@ void kernel_main() {
     float x_index_compute = uint32_to_float(x_index_compute_comp);
 
     // If the current core is a writer core, adjust the x_index_compute to start from the correct position.
+
     if (!is_reader) {
         x_index_compute += scale_w_inv;
         // If the total number of sticks is odd, process one less stick.
         nsticks_to_process_on_core =
             (total_nsticks_to_process % 2) ? nsticks_to_process_on_core - 1 : nsticks_to_process_on_core;
     }
+    int32_t accumulated_offset = 0;
     for (uint32_t image_row = 0; image_row < in_image_rows_per_core * scale_h; ++image_row) {
         x_index = x_index_compute;
+
+        uint32_t y1 = int(y_index);
+        uint32_t y2 = y1 + 1;
+
+        // After haloing, the last row from the last core (or a padding row)
+        // Gets inserted into as the first (index 0) row for the current core
+        // So the start_input_row_in_image_id corresponds to the row with index 1
+        // for the current core
+        // In no circumstance should the padding rows have weights greater than 0.5
+
+        int32_t in_image_index_y1 = int32_t(y1) - 1 + start_input_row_in_image_id - accumulated_offset;
+        int32_t in_image_index_y2 = int32_t(y2) - 1 + start_input_row_in_image_id - accumulated_offset;
+
+        dy = y_index - y1;
+
+        if (in_image_index_y1 == -1) {
+            dy = 1;
+        }
+
+        if (in_image_index_y2 == int(in_h)) {  // change later to not check with modulus
+            if (dy > 0.5) {
+                y1 += 2;
+                y2 += 2;
+                y_index += 2;
+                dy = 1;
+                accumulated_offset += 2 + in_h;
+            } else {
+                dy = 0;
+            }
+        }
         for (uint32_t j = 0; j < nsticks_to_process_on_core; j++) {
             for (uint32_t i = 0; i < blocks; i++) {
                 cb_reserve_back(out_cb_id, 4);
                 cb_reserve_back(in_scalar_cb_id, 1);
 
                 x = x_index < 0 ? 0 : x_index;
-                y = y_index < read_offset ? read_offset : y_index;
                 dx = x - int(x);
-                dy = y - int(y);
-
                 uint32_t x1 = int(x);
-                uint32_t y1 = int(y);
                 uint32_t x2 = std::min(x1 + 1, in_w - 1);
-                uint32_t y2 = y1 + 1;
-                if (is_last_row) {
-                    y2 = std::min(y2, in_image_rows_per_core);  // if last row, y2 should be in_image_rows_per_core
-                }
 
                 fill_four_val(
                     get_write_ptr(in_scalar_cb_id),
