@@ -70,7 +70,6 @@ def prepare_conv_weights_func(
         tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16) if has_bias else None
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=weights_dtype,
         enable_act_double_buffer=False,
         enable_split_reader=False,
@@ -115,10 +114,14 @@ def prepare_conv_weights_func(
         input_memory_config=ttnn.L1_MEMORY_CONFIG,
         has_bias=has_bias,
         **conv_kwargs,
+        input_dtype=ttnn.bfloat16,
     )
     tt_bias_tensor_formatted = (
         ttnn.prepare_conv_bias(
-            bias_tensor=tt_bias_tensor, input_memory_config=tt_input_tensor.memory_config(), **conv_kwargs
+            bias_tensor=tt_bias_tensor,
+            input_memory_config=tt_input_tensor.memory_config(),
+            **conv_kwargs,
+            input_dtype=ttnn.bfloat16,
         )
         if has_bias
         else None
@@ -133,6 +136,7 @@ def prepare_conv_weights_func(
         bias_tensor=tt_bias_tensor_formatted,
         **conv_kwargs,
         compute_config=compute_config,
+        dtype=ttnn.bfloat16,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -343,7 +347,6 @@ def test_prepare_bias(
     tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16) if has_bias else None
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         enable_act_double_buffer=False,
         enable_split_reader=False,
@@ -382,7 +385,10 @@ def test_prepare_bias(
 
     tt_bias_tensor_formatted = (
         ttnn.prepare_conv_bias(
-            bias_tensor=tt_bias_tensor, input_memory_config=tt_input_tensor.memory_config(), **conv_kwargs
+            bias_tensor=tt_bias_tensor,
+            input_memory_config=tt_input_tensor.memory_config(),
+            **conv_kwargs,
+            input_dtype=ttnn.bfloat16,
         )
         if has_bias
         else None
@@ -396,6 +402,7 @@ def test_prepare_bias(
         bias_tensor=tt_bias_tensor_formatted,
         **conv_kwargs,
         compute_config=compute_config,
+        dtype=ttnn.bfloat16,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)

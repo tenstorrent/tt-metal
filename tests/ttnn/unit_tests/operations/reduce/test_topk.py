@@ -83,7 +83,6 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         (1, 1, 32, 8192, 3, 50),  # passed
         (1, 1, 64, 64, 2, 32),  # passed
         (1, 1, 64, 64, 2, 64),  # passed
-        (1, 1, 32, 8192, 3, 50),  # passed
         (1, 2048, 1, 64, 1, 32),  # skipped
         (1, 1, 32, 64, 3, 2),  # passed
         (1, 1, 32, 64, 3, 4),  # passed
@@ -172,3 +171,43 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
         # and when dim = 0 or 1, transpose converts it into TransposeOpDim::HC & this dim doesnt support bf16 or fp32
         pytest.skip()
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids, pass_indices_tensor)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16,),
+    ids=[
+        "BFLOAT16_B",
+    ],
+)
+@pytest.mark.parametrize(
+    "N, C, H, W, dim, k",
+    (
+        (1, 1, 32, 151936, 3, 50),  # passed  - customer shape 2
+        (1, 1, 32, 128256, 3, 50),  # passed  - customer shape 1
+    ),
+)
+@pytest.mark.parametrize(
+    "sorted",
+    [
+        True,
+        False,
+    ],
+)
+@pytest.mark.parametrize(
+    "largest",
+    [
+        True,
+        False,
+    ],
+)
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    [
+        None,
+    ],
+)
+def test_topk_large_2d_shapes(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids):
+    if dim == 0 or dim == 1:
+        pytest.skip()
+    run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids)

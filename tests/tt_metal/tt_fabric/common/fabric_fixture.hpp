@@ -47,6 +47,11 @@ public:
 
     const std::vector<tt::tt_metal::IDevice*>& get_devices() const { return devices_; }
     void SetUpDevices(tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt) {
+        auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        if (num_devices < 2) {
+            log_info(tt::LogTest, "Skipping fabric tests as there are less than 2 devices available");
+            GTEST_SKIP();
+        }
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
             log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
@@ -55,7 +60,6 @@ public:
         }
         // Set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> ids;
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
@@ -89,6 +93,9 @@ public:
     }
 
     void TearDown() override {
+        if (devices_.empty()) {
+            return;
+        }
         tt::tt_metal::detail::CloseDevices(devices_map_);
         tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
     }
