@@ -13,7 +13,7 @@ inline void open_direction_connections(
     const std::array<bool, Size>& directions,
     std::array<WorkerToFabricEdmSender, Size>& connections,
     size_t rt_args_idx) {
-    for (uint32_t i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < Size; i++) {
         if (directions[i]) {
             connections[i] =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
@@ -78,7 +78,6 @@ inline void dispatch_input_remote_device(
     const uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
-    zero_l1_buf((uint32_t*)token_unicast_packet_header, sizeof(PACKET_HEADER_TYPE));
     fabric_set_unicast_route(
         const_cast<LowLatencyMeshPacketHeader*>(token_unicast_packet_header),
         static_cast<eth_chan_directions>(fabric_connections[route].direction),

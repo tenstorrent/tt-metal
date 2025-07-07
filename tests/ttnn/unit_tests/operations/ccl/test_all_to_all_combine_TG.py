@@ -51,6 +51,9 @@ def test_all_to_all_combine_no_trace(
     input_memory_config,
     output_memory_config,
 ):
+    if seq == 2 and ttnn.L1_MEMORY_CONFIG in (input_memory_config, output_memory_config):
+        pytest.skip("Prefill needs to run in DRAM")
+
     devices = mesh_shape[0] * mesh_shape[1]
     batch = batches_per_device * devices
     experts = experts_per_device * devices

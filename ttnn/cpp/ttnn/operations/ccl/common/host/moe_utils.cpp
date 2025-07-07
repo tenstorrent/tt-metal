@@ -29,8 +29,6 @@ uint32_t device_index(const std::vector<tt::tt_metal::IDevice*>& devices, const 
 }
 }  // namespace detail
 
-using namespace ttnn::distributed;
-
 std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbors(
     const MeshDeviceView& mesh_view,
     const MeshCoordinate& mesh_coordinate,
