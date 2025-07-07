@@ -743,32 +743,13 @@ jobs:
       )
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout parent repo
-        if: inputs.recheck_tests == true
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.TEMP_METAL_PAT }}
-
       - name: Auto-merge PR
         env:
           GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
         run: |
           echo "🚀 Finalizing PR merge..."
 
-          # Get PR number - either from llk-submodule-uplift output or find it by branch
-          if [ "${{ inputs.recheck_tests }}" == "true" ]; then
-            # When coming from recheck-tests, find the PR by branch
-            PR_NUMBER=$(gh pr list --head "${{ env.BRANCH_NAME }}" --json number --jq '.[0].number // empty' --repo "${{ github.repository }}")
-            if [ -z "$PR_NUMBER" ]; then
-              echo "❌ No LLK PR found on branch ${{ env.BRANCH_NAME }}"
-              exit 1
-            fi
-            echo "📍 Found PR #$PR_NUMBER from recheck-tests flow"
-          else
-            # Normal flow - use output from llk-submodule-uplift
-            PR_NUMBER="${{ needs.llk-submodule-uplift.outputs.pr-number }}"
-            echo "📍 Using PR #$PR_NUMBER from normal flow"
-          fi
+          PR_NUMBER="${{ needs.llk-submodule-uplift.outputs.pr-number }}"
 
           # Mark PR as ready if it was created as draft
           if [ "${{ inputs.skip_draft }}" != "true" ]; then
@@ -810,43 +791,8 @@ jobs:
             PR_CREATED_AT=$(gh pr view "$PR_NUMBER" --json createdAt --jq '.createdAt' --repo "${{ github.repository }}")
             echo "PR created at: $PR_CREATED_AT"
 
-            # Determine which workflows should have run
-            if [ "${{ inputs.recheck_tests }}" == "true" ]; then
-              # When coming from recheck-tests, read decisions from PR body
-              PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body' --repo "${{ github.repository }}")
-              
-              if echo "$PR_BODY" | grep -q "WORKFLOW_DECISIONS:"; then
-                WORKFLOW_DECISIONS=$(echo "$PR_BODY" | grep -o "WORKFLOW_DECISIONS:[^>]*" | head -1)
-                echo "Found workflow decisions: $WORKFLOW_DECISIONS"
-                
-                if echo "$WORKFLOW_DECISIONS" | grep -q "should-run-wormhole=true"; then
-                  SHOULD_RUN_WORMHOLE=true
-                else
-                  SHOULD_RUN_WORMHOLE=false
-                fi
-                
-                if echo "$WORKFLOW_DECISIONS" | grep -q "should-run-blackhole=true"; then
-                  SHOULD_RUN_BLACKHOLE=true
-                else
-                  SHOULD_RUN_BLACKHOLE=false
-                fi
-              else
-                echo "⚠️ No workflow decisions found in PR body"
-                SHOULD_RUN_WORMHOLE=false
-                SHOULD_RUN_BLACKHOLE=false
-              fi
-            else
-              # Normal flow - use outputs from llk-submodule-uplift
-              SHOULD_RUN_WORMHOLE="${{ needs.llk-submodule-uplift.outputs.should-run-wormhole }}"
-              SHOULD_RUN_BLACKHOLE="${{ needs.llk-submodule-uplift.outputs.should-run-blackhole }}"
-            fi
-
-            echo "Final test status decisions:"
-            echo "  - Should run Wormhole: $SHOULD_RUN_WORMHOLE"
-            echo "  - Should run Blackhole: $SHOULD_RUN_BLACKHOLE"
-
             # Post-commit jobs should have run, get their actual results
-            if [ "$SHOULD_RUN_WORMHOLE" = "true" ]; then
+            if [ "${{ needs.llk-submodule-uplift.outputs.should-run-wormhole }}" = "true" ]; then
               WH_RUN=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json databaseId,url,conclusion,createdAt --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | .[0] // {}" --repo "${{ github.repository }}")
               WH_URL=$(echo "$WH_RUN" | jq -r '.url // ""')
               WH_CONCLUSION=$(echo "$WH_RUN" | jq -r '.conclusion // ""')
@@ -857,7 +803,7 @@ jobs:
               fi
             fi
 
-            if [ "$SHOULD_RUN_BLACKHOLE" = "true" ]; then
+            if [ "${{ needs.llk-submodule-uplift.outputs.should-run-blackhole }}" = "true" ]; then
               BH_RUN=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json databaseId,url,conclusion,createdAt --jq "map(select(.createdAt >= \"$PR_CREATED_AT\")) | .[0] // {}" --repo "${{ github.repository }}")
               BH_URL=$(echo "$BH_RUN" | jq -r '.url // ""')
               BH_CONCLUSION=$(echo "$BH_RUN" | jq -r '.conclusion // ""')
