@@ -375,7 +375,7 @@ void MAIN {
             // if last block we pack the final result with relu enabled
             PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
-            pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
+            pack_reconfig_data_format(matmul_partials_cb, untilize_mode_out_cb_id);
 #ifdef PACKER_L1_ACC
             pack_reconfig_l1_acc(0);
 #endif
@@ -424,7 +424,7 @@ void MAIN {
             }
 #endif
             if constexpr (untilize_out) {
-#if defined PACKER_L1_ACC and not defined FUSE_BIAS
+#if defined PACKER_L1_ACC
                 pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
                 pack_reconfig_l1_acc(0);
 #endif
