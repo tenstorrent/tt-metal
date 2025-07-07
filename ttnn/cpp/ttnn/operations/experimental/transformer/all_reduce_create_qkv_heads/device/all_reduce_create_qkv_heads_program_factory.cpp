@@ -136,8 +136,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         vcores_noc_y_coords.push_back(worker_core.y);
     }
 
-    uint32_t process_qv = 1, process_k = 0;
-
     // End of qkv heads fuse
 
     // TODO: Remove this once we have a way to get the number of cores per link

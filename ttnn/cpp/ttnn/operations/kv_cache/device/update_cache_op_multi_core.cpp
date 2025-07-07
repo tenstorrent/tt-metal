@@ -54,8 +54,6 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     uint32_t cache_batch_num_tiles = cache_total_num_tiles / cache_tensor.padded_shape()[0];
     uint32_t cache_head_num_tiles = cache_batch_num_tiles / cache_tensor.padded_shape()[1];
 
-    uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
-
     uint32_t B = input_tensor.padded_shape()[-2];
     uint32_t Bcache = cache_tensor.padded_shape()[0];
     const uint32_t granularity = std::min(static_cast<uint32_t>(2), Bcache);  // granularity = 2 best for performance

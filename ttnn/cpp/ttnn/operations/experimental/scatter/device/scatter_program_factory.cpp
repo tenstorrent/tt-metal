@@ -64,8 +64,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t src_tensor_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
     const uint32_t output_tensor_is_dram = output_buffer->buffer_type() == BufferType::DRAM;
 
-    const int32_t dim{(args.dim >= 0) ? args.dim : (input_rank + args.dim)};
-
     auto device = input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 

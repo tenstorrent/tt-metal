@@ -31,7 +31,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
     ////////////////////////////////////////////////////////////////////////////
     //                      TM Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const uint32_t head_dim = 32;
     uint32_t per_tensor_tiles = ashape[3] / TILE_WIDTH;
     const uint32_t q_num_tiles_per_tensor = per_tensor_tiles;
     const uint32_t num_q_heads = q_num_tiles_per_tensor;  // hard-coding the head_dim = 32
@@ -45,7 +44,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
     uint32_t q_out_CHtWt = q_out_c * q_out_HtWt;
     uint32_t q_num_tiles = num_q_heads * q_out_w_tiles;
 
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // Block is a unit of work; ie. num of per_tensor_tiles per core
     uint32_t num_blocks = ashape[0] * ashape[1] * ashape[2] / TILE_HEIGHT;

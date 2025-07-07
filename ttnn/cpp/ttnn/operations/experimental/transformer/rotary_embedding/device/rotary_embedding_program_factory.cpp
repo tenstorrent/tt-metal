@@ -43,7 +43,6 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
-    uint32_t num_tiles = input.physical_volume() / TILE_HW;
     uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
     uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;

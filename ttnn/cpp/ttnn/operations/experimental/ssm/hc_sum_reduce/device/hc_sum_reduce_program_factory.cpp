@@ -14,7 +14,6 @@ using namespace tt::tt_metal;
 
 operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     const Tensor& a, Tensor& output, MathFidelity math_fidelity, CoreCoord compute_with_storage_grid_size) {
-    constexpr uint32_t ONE_TILE = 1;
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
 
