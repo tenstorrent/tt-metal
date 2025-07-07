@@ -57,7 +57,8 @@ def run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc=False, comput
         tt_output = ttnn.to_torch(npu_output).reshape(shape)
         tt_output_list = tt_output.flatten().tolist()
         c = Counter(tt_output_list)
-        # one_probs is proportion of 1 in tt_output_list
+        # assert that only 1 and 0 are returned from op
+        assert c[1] + c[0] == len(tt_output_list)
         one_probs.append(c[1] / len(tt_output_list))
 
     estimated_one_prob = np.mean(one_probs)
@@ -88,15 +89,15 @@ def test_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc, p_value):
     run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc=is_out_alloc, p_value=p_value)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
-# @skip_for_blackhole("Requires wormhole_b0 to run")
-@pytest.mark.parametrize(
-    "shape",
-    [
-        [1, 21, 123, 24],
-    ],
-)
 # TODO: Re-enable this test when we return to fixed seed testing
+# @skip_for_grayskull("Requires wormhole_b0 to run")
+# @skip_for_blackhole("Requires wormhole_b0 to run")
+# @pytest.mark.parametrize(
+#     "shape",
+#     [
+#         [1, 21, 123, 24],
+#     ],
+# )
 # @pytest.mark.parametrize("seed", [1408])
 # @pytest.mark.parametrize("in_dtype", ["float32"])
 # @pytest.mark.parametrize("out_dtype", ["float32"])
