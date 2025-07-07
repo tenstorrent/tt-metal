@@ -1,6 +1,10 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import torch.nn as nn
-from VADv2.reference.utils import denormalize_2d_bbox, denormalize_2d_pts, denormalize_bbox
+from models.experimental.vadv2.reference.utils import denormalize_2d_bbox, denormalize_2d_pts, denormalize_bbox
 
 
 class MapNMSFreeCoder(nn.Module):

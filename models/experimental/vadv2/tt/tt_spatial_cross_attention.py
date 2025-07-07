@@ -62,7 +62,6 @@ class TtSpatialCrossAttention:
 
         D = reference_points_cam.size(3)
         indexes = []
-        print("bev_mask.shape", bev_mask.shape)
         indexes = []
         # bev_mask = ttnn.to_torch(bev_mask)
         # reference_points_cam = ttnn.to_torch(reference_points_cam)

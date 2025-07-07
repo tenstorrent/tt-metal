@@ -49,7 +49,6 @@ class TtDetectionTransformerDecoder:
                 batch_first=False,
                 kwargs={
                     "feedforward_channels": 512,
-                    "ffn_dropout": 0.1,
                     "act_cfg": {"type": "ReLU", "inplace": True},
                     "ffn_num_fcs": 2,
                 },
@@ -148,7 +147,6 @@ class TtMapDetectionTransformerDecoder:
                 batch_first=False,
                 kwargs={
                     "feedforward_channels": 512,
-                    "ffn_dropout": 0.1,
                     "act_cfg": {"type": "ReLU", "inplace": True},
                     "ffn_num_fcs": 2,
                 },
@@ -210,3 +208,72 @@ class TtMapDetectionTransformerDecoder:
             b = ttnn.stack(intermediate_reference_points, dim=0)
             return a, b
         return output, reference_points
+
+
+class TtCustomTransformerDecoder:
+    def __init__(self, params, device, num_layers, return_intermediate=False, embed_dim=256, num_heads=8):
+        super(TtCustomTransformerDecoder, self).__init__()
+        self.device = device
+        self.params = params
+        self.return_intermediate = return_intermediate
+        self.fp16_enabled = False
+        self.layers = [
+            TtBaseTransformerLayer(
+                params.layers[f"layer{i}"],
+                self.device,
+                attn_cfgs=[
+                    {
+                        "type": "MultiheadAttention",
+                        "embed_dims": 256,
+                        "num_heads": 8,
+                    }
+                ],
+                ffn_cfgs={
+                    "type": "FFN",
+                    "embed_dims": 256,
+                    "feedforward_channels": 512,
+                    "num_fcs": 2,
+                    "act_cfg": {"type": "ReLU", "inplace": True},
+                },
+                operation_order=("cross_attn", "norm", "ffn", "norm"),
+                norm_cfg={"type": "LN"},
+                init_cfg=None,
+                batch_first=False,
+                kwargs={"feedforward_channels": 512},
+            )
+            for i in range(num_layers)
+        ]
+
+    def __call__(
+        self,
+        query,
+        key=None,
+        value=None,
+        query_pos=None,
+        key_pos=None,
+        attn_masks=None,
+        key_padding_mask=None,
+        *args,
+        **kwargs,
+    ):
+        intermediate = []
+        for lid, layer in enumerate(self.layers):
+            query = layer(
+                query=query,
+                key=key,
+                value=value,
+                query_pos=query_pos,
+                key_pos=key_pos,
+                attn_masks=attn_masks,
+                key_padding_mask=key_padding_mask,
+                *args,
+                **kwargs,
+            )
+
+            if self.return_intermediate:
+                intermediate.append(query)
+
+        if self.return_intermediate:
+            return ttnn.stack(intermediate, dim=0)
+
+        return query

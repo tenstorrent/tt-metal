@@ -19,12 +19,20 @@ def multi_scale_deformable_attn(
 
     for level, (H_, W_) in enumerate(value_spatial_shapes):
         value_l_ = value_list[level]
+        print(value_l_.shape)
+
         value_l_ = ttnn.reshape(value_l_, [value_l_.shape[0], value_l_.shape[1], value_l_.shape[2] * value_l_.shape[3]])
         value_l_ = ttnn.permute(value_l_, (0, 2, 1))
+        print(value_l_.shape)
+        print(bs)
+        print(num_heads)
+        print(embed_dims)
+
         if reshape:
-            value_l_ = ttnn.reshape(value_l_, [bs * num_heads, embed_dims, 12, 20])
+            value_l_ = ttnn.reshape(value_l_, [bs * num_heads, embed_dims, 12, 20])  # 24751
+
         else:
-            value_l_ = ttnn.reshape(value_l_, [bs * num_heads, embed_dims, 100, 100])
+            value_l_ = ttnn.reshape(value_l_, [bs * num_heads, embed_dims, 100, 100])  # 24751
 
         sampling_grid_l_ = sampling_grids[:, :, :, level]
         sampling_grid_l_ = ttnn.permute(sampling_grid_l_, (0, 2, 1, 3, 4))

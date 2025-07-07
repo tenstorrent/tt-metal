@@ -1,30 +1,17 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import copy
 import torch
 import torch.nn as nn
-from VADv2.reference.resnet import ResNet, Bottleneck
-from VADv2.reference.fpn import FPN
-from VADv2.reference.head import VADHead
-from VADv2.reference.grid_mask import GridMask
+from models.experimental.vadv2.reference.resnet import ResNet, Bottleneck
+from models.experimental.vadv2.reference.fpn import FPN
+from models.experimental.vadv2.reference.head import VADHead
+from models.experimental.vadv2.reference.grid_mask import GridMask
 
 
 def bbox3d2result(bboxes, scores, labels, attrs=None):
-    """Convert detection results to a list of numpy arrays.
-
-    Args:
-        bboxes (torch.Tensor): Bounding boxes with shape of (n, 5).
-        labels (torch.Tensor): Labels with shape of (n, ).
-        scores (torch.Tensor): Scores with shape of (n, ).
-        attrs (torch.Tensor, optional): Attributes with shape of (n, ). \
-            Defaults to None.
-
-    Returns:
-        dict[str, torch.Tensor]: Bounding box results in cpu mode.
-
-            - boxes_3d (torch.Tensor): 3D boxes.
-            - scores (torch.Tensor): Prediction scores.
-            - labels_3d (torch.Tensor): Box labels.
-            - attrs_3d (torch.Tensor, optional): Box attributes.
-    """
     result_dict = dict(boxes_3d=bboxes, scores_3d=scores, labels_3d=labels)
 
     if attrs is not None:

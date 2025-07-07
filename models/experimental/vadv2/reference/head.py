@@ -1,29 +1,20 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import copy
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from VADv2.reference.nms_free_coder import MapNMSFreeCoder, CustomNMSFreeCoder
-from VADv2.reference.decoder import CustomTransformerDecoder
-from VADv2.reference.transformer import VADPerceptionTransformer
-from VADv2.reference.utils import inverse_sigmoid, bbox_xyxy_to_cxcywh
+from models.experimental.vadv2.reference.nms_free_coder import MapNMSFreeCoder, CustomNMSFreeCoder
+from models.experimental.vadv2.reference.decoder import CustomTransformerDecoder
+from models.experimental.vadv2.reference.transformer import VADPerceptionTransformer
+from models.experimental.vadv2.reference.utils import inverse_sigmoid, bbox_xyxy_to_cxcywh
 from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
 
 
 class LearnedPositionalEncoding(nn.Module):
-    """Position embedding with learnable embedding weights.
-
-    Args:
-        num_feats (int): The feature dimension for each position
-            along x-axis or y-axis. The final returned dimension for
-            each position is 2 times of this value.
-        row_num_embed (int, optional): The dictionary size of row embeddings.
-            Default 50.
-        col_num_embed (int, optional): The dictionary size of col embeddings.
-            Default 50.
-        init_cfg (dict or list[dict], optional): Initialization config dict.
-    """
-
     def __init__(self, num_feats, row_num_embed=50, col_num_embed=50, init_cfg=dict(type="Uniform", layer="Embedding")):
         super(LearnedPositionalEncoding, self).__init__()
         self.row_embed = nn.Embedding(row_num_embed, num_feats)
@@ -33,17 +24,6 @@ class LearnedPositionalEncoding(nn.Module):
         self.col_num_embed = col_num_embed
 
     def forward(self, mask):
-        """Forward function for `LearnedPositionalEncoding`.
-
-        Args:
-            mask (Tensor): ByteTensor mask. Non-zero values representing
-                ignored positions, while zero values means valid positions
-                for this image. Shape [bs, h, w].
-
-        Returns:
-            pos (Tensor): Returned position embedding with shape
-                [bs, num_feats*2, h, w].
-        """
         h, w = mask.shape[-2:]
         x = torch.arange(w, device=mask.device)
         y = torch.arange(h, device=mask.device)
@@ -78,15 +58,6 @@ class LaneNet(nn.Module):
             in_channels = hidden_unit * 2
 
     def forward(self, pts_lane_feats):
-        """
-            Extract lane_feature from vectorized lane representation
-
-        Args:
-            pts_lane_feats: [batch size, max_pnum, pts, D]
-
-        Returns:
-            inst_lane_feats: [batch size, max_pnum, D]
-        """
         x = pts_lane_feats
         for name, layer in self.layer_seq.named_modules():
             if isinstance(layer, MLP):
@@ -100,17 +71,6 @@ class LaneNet(nn.Module):
 
 
 class VADHead(nn.Module):
-    """Head of VAD model.
-    Args:
-        with_box_refine (bool): Whether to refine the reference points
-            in the decoder. Defaults to False.
-        as_two_stage (bool) : Whether to generate the proposal from
-            the outputs of encoder.
-        transformer (obj:`ConfigDict`): ConfigDict is used for building
-            the Encoder and Decoder.
-        bev_h, bev_w (int): spatial shape of BEV queries.
-    """
-
     def __init__(
         self,
         *args,
@@ -279,39 +239,6 @@ class VADHead(nn.Module):
             torch.tensor(self.map_code_weights, requires_grad=False), requires_grad=False
         )
         self._init_layers()
-        # if kwargs['train_cfg'] is not None:
-        #     assert 'map_assigner' in kwargs['train_cfg'], 'map assigner should be provided '\
-        #         'when train_cfg is set.'
-        #     map_assigner = kwargs['train_cfg']['map_assigner']
-        #     assert loss_map_cls['loss_weight'] == map_assigner['cls_cost']['weight'], \
-        #         'The classification weight for loss and matcher should be' \
-        #         'exactly the same.'
-        # assert loss_map_bbox['loss_weight'] == map_assigner['reg_cost'][
-        #     'weight'], 'The regression L1 weight for loss and matcher ' \
-        #     'should be exactly the same.'
-        # assert loss_map_iou['loss_weight'] == map_assigner['iou_cost']['weight'], \
-        #     'The regression iou weight for loss and matcher should be' \
-        #     'exactly the same.'
-        # assert loss_map_pts['loss_weight'] == map_assigner['pts_cost']['weight'], \
-        #     'The regression l1 weight for map pts loss and matcher should be' \
-        #     'exactly the same.'
-
-        # self.map_assigner = build_assigner(map_assigner)
-        # # DETR sampling=False, so use PseudoSampler
-        # sampler_cfg = dict(type='PseudoSampler')
-        # self.map_sampler = build_sampler(sampler_cfg, context=self)
-
-        # self.loss_traj = build_loss(loss_traj)
-        # self.loss_traj_cls = build_loss(loss_traj_cls)
-        # self.loss_map_bbox = build_loss(loss_map_bbox)
-        # self.loss_map_cls = build_loss(loss_map_cls)
-        # self.loss_map_iou = build_loss(loss_map_iou)
-        # self.loss_map_pts = build_loss(loss_map_pts)
-        # self.loss_map_dir = build_loss(loss_map_dir)
-        # self.loss_plan_reg = build_loss(loss_plan_reg)
-        # self.loss_plan_bound = build_loss(loss_plan_bound)
-        # self.loss_plan_col = build_loss(loss_plan_col)
-        # self.loss_plan_dir = build_loss(loss_plan_dir)
 
     def _init_layers(self):
         """Initialize classification branch and regression branch of head."""
@@ -460,22 +387,6 @@ class VADHead(nn.Module):
         ego_his_trajs=None,
         ego_lcf_feat=None,
     ):
-        """Forward function.
-        Args:
-            mlvl_feats (tuple[Tensor]): Features from the upstream
-                network, each is a 5D-tensor with shape
-                (B, N, C, H, W).
-            prev_bev: previous bev featues
-            only_bev: only compute BEV features with encoder.
-        Returns:
-            all_cls_scores (Tensor): Outputs from the classification head, \
-                shape [nb_dec, bs, num_query, cls_out_channels]. Note \
-                cls_out_channels should includes background.
-            all_bbox_preds (Tensor): Sigmoid outputs from the regression \
-                head with normalized coordinate format (cx, cy, w, l, cz, h, theta, vx, vy). \
-                Shape [nb_dec, bs, num_query, 9].
-        """
-
         bs, num_cam, _, _, _ = mlvl_feats[0].shape
         dtype = mlvl_feats[0].dtype
         object_query_embeds = self.query_embedding.weight.to(dtype)
@@ -791,18 +702,6 @@ class VADHead(nn.Module):
         return outs
 
     def map_transform_box(self, pts, y_first=False):
-        """
-        Converting the points set into bounding box.
-
-        Args:
-            pts: the input points sets (fields), each points
-                set (fields) is represented as 2n scalar.
-            y_first: if y_fisrt=True, the point set is represented as
-                [y1, x1, y2, x2 ... yn, xn], otherwise the point set is
-                represented as [x1, y1, x2, y2 ... xn, yn].
-        Returns:
-            The bbox [cx, cy, w, h] transformed from points.
-        """
         pts_reshape = pts.view(pts.shape[0], self.map_num_vec, self.map_num_pts_per_vec, 2)
         pts_y = pts_reshape[:, :, :, 0] if y_first else pts_reshape[:, :, :, 1]
         pts_x = pts_reshape[:, :, :, 1] if y_first else pts_reshape[:, :, :, 0]
@@ -820,30 +719,6 @@ class VADHead(nn.Module):
         return bbox, pts_reshape
 
     def _get_target_single(self, cls_score, bbox_pred, gt_labels, gt_bboxes, gt_attr_labels, gt_bboxes_ignore=None):
-        """ "Compute regression and classification targets for one image.
-        Outputs from a single decoder layer of a single feature level are used.
-        Args:
-            cls_score (Tensor): Box score logits from a single decoder layer
-                for one image. Shape [num_query, cls_out_channels].
-            bbox_pred (Tensor): Sigmoid outputs from a single decoder layer
-                for one image, with normalized coordinate (cx, cy, w, h) and
-                shape [num_query, 10].
-            gt_bboxes (Tensor): Ground truth bboxes for one image with
-                shape (num_gts, 9) in [x,y,z,w,l,h,yaw,vx,vy] format.
-            gt_labels (Tensor): Ground truth class indices for one image
-                with shape (num_gts, ).
-            gt_bboxes_ignore (Tensor, optional): Bounding boxes
-                which can be ignored. Default None.
-        Returns:
-            tuple[Tensor]: a tuple containing the following for one image.
-                - labels (Tensor): Labels of each image.
-                - label_weights (Tensor]): Label weights of each image.
-                - bbox_targets (Tensor): BBox targets of each image.
-                - bbox_weights (Tensor): BBox weights of each image.
-                - pos_inds (Tensor): Sampled positive indices for each image.
-                - neg_inds (Tensor): Sampled negative indices for each image.
-        """
-
         num_bboxes = bbox_pred.size(0)
         # assigner and sampler
         gt_fut_trajs = gt_attr_labels[:, : self.fut_ts * 2]
@@ -903,29 +778,6 @@ class VADHead(nn.Module):
     def _map_get_target_single(
         self, cls_score, bbox_pred, pts_pred, gt_labels, gt_bboxes, gt_shifts_pts, gt_bboxes_ignore=None
     ):
-        """ "Compute regression and classification targets for one image.
-        Outputs from a single decoder layer of a single feature level are used.
-        Args:
-            cls_score (Tensor): Box score logits from a single decoder layer
-                for one image. Shape [num_query, cls_out_channels].
-            bbox_pred (Tensor): Sigmoid outputs from a single decoder layer
-                for one image, with normalized coordinate (cx, cy, w, h) and
-                shape [num_query, 4].
-            gt_bboxes (Tensor): Ground truth bboxes for one image with
-                shape (num_gts, 4) in [tl_x, tl_y, br_x, br_y] format.
-            gt_labels (Tensor): Ground truth class indices for one image
-                with shape (num_gts, ).
-            gt_bboxes_ignore (Tensor, optional): Bounding boxes
-                which can be ignored. Default None.
-        Returns:
-            tuple[Tensor]: a tuple containing the following for one image.
-                - labels (Tensor): Labels of each image.
-                - label_weights (Tensor]): Label weights of each image.
-                - bbox_targets (Tensor): BBox targets of each image.
-                - bbox_weights (Tensor): BBox weights of each image.
-                - pos_inds (Tensor): Sampled positive indices for each image.
-                - neg_inds (Tensor): Sampled negative indices for each image.
-        """
         num_bboxes = bbox_pred.size(0)
         # assigner and sampler
         gt_c = gt_bboxes.shape[-1]
@@ -966,35 +818,6 @@ class VADHead(nn.Module):
         gt_attr_labels_list,
         gt_bboxes_ignore_list=None,
     ):
-        """"Compute regression and classification targets for a batch image.
-        Outputs from a single decoder layer of a single feature level are used.
-        Args:
-            cls_scores_list (list[Tensor]): Box score logits from a single
-                decoder layer for each image with shape [num_query,
-                cls_out_channels].
-            bbox_preds_list (list[Tensor]): Sigmoid outputs from a single
-                decoder layer for each image, with normalized coordinate
-                (cx, cy, w, h) and shape [num_query, 4].
-            gt_bboxes_list (list[Tensor]): Ground truth bboxes for each image
-                with shape (num_gts, 4) in [tl_x, tl_y, br_x, br_y] format.
-            gt_labels_list (list[Tensor]): Ground truth class indices for each
-                image with shape (num_gts, ).
-            gt_bboxes_ignore_list (list[Tensor], optional): Bounding
-                boxes which can be ignored for each image. Default None.
-        Returns:
-            tuple: a tuple containing the following targets.
-                - labels_list (list[Tensor]): Labels for all images.
-                - label_weights_list (list[Tensor]): Label weights for all \
-                    images.
-                - bbox_targets_list (list[Tensor]): BBox targets for all \
-                    images.
-                - bbox_weights_list (list[Tensor]): BBox weights for all \
-                    images.
-                - num_total_pos (int): Number of positive samples in all \
-                    images.
-                - num_total_neg (int): Number of negative samples in all \
-                    images.
-        """
         assert gt_bboxes_ignore_list is None, "Only supports for gt_bboxes_ignore setting to None."
         num_imgs = len(cls_scores_list)
         gt_bboxes_ignore_list = [gt_bboxes_ignore_list for _ in range(num_imgs)]
@@ -1042,35 +865,6 @@ class VADHead(nn.Module):
         gt_shifts_pts_list,
         gt_bboxes_ignore_list=None,
     ):
-        """"Compute regression and classification targets for a batch image.
-        Outputs from a single decoder layer of a single feature level are used.
-        Args:
-            cls_scores_list (list[Tensor]): Box score logits from a single
-                decoder layer for each image with shape [num_query,
-                cls_out_channels].
-            bbox_preds_list (list[Tensor]): Sigmoid outputs from a single
-                decoder layer for each image, with normalized coordinate
-                (cx, cy, w, h) and shape [num_query, 4].
-            gt_bboxes_list (list[Tensor]): Ground truth bboxes for each image
-                with shape (num_gts, 4) in [tl_x, tl_y, br_x, br_y] format.
-            gt_labels_list (list[Tensor]): Ground truth class indices for each
-                image with shape (num_gts, ).
-            gt_bboxes_ignore_list (list[Tensor], optional): Bounding
-                boxes which can be ignored for each image. Default None.
-        Returns:
-            tuple: a tuple containing the following targets.
-                - labels_list (list[Tensor]): Labels for all images.
-                - label_weights_list (list[Tensor]): Label weights for all \
-                    images.
-                - bbox_targets_list (list[Tensor]): BBox targets for all \
-                    images.
-                - bbox_weights_list (list[Tensor]): BBox weights for all \
-                    images.
-                - num_total_pos (int): Number of positive samples in all \
-                    images.
-                - num_total_neg (int): Number of negative samples in all \
-                    images.
-        """
         assert gt_bboxes_ignore_list is None, "Only supports for gt_bboxes_ignore setting to None."
         num_imgs = len(cls_scores_list)
         gt_bboxes_ignore_list = [gt_bboxes_ignore_list for _ in range(num_imgs)]
@@ -1120,25 +914,6 @@ class VADHead(nn.Module):
         agent_score_preds,
         agent_fut_cls_preds,
     ):
-        """ "Loss function for ego vehicle planning.
-        Args:
-            ego_fut_preds (Tensor): [B, ego_fut_mode, fut_ts, 2]
-            ego_fut_gt (Tensor): [B, fut_ts, 2]
-            ego_fut_masks (Tensor): [B, fut_ts]
-            ego_fut_cmd (Tensor): [B, ego_fut_mode]
-            lane_preds (Tensor): [B, num_vec, num_pts, 2]
-            lane_score_preds (Tensor): [B, num_vec, 3]
-            agent_preds (Tensor): [B, num_agent, 2]
-            agent_fut_preds (Tensor): [B, num_agent, fut_mode, fut_ts, 2]
-            agent_score_preds (Tensor): [B, num_agent, 10]
-            agent_fut_cls_scores (Tensor): [B, num_agent, fut_mode]
-        Returns:
-            loss_plan_reg (Tensor): planning reg loss.
-            loss_plan_bound (Tensor): planning map boundary constraint loss.
-            loss_plan_col (Tensor): planning col constraint loss.
-            loss_plan_dir (Tensor): planning directional constraint loss.
-        """
-
         ego_fut_gt = ego_fut_gt.unsqueeze(1).repeat(1, self.ego_fut_mode, 1, 1)
         loss_plan_l1_weight = ego_fut_cmd[..., None, None] * ego_fut_masks[:, None, :, None]
         loss_plan_l1_weight = loss_plan_l1_weight.repeat(1, 1, 1, 2)
@@ -1187,24 +962,6 @@ class VADHead(nn.Module):
         gt_attr_labels_list,
         gt_bboxes_ignore_list=None,
     ):
-        """ "Loss function for outputs from a single decoder layer of a single
-        feature level.
-        Args:
-            cls_scores (Tensor): Box score logits from a single decoder layer
-                for all images. Shape [bs, num_query, cls_out_channels].
-            bbox_preds (Tensor): Sigmoid outputs from a single decoder layer
-                for all images, with normalized coordinate (cx, cy, w, h) and
-                shape [bs, num_query, 4].
-            gt_bboxes_list (list[Tensor]): Ground truth bboxes for each image
-                with shape (num_gts, 4) in [tl_x, tl_y, br_x, br_y] format.
-            gt_labels_list (list[Tensor]): Ground truth class indices for each
-                image with shape (num_gts, ).
-            gt_bboxes_ignore_list (list[Tensor], optional): Bounding
-                boxes which can be ignored for each image. Default None.
-        Returns:
-            dict[str, Tensor]: A dictionary of loss components for outputs from
-                a single decoder layer.
-        """
         num_imgs = cls_scores.size(0)
         cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
         bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)]
@@ -1301,19 +1058,6 @@ class VADHead(nn.Module):
         return loss_cls, loss_bbox, loss_traj, loss_traj_cls
 
     def get_best_fut_preds(self, traj_preds, traj_targets, gt_fut_masks):
-        """ "Choose best preds among all modes.
-        Args:
-            traj_preds (Tensor): MultiModal traj preds with shape (num_box_preds, fut_mode, fut_ts, 2).
-            traj_targets (Tensor): Ground truth traj for each pred box with shape (num_box_preds, fut_ts, 2).
-            gt_fut_masks (Tensor): Ground truth traj mask with shape (num_box_preds, fut_ts).
-            pred_box_centers (Tensor): Pred box centers with shape (num_box_preds, 2).
-            gt_box_centers (Tensor): Ground truth box centers with shape (num_box_preds, 2).
-
-        Returns:
-            best_traj_preds (Tensor): best traj preds (min displacement error with gt)
-                with shape (num_box_preds, fut_ts*2).
-        """
-
         cum_traj_preds = traj_preds.cumsum(dim=-2)
         cum_traj_targets = traj_targets.cumsum(dim=-2)
 
@@ -1330,17 +1074,6 @@ class VADHead(nn.Module):
         return best_traj_preds
 
     def get_traj_cls_target(self, traj_preds, traj_targets, gt_fut_masks, neg_inds):
-        """ "Get Trajectory mode classification target.
-        Args:
-            traj_preds (Tensor): MultiModal traj preds with shape (num_box_preds, fut_mode, fut_ts, 2).
-            traj_targets (Tensor): Ground truth traj for each pred box with shape (num_box_preds, fut_ts, 2).
-            gt_fut_masks (Tensor): Ground truth traj mask with shape (num_box_preds, fut_ts).
-            neg_inds (Tensor): Negtive indices with shape (num_box_preds,)
-
-        Returns:
-            traj_labels (Tensor): traj cls labels (num_box_preds,).
-        """
-
         cum_traj_preds = traj_preds.cumsum(dim=-2)
         cum_traj_targets = traj_targets.cumsum(dim=-2)
 
@@ -1365,26 +1098,6 @@ class VADHead(nn.Module):
         gt_shifts_pts_list,
         gt_bboxes_ignore_list=None,
     ):
-        """ "Loss function for outputs from a single decoder layer of a single
-        feature level.
-        Args:
-            cls_scores (Tensor): Box score logits from a single decoder layer
-                for all images. Shape [bs, num_query, cls_out_channels].
-            bbox_preds (Tensor): Sigmoid outputs from a single decoder layer
-                for all images, with normalized coordinate (cx, cy, w, h) and
-                shape [bs, num_query, 4].
-            gt_bboxes_list (list[Tensor]): Ground truth bboxes for each image
-                with shape (num_gts, 4) in [tl_x, tl_y, br_x, br_y] format.
-            gt_labels_list (list[Tensor]): Ground truth class indices for each
-                image with shape (num_gts, ).
-            gt_pts_list (list[Tensor]): Ground truth pts for each image
-                with shape (num_gts, fixed_num, 2) in [x,y] format.
-            gt_bboxes_ignore_list (list[Tensor], optional): Bounding
-                boxes which can be ignored for each image. Default None.
-        Returns:
-            dict[str, Tensor]: A dictionary of loss components for outputs from
-                a single decoder layer.
-        """
         num_imgs = cls_scores.size(0)
         cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
         bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)]
@@ -1508,33 +1221,6 @@ class VADHead(nn.Module):
         map_gt_bboxes_ignore=None,
         img_metas=None,
     ):
-        """ "Loss function.
-        Args:
-
-            gt_bboxes_list (list[Tensor]): Ground truth bboxes for each image
-                with shape (num_gts, 4) in [tl_x, tl_y, br_x, br_y] format.
-            gt_labels_list (list[Tensor]): Ground truth class indices for each
-                image with shape (num_gts, ).
-            preds_dicts:
-                all_cls_scores (Tensor): Classification score of all
-                    decoder layers, has shape
-                    [nb_dec, bs, num_query, cls_out_channels].
-                all_bbox_preds (Tensor): Sigmoid regression
-                    outputs of all decode layers. Each is a 4D-tensor with
-                    normalized coordinate format (cx, cy, w, h) and shape
-                    [nb_dec, bs, num_query, 4].
-                enc_cls_scores (Tensor): Classification scores of
-                    points on encode feature map , has shape
-                    (N, h*w, num_classes). Only be passed when as_two_stage is
-                    True, otherwise is None.
-                enc_bbox_preds (Tensor): Regression results of each points
-                    on the encode feature map, has shape (N, h*w, 4). Only be
-                    passed when as_two_stage is True, otherwise is None.
-            gt_bboxes_ignore (list[Tensor], optional): Bounding boxes
-                which can be ignored for each image. Default None.
-        Returns:
-            dict[str, Tensor]: A dictionary of loss components.
-        """
         assert gt_bboxes_ignore is None, (
             f"{self.__class__.__name__} only supports " f"for gt_bboxes_ignore setting to None."
         )
@@ -1720,14 +1406,6 @@ class VADHead(nn.Module):
         return loss_dict
 
     def get_bboxes(self, preds_dicts, img_metas, rescale=False):
-        """Generate bboxes from bbox head predictions.
-        Args:
-            preds_dicts (tuple[list[dict]]): Prediction results.
-            img_metas (list[dict]): Point cloud and image's meta info.
-        Returns:
-            list[dict]: Decoded bbox, scores and labels after nms.
-        """
-
         det_preds_dicts = self.bbox_coder.decode(preds_dicts)
         # map_bboxes: xmin, ymin, xmax, ymax
         map_preds_dicts = self.map_bbox_coder.decode(preds_dicts)
@@ -1767,21 +1445,6 @@ class VADHead(nn.Module):
         pe_normalization=True,
         use_fix_pad=False,
     ):
-        """select_and_pad_pred_map.
-        Args:
-            motion_pos: [B, A, 2]
-            map_query: [B, P, D].
-            map_score: [B, P, 3].
-            map_pos: [B, P, pts, 2].
-            map_thresh: map confidence threshold for filtering low-confidence preds
-            dis_thresh: distance threshold for masking far maps for each agent in cross-attn
-            use_fix_pad: always pad one lane instance for each batch
-        Returns:
-            selected_map_query: [B*A, P1(+1), D], P1 is the max inst num after filter and pad.
-            selected_map_pos: [B*A, P1(+1), 2]
-            selected_padding_mask: [B*A, P1(+1)]
-        """
-
         if dis_thresh is None:
             raise NotImplementedError("Not implement yet")
 
@@ -1858,19 +1521,6 @@ class VADHead(nn.Module):
         return selected_map_query, selected_map_pos, selected_padding_mask
 
     def select_and_pad_query(self, query, query_pos, query_score, score_thresh=0.5, use_fix_pad=True):
-        """select_and_pad_query.
-        Args:
-            query: [B, Q, D].
-            query_pos: [B, Q, 2]
-            query_score: [B, Q, C].
-            score_thresh: confidence threshold for filtering low-confidence query
-            use_fix_pad: always pad one query instance for each batch
-        Returns:
-            selected_query: [B, Q', D]
-            selected_query_pos: [B, Q', 2]
-            selected_padding_mask: [B, Q']
-        """
-
         # select & pad query for different batch using score_thresh
         query_score = query_score.sigmoid()
         query_score = query_score.max(dim=-1)[0]

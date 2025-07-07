@@ -7,7 +7,10 @@ import torch.nn as nn
 from models.experimental.vadv2.reference.resnet import ResNet
 from models.experimental.vadv2.reference.fpn import FPN
 from models.experimental.vadv2.reference.encoder import BEVFormerEncoder
+from models.experimental.vadv2.reference.transformer import VADPerceptionTransformer
+
 from models.experimental.vadv2.reference.decoder import (
+    CustomTransformerDecoder,
     DetectionTransformerDecoder,
     MapDetectionTransformerDecoder,
     CustomMSDeformableAttention,
@@ -46,109 +49,26 @@ def custom_preprocessor(model, name):
         bias = model.fpn_convs.conv.bias.reshape((1, 1, 1, -1))
         parameters["fpn"]["fpn_convs"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
 
-    if isinstance(model, TemporalSelfAttention):
-        parameters["temporal_self_attention"] = {}
-        parameters["temporal_self_attention"]["sampling_offsets"] = {}
-        parameters["temporal_self_attention"]["sampling_offsets"]["weight"] = preprocess_linear_weight(
-            model.sampling_offsets.weight, dtype=ttnn.bfloat16
-        )
-        parameters["temporal_self_attention"]["sampling_offsets"]["bias"] = preprocess_linear_bias(
-            model.sampling_offsets.bias, dtype=ttnn.bfloat16
-        )
-        parameters["temporal_self_attention"]["attention_weights"] = {}
-        parameters["temporal_self_attention"]["attention_weights"]["weight"] = preprocess_linear_weight(
-            model.attention_weights.weight, dtype=ttnn.bfloat16
-        )
-        parameters["temporal_self_attention"]["attention_weights"]["bias"] = preprocess_linear_bias(
-            model.attention_weights.bias, dtype=ttnn.bfloat16
-        )
-        parameters["temporal_self_attention"]["value_proj"] = {}
-        parameters["temporal_self_attention"]["value_proj"]["weight"] = preprocess_linear_weight(
-            model.value_proj.weight, dtype=ttnn.bfloat16
-        )
-        parameters["temporal_self_attention"]["value_proj"]["bias"] = preprocess_linear_bias(
-            model.value_proj.bias, dtype=ttnn.bfloat16
-        )
-        parameters["temporal_self_attention"]["output_proj"] = {}
-        parameters["temporal_self_attention"]["output_proj"]["weight"] = preprocess_linear_weight(
-            model.output_proj.weight, dtype=ttnn.bfloat16
-        )
-        parameters["temporal_self_attention"]["output_proj"]["bias"] = preprocess_linear_bias(
-            model.output_proj.bias, dtype=ttnn.bfloat16
-        )
-    # if isinstance(model, MultiheadAttention):
-    #     print("dtghbnnjnm", model.attn.in_proj_weight.shape)
-    #     parameters = {
-    #         "attentions": {},
-    #     }
-    #     parameters["attentions"][f"attn{0}"] = {
-    #         "in_proj": {
-    #             "weight": preprocess_linear_weight(model.attn.in_proj_weight, dtype=ttnn.bfloat16),
-    #             "bias": preprocess_linear_bias(model.attn.in_proj_bias, dtype=ttnn.bfloat16),
-    #         },
-    #         "out_proj": {
-    #             "weight": preprocess_linear_weight(model.attn.out_proj.weight, dtype=ttnn.bfloat16),
-    #             "bias": preprocess_linear_bias(model.attn.out_proj.bias, dtype=ttnn.bfloat16),
-    #         },
-    #     }
-    # if isinstance(model, FFN):
-    #     parameters = {
-    #         "ffn": {},
-    #     }
-    #     parameters["ffn"][f"ffn0"] = {
-    #             "linear1": {
-    #                 "weight": preprocess_linear_weight(model.layers[0][0].weight, dtype=ttnn.bfloat16),
-    #                 "bias": preprocess_linear_bias(model.layers[0][0].bias, dtype=ttnn.bfloat16),
-    #             },
-    #             "linear2": {
-    #                 "weight": preprocess_linear_weight(model.layers[1].weight, dtype=ttnn.bfloat16),
-    #                 "bias": preprocess_linear_bias(model.layers[1].bias, dtype=ttnn.bfloat16),
-    #             },
-    #         }
-
-    if isinstance(model, CustomMSDeformableAttention):
-        parameters = {
-            "attentions": {},
-        }
-        parameters["attentions"][f"attn1"] = {
-            "sampling_offsets": {
-                "weight": preprocess_linear_weight(model.sampling_offsets.weight, dtype=ttnn.bfloat16),
-                "bias": preprocess_linear_bias(model.sampling_offsets.bias, dtype=ttnn.bfloat16),
-            },
-            "attention_weights": {
-                "weight": preprocess_linear_weight(model.attention_weights.weight, dtype=ttnn.bfloat16),
-                "bias": preprocess_linear_bias(model.attention_weights.bias, dtype=ttnn.bfloat16),
-            },
-            "value_proj": {
-                "weight": preprocess_linear_weight(model.value_proj.weight, dtype=ttnn.bfloat16),
-                "bias": preprocess_linear_bias(model.value_proj.bias, dtype=ttnn.bfloat16),
-            },
-            "output_proj": {
-                "weight": preprocess_linear_weight(model.output_proj.weight, dtype=ttnn.bfloat16),
-                "bias": preprocess_linear_bias(model.output_proj.bias, dtype=ttnn.bfloat16),
-            },
-        }
-
-    if isinstance(model, BEVFormerEncoder):
+    def extract_transformer_parameters(transformer_module):
         parameters = {"layers": {}}
 
-        for i, layer in enumerate(model.layers):  # BaseTransformerLayer
+        for i, layer in enumerate(transformer_module.layers):  # BaseTransformerLayer
             layer_dict = {
                 "attentions": {},
                 "ffn": {},
                 "norms": {},
             }
 
-            # Norms
-            for n, norm in enumerate(layer.norms):
+            # ---- Norms ----
+            for n, norm in enumerate(getattr(layer, "norms", [])):
                 if isinstance(norm, nn.LayerNorm):
                     layer_dict["norms"][f"norm{n}"] = {
                         "weight": preprocess_layernorm_parameter(norm.weight, dtype=ttnn.bfloat16),
                         "bias": preprocess_layernorm_parameter(norm.bias, dtype=ttnn.bfloat16),
                     }
 
-            # FFNs
-            for k, ffn in enumerate(layer.ffns):
+            # ---- FFNs ----
+            for k, ffn in enumerate(getattr(layer, "ffns", [])):
                 layer_dict["ffn"][f"ffn{k}"] = {
                     "linear1": {
                         "weight": preprocess_linear_weight(ffn.layers[0][0].weight, dtype=ttnn.bfloat16),
@@ -160,8 +80,8 @@ def custom_preprocessor(model, name):
                     },
                 }
 
-            # Attentions
-            for j, attn in enumerate(layer.attentions):
+            # ---- Attentions ----
+            for j, attn in enumerate(getattr(layer, "attentions", [])):
                 if isinstance(attn, TemporalSelfAttention):
                     layer_dict["attentions"][f"attn{j}"] = {
                         "sampling_offsets": {
@@ -183,30 +103,23 @@ def custom_preprocessor(model, name):
                     }
 
                 elif isinstance(attn, SpatialCrossAttention):
+                    deform_attn = attn.deformable_attention
                     layer_dict["attentions"][f"attn{j}"] = {
                         "sampling_offsets": {
                             "weight": preprocess_linear_weight(
-                                attn.deformable_attention.sampling_offsets.weight, dtype=ttnn.bfloat16
+                                deform_attn.sampling_offsets.weight, dtype=ttnn.bfloat16
                             ),
-                            "bias": preprocess_linear_bias(
-                                attn.deformable_attention.sampling_offsets.bias, dtype=ttnn.bfloat16
-                            ),
+                            "bias": preprocess_linear_bias(deform_attn.sampling_offsets.bias, dtype=ttnn.bfloat16),
                         },
                         "attention_weights": {
                             "weight": preprocess_linear_weight(
-                                attn.deformable_attention.attention_weights.weight, dtype=ttnn.bfloat16
+                                deform_attn.attention_weights.weight, dtype=ttnn.bfloat16
                             ),
-                            "bias": preprocess_linear_bias(
-                                attn.deformable_attention.attention_weights.bias, dtype=ttnn.bfloat16
-                            ),
+                            "bias": preprocess_linear_bias(deform_attn.attention_weights.bias, dtype=ttnn.bfloat16),
                         },
                         "value_proj": {
-                            "weight": preprocess_linear_weight(
-                                attn.deformable_attention.value_proj.weight, dtype=ttnn.bfloat16
-                            ),
-                            "bias": preprocess_linear_bias(
-                                attn.deformable_attention.value_proj.bias, dtype=ttnn.bfloat16
-                            ),
+                            "weight": preprocess_linear_weight(deform_attn.value_proj.weight, dtype=ttnn.bfloat16),
+                            "bias": preprocess_linear_bias(deform_attn.value_proj.bias, dtype=ttnn.bfloat16),
                         },
                         "output_proj": {
                             "weight": preprocess_linear_weight(attn.output_proj.weight, dtype=ttnn.bfloat16),
@@ -214,43 +127,7 @@ def custom_preprocessor(model, name):
                         },
                     }
 
-            parameters["layers"][f"layer{i}"] = layer_dict
-
-    if isinstance(model, MapDetectionTransformerDecoder or DetectionTransformerDecoder):
-        parameters = {"layers": {}}
-
-        for i, layer in enumerate(model.layers):  # BaseTransformerLayer
-            layer_dict = {
-                "attentions": {},
-                "ffn": {},
-                "norms": {},
-            }
-
-            # Norms
-            for n, norm in enumerate(layer.norms):
-                if isinstance(norm, nn.LayerNorm):
-                    layer_dict["norms"][f"norm{n}"] = {
-                        "weight": preprocess_layernorm_parameter(norm.weight, dtype=ttnn.bfloat16),
-                        "bias": preprocess_layernorm_parameter(norm.bias, dtype=ttnn.bfloat16),
-                    }
-
-            # FFNs
-            for k, ffn in enumerate(layer.ffns):
-                layer_dict["ffn"][f"ffn{k}"] = {
-                    "linear1": {
-                        "weight": preprocess_linear_weight(ffn.layers[0][0].weight, dtype=ttnn.bfloat16),
-                        "bias": preprocess_linear_bias(ffn.layers[0][0].bias, dtype=ttnn.bfloat16),
-                    },
-                    "linear2": {
-                        "weight": preprocess_linear_weight(ffn.layers[1].weight, dtype=ttnn.bfloat16),
-                        "bias": preprocess_linear_bias(ffn.layers[1].bias, dtype=ttnn.bfloat16),
-                    },
-                }
-
-            # Attentions
-            for j, attn in enumerate(layer.attentions):
-                if isinstance(attn, MultiheadAttention):
-                    print(attn.attn.in_proj_weight.shape)
+                elif isinstance(attn, MultiheadAttention):
                     layer_dict["attentions"][f"attn{j}"] = {
                         "in_proj": {
                             "weight": preprocess_linear_weight(attn.attn.in_proj_weight, dtype=ttnn.bfloat16),
@@ -283,8 +160,60 @@ def custom_preprocessor(model, name):
                     }
 
             parameters["layers"][f"layer{i}"] = layer_dict
-
         return parameters
+
+    if isinstance(model, (CustomTransformerDecoder, VADPerceptionTransformer)):
+        parameters = {}
+        # parameters = parameters[""]
+        # print(model.encoder)
+        # ss
+
+        print("helloo")
+        if isinstance(model, CustomTransformerDecoder):
+            parameters["motion_decoder"] = extract_transformer_parameters(model)
+        else:
+            if isinstance(model.encoder, BEVFormerEncoder):
+                parameters["encoder"] = extract_transformer_parameters(model.encoder)
+
+            if isinstance(model.decoder, DetectionTransformerDecoder):
+                print("Executedddddddddddd")
+                parameters["decoder"] = extract_transformer_parameters(model.decoder)
+
+            # Handle map_decoder if present
+            if isinstance(model.map_decoder, MapDetectionTransformerDecoder):
+                print("yes here")
+                parameters["map_decoder"] = extract_transformer_parameters(model.map_decoder)
+
+            parameters["reference_points"] = {
+                "weight": preprocess_linear_weight(model.reference_points.weight, dtype=ttnn.bfloat16),
+                "bias": preprocess_linear_bias(model.reference_points.bias, dtype=ttnn.bfloat16),
+            }
+
+            parameters["map_reference_points"] = {
+                "weight": preprocess_linear_weight(model.map_reference_points.weight, dtype=ttnn.bfloat16),
+                "bias": preprocess_linear_bias(model.map_reference_points.bias, dtype=ttnn.bfloat16),
+            }
+
+            # CAN Bus MLP
+            parameters["can_bus_mlp"] = {
+                "0": {
+                    "weight": preprocess_linear_weight(model.can_bus_mlp[0].weight, dtype=ttnn.bfloat16),
+                    "bias": preprocess_linear_bias(model.can_bus_mlp[0].bias, dtype=ttnn.bfloat16),
+                },
+                "1": {
+                    "weight": preprocess_linear_weight(model.can_bus_mlp[2].weight, dtype=ttnn.bfloat16),
+                    "bias": preprocess_linear_bias(model.can_bus_mlp[2].bias, dtype=ttnn.bfloat16),
+                },
+                "norm": {
+                    "weight": preprocess_layernorm_parameter(model.can_bus_mlp.norm.weight, dtype=ttnn.bfloat16),
+                    "bias": preprocess_layernorm_parameter(model.can_bus_mlp.norm.bias, dtype=ttnn.bfloat16),
+                },
+            }
+
+            parameters["level_embeds"] = ttnn.from_torch(
+                model.level_embeds, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            parameters["cams_embeds"] = ttnn.from_torch(model.cams_embeds, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     return parameters
 

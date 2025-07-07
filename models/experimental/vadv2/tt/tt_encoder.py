@@ -168,6 +168,7 @@ class TtBEVFormerEncoder:
         shift=0.0,
         **kwargs,
     ):
+        bev_query = ttnn.to_torch(bev_query)
         output = bev_query
         intermediate = []
 
@@ -346,7 +347,6 @@ class TtBEVFormerLayer:
 
         for layer in self.operation_order:
             if layer == "self_attn":
-                print("self_attn")
                 spatial_shapes_1 = torch.tensor([[bev_h, bev_w]])
                 spatial_shapes_1 = ttnn.from_torch(
                     spatial_shapes_1, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
@@ -370,7 +370,6 @@ class TtBEVFormerLayer:
                 identity = query
 
             elif layer == "norm":
-                print("norm")
                 query = ttnn.layer_norm(
                     query,
                     weight=self.params.norms[f"norm{norm_index}"].weight,
@@ -379,8 +378,6 @@ class TtBEVFormerLayer:
                 ttnn.deallocate(self.params.norms[f"norm{norm_index}"].weight)
                 ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
                 norm_index += 1
-
-                print("norm_output", query)
 
             # spaital cross attention
             elif layer == "cross_attn":
@@ -404,7 +401,6 @@ class TtBEVFormerLayer:
                 identity = query
 
             elif layer == "ffn":
-                print("ffn")
                 query = self.ffns[ffn_index](query, identity if self.pre_norm else None)
 
                 ffn_index += 1
