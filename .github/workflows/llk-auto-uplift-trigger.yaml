@@ -329,7 +329,10 @@ jobs:
 
           # Trigger workflows and collect run IDs with workflow mapping
           declare -A RUN_ID_TO_WORKFLOW
+          declare -A WORKFLOW_RETRY_COUNT
           RUN_IDS=()
+          MAX_RETRIES=3
+
           for workflow in "${WORKFLOWS_TO_RUN[@]}"; do
             echo "Triggering $workflow..."
 
@@ -364,6 +367,7 @@ jobs:
               if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
                 RUN_IDS+=("$RUN_ID")
                 RUN_ID_TO_WORKFLOW["$RUN_ID"]="$workflow"
+                WORKFLOW_RETRY_COUNT["$workflow"]=0
                 echo "Monitoring run ID: $RUN_ID for workflow: $workflow"
 
                 # Comment on PR with workflow link
@@ -427,9 +431,58 @@ jobs:
                     --repo "${{ github.repository }}"
                 else
                   echo "❌ $WORKFLOW_DISPLAY_NAME (Run $run_id) failed with conclusion: $CONCLUSION"
-                  gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
-                    --body "❌ **$WORKFLOW_DISPLAY_NAME** failed (conclusion: \`$CONCLUSION\`): [View run]($RUN_URL)" \
-                    --repo "${{ github.repository }}"
+
+                  # Check if we should retry this workflow
+                  CURRENT_RETRIES=${WORKFLOW_RETRY_COUNT["$WORKFLOW_NAME"]}
+                  if [ "$CURRENT_RETRIES" -lt "$MAX_RETRIES" ]; then
+                    NEW_RETRY_COUNT=$((CURRENT_RETRIES + 1))
+                    WORKFLOW_RETRY_COUNT["$WORKFLOW_NAME"]=$NEW_RETRY_COUNT
+
+                    echo "🔄 Retrying $WORKFLOW_DISPLAY_NAME (attempt $NEW_RETRY_COUNT/$MAX_RETRIES)"
+                    gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
+                      --body "🔄 **$WORKFLOW_DISPLAY_NAME** failed, retrying (attempt $NEW_RETRY_COUNT/$MAX_RETRIES): [Failed run]($RUN_URL)" \
+                      --repo "${{ github.repository }}"
+
+                    # Rerun the failed workflow
+                    if gh run rerun "$run_id" --failed-jobs --repo "${{ github.repository }}"; then
+                      echo "✅ Successfully triggered retry for $WORKFLOW_DISPLAY_NAME"
+
+                      # Wait for the new run to appear and add it to monitoring
+                      sleep 30
+                      NEW_RUN_ID=""
+                      for i in {1..6}; do
+                        LATEST_RUN=$(gh run list --workflow "$WORKFLOW_NAME" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json databaseId --jq '.[0].databaseId')
+                        if [ "$LATEST_RUN" != "$run_id" ] && [ -n "$LATEST_RUN" ]; then
+                          NEW_RUN_ID="$LATEST_RUN"
+                          break
+                        fi
+                        echo "Waiting for retry run to appear (attempt $i/6)..."
+                        sleep 10
+                      done
+
+                      if [ -n "$NEW_RUN_ID" ]; then
+                        # Replace the old run ID with the new one for continued monitoring
+                        RUN_IDS=("${RUN_IDS[@]/$run_id}")
+                        RUN_IDS+=("$NEW_RUN_ID")
+                        RUN_ID_TO_WORKFLOW["$NEW_RUN_ID"]="$WORKFLOW_NAME"
+                        unset RUN_ID_TO_WORKFLOW["$run_id"]
+                        echo "📍 Now monitoring retry run ID: $NEW_RUN_ID"
+
+                        # Continue to next iteration to keep monitoring the retry
+                        continue
+                      else
+                        echo "⚠️ Could not find retry run ID, will mark as failed"
+                      fi
+                    else
+                      echo "❌ Failed to trigger retry for $WORKFLOW_DISPLAY_NAME"
+                    fi
+                  else
+                    echo "❌ $WORKFLOW_DISPLAY_NAME exceeded max retries ($MAX_RETRIES)"
+                    gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
+                      --body "❌ **$WORKFLOW_DISPLAY_NAME** failed after $MAX_RETRIES attempts (conclusion: \`$CONCLUSION\`): [View run]($RUN_URL)" \
+                      --repo "${{ github.repository }}"
+                  fi
+
                   ALL_SUCCESS=false
                 fi
               else
