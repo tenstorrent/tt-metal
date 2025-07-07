@@ -212,7 +212,6 @@ def run_conv(
     )
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=output_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout if not auto_shard else None,
         deallocate_activation=deallocate_activation,
@@ -265,6 +264,7 @@ def run_conv(
         slice_config=slice_config,
         return_output_dim=True,
         return_weights_and_bias=True,
+        dtype=output_dtype,
     )
     if run_twice:
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
@@ -288,6 +288,7 @@ def run_conv(
             slice_config=slice_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=output_dtype,
         )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
@@ -422,7 +423,6 @@ def run_conv_with_split(
         split_weight_tensors[i] = torch.split(split_weight_tensors[i], split_input_channels, 1)
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=output_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout if not auto_shard else None,
     )
@@ -469,6 +469,7 @@ def run_conv_with_split(
                 conv_config=conv_config,
                 compute_config=compute_config,
                 return_output_dim=True,
+                dtype=output_dtype,
             )
             tt_conv_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
             ttnn.deallocate(tt_output_tensor_on_device, True)
@@ -893,7 +894,6 @@ def test_conv_ws(
             pytest.skip("Test is not supported on n300 (8,7) grid due to #13541")
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=output_dtype,
         weights_dtype=weights_dtype,
         shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED if not auto_shard else None,
         deallocate_activation=deallocate_activation,
@@ -928,6 +928,7 @@ def test_conv_ws(
         compute_config=compute_config,
         groups=groups,
         return_output_dim=True,
+        dtype=output_dtype,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -3583,7 +3584,6 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
     )
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat8_b,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_split_reader=enable_split_reader,
@@ -3603,6 +3603,7 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
         device=device,
         padding=(patch_size // 2, patch_size // 2),
         conv_config=conv_config,
+        dtype=ttnn.bfloat8_b,
     )
     ttnn_output_tensor = ttnn.to_torch(ttnn_output_tensor)
 
@@ -3863,7 +3864,6 @@ def test_conv2d_act_dealloc(
     )
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=output_dtype,
         weights_dtype=weights_dtype,
         deallocate_activation=True,
         output_layout=output_layout,
@@ -3892,5 +3892,6 @@ def test_conv2d_act_dealloc(
         conv_config=conv_config,
         groups=groups,
         slice_config=slice_config,
+        dtype=output_dtype,
     )
     assert not tt_input_tensor.is_allocated(), "Input tensor is allocated"
