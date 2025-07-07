@@ -1005,6 +1005,27 @@ FORCE_INLINE void noc_async_read_page(
     noc_async_read(s.get_noc_addr(id, offset), dst_local_l1_addr, s.page_size, noc);
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous read for a single tile from an interleaved buffer
+ * which can be in DRAM or L1 memory. The source address is handled by the
+ * address generator and the index of the tile to read.
+ * The destination is in L1 memory on the Tensix core
+ * executing this function call.
+ *
+ * Return value: None
+ *
+ * | Argument                    | Description                                         | Data type              | Valid range                      | required |
+ * |-----------------------------|-----------------------------------------------------|------------------------|----------------------------------|----------|
+ * | id                          | The ordered index of the tile to read               | uint32_t               | 0..(Num of tiles in buffer - 1)  | True     |
+ * | s                           | Determines which bank and address to read tile from | InterleavedAddrGenFast | Any InterleavedAddrGenFast       | True     |
+ * | dst_local_l1_addr           | L1 address to read the tile to                      | uint32_t               | 0..1.5MB                         | True     |
+ * | offset                      | Adds offset to source address (default = 0)         | uint32_t               | 0..1.5MB                         | False    |
+ * | noc                         | Which NOC to use for the transaction                | uint8_t                | 0 or 1                           | False    |
+ * | DRAM (template argument)    | If the interleaved buffer is in DRAM or L1          | bool                   | true or false                    | True     |
+ * | tile_hw (template argument) | Tile size in datums (default: 1024)                 | bool                   | true or false                    | True     |
+ */
+// clang-format on
 template <bool DRAM, uint32_t tile_hw>
 FORCE_INLINE void noc_async_read_tile(
     const uint32_t id,
@@ -1046,6 +1067,25 @@ FORCE_INLINE void noc_async_read_tile(
     }
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous write for a single tile into an interleaved buffer
+ * which can be in DRAM or L1 memory. The source address is in L1 memory on the
+ * Tensix core executing this function call. The destination address is handled
+ * by the address generator and the index of the tile to write.
+ *
+ * Return value: None
+ *
+ * | Argument                    | Description                                         | Data type              | Valid range                      | required |
+ * |-----------------------------|-----------------------------------------------------|------------------------|----------------------------------|----------|
+ * | id                          | The ordered index of the tile to write              | uint32_t               | 0..(Num of tiles in buffer - 1)  | True     |
+ * | s                           | Determines which bank and address to write tile to  | InterleavedAddrGenFast | Any InterleavedAddrGenFast       | True     |
+ * | src_local_l1_addr           | L1 address to read the tile from                    | uint32_t               | 0..1.5MB                         | True     |
+ * | noc                         | Which NOC to use for the transaction                | uint8_t                | 0 or 1                           | False    |
+ * | DRAM (template argument)    | If the interleaved buffer is in DRAM or L1          | bool                   | true or false                    | True     |
+ * | tile_hw (template argument) | Tile size in datums (default: 1024)                 | bool                   | true or false                    | True     |
+ */
+// clang-format on
 template <bool DRAM, uint32_t tile_hw>
 FORCE_INLINE void noc_async_write_tile(
     const uint32_t id,
