@@ -51,7 +51,6 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     auto input = tensor_args.input;
     auto fill_value = operation_attributes.fill_value;
     DataType dtype{operation_attributes.dtype};
-    Layout layout{operation_attributes.layout};
     IDevice* device = input.device();
     MemoryConfig memory_config{operation_attributes.memory_config};
 

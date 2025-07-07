@@ -154,7 +154,6 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     /* remote cb setup */
     uint32_t remote_cb_size = global_cb.size();
-    uint32_t remote_cb_single_tile_size = max_tile_size;
 
     auto L1_ALIGNMENT = tt::tt_metal::hal::get_l1_alignment();
     uint32_t remote_cb_index = tt::CBIndex::c_31;

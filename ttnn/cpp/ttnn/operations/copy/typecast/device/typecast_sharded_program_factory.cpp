@@ -27,7 +27,6 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     const auto& output_dtype = args.output_dtype;
 
     tt::tt_metal::Program program = CreateProgram();
-    tt::tt_metal::IDevice* device = input.device();
 
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
