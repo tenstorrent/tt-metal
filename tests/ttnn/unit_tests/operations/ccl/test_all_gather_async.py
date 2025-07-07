@@ -312,14 +312,14 @@ def test_all_gather_async_sharded_to_sharded(
         input_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    mem_config_input = ttnn.MemoryConfig(
-        input_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=input_shard_spec
-    )
-
     output_shard_spec = ttnn.ShardSpec(
         output_shard_grid,
         output_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    mem_config_input = ttnn.MemoryConfig(
+        input_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=input_shard_spec
     )
     mem_config_ag = ttnn.MemoryConfig(output_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=output_shard_spec)
 
@@ -401,10 +401,10 @@ def test_all_gather_async_sharded_to_interleaved(
         input_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
+
     mem_config_input = ttnn.MemoryConfig(
         input_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=input_shard_spec
     )
-
     mem_config_ag = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     run_all_gather_impl(
@@ -480,13 +480,13 @@ def test_all_gather_async_interleaved_to_sharded(
     all_gather_topology,
     num_iters,
 ):
-    mem_config_input = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-
     output_shard_spec = ttnn.ShardSpec(
         output_shard_grid,
         output_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
+
+    mem_config_input = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     mem_config_ag = ttnn.MemoryConfig(output_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=output_shard_spec)
 
     run_all_gather_impl(
