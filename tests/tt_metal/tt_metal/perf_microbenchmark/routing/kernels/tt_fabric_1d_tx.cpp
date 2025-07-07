@@ -119,12 +119,11 @@ inline void setup_header_noc_unicast_write_dram(
 inline void setup_header_noc_unicast_atomic_inc(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint32_t notification_mailbox_address,
-    uint32_t atomic_inc_val,
     uint8_t noc_x_start,
     uint8_t noc_y_start) {
     packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
         get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
-        static_cast<uint16_t>(atomic_inc_val),
+        1 /* increment value */,
         std::numeric_limits<uint16_t>::max(),
         true /*flush*/});
 }
@@ -192,13 +191,11 @@ void kernel_main() {
     uint32_t dest_bank_id;
     uint32_t dest_dram_addr;
     uint32_t notification_mailbox_address;
-    uint32_t atomic_inc_val;
 
     if constexpr (use_dram_dst) {
         dest_bank_id = get_arg_val<uint32_t>(rt_args_idx++);
         dest_dram_addr = get_arg_val<uint32_t>(rt_args_idx++);
         notification_mailbox_address = get_arg_val<uint32_t>(rt_args_idx++);
-        atomic_inc_val = get_arg_val<uint32_t>(rt_args_idx++);
     }
 
     uint32_t bwd_start_distance;
@@ -278,7 +275,7 @@ void kernel_main() {
 #ifndef BENCHMARK_MODE
         time_seed = prng_next(time_seed);
 
-        if (use_dram_dst) {
+        if constexpr (use_dram_dst) {
             // Calculate current DRAM destination address for this packet
             uint32_t current_dram_addr = dest_dram_addr + (i * packet_payload_size_bytes);
 
@@ -317,19 +314,16 @@ void kernel_main() {
     }
 
     /* Use atomic increment to flush writes for simplicity*/
-    if (use_dram_dst) {
+    if constexpr (use_dram_dst) {
         // Ensure all DRAM packets are written before sending notification
         noc_async_write_barrier();
 
         // Send notification that packets have been sent
-#ifndef BENCHMARK_MODE
-        setup_header_noc_unicast_atomic_inc(
-            fwd_packet_header, notification_mailbox_address, atomic_inc_val, noc_x_start, noc_y_start);
+        setup_header_noc_unicast_atomic_inc(fwd_packet_header, notification_mailbox_address, noc_x_start, noc_y_start);
         if constexpr (additional_dir) {
             setup_header_noc_unicast_atomic_inc(
-                bwd_packet_header, notification_mailbox_address, atomic_inc_val, noc_x_start, noc_y_start);
+                bwd_packet_header, notification_mailbox_address, noc_x_start, noc_y_start);
         }
-#endif
         send_notification(fwd_packet_header, fwd_fabric_connection);
         if constexpr (additional_dir) {
             send_notification(bwd_packet_header, bwd_fabric_connection);

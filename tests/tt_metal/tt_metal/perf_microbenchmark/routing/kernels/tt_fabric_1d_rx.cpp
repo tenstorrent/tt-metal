@@ -28,13 +28,11 @@ void kernel_main() {
     int32_t dest_bank_id;
     uint32_t dest_dram_addr;
     uint32_t notification_mailbox_address;
-    uint32_t atomic_inc_val;
 
     if constexpr (use_dram_dst) {
         dest_bank_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
         dest_dram_addr = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
         notification_mailbox_address = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-        atomic_inc_val = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     }
 
     tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(target_address);
@@ -76,7 +74,7 @@ void kernel_main() {
 #ifndef BENCHMARK_MODE
 
         WAYPOINT("FPW");
-        while (*poll_addr != atomic_inc_val) {
+        while (*poll_addr != 1 /* increment value*/) {
             invalidate_l1_cache();
         }
         WAYPOINT("FPD");

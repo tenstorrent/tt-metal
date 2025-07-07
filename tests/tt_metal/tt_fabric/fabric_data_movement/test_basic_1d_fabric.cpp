@@ -602,8 +602,7 @@ void run_unicast_test_bw_chips(
     // Only add DRAM args if use_dram_dst is true
     if (use_dram_dst) {
         sender_runtime_args.insert(
-            sender_runtime_args.end(),
-            {dest_bank_id, dest_dram_addr, worker_mem_map.notification_mailbox_address, 1 /* atomic increment val*/});
+            sender_runtime_args.end(), {dest_bank_id, dest_dram_addr, worker_mem_map.notification_mailbox_address});
     }
 
     // append the EDM connection rt args
