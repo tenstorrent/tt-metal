@@ -223,7 +223,6 @@ inline size_t flattened_index (const ttnn::ccl::Shape4D<uint32_t>& shape, const 
         uint32_t curr_num_wrap_around = (flattened_offset_worker_slice + offset_into_worker_slice) / tensor_slice_shape.x;
         uint32_t num_wrap_around = curr_num_wrap_around - prev_num_wrap_around;
 
-        bool end_of_worker_slice_row = offset_into_worker_slice == worker_slice_volume;
         // Check for wrap around
         if (num_wrap_around > 0) { // wrap around wrt to global tensor
             curr_page_idx += num_wrap_around * (tensor_shape.x - tensor_slice_shape.x) + stride;
