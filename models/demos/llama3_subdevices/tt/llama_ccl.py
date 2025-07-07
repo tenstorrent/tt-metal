@@ -71,6 +71,7 @@ class TT_CCL:
 
                 if mode == "prefill":
                     if self.use_ring_rs_prefill:
+                        # current ring implementation of reduce scatter expects 3 semaphores per link (12 total), where AG and old RS use same addresses on all links
                         self.reduce_semaphore_handles[i].append(
                             [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(12)]
                         )
