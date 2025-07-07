@@ -15,7 +15,7 @@ namespace ckernel {
 template <bool APPROXIMATE, int binop_mode>
 inline void llk_math_eltwise_unary_sfpu_binop_with_scalar(
     uint dst_index, uint32_t param1, int vector_mode = VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_binop_with_scalar<APPROXIMATE, binop_mode, 8>, dst_index, vector_mode, param1);
 }
 

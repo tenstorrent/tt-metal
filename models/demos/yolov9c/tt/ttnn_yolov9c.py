@@ -67,6 +67,7 @@ class TtYOLOv9cConv2D:
         self.conv_transpose = conv_transpose
         self.output_padding = conv.output_padding if conv_transpose else None
         self.enable_autopad = enable_autopad
+        self.activation_dtype = activation_dtype
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -76,7 +77,6 @@ class TtYOLOv9cConv2D:
             math_approx_mode=False,
         )
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=activation_dtype,
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
@@ -132,6 +132,7 @@ class TtYOLOv9cConv2D:
                 compute_config=self.compute_config,
                 return_output_dim=True,
                 return_weights_and_bias=True,
+                dtype=self.activation_dtype,
             )
             hw = output_height * output_width
             if x.shape[2] != hw:
@@ -161,6 +162,7 @@ class TtYOLOv9cConv2D:
                 output_padding=(1, 1),
                 dilation=(1, 1),
                 mirror_kernel=True,
+                dtype=self.activation_dtype,
             )
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
             x = ttnn.reshape(x, (x.shape[0], output_height, output_width, x.shape[3]))
