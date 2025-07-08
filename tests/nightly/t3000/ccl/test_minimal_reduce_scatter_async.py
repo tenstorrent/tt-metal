@@ -7,15 +7,14 @@ import pytest
 import math
 from loguru import logger
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
-
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 
 
-def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
+def create_global_semaphores(mesh_device, num_devices, cores, initial_value, num_links):
     # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(3)]
+    ccl_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(3 * num_links)
+    ]
     return ccl_semaphore_handles
 
 
@@ -32,6 +31,7 @@ def run_reduce_scatter_impl(
     rs_topology,
     num_iters=1,
     enable_trace=True,
+    cluster_axis=None,
     ones_tensor=False,
 ):
     torch.manual_seed(0)
@@ -57,14 +57,14 @@ def run_reduce_scatter_impl(
 
     # create global semaphore handles
     ccl_semaphore_handles = [
-        create_global_semaphores(t3k_mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(num_iters)
+        create_global_semaphores(t3k_mesh_device, num_devices, ccl_sub_device_crs, 0, num_links)
+        for _ in range(num_iters)
     ]
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
-    rs_num_batches = rs_input_shape[0]
     single_batch_input_shape = rs_input_shape[:]
-    single_batch_input_shape[2] //= rs_num_batches
+    single_batch_input_shape[0] = 1
     persistent_intermediate_buffers = [
         ttnn.from_torch(
             torch.zeros(single_batch_input_shape),
@@ -146,6 +146,7 @@ def run_reduce_scatter_impl(
             memory_config=mem_config_rs,
             topology=rs_topology,
             subdevice_id=worker_sub_device_id,
+            cluster_axis=cluster_axis,
         )
 
         return tt_reduce_scatter_output_tensor
@@ -188,7 +189,7 @@ def run_reduce_scatter_impl(
         torch_rs_out = torch.cat(torch_rs_out_tensor, 3)
 
         tt_rs_out = ttnn.from_device(tt_rs_out_tensor)
-        tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+        tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=3))
 
         if ones_tensor:
             eq, output = comp_equal(tt_rs_out, torch_rs_out)
@@ -202,30 +203,26 @@ def run_reduce_scatter_impl(
     t3k_mesh_device.clear_loaded_sub_device_manager()
 
 
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "num_devices, num_links, rs_input_shape, dim, layout, rs_input_dtype",
+    "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
-        # (
-        #     8,
-        #     1,
-        #     [1, 1, 4096, 2560],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     ttnn.bfloat16,
-        #     1,
-        # ),  # Full SD3.5 shape, when reduce scatter unfused
-        (8, 1, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, 1, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, 1, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, 1, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, 1, [1, 1, 512, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, 1, [1, 1, 512, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 352, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 512, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 512, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "batch_8",
         "batch_4",
         "batch_2",
         "batch_1",
+        "batch_1_sd35_spatial",
+        "batch_1_sd35_prompt",
         "batch_1_slice_wt_1",
         "batch_1_slice_wt_2",
     ],
@@ -258,9 +255,10 @@ def run_reduce_scatter_impl(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring"],
+    ids=["fabric_ring", "fabric_linear"],
 )
 def test_reduce_scatter_async(
     t3k_mesh_device,
