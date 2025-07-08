@@ -29,11 +29,11 @@ jobs:
           { name: "t3k_qwen25_tests", arch: wormhole_b0, cmd: run_t3000_qwen25_tests, timeout: 60, owner_id: U03HY7MK4BT}, # Mark O'Connor
           { name: "t3k_llama3_vision_tests", arch: wormhole_b0, cmd: run_t3000_llama3_vision_tests, timeout: 30, owner_id: U03FJB5TM5Y}, #Colman Glagovich
           { name: "t3k_llama3_90b_vision_tests", arch: wormhole_b0, cmd: run_t3000_llama3_90b_vision_tests, timeout: 60, owner_id: U07RY6B5FLJ},  #Gongyu Wang
-          { name: "t3k_llama3_70b_tests", arch: wormhole_b0, cmd: run_t3000_llama3_70b_tests, timeout: 60, owner_id: U03FJB5TM5Y}, #Colman Glagovich
+          { name: "t3k_llama3_70b_tests", arch: wormhole_b0, cmd: run_t3000_llama3_70b_tests, timeout: 60, owner_id: U03FJB5TM5Y}, # Colman Glagovich
           { name: "t3k_falcon7b_tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 90, owner_id: U05RWH3QUPM}, #Salar Hosseini
           { name: "t3k_mixtral_tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 50, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "t3k_resnet50_tests", arch: wormhole_b0, cmd: run_t3000_resnet50_tests, timeout: 50, owner_id: U0837MYG788}, # Marko Radosavljevic
-          { name: "t3k sd35_large tests", arch: wormhole_b0, cmd: run_t3000_sd35large_tests, timeout: 60, owner_id: U03FJB5TM5Y}, #Colman Glagovich
+          { name: "t3k sd35_large tests", arch: wormhole_b0, cmd: run_t3000_sd35large_tests, timeout: 60, owner_id: U03FJB5TM5Y}, # Colman Glagovich
           { name: "t3k flux1_schnell tests", arch: wormhole_b0, cmd: run_t3000_flux1_schnell, timeout: 60, owner_id: U08HEPGQ2UE}, # Stanley Shen
           { name: "t3k_mistral_tests", arch: wormhole_b0, cmd: run_t3000_mistral_tests, timeout: 90, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
           # Temporary: Run Qwen 3 tests last as they update to a newer transformers version.
