@@ -51,6 +51,8 @@ def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dty
     # so the test must validate different input tensor origins
     ttnn_dtype_requires_tile = ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]
     ttnn_dtype_has_random = ttnn_dtype not in [ttnn.uint8, ttnn.int32]
+    ttnn_is_float = ttnn_dtype in [ttnn.float32, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b]
+    torch_is_float = torch_dtype in [torch.float16, torch.float32]
 
     print("")
 
@@ -83,7 +85,7 @@ def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dty
         torch_input_tensor,
         device=device if convert_with_device else None,
         dtype=ttnn_dtype,
-        layout=ttnn.TILE_LAYOUT if ttnn_dtype_requires_tile else ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT if ttnn_dtype_requires_tile else ttnn_layout,
     )
 
     assert (
@@ -100,5 +102,5 @@ def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dty
     assert_with_pcc(
         expected_pytorch_result=torch_input_tensor,
         actual_pytorch_result=ttnn_result_tensor.cpu().to_torch(),
-        pcc=0.9999,
+        pcc=0.99 if ttnn_is_float != torch_is_float else 0.9999,
     )

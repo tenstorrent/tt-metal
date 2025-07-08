@@ -307,6 +307,7 @@ def from_torch(
 
     if not device and dtype in ttnn_fallback_type_mapping:
         tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
+        print(f"from_torch::tensor.to no device:\n{tensor} {tensor.dtype} {tensor.shape}")
         host_type_conversion = True
 
     elif tensor.dtype in ttnn_unsupported_type_mapping:
@@ -315,15 +316,28 @@ def from_torch(
         if dtype in ttnn_fallback_type_mapping:
             tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
         else:
-            tensor = tensor.to(ttnn_unsupported_type_mapping[dtype])
+            tensor = tensor.to(ttnn_unsupported_type_mapping[tensor.dtype])
+
+        print(f"from_torch::tensor.to unsupported origin:\n{tensor} {tensor.dtype} {tensor.shape}")
 
         host_type_conversion = True
+
+    elif layout == ttnn.ROW_MAJOR_LAYOUT and tensor.dtype in [torch.float32, torch.int32] and dtype == ttnn.uint8:
+        # `to_layout` turns the whole tensor into zeroes when converting float32/int32 to uint8 in row-major layout
+        tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
+        host_type_conversion = True
+
+    if host_type_conversion and (dtype == ttnn.bfloat4_b or dtype == ttnn.bfloat8_b):
+        construct_with_dtype = dtype
+
+    else:
+        construct_with_dtype = None
 
     print(f"from_torch::tensor:\n{tensor} {tensor.dtype} {tensor.shape}")
 
     result = ttnn.Tensor(
         tensor=tensor,
-        data_type=dtype,
+        data_type=construct_with_dtype,
         device=device,
         # If dtype is specified explicitly create the tensor in tile layout for the
         # typecast operation.

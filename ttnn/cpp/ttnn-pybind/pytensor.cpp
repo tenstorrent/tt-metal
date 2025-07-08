@@ -169,7 +169,11 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
         py::object contiguous_py_tensor = py_tensor.attr("contiguous")();
         DataType data_type = DataType::INVALID;
 
-        if (py_dtype.equal(torch.attr("float32"))) {
+        // Override the data type if there is a user-provided one
+        // Otherwise, figure it out from torch dtype
+        if (optional_data_type.has_value()) {
+            data_type = optional_data_type.value();
+        } else if (py_dtype.equal(torch.attr("float32"))) {
             data_type = DataType::FLOAT32;
         } else if (py_dtype.equal(torch.attr("float16"))) {
             data_type = DataType::BFLOAT16;
