@@ -12,6 +12,7 @@ from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
+from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 
@@ -32,8 +33,7 @@ def hf_config():
     """Load DeepSeek config for testing"""
     config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
     config.num_hidden_layers = 1  # Reduce layers for testing
-    config.num_attention_heads = 32  # TODO: Remove when done with single-device testing
-    config.max_seq_len = 16 * 1024  # Set max sequence length for testing
+    config.max_seq_len = 5 * 1024  # Set max sequence length for testing
 
     return config
 
@@ -53,6 +53,23 @@ def reference(hf_config, reset_seeds):
     model.init_weights_with_random()
 
     return model_args, model
+
+
+def get_cache_on_host(tt_cache, mesh_device):
+    """
+    Get the KVPE cache on the host from the TTNN cache.
+    This specifically retrieves the first row of the mesh_device,
+    which currently only supports DP on the first row.
+    """
+    host_cache = []
+    for i, t in enumerate(
+        ttnn.get_device_tensors(tt_cache)[: list(mesh_device.shape)[0]]
+    ):  # Only get from first row of mesh_device
+        host_t = t.cpu().to_torch()
+        host_cache.append(host_t)
+    host_cache = torch.concat(host_cache, dim=0)
+
+    return host_cache
 
 
 # Unit Tests
@@ -98,6 +115,15 @@ def test_convert_weights(reference, hf_config, temp_dir, mesh_device):
     "check_cache",
     [True],
 )
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
 def test_forward_pass(
     mode,
     seq_len,
@@ -108,6 +134,8 @@ def test_forward_pass(
     temp_dir,
     mesh_device,
 ):
+    mesh_shape = list(mesh_device.shape)
+
     reference_args, reference_model = reference
 
     if mode == "prefill":
@@ -121,8 +149,9 @@ def test_forward_pass(
     weight_config = MLA1D.convert_weights(hf_config, reference_model.state_dict(), temp_dir, mesh_device)
 
     # Generate appropriate configs
-    model_prefill_config = MLA1D.prefill_model_config(hf_config, mesh_device)
-    model_decode_config = MLA1D.decode_model_config(hf_config, mesh_device)
+    ccl = CCL1D(mesh_device, hf_config)
+    model_prefill_config = MLA1D.prefill_model_config(hf_config, mesh_device, ccl)
+    model_decode_config = MLA1D.decode_model_config(hf_config, mesh_device, ccl)
 
     # Create RunConfig using both weight_config and model_config
     run_prefill_config, run_decode_config = MLA1D.run_config(
@@ -172,7 +201,7 @@ def test_forward_pass(
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-1, None), mesh_shape=list(mesh_device.shape)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-1, None), mesh_shape=mesh_shape),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
@@ -181,22 +210,43 @@ def test_forward_pass(
         [start_pos] * batch_size if mode == "decode" else None
     )  # TODO: Only support same position for all users
 
+    if mode == "decode":
+        position_idxs_tensor = ttnn.from_torch(
+            torch.tensor(position_idxs),
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, dims=(None, None), mesh_shape=mesh_shape
+            ),  # TODO: Shard on batch when DP
+            dtype=ttnn.int32,
+        )
+
     # RoPE stuff
     rope_setup = RotarySetup(
         device=mesh_device,
         batch_size=batch_size,
         hf_config=hf_config,
     )
+    rope_setup_dp = RotarySetup(
+        device=mesh_device,
+        batch_size=batch_size,
+        hf_config=hf_config,
+        use_dp=True,
+    )
 
     if mode == "prefill":
         rot_mats = rope_setup.get_rot_mats_table(seq_len)
+        rot_mats_dp = [None, None, None]
     else:
         rot_idxs = torch.tensor(position_idxs, dtype=torch.int32)
         rot_mats = rope_setup.get_rot_mats(rot_idxs)
+        rot_mats_dp = rope_setup_dp.get_rot_mats(rot_idxs)
     rope_tensors = {
         "cos_matrix": rot_mats[0],
         "sin_matrix": rot_mats[1],
-        "trans_matrix": rope_setup.get_both_trans_mats()[mode],
+        "trans_matrix": rot_mats[2],
+        "cos_matrix_dp": rot_mats_dp[0],
+        "sin_matrix_dp": rot_mats_dp[1],
+        "trans_matrix_dp": rot_mats_dp[2],
     }
 
     user_id = None if mode == "decode" else 0  # TODO: randint(0, MLA1D.MAX_BATCH_SIZE)
@@ -208,8 +258,10 @@ def test_forward_pass(
         tt_output = MLA1D.forward_prefill(tt_input, user_id, rope_tensors, run_config)
         tt_output_torch = ttnn.to_torch(tt_output)
     else:
-        tt_output = MLA1D.forward_decode(tt_input, position_idxs, rope_tensors, run_config)
-        tt_output_torch = ttnn.to_torch(tt_output)
+        tt_output = MLA1D.forward_decode(tt_input, position_idxs_tensor, rope_tensors, run_config)
+        tt_output_torch = ttnn.to_torch(
+            tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-1, 0), mesh_shape=mesh_shape)
+        )[:1, ...]
         tt_output_torch = tt_output_torch.squeeze(0).permute(1, 0, 2)
 
     ############################
@@ -234,7 +286,9 @@ def test_forward_pass(
         else:
             range_to_check = range(start_pos, start_pos + 1)
 
-        tt_cache = ttnn.to_torch(run_config["kvpe_cache"]).squeeze(1)  # [bsz, max_seq_len, head_dim + rope_head_dim]
+        tt_cache = get_cache_on_host(run_config["kvpe_cache"], mesh_device)[: MLA1D.MAX_BATCH_SIZE, ...].squeeze(
+            1
+        )  # [bsz, max_seq_len, head_dim + rope_head_dim]
         tt_cache_kv = tt_cache[:, range_to_check, : hf_config.kv_lora_rank]
         tt_cache_pe = tt_cache[:, range_to_check, hf_config.kv_lora_rank :]
 

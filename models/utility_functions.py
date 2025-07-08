@@ -23,10 +23,10 @@ def get_mesh_device():
     mesh_device = os.environ.get("MESH_DEVICE", "N150")
     mesh_config = {
         "N150": (1, 1),
-        "N300": (1, 2),
-        "T3K": (1, 8),
+        "N300": (2, 1),
+        "T3K": (8, 1),
         "TG": (8, 4),
-    }.get(mesh_device, (1, ttnn.get_num_devices()))
+    }.get(mesh_device, (ttnn.get_num_devices(), 1))
     return mesh_config
 
 

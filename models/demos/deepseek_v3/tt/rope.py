@@ -64,6 +64,7 @@ class RotarySetup(LightweightModule):
         device,
         batch_size: int,
         hf_config,
+        use_dp: bool = False,
     ):
         super().__init__()
 
@@ -72,10 +73,10 @@ class RotarySetup(LightweightModule):
         self.dim = hf_config.qk_rope_head_dim
         self.device = device
         self.num_devices = device.get_num_devices()
+        self.use_dp = use_dp
 
-        if self.num_devices == 32:
-            assert False, "This is untested!"
-            self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[1], 1)
+        if self.use_dp:
+            self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[0], 1)
         else:
             self.batch_size_per_device_group = self.batch_size
         self.core_grid = device.compute_with_storage_grid_size()
@@ -122,11 +123,6 @@ class RotarySetup(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
 
-    def get_both_trans_mats(self):
-        assert self.transformation_mat is not None, "Transformation matrix not initialized"
-        assert self.transformation_mat_prefill is not None, "Prefill Transformation matrix not initialized"
-        return {"decode": self.transformation_mat, "prefill": self.transformation_mat_prefill}
-
     def get_rot_idxs(self, position_idxs, on_host=False):
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
@@ -144,7 +140,11 @@ class RotarySetup(LightweightModule):
             position_idxs,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.device,
+                dims=(1, None) if self.use_dp else (None, None),
+                mesh_shape=list(self.device.shape),
+            ),
             device=None if on_host else self.device,
             memory_config=None if on_host else ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -179,6 +179,8 @@ class RotarySetup(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
 
+        if seq_len is not None:
+            return cos_matrix, sin_matrix, self.transformation_mat_prefill
         return cos_matrix, sin_matrix
 
     def get_rot_mats(self, position_idxs, return_rot_idxs=False):
@@ -221,5 +223,5 @@ class RotarySetup(LightweightModule):
         sin = ttnn.interleaved_to_sharded(sin, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
 
         if return_rot_idxs:
-            return [cos, sin], rot_idxs
-        return [cos, sin]
+            return [cos, sin, self.transformation_mat], rot_idxs
+        return [cos, sin, self.transformation_mat]

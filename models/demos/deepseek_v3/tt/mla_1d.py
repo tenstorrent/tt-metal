@@ -10,11 +10,13 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     FromWeightConfig,
     LinearConfig,
+    MeshDeviceStub,
     ModelDecodeConfig,
     ModelPrefillConfig,
     ReshardConfig,
@@ -29,6 +31,7 @@ class MLA1D(AbstractModule):
     """ """
 
     MAX_BATCH_SIZE = ttnn.TILE_SIZE
+    TG_GRID = (8, 4)
 
     @classmethod
     def convert_weights(
@@ -60,8 +63,6 @@ class MLA1D(AbstractModule):
         v_head_dim = hf_config.v_head_dim
 
         num_devices = mesh_device.get_num_devices()
-
-        TG_GRID = (8, 4)  # TP, DP
 
         def add_weight_config(
             torch_weight,
@@ -231,7 +232,9 @@ class MLA1D(AbstractModule):
         return weight_config
 
     @classmethod
-    def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
+    def prefill_model_config(
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL1D
+    ) -> ModelPrefillConfig:
         """Prefill model config for an MLP with 1D tensor parallelism.
 
         Args:
@@ -255,6 +258,8 @@ class MLA1D(AbstractModule):
         v_head_dim = hf_config.v_head_dim
         mscale = hf_config.rope_scaling["mscale"]
         rope_factor = hf_config.rope_scaling["factor"]
+        original_seq_len = hf_config.rope_scaling["original_max_position_embeddings"]
+        max_seq_len = hf_config.max_seq_len
 
         config: ModelPrefillConfig = {}
         config["hf_config"] = hf_config
@@ -314,9 +319,9 @@ class MLA1D(AbstractModule):
         )
 
         scale = qk_head_dim**-0.5
-        # If max_seq_len > original max_seq_len (4k)
-        mscale = 0.1 * mscale * math.log(rope_factor) + 1.0
-        scale = scale * mscale * mscale
+        if max_seq_len > original_seq_len:
+            mscale = 0.1 * mscale * math.log(rope_factor) + 1.0
+            scale = scale * mscale * mscale
 
         config["flash_mla"] = {
             "head_dim_v": kv_lora_rank,
@@ -335,7 +340,9 @@ class MLA1D(AbstractModule):
         return config
 
     @classmethod
-    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelDecodeConfig:
+    def decode_model_config(
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL1D
+    ) -> ModelDecodeConfig:
         """Generate decode operator configuration for this MLP layer.
 
         Args:
@@ -359,6 +366,10 @@ class MLA1D(AbstractModule):
         v_head_dim = hf_config.v_head_dim
         mscale = hf_config.rope_scaling["mscale"]
         rope_factor = hf_config.rope_scaling["factor"]
+        original_seq_len = hf_config.rope_scaling["original_max_position_embeddings"]
+        max_seq_len = hf_config.max_seq_len
+
+        num_heads_local = num_heads // list(mesh_device.shape)[0]
 
         config: ModelDecodeConfig = {}
 
@@ -402,7 +413,7 @@ class MLA1D(AbstractModule):
 
         # Resharding for q_rope
         # TODO: Should be dynamic based on batch size?
-        q_rope_shape = (1, MLA1D.MAX_BATCH_SIZE, num_heads, qk_rope_head_dim)
+        q_rope_shape = (1, MLA1D.MAX_BATCH_SIZE, num_heads_local, qk_rope_head_dim)
         q_rope_shard_height = nearest_y(q_rope_shape[2], ttnn.TILE_SIZE)
         q_rope_shard_width = q_rope_shape[3]
         q_rope_num_cores = q_rope_shape[1]
@@ -422,6 +433,7 @@ class MLA1D(AbstractModule):
 
         # Resharding for kv_rope
         # TODO: Should be dynamic based on batch size?
+        # TODO: Split batch when adding DP
         kv_rope_shape = (1, MLA1D.MAX_BATCH_SIZE, 1, qk_rope_head_dim)
         kv_rope_shard_height = nearest_y(kv_rope_shape[2], ttnn.TILE_SIZE)
         kv_rope_shard_width = kv_rope_shape[3]
@@ -475,7 +487,7 @@ class MLA1D(AbstractModule):
         )
 
         q_num_cores = MLA1D.MAX_BATCH_SIZE  # TODO: How to use non-padded batch size here? (might need to be dynamic)
-        block_height = nearest_y((MLA1D.MAX_BATCH_SIZE * num_heads) // q_num_cores, ttnn.TILE_SIZE)
+        block_height = nearest_y((MLA1D.MAX_BATCH_SIZE * num_heads_local) // q_num_cores, ttnn.TILE_SIZE)
         block_width = kv_lora_rank + qk_rope_head_dim
 
         q_core_grid = ttnn.num_cores_to_corerangeset(q_num_cores, grid_size, row_wise=True)
@@ -493,9 +505,9 @@ class MLA1D(AbstractModule):
         )
 
         scale = qk_head_dim**-0.5
-        # If max_seq_len > original max_seq_len (4k)
-        mscale = 0.1 * mscale * math.log(rope_factor) + 1.0
-        scale = scale * mscale * mscale
+        if max_seq_len > original_seq_len:
+            mscale = 0.1 * mscale * math.log(rope_factor) + 1.0
+            scale = scale * mscale * mscale
 
         config["flash_mla_reshard"] = ReshardConfig(
             memory_config=q_mem_config,
@@ -514,6 +526,63 @@ class MLA1D(AbstractModule):
         # Norms
         config["q_norm"] = RMSNorm.decode_model_config(hf_config, mesh_device, norm_category="q_norm")
         config["kv_norm"] = RMSNorm.decode_model_config(hf_config, mesh_device, norm_category="k_norm")
+
+        # Set up CCLs
+        # **Must be in order of execution**
+
+        # Q
+        config["wq_a_rs"] = {
+            "mesh_device": MeshDeviceStub(list(mesh_device.shape)),
+            "cluster_axis": 0,
+            "dim": 3,
+            "from_remote_multi_device_global_semaphore": ccl.get_semaphore(0),
+            "to_remote_multi_device_global_semaphore": ccl.get_semaphore(0),
+            "math_op": ttnn.ReduceType.Sum,
+            "num_links": ccl.get_max_links(0),
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "topology": ttnn.Topology.Linear,
+        }
+        config["wq_a_ag"] = {
+            "mesh_device": MeshDeviceStub(list(mesh_device.shape)),
+            "cluster_axis": 0,
+            "dim": 3,
+            "multi_device_global_semaphore": ccl.get_semaphore(0),
+            "num_links": ccl.get_max_links(0),
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "topology": ttnn.Topology.Linear,
+        }
+
+        # KV
+        config["wkv_a_ag"] = {
+            "mesh_device": MeshDeviceStub(list(mesh_device.shape)),
+            "cluster_axis": 0,
+            "dim": 1,
+            "multi_device_global_semaphore": ccl.get_semaphore(0),
+            "num_links": ccl.get_max_links(0),
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "topology": ttnn.Topology.Linear,
+        }
+        config["wkv_a_r"] = {
+            "dims": [1],
+            "output": None,
+            "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            ),
+        }
+
+        # WO
+        config["wo_ag"] = {
+            "mesh_device": MeshDeviceStub(list(mesh_device.shape)),
+            "cluster_axis": 0,
+            "dim": 1,
+            "multi_device_global_semaphore": ccl.get_semaphore(0),
+            "num_links": ccl.get_max_links(0),
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "topology": ttnn.Topology.Linear,
+        }
 
         return config
 
@@ -537,7 +606,7 @@ class MLA1D(AbstractModule):
 
         cache = torch.zeros(
             (
-                MLA1D.MAX_BATCH_SIZE,
+                MLA1D.MAX_BATCH_SIZE,  # TODO: Split batch when addign DP support
                 1,  # 1 latent kv heads
                 max_seq_len,
                 kvpe_dim,
@@ -554,7 +623,7 @@ class MLA1D(AbstractModule):
             # TODO: Add caching
         )
 
-        return {"kvpe_cache": tt_cache}
+        return {"kvpe_cache": tt_cache, "mesh_device": mesh_device}
 
     @classmethod
     def forward_decode(
@@ -562,8 +631,12 @@ class MLA1D(AbstractModule):
     ) -> ttnn.Tensor:
         """Straightforward forward pass for decode mode"""
 
+        mesh_device = cfg["mesh_device"]
+        mesh_shape = list(mesh_device.shape)
+
         hf_config = cfg["hf_config"]
         num_heads = hf_config.num_attention_heads
+        num_heads_local = num_heads // mesh_shape[0]
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
         qk_rope_head_dim = hf_config.qk_rope_head_dim
@@ -573,25 +646,32 @@ class MLA1D(AbstractModule):
         kvpe_cache = cfg["kvpe_cache"]
 
         bsz = x.shape[2]
+        bsz_local = bsz // 1  # TODO: Use this when adding DP support (MLA1D.TG_GRID[0])
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
+
+        tt_q = ttnn.experimental.reduce_scatter_async(tt_q, **cfg["wq_a_rs"])
+        tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag"])
+
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"], None)
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
 
         # TODO: Use local heads here
-        tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads, qk_head_dim))
+        tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
 
-        tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads, qk_nope_head_dim])
-        tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads, qk_head_dim])
+        tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads_local, qk_nope_head_dim])
+        tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim])
 
         # wkv_b1
-        tt_q_nope = ttnn.permute(tt_q_nope, (1, 2, 0, 3))  # [1, num_heads, bsz, qk_nope_head_dim]
-        tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads, bsz, kv_lora_rank]
-        tt_q_nope = ttnn.permute(tt_q_nope, (0, 2, 1, 3))  # [1, bsz, num_heads, qk_nope_head_dim]
+        tt_q_nope = ttnn.permute(tt_q_nope, (1, 2, 0, 3))  # [1, num_heads_local, bsz, qk_nope_head_dim]
+        tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local, bsz, kv_lora_rank]
+        tt_q_nope = ttnn.permute(tt_q_nope, (0, 2, 1, 3))  # [1, bsz, num_heads_local, qk_nope_head_dim]
 
         # Q RoPE
-        tt_q_rope = ttnn.permute(tt_q_rope, (1, 0, 2, 3))  # [1, bsz, num_heads, qk_rope_head_dim], should be no-op
+        tt_q_rope = ttnn.permute(
+            tt_q_rope, (1, 0, 2, 3)
+        )  # [1, bsz, num_heads_local, qk_rope_head_dim], should be no-op
         tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_reshard"])
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(
             tt_q_rope,
@@ -607,16 +687,26 @@ class MLA1D(AbstractModule):
 
         # KVPE Stuff
         tt_kv = ttnn.linear(x, **cfg["wkv_a"])
-        tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, bsz, kv_lora_rank])
-        tt_kv_rope = ttnn.slice(tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, bsz, kv_lora_rank + qk_rope_head_dim])
+
+        # AG + Reduce b/c sub-tile RS not supported
+        tt_kv = ttnn.experimental.all_gather_async(
+            tt_kv, **cfg["wkv_a_ag"]
+        )  # [1, num_devices, bsz_local, kv_lora_rank + qk_rope_head_dim]
+        tt_kv = ttnn.experimental.fast_reduce_nc(
+            tt_kv, **cfg["wkv_a_r"]
+        )  # [1, 1, bsz_local, kv_lora_rank + qk_rope_head_dim]
+
+        tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, bsz_local, kv_lora_rank])
+        tt_kv_rope = ttnn.slice(tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, bsz_local, kv_lora_rank + qk_rope_head_dim])
         ttnn.deallocate(tt_kv)
 
         # KV Norm
         tt_kv_nope = RMSNorm.forward_decode(tt_kv_nope, cfg["kv_norm"], None)
 
         # KV RoPE
-        tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, bsz, 1, qk_rope_head_dim]
+        tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, bsz_local, 1, qk_rope_head_dim]
         tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_reshard"])
+        # TODO: Use DP tensors
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
             tt_kv_rope,
             rope_tensors["cos_matrix"],
@@ -625,10 +715,10 @@ class MLA1D(AbstractModule):
             is_decode_mode=True,
         )
         tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_out_reshard"])
-        tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, 1, bsz, qk_rope_head_dim]
+        tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, 1, bsz_local, qk_rope_head_dim]
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
-        tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz, 1, kv_lora_rank + qk_rope_head_dim]
+        tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz_local, 1, kv_lora_rank + qk_rope_head_dim]
         tt_kvpe = ttnn.to_memory_config(tt_kvpe, **cfg["kvpe_reshard"])
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)
@@ -637,7 +727,7 @@ class MLA1D(AbstractModule):
         ttnn.experimental.paged_update_cache(
             kvpe_cache,
             tt_kvpe,
-            update_idxs=position_idxs,
+            update_idxs_tensor=position_idxs,
         )
 
         # FlashMLA
@@ -645,18 +735,20 @@ class MLA1D(AbstractModule):
         attn_out = ttnn.transformer.flash_multi_latent_attention_decode(
             tt_q,
             kvpe_cache,
-            cur_pos=position_idxs,
+            cur_pos_tensor=position_idxs,
             **cfg["flash_mla"],
-        )  #  [1, bsz, num_heads, kv_lora_rank]
+        )  #  [1, bsz_local, num_heads, kv_lora_rank]
         ttnn.deallocate(tt_q)
         attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
 
         # wkv_b2
-        attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads, bsz, kv_lora_rank]
-        v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads, bsz, v_head_dim]
-        v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, bsz, num_heads, v_head_dim]
+        attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads_local, bsz, kv_lora_rank]
+        v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, bsz, v_head_dim]
 
         # wo
+        v_out = ttnn.experimental.all_gather_async(v_out, **cfg["wo_ag"])  # [1, num_heads, bsz, v_head_dim]
+        v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, bsz, num_heads, v_head_dim]
+
         v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
 

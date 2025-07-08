@@ -536,10 +536,9 @@ def run_rope_impl(
     )
 
     if mode == "prefill":
-        tt_cos, tt_sin = rope_setup.get_rot_mats_table(seq_len)
+        tt_cos, tt_sin, tt_trans_mat = rope_setup.get_rot_mats_table(seq_len)
     else:
-        tt_cos, tt_sin = rope_setup.get_rot_mats(position_ids)
-    tt_trans_mat = rope_setup.get_both_trans_mats()[mode]
+        tt_cos, tt_sin, tt_trans_mat = rope_setup.get_rot_mats(position_ids)
 
     tt_input = ttnn.from_torch(
         input_torch,
