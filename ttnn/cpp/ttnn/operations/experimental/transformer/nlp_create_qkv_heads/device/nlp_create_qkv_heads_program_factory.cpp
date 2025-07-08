@@ -334,8 +334,6 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.padded_shape();
-
     tt_metal::IDevice* device = input_tensor.device();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());

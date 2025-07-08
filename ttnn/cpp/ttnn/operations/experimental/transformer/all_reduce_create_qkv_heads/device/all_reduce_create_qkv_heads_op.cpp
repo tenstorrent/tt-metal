@@ -17,8 +17,6 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
     TT_FATAL(input_tensors.size() == 3, "Error, Input tensor size should be 3 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& buffer_tensor = input_tensors[1];
-    const auto& layout = input_tensors[0].layout();
-    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
     TT_FATAL(
@@ -67,7 +65,6 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
 
     // validate for create qkv heads
     const auto& input_shape = input_tensor.logical_shape();
-    const auto& batch_offset = input_tensors.at(2);
 
     // TODO: Rewrite validation for this decode case
     // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim

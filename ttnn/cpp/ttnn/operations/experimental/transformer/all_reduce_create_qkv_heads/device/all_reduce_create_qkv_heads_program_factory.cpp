@@ -51,16 +51,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     const uint32_t sub_tile_line_bytes = 16 * element_size;
     const auto q_shard_spec = q_output_tensor.shard_spec().value();
     const auto q_cores = q_shard_spec.grid;
-    const auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / tt::constants::TILE_HW;
     const auto k_shard_spec = k_output_tensor.shard_spec().value();
     const auto k_cores = k_shard_spec.grid;
-    const auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / tt::constants::TILE_HW;
     const auto v_shard_spec = v_output_tensor.shard_spec().value();
     const auto v_cores = v_shard_spec.grid;
-    const auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / tt::constants::TILE_HW;
     const auto in_shard_spec = output_tensor.shard_spec().value();
     const auto in_cores = in_shard_spec.grid;
-    const auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / tt::constants::TILE_HW;
     uint32_t batch_offset_index_stick_size = 0;
     // auto qk_cores = q_cores;
 

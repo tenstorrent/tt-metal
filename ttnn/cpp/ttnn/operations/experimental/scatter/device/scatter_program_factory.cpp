@@ -40,13 +40,10 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
 
     const auto& input_tensor{tensor_args.input_tensor};
     const auto& input_shape{input_tensor.logical_shape()};
-    const auto& input_rank{input_shape.rank()};
     const auto& index_tensor{tensor_args.index_tensor};
     const auto& index_shape{index_tensor.logical_shape()};
-    const auto& index_rank{index_shape.rank()};
     const auto& src_tensor{tensor_args.src_tensor};
     const auto& src_shape{src_tensor.logical_shape()};
-    const auto& src_rank{src_shape.rank()};
     const auto& output_shape{output_tensor.logical_shape()};
 
     const tt::DataFormat input_tensor_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());

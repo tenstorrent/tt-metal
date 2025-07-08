@@ -23,7 +23,6 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     const auto& input = tensor_args.input;
     const auto& input_dtype = args.input_dtype;
     const auto& output_dtype = args.output_dtype;
-    const auto& sub_core_grids = args.sub_core_grids;
 
     tt::tt_metal::Program program{};
 
