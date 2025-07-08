@@ -19,7 +19,7 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
     // Writer config
     const uint32_t writer_addr = get_write_ptr(cb_id);
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(writer_addr);
-    const uint16_t wt_offset = wt << 5;  // wt * 2^(5)
+    const uint16_t w = wt << 5;  // wt * 2^(5)
 
     // Writer loop
     uint32_t count = 0;
@@ -34,7 +34,7 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
         for (uint32_t j = 0; j < tile_faces; ++j) {
             for (uint32_t k = 0; k < face_size; ++k) {
                 for (uint32_t l = 0; l < face_size; l++) {
-                    const uint16_t value = l + face_size * j + wt_offset;
+                    const uint16_t value = l + face_size * j + w;
                     ptr[count] = value;
                     count++;
                 }  // l loop

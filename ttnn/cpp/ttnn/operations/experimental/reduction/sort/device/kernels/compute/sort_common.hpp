@@ -143,7 +143,7 @@ void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, ui
  * @param global_old_cb Reference to the current global circular buffer index; will be updated to new_cb.
  */
 FORCE_INLINE
-void COPY_TILE_TO_DST_INIT(uint32_t new_cb, uint32_t& global_old_cb) {
+void copy_tile_to_dst_init_with_cb_update(uint32_t new_cb, uint32_t& global_old_cb) {
     copy_tile_to_dst_init_short_with_dt(global_old_cb, new_cb);
     global_old_cb = new_cb;
 }
@@ -166,6 +166,10 @@ constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
  * by performing a sequence of reserve, push, wait, and pop operations on a circular buffer
  * identified by the given index. The synchronization ensures that the packer and unpacker
  * operate in lockstep, processing one tile at a time.
+ * This should be used when a compute kernel performs multiple sequential operations on data
+ * from the same circular buffer (CB), to avoid situations where the packer from a previous
+ * operation has not yet finished but the packer from the next operation has already started.
+ * Using this synchronization prevents data hazards and ensures correct ordering of operations.
  *
  * @param packer_unpacker_sync_cb_index The index of the circular buffer used for synchronization.
  */

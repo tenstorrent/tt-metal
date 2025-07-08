@@ -6,7 +6,26 @@ The TTNN Sort operation is a high-performance sorting algorithm optimized for ex
 
 The sorting is performed along a specified dimension of the input tensor, typically requiring data to be rearranged such that the sort dimension is the innermost dimension. To maximize hardware utilization, the operation offers multiple strategies that leverage the parallelism available in the architecture.
 
-## Implemented Strategies
+## Strategy Comparison Overview
+
+The TTNN Sort operation provides three sorting strategies, each optimized for different tensor sizes and hardware resource constraints. The choice of strategy reflects a trade-off between **performance**, **scalability**, and **resource utilization**.
+
+| Strategy                   | Description                                                                                                  | Strengths                                                                                                | Weaknesses                                                          | Typical Use Case                              |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------- |
+| **Single Row Single Core** | Each core sorts an entire row of tiles independently.                                     | Simple, low coordination overhead, efficient for small tensors.                                          | Limited to rows with ≤64 tiles; cannot handle larger tensors.       | Small tensors (≤64 tiles per sort row).       |
+| **Hybrid**                 | Each core processes multiple tiles locally; fast cross-core L1-to-L1 communication is used only when needed. | **Fastest option** due to interior NoC-based communication; minimal DRAM usage; excellent parallelism.   | Scalability limited by number of cores and L1 memory size per core. | Medium tensors where speed is key.            |
+| **Single Row Multi Core**  | Multiple cores collaboratively sort a single row in parallel across Bitonic Sort stages.                     | **Most scalable and reliable**—works for arbitrarily large tensors; ensures sorting can always complete. | Higher synchronization overhead; typically slower than Hybrid.      | Very large tensors exceeding Hybrid capacity. |
+
+### Key Points:
+
+* **Hybrid** is the **fastest strategy** because it minimizes expensive DRAM access by using **internal core-to-core (L1-to-L1) communication** over the on-chip **Network-on-Chip (NoC)**. However, its scalability is bounded by:
+
+  * The **number of available cores**.
+  * The **L1 memory size** of each core.
+* **Single Row Multi Core** is the **most scalable and robust** strategy. It guarantees sorting of **tensors of any size**, regardless of how large they are, though it may be slower due to increased synchronization and DRAM involvement. This strategy ensures that even extremely large tensors are always supported.
+* **Single Row Single Core** is efficient for small tensors where the entire sort fits easily within one core's working memory.
+
+## Strategies description
 
 ### Single Row Single Core
 
@@ -103,15 +122,19 @@ The Hybrid approach supports two strategies for assigning tiles to cores:
 
 1. **Max-Core Utilization (USE_AS_MANY_CORES)**:
 
-   * Distributes tiles across the maximum number of cores to increase parallelism.
-   * Each core handles a smaller number of tiles.
-   * Suitable for workloads where latency is critical.
+   * Distributes tiles across the maximum number of cores to maximize parallelism.
+   * Each core handles a smaller number of tiles, leading to lower latency.
+   * This strategy is always faster, but it consumes more cores from the very beginning—even for small tensors.
+   * Recommended when minimizing execution time is the top priority and sufficient hardware resources are available.
 
 2. **Fixed Tile Per Core (FILL_CORES_FIRST)**:
 
-   * Each core is assigned a fixed number of tiles based on the input datatype and tile size.
-   * Fewer cores are used, but each processes a larger chunk of data.
-   * Reduces synchronization overhead.
+   * Assigns a fixed number of tiles to each core based on input datatype and tile size.
+   * Fewer cores are used initially, with each core processing a larger chunk of data.
+   * This approach reduces synchronization overhead and is more resource-efficient for smaller tensors.
+   * Suitable when it is important to conserve core usage or when hardware resources are limited.
+
+**Note:** Both strategies achieve the same performance when all available cores are utilized. The choice is a tradeoff: USE_AS_MANY_CORES delivers higher speed at the cost of greater core usage, while FILL_CORES_FIRST is slower for small tensors but uses resources more rationally.
 
 #### Sorting Mechanism:
 
@@ -155,7 +178,7 @@ The Hybrid approach supports two strategies for assigning tiles to cores:
 
 ### Single Row Multi Core
 
-This strategy implements a parallel Bitonic Sort for a single row of tiles using multiple cores simultaneously, improving performance for large datasets. This strategy is used for extra large tensors which sorting dimension exceeds *number_of_available_cores* * *cores_processed_in_each_core_memory* approach from hybrid strategy.
+This strategy implements a parallel Bitonic Sort for a single row of tiles using multiple cores simultaneously, improving performance for large datasets. This strategy is used for extra large tensors which sorting dimension exceeds *number_of_available_cores* * *cores_processed_in_each_core_memory* in the approach used by the hybrid strategy.
 
 #### Overview:
 

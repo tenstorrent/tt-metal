@@ -110,12 +110,12 @@ void MAIN {
                             tile_regs_acquire();
 
                             // Copy value tiles to DST register
-                            COPY_TILE_TO_DST_INIT(input_tensor_transposed_cb_index, global_old_cb);
+                            copy_tile_to_dst_init_with_cb_update(input_tensor_transposed_cb_index, global_old_cb);
                             copy_tile(input_tensor_transposed_cb_index, left_tile_id, input_dest_start);
                             copy_tile(input_tensor_transposed_cb_index, right_tile_id, input_dest_end);
 
                             // Copy index tiles to DST register
-                            COPY_TILE_TO_DST_INIT(index_tensor_transposed_cb_index, global_old_cb);
+                            copy_tile_to_dst_init_with_cb_update(index_tensor_transposed_cb_index, global_old_cb);
                             copy_tile(index_tensor_transposed_cb_index, left_tile_id, index_dest_start);
                             copy_tile(index_tensor_transposed_cb_index, right_tile_id, index_dest_end);
 
@@ -162,11 +162,11 @@ void MAIN {
                         tile_regs_acquire();
 
                         // Copy index tiles to DST register for exchange
-                        COPY_TILE_TO_DST_INIT(index_tensor_transposed_cb_index, global_old_cb);
+                        copy_tile_to_dst_init_with_cb_update(index_tensor_transposed_cb_index, global_old_cb);
                         copy_tile(index_tensor_transposed_cb_index, tile_id, index_dest_start);
 
                         // Copy value tiles to DST register for exchange
-                        COPY_TILE_TO_DST_INIT(input_tensor_transposed_cb_index, global_old_cb);
+                        copy_tile_to_dst_init_with_cb_update(input_tensor_transposed_cb_index, global_old_cb);
                         copy_tile(input_tensor_transposed_cb_index, tile_id, input_dest_start);
 
                         tile_regs_commit();
@@ -192,17 +192,17 @@ void MAIN {
                         tile_regs_acquire();
 
                         // Prepare local index tiles for sorting with new tiles
-                        COPY_TILE_TO_DST_INIT(index_tensor_transposed_cb_index, global_old_cb);
+                        copy_tile_to_dst_init_with_cb_update(index_tensor_transposed_cb_index, global_old_cb);
                         copy_tile(index_tensor_transposed_cb_index, tile_id, index_dest_start);
 
                         // Prepare local value tiles for sorting with new tiles
-                        COPY_TILE_TO_DST_INIT(input_tensor_transposed_cb_index, global_old_cb);
+                        copy_tile_to_dst_init_with_cb_update(input_tensor_transposed_cb_index, global_old_cb);
                         copy_tile(input_tensor_transposed_cb_index, tile_id, input_dest_start);
 
                         cb_wait_front(index_tensor_peer_cb_index, one_tile);
 
                         // Load new index tile for sorting
-                        COPY_TILE_TO_DST_INIT(index_tensor_peer_cb_index, global_old_cb);
+                        copy_tile_to_dst_init_with_cb_update(index_tensor_peer_cb_index, global_old_cb);
                         copy_tile(index_tensor_peer_cb_index, FIRST_TILE, index_dest_end);
 
                         cb_pop_front(index_tensor_peer_cb_index, one_tile);
@@ -211,7 +211,7 @@ void MAIN {
                         cb_wait_front(value_tensor_peer_cb_index, one_tile);
 
                         // Load new value tile for sorting
-                        COPY_TILE_TO_DST_INIT(value_tensor_peer_cb_index, global_old_cb);
+                        copy_tile_to_dst_init_with_cb_update(value_tensor_peer_cb_index, global_old_cb);
                         copy_tile(value_tensor_peer_cb_index, FIRST_TILE, input_dest_end);
 
                         cb_pop_front(value_tensor_peer_cb_index, one_tile);
