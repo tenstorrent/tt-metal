@@ -125,7 +125,7 @@ jobs:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
-      per-test-timeout: 10 # TSan can be slow; relax the timeout somewhat
+      per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-metalium
 
   ttnn-smoke-tests:
@@ -148,7 +148,7 @@ jobs:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
-      per-test-timeout: 10 # TSan can be slow; relax the timeout somewhat
+      per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-nn
 
   build-asan:
@@ -186,6 +186,7 @@ jobs:
     with:
       docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+      per-test-timeout: 11
       runner: ${{ matrix.platform }}
       product: tt-metalium
 
@@ -207,6 +208,7 @@ jobs:
     with:
       docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+      per-test-timeout: 11
       runner: ${{ matrix.platform }}
       product: tt-nn
 

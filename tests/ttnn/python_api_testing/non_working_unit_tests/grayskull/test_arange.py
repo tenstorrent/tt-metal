@@ -34,7 +34,7 @@ def run_arange_tests(
 
         x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config[0], dtype[0])
 
-        tt_result = ttnn.arange(start, end, step, device)
+        tt_result = ttnn.arange(start, end, step, device=device)
 
         tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result, output_mem_config)
         if divup((end - start), step) % 2 != 0:

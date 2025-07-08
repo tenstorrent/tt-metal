@@ -24,11 +24,11 @@ inline void llk_math_eltwise_unary_sfpu_rsqrt(uint dst_index, int vector_mode = 
     // The algorithm uses Newton's method based on no.of iteration better approximation can be calculated
 
     // if (APPROXIMATE) {
-    //     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    //     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
     //                         ckernel::sfpu::calculate_rsqrt<APPROXIMATE, 8, 10>,
     //                         dst_index, vector_mode);
     // } else {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_rsqrt<APPROXIMATE, 8, 25>, dst_index, vector_mode);
     // }
 }

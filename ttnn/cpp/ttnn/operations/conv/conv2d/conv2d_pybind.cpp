@@ -9,6 +9,7 @@
 #include <variant>
 #include <optional>
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -46,6 +47,7 @@ void py_bind_conv2d(py::module& module) {
         :param tuple[int, int] or tuple[int, int, int, int]) padding: Zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
         :param tuple[int, int] dilation: Spacing between kernel elements.
         :param int groups:  Number of blocked connections from input channels to output channels.
+        :param ttnn.DataType, None dtype:  The data type of the output tensor. Default: None (inferred from input tensor).
         :param ttnn.Conv2dConfig, None conv_config: Configuration for convolution. Default: None
         :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None
         :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None
@@ -74,6 +76,7 @@ void py_bind_conv2d(py::module& module) {
                std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
+               const std::optional<const DataType>& dtype,
                std::optional<const ttnn::Tensor> bias_tensor,
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
@@ -97,6 +100,7 @@ void py_bind_conv2d(py::module& module) {
                     padding,
                     dilation,
                     groups,
+                    dtype,
                     bias_tensor,
                     conv_config,
                     compute_config,
@@ -119,6 +123,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("padding") = std::array<uint32_t, 2>{0, 0},
             py::arg("dilation") = std::array<uint32_t, 2>{1, 1},
             py::arg("groups") = 1,
+            py::arg("dtype") = std::nullopt,
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
@@ -143,6 +148,7 @@ void py_bind_conv2d(py::module& module) {
                std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
+               const std::optional<const DataType>& dtype,
                std::optional<const ttnn::Tensor> bias_tensor,
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
@@ -166,6 +172,7 @@ void py_bind_conv2d(py::module& module) {
                     padding,
                     dilation,
                     groups,
+                    dtype,
                     bias_tensor,
                     conv_config,
                     compute_config,
@@ -188,6 +195,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("padding") = std::array<uint32_t, 2>{0, 0},
             py::arg("dilation") = std::array<uint32_t, 2>{1, 1},
             py::arg("groups") = 1,
+            py::arg("dtype") = std::nullopt,
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
@@ -217,6 +225,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("has_bias"),
         py::arg("groups"),
         py::arg("device"),
+        py::arg("input_dtype"),
+        py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
         py::arg("compute_config") = std::nullopt,
         py::arg("slice_config") = std::nullopt);
@@ -241,6 +251,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("has_bias"),
         py::arg("groups"),
         py::arg("device"),
+        py::arg("input_dtype"),
+        py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
         py::arg("compute_config") = std::nullopt,
         py::arg("slice_config") = std::nullopt);
@@ -263,6 +275,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("dilation"),
         py::arg("groups"),
         py::arg("device"),
+        py::arg("input_dtype"),
+        py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
         py::arg("compute_config") = std::nullopt);
 
@@ -284,6 +298,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("dilation"),
         py::arg("groups"),
         py::arg("device"),
+        py::arg("input_dtype"),
+        py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
         py::arg("compute_config") = std::nullopt);
 
@@ -398,7 +414,6 @@ void py_bind_conv2d(py::module& module) {
         )doc");
     py_conv_config.def(
         py::init<
-            DataType,
             std::optional<DataType>,
             string,
             bool,
@@ -418,7 +433,6 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool>(),
         py::kw_only(),
-        py::arg("dtype") = DataType::BFLOAT16,
         py::arg("weights_dtype") = std::nullopt,
         py::arg("activation") = "",
         py::arg("deallocate_activation") = false,
@@ -437,10 +451,6 @@ void py_bind_conv2d(py::module& module) {
         py::arg("enable_subblock_padding") = false,
         py::arg("in_place") = false,
         py::arg("enable_kernel_stride_folding") = false);
-    py_conv_config.def_readwrite(
-        "dtype",
-        &Conv2dConfig::dtype,
-        R"doc(Specifies the data type of the output tensor. Supports ttnn.float32, ttnn.bfloat16 and ttnn.bfloat8_b. )doc");
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.

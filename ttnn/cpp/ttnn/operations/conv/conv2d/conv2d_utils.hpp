@@ -162,6 +162,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     const CoreCoord& compute_grid_size,
     Layout input_layout,
     tt::tt_metal::DataType input_datatype,
+    tt::tt_metal::DataType output_datatype,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
     uint32_t groups,
@@ -190,9 +191,7 @@ ttnn::Tensor fold_tensor(
     T* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4,
-    std::optional<DataType> dtype,
-    bool is_weight_tensor = false);
+    std::array<uint32_t, 4> padding_n4);
 
 struct KernelStrideFoldingResult {
     uint32_t input_height;

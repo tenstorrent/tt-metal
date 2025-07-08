@@ -60,6 +60,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::UNARY_EQ:
         case UnaryOpType::UNARY_GT:
         case UnaryOpType::UNARY_LT:
+        case UnaryOpType::UNARY_GE:
+        case UnaryOpType::UNARY_LE:
         case UnaryOpType::TYPECAST:
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::BITWISE_AND:

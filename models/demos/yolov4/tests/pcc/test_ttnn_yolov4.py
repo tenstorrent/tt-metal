@@ -25,7 +25,7 @@ from models.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_weight, resolution):
+def run_yolov4(device, model_location_generator, use_pretrained_weight, resolution):
     torch.manual_seed(0)
 
     # https://github.com/tenstorrent/tt-metal/issues/23192
@@ -40,7 +40,7 @@ def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_wei
         torch_model.load_state_dict(new_state_dict)
         torch_model.eval()
 
-    imgfile = "models/demos/yolov4/resources/giraffe_320.jpg"
+    imgfile = "models/demos/yolov4/resources/giraffe.jpg"
     img = load_image(imgfile, resolution)
     torch_input = image_to_tensor(img)
 
@@ -97,10 +97,9 @@ def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_wei
         "1",
     ],
 )
-def test_yolov4(device, reset_seeds, model_location_generator, use_pretrained_weight, resolution):
+def test_yolov4(device, model_location_generator, use_pretrained_weight, resolution):
     run_yolov4(
         device,
-        reset_seeds,
         model_location_generator,
         use_pretrained_weight,
         resolution,

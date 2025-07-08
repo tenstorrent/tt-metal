@@ -14,7 +14,6 @@ using namespace tt::tt_metal;
 
 operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     const Tensor& a, Tensor& output, MathFidelity math_fidelity, CoreCoord compute_with_storage_grid_size) {
-    constexpr uint32_t ONE_TILE = 1;
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
 
@@ -58,30 +57,27 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
 
     // Reader writes input tiles to this
     const uint32_t input_cb_id = tt::CBIndex::c_0;
-    const auto input_cb = create_circular_buffer(input_cb_id, cb_size, input_tile_size, input_format);
+    create_circular_buffer(input_cb_id, cb_size, input_tile_size, input_format);
 
     // Reader writes scaling tile to this CB. We need it because the reduce LLK requires a scaling factor tile.
     const uint32_t scalar_cb_id = tt::CBIndex::c_2;
-    const auto scalar_cb = create_circular_buffer(scalar_cb_id, cb_size, intermediary_tile_size, intermediary_format);
+    create_circular_buffer(scalar_cb_id, cb_size, intermediary_tile_size, intermediary_format);
 
     // Compute writes transposed tile (loopback)
     const uint32_t intermed_cb_id0 = tt::CBIndex::c_24;
-    const auto intermed_cb0 =
-        create_circular_buffer(intermed_cb_id0, cb_size, intermediary_tile_size, intermediary_format);
+    create_circular_buffer(intermed_cb_id0, cb_size, intermediary_tile_size, intermediary_format);
 
     // Compute writes reduced tile for writer
     const uint32_t intermed_cb_id1 = tt::CBIndex::c_25;
-    const auto intermed_cb1 =
-        create_circular_buffer(intermed_cb_id1, cb_size, intermediary_tile_size, intermediary_format);
+    create_circular_buffer(intermed_cb_id1, cb_size, intermediary_tile_size, intermediary_format);
 
     // Writer concats and writes back to compute
     const uint32_t intermed_cb_id2 = tt::CBIndex::c_26;
-    const auto intermed_cb2 =
-        create_circular_buffer(intermed_cb_id2, cb_size, intermediary_tile_size, intermediary_format);
+    create_circular_buffer(intermed_cb_id2, cb_size, intermediary_tile_size, intermediary_format);
 
     // Compute transposes and writes back to writer
     const uint32_t output_cb_id = tt::CBIndex::c_16;
-    const auto output_cb = create_circular_buffer(output_cb_id, cb_size, input_tile_size, input_format);
+    create_circular_buffer(output_cb_id, cb_size, input_tile_size, input_format);
 
     const bfloat16 bfloat_scaler_value = bfloat16(1.0f);
     const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
@@ -153,8 +149,6 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
         std::vector<std::vector<uint32_t>> compute_runtime_args = {cores.size(), {0, 0}};
 
         for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
-            const CoreCoord& core = cores.at(i);
-
             if (i < g1_numcores) {
                 num_blocks_per_core = num_blocks_per_core_group_1;
             } else {

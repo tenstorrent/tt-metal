@@ -143,7 +143,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::invoke(
     const uint32_t slice_size,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::MemoryConfig>& qkv_memory_config,
-    bool use_noc1_only) {
+    bool use_noc1_only,
+    bool use_optimal_ccl_for_llama) {
     return {
         operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
@@ -160,6 +161,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::invoke(
             .slice_size = slice_size,
             .qkv_memory_config = qkv_memory_config,
             .use_noc1_only = use_noc1_only,
+            .use_optimal_ccl_for_llama = use_optimal_ccl_for_llama,
         },
         tensor_args_t{.input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer}};
 }

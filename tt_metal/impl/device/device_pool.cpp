@@ -30,9 +30,9 @@
 #include "hal.hpp"
 #include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "profiler_types.hpp"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -388,12 +388,7 @@ void DevicePool::initialize_active_devices() const {
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         log_info(tt::LogMetal, "Initializing Fabric");
-        if (tt_fabric::is_2d_fabric_config(fabric_config)) {
-            // TODO: need to write routing tables for unified 2d fabric.
-            // write routing tables to all ethernet cores
-            tt::tt_metal::MetalContext::instance()
-                .get_control_plane().write_routing_tables_to_all_chips();
-        }
+        tt::tt_metal::MetalContext::instance().get_control_plane().write_routing_tables_to_all_chips();
 
         // Initialize fabric on mmio device
         init_fabric(active_devices);

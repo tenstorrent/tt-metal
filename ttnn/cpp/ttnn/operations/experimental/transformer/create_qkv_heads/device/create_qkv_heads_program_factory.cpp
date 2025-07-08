@@ -134,7 +134,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
     if (transpose_k) {
         reader_defines["TRANSPOSE_K_HEADS"] = "1";
     }
-    auto reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/create_qkv_heads/device/kernels/"
         "reader_create_qkv_heads_sharded.cpp",
@@ -145,7 +145,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
         std::vector<uint32_t> compute_args = {
             (std::uint32_t)block_ht * num_tiles_per_group[1] * groups_per_block,  // number of K tiles
         };
-        auto compute_kernel_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/"
             "compute/transpose_wh_sharded.cpp",
@@ -183,7 +183,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
     if (transpose_k) {
         auto c_im0_config = tt::tt_metal::CircularBufferConfig(k_size, {{CBIndex::c_24, data_format}})
                                 .set_page_size(CBIndex::c_24, single_tile_size);
-        auto cb_im0_id = CreateCircularBuffer(program, all_cores, c_im0_config);
+        CreateCircularBuffer(program, all_cores, c_im0_config);
     }
 
     auto override_runtime_args_callback = [cb_in0_id, cb_out0_id, cb_out1_id, cb_out2_id](

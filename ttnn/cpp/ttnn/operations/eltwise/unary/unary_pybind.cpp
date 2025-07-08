@@ -1675,7 +1675,12 @@ void py_module(py::module& module) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|atan|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
-
+    bind_unary_composite(
+        module,
+        ttnn::atanh,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|atanh|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLAOT8_B, FLOAT32)doc");
     bind_unary_operation(
         module,
         ttnn::cos,
@@ -2068,15 +2073,6 @@ void py_module(py::module& module) {
     bind_identity(module, ttnn::identity);
 
     // unary composite imported into ttnn
-    bind_unary_composite(
-        module,
-        ttnn::atanh,
-        R"doc(Performs atanh function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16)doc",
-        R"doc(TILE)doc",
-        R"doc(2, 3, 4)doc",
-        R"doc(System memory is not supported.)doc");
     bind_unary_composite(module, ttnn::cbrt, R"doc(Performs cbrt function on :attr:`input_tensor`.)doc");
     bind_unary_composite(
         module,

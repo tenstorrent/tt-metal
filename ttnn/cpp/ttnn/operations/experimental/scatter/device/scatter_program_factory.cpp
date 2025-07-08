@@ -40,19 +40,11 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
 
     const auto& input_tensor{tensor_args.input_tensor};
     const auto& input_shape{input_tensor.logical_shape()};
-    const auto& input_rank{input_shape.rank()};
     const auto& index_tensor{tensor_args.index_tensor};
     const auto& index_shape{index_tensor.logical_shape()};
-    const auto& index_rank{index_shape.rank()};
     const auto& src_tensor{tensor_args.src_tensor};
     const auto& src_shape{src_tensor.logical_shape()};
-    const auto& src_rank{src_shape.rank()};
     const auto& output_shape{output_tensor.logical_shape()};
-
-    const tt::DataFormat input_tensor_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    const tt::DataFormat index_tensor_cb_data_format = datatype_to_dataformat_converter(index_tensor.dtype());
-    const tt::DataFormat src_tensor_cb_data_format = datatype_to_dataformat_converter(src_tensor.dtype());
-    const tt::DataFormat output_tensor_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
 
     auto input_buffer = input_tensor.buffer();
     auto index_buffer = index_tensor.buffer();
@@ -64,11 +56,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t src_tensor_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
     const uint32_t output_tensor_is_dram = output_buffer->buffer_type() == BufferType::DRAM;
 
-    const int32_t dim{(args.dim >= 0) ? args.dim : (input_rank + args.dim)};
-
     auto device = input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
 
     const uint32_t& input_stick_size = input_shape[-1];
     const uint32_t& index_stick_size = index_shape[-1];
@@ -128,10 +117,10 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t source_page_size_bytes = ceil32(source_chunk_size_bytes);
     const uint32_t output_page_size_bytes = ceil32(input_and_output_chunk_size_bytes);
 
-    auto cb_input{create_cb(program, input_tensor.get_dtype(), ScatterCB::INPUT, all_cores, input_page_size_bytes)};
-    auto cb_index{create_cb(program, index_tensor.get_dtype(), ScatterCB::INDEX, all_cores, index_page_size_bytes)};
-    auto cb_src{create_cb(program, src_tensor.get_dtype(), ScatterCB::SRC, all_cores, source_page_size_bytes)};
-    auto cb_dst{create_cb(program, output_tensor.get_dtype(), ScatterCB::DST, all_cores, output_page_size_bytes)};
+    create_cb(program, input_tensor.get_dtype(), ScatterCB::INPUT, all_cores, input_page_size_bytes);
+    create_cb(program, index_tensor.get_dtype(), ScatterCB::INDEX, all_cores, index_page_size_bytes);
+    create_cb(program, src_tensor.get_dtype(), ScatterCB::SRC, all_cores, source_page_size_bytes);
+    create_cb(program, output_tensor.get_dtype(), ScatterCB::DST, all_cores, output_page_size_bytes);
 
     constexpr const char* reader_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/scatter/device/kernels/dataflow/reader_scatter.cpp";

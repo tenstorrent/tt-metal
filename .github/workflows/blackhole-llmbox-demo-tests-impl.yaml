@@ -18,7 +18,7 @@ on:
         default: "BH-LLMBox"
 
 jobs:
-  single-card-demo-tests:
+  llmbox-demo-tests:
     strategy:
       fail-fast: false
       matrix:

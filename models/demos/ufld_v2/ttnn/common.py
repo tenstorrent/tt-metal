@@ -35,8 +35,8 @@ class TtnnUFLDV2Conv2D:
             packer_l1_acc=False,
             math_approx_mode=True,
         )
+        self.conv_output_dtype = activation_dtype
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=activation_dtype,
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=dealloc_act,
@@ -77,5 +77,6 @@ class TtnnUFLDV2Conv2D:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         return x, output_height, output_width

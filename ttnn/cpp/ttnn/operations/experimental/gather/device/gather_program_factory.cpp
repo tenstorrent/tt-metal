@@ -102,21 +102,21 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
         tt::tt_metal::CircularBufferConfig(
             Wt_input * input_tensor_tile_size, {{input_tensor_cb_index, input_tensor_cb_data_format}})
             .set_page_size(input_tensor_cb_index, input_tensor_tile_size);
-    auto cb_input_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, input_tensor_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range, input_tensor_cb_config);
 
     constexpr uint32_t input_index_tensor_cb_index = tt::CBIndex::c_1;
     const tt::tt_metal::CircularBufferConfig input_index_tensor_cb_config =
         tt::tt_metal::CircularBufferConfig(
             input_index_tensor_tile_size, {{input_index_tensor_cb_index, input_index_tensor_cb_data_format}})
             .set_page_size(input_index_tensor_cb_index, input_index_tensor_tile_size);
-    auto cb_input_index_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, input_index_tensor_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range, input_index_tensor_cb_config);
 
     constexpr uint32_t output_tensor_cb_index = tt::CBIndex::c_2;
     const tt::tt_metal::CircularBufferConfig output_tensor_cb_config =
         tt::tt_metal::CircularBufferConfig(
             output_tensor_tile_size, {{output_tensor_cb_index, output_tensor_cb_data_format}})
             .set_page_size(output_tensor_cb_index, output_tensor_tile_size);
-    auto cb_output_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, output_tensor_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range, output_tensor_cb_config);
 
     // Kernels
     const std::vector<uint32_t> reader_compile_time_args = {
@@ -341,21 +341,21 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
         tt::tt_metal::CircularBufferConfig(
             buffer_scale_factor * input_tensor_tile_size, {{input_tensor_cb_index, input_tensor_cb_data_format}})
             .set_page_size(input_tensor_cb_index, input_tensor_tile_size);
-    auto cb_input_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, input_tensor_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range, input_tensor_cb_config);
 
     constexpr uint32_t input_index_tensor_cb_index = tt::CBIndex::c_1;
     const tt::tt_metal::CircularBufferConfig input_index_tensor_cb_config =
         tt::tt_metal::CircularBufferConfig(
             input_index_tensor_tile_size, {{input_index_tensor_cb_index, input_index_tensor_cb_data_format}})
             .set_page_size(input_index_tensor_cb_index, input_index_tensor_tile_size);
-    auto cb_input_index_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, input_index_tensor_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range, input_index_tensor_cb_config);
 
     constexpr uint32_t output_tensor_cb_index = tt::CBIndex::c_2;
     const tt::tt_metal::CircularBufferConfig output_tensor_cb_config =
         tt::tt_metal::CircularBufferConfig(
             output_tensor_tile_size, {{output_tensor_cb_index, output_tensor_cb_data_format}})
             .set_page_size(output_tensor_cb_index, output_tensor_tile_size);
-    auto cb_output_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, output_tensor_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range, output_tensor_cb_config);
 
     // Kernels
     const std::vector<uint32_t> reader_compile_time_args = {

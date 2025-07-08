@@ -28,29 +28,32 @@ namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t St = get_compile_time_arg_val(0);
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(2);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(3);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(2);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
 
-    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(4);
-    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(5);
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(6);
-    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(7);
-    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(8);
-    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(9);
-    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(10);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(12);
-    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(13);
-    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(14);
-    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(15);
-    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(18);
-    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(19);
-    constexpr bool is_causal = get_compile_time_arg_val(20) == 1;
-    constexpr bool use_attention_mask = get_compile_time_arg_val(21) == 1;
-    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(22);
-    constexpr bool tilize_q = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(5);
+    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(6);
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(7);
+    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(8);
+    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(9);
+    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(10);
+    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(11);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(12);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(13);
+    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(14);
+    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(15);
+    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(16);
+    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(19);
+    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(20);
+    constexpr bool is_causal = get_compile_time_arg_val(21) == 1;
+    constexpr bool use_attention_mask = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(23);
+    constexpr bool tilize_q = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(25);
+
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
-    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
+    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool untilize_output = tilize_q;
     constexpr bool use_pack_untilize = out_chunk_tiles <= MAX_PACK_UNTILIZE_WIDTH;
 
@@ -111,7 +114,8 @@ void MAIN {
             cb_wait_front(cb_index_id, 1);
             volatile uint32_t* index_addr_ptr;
             cb_get_tile(cb_index_id, 0, &index_addr_ptr);
-            cur_pos = index_addr_ptr[4 + cur_batch];
+            uint32_t cb_get_tile_offset = 4;  // Using cb_get_tile, the first 4 elements do not have the data
+            cur_pos = index_addr_ptr[cb_get_tile_offset + (cur_batch / q_heads_parallel_factor)];
             cb_release_tile(cb_index_id);
         }
 
@@ -175,6 +179,7 @@ void MAIN {
             // Compile-time dimension parameters
             St,
             DHt,
+            vDHt,
             Sq_chunk_t,
             out_chunk_tiles,
             // QK matmul block parameters
@@ -230,7 +235,7 @@ void MAIN {
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
                     // reconfig_data_format(cb_q_in, cb_q_in); // DEBUG
                     // pack_reconfig_data_format(cb_out_accumulate_im_2);
-                    copy_block(cb_out_o, cb_out_accumulate_im_2, q_chunk_tiles);
+                    copy_block(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
                     copy_block(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
                     max_block(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
 
@@ -252,12 +257,12 @@ void MAIN {
 
                     // reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff); // DEBUG
                     // pack_reconfig_data_format(cb_out_accumulate_im);
-                    mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, DHt);
-                    mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, DHt);
+                    mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, vDHt);
+                    mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, vDHt);
 
                     // reconfig_data_format(cb_out_accumulate_im, cb_out_accumulate_im_2);
                     // pack_reconfig_data_format(cb_out_accumulate_im);
-                    add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, q_chunk_tiles);
+                    add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);
 
                     // copy tiles
                     // reconfig_data_format(cb_cur_max, cb_cur_max); // DEBUG
@@ -279,7 +284,7 @@ void MAIN {
             /* cb_out_accumulate_im *= cb_cur_sum */
             reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);  // DEBUG
             pack_reconfig_data_format(cb_out_accumulate_im);
-            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, DHt);
+            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, vDHt);
             pack_reconfig_data_format(cb_out_final);
 
             if constexpr (untilize_output) {

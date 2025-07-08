@@ -504,8 +504,7 @@ void EthernetKernel::read_binaries(IDevice* device) {
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), erisc_core_type, dm_class_idx, erisc_id);
     // TODO: fix when active eth supports relo
-    auto load_type =
-        MetalContext::instance().hal().get_jit_build_config(erisc_core_type, dm_class_idx, erisc_id).memory_load;
+    auto load_type = MetalContext::instance().hal().get_jit_build_config(erisc_core_type, erisc_id, 0).memory_load;
     ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
         load_type);
