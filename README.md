@@ -150,7 +150,8 @@ For information on initial model procedures, please see [Model Bring-Up and Test
 
 ## Benchmarks
 
-- [Matrix Multiply FLOPS on Wormhole and Blackhole](./tech_reports/GEMM_FLOPS/GEMM_FLOPS.md)  (updated June 17th, 2025)
+- [Matrix Multiply FLOPS on Wormhole](./tech_reports/GEMM_FLOPS/GEMM_FLOPS.md)  (updated June 17th, 2025)
+- [Matrix Multiply FLOPS on Blackhole](./tech_reports/Blackhole_GEMM_FLOPS/GEMM_FLOPS_BH.md)  (updated Jul 7th, 2025)
 
 ---
 
