@@ -51,7 +51,7 @@ void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n
     // Configuration for bulk processing: inner loop processes 8 x 32-byte operations
     // This creates 256-byte blocks (8 * 32 = 256 bytes) for maximum throughput
     static constexpr uint32_t inner_loop = 8;
-    static constexpr uint32_t inner_blk_size = inner_loop * sizeof(__m256i);  // 256 bytes
+    constexpr uint32_t inner_blk_size = inner_loop * sizeof(__m256i);  // 256 bytes
 
     uint8_t* src8 = (uint8_t*)src;
     uint8_t* dst8 = (uint8_t*)dst;
