@@ -488,6 +488,28 @@ def is_close(a, b, rtol=1e-2, atol=1e-2, max_mag=2.0, max_mag_fraction=0.02):
     return torch.all(or_abs_rel)
 
 
+def _comp_nonfinite(golden, calculated):
+    """
+    Returns True if tensors contain the same non-finite values (nan, inf, -inf) at the same positions. Also returns True if all elements are finite.
+    Returns False if non-finite values differ between both tensors.
+    """
+
+    # torch.equal(['nan'], ['nan']] => False
+    # For this reason, we check for nan and inf separately
+    if torch.not_equal(torch.isnan(golden), torch.isnan(calculated)).any():
+        return False
+
+    golden_inf_mask = torch.isinf(golden)
+    calculated_inf_mask = torch.isinf(calculated)
+
+    if torch.not_equal(golden_inf_mask, calculated_inf_mask).any():
+        return False
+
+    golden_inf = golden[golden_inf_mask]
+    calculated_inf = calculated[calculated_inf_mask]
+    return torch.equal(golden_inf, calculated_inf)
+
+
 def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
@@ -582,10 +604,28 @@ def ulp(x: Union[ttnn.Tensor, torch.Tensor]) -> Union[ttnn.Tensor, torch.Tensor]
     return ulp_value
 
 
-def comp_ulp(golden, calculated, ulp_threshold):
+def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
     """
     Compute absolute error between two tensors in Units of Least Precision (ULP)
     """
+
+    # If both tensors are empty, then we can return True
+    if torch.numel(golden) == 0 and torch.numel(calculated) == 0:
+        return True, "Both tensors are empty"
+
+    if not allow_nonfinite and not torch.all(torch.isfinite(calculated)):
+        return False, "Calculated tensor contains non-finite values"
+
+    if not _comp_nonfinite(golden, calculated):
+        return False, "Tensors are not finite at the same positions"
+    # nonfinite elments can intefere with ULP error calculation
+    # To avoid this, replace nan, +inf, -inf with 0
+    # (we have already checked that both tensors have the same nonfinite elements)
+    mask_finite = ~torch.isfinite(golden)
+    golden = golden.clone()
+    calculated = calculated.clone()
+    golden[mask_finite] = 0
+    calculated[mask_finite] = 0
 
     # ULP is measured according to the golden tensor
     # In most cases, data type of golden tensor should be the same as calculated tensor.
@@ -593,7 +633,6 @@ def comp_ulp(golden, calculated, ulp_threshold):
     # to have higher precision than calculated tensor.
     # If we passed golden tensor to ulp() as is, we would get ULP of higher precision.
     # e.g. ulp of float32 rather bfloat16 calculation, which would give us a wrong value.
-
     ulp_value = ulp(golden.type(calculated.dtype))
 
     if golden.dtype != calculated.dtype:  # Note: assumes that golden has higher precision than calculated tensor
