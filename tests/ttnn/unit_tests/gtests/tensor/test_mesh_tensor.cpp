@@ -31,6 +31,93 @@ using ::testing::ThrowsMessage;
 using MeshTensorTest = GenericMeshDeviceFixture;
 using MeshTensorTestT3K = T3000MeshDeviceFixture;
 
+TEST(MeshTensorHostTest, ToHostNonMeshTensor) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const TensorSpec tensor_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    Tensor input_host_tensor = Tensor::from_vector(std::vector<float>(shape.volume()), tensor_spec);
+    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
+
+    EXPECT_ANY_THROW(tensor_impl::to_host_mesh_tensor_wrapper(input_host_tensor));
+}
+
+TEST(MeshTensorHostTest, FromHostShardsDifferentSpecs) {
+    EXPECT_THAT(
+        ([&]() {
+            std::vector<Tensor> shards = {
+                Tensor::from_vector(
+                    std::vector<float>(7),
+                    TensorSpec(ttnn::Shape{7}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
+                Tensor::from_vector(
+                    std::vector<float>(10),
+                    TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
+            };
+            from_host_shards(shards, MeshShape(2));
+        }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("All tensor shards must have the same tensor spec")));
+}
+
+TEST_F(MeshTensorTest, FromHostShardsDeviceStorage) {
+    EXPECT_THAT(
+        ([&]() {
+            std::vector<Tensor> shards = {
+                Tensor::from_vector(
+                    std::vector<float>(10),
+                    TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{})),
+                    mesh_device_.get()),
+                Tensor::from_vector(
+                    std::vector<float>(10),
+                    TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{})),
+                    mesh_device_.get()),
+            };
+            from_host_shards(shards, MeshShape(2));
+        }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("All tensor shards must be on host")));
+}
+
+TEST(MeshTensorHostTest, FromHostShardsMeshShapeMismatch) {
+    EXPECT_THAT(
+        ([&]() {
+            std::vector<Tensor> shards = {
+                Tensor::from_vector(
+                    std::vector<float>(7),
+                    TensorSpec(ttnn::Shape{7}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
+                Tensor::from_vector(
+                    std::vector<float>(10),
+                    TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
+            };
+            from_host_shards(shards, MeshShape(3));
+        }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("Number of tensor shards must match mesh size")));
+}
+
+TEST(MeshTensorHostTest, FromHostShards) {
+    std::vector<float> host_data1(10);
+    std::iota(host_data1.begin(), host_data1.end(), 0);
+
+    std::vector<float> host_data2(10);
+    std::iota(host_data2.begin(), host_data2.end(), 10);
+
+    auto tensor = from_host_shards(
+        std::vector<Tensor>{
+            Tensor::from_vector(
+                host_data1,
+                TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
+            Tensor::from_vector(
+                host_data2,
+                TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
+        },
+        MeshShape(2));
+
+    EXPECT_EQ(tensor.tensor_spec().logical_shape(), ttnn::Shape{10});
+    EXPECT_EQ(tensor.storage_type(), StorageType::MULTI_DEVICE_HOST);
+
+    auto tensors = get_device_tensors(tensor);
+    ASSERT_THAT(tensors, SizeIs(2));
+    EXPECT_THAT(tensors[0].to_vector<float>(), Pointwise(FloatEq(), host_data1));
+    EXPECT_THAT(tensors[1].to_vector<float>(), Pointwise(FloatEq(), host_data2));
+}
+
 TEST_F(MeshTensorTest, Lifecycle) {
     const TensorSpec tensor_spec =
         TensorSpec(ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
@@ -62,17 +149,7 @@ TEST_F(MeshTensorTest, Lifecycle) {
     EXPECT_FALSE(input_tensor.is_allocated());
 }
 
-TEST_F(MeshTensorTest, ToHostNonMeshTensor) {
-    const ttnn::Shape shape{1, 1, 32, 32};
-    const TensorSpec tensor_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    Tensor input_host_tensor = Tensor::from_vector(std::vector<float>(shape.volume()), tensor_spec);
-    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
-
-    EXPECT_ANY_THROW(tensor_impl::to_host_mesh_tensor_wrapper(input_host_tensor));
-}
-
-TEST_F(MeshTensorTest, ReplicateOwnedTensor) {
+TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
     const ttnn::Shape shape{1, 1, 32, 32};
     const TensorSpec tensor_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));

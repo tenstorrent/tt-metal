@@ -34,7 +34,7 @@ def load_or_compute_and_cache(
     tensor = None
     if cache_path:
         try:
-            tensor = ttnn.load_tensor(cache_path)
+            tensor = ttnn.load_tensor(cache_path, device=device)
             logger.info(f"Loaded tensor from cache: {cache_path}")
         except Exception as e:
             logger.warning(f"Failed to load tensor from cache: {cache_path}. Error: {e}")

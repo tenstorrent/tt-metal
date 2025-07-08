@@ -111,7 +111,14 @@
 #error "Tensix routing table base and size must be 16-byte aligned"
 #endif
 
-#define MEM_MAP_END (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_TENSIX_ROUTING_TABLE_SIZE)
+// Tensix fabric connection metadata for workers
+#define MEM_TENSIX_FABRIC_CONNECTIONS_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_TENSIX_ROUTING_TABLE_SIZE)
+#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 592  // sizeof(tensix_fabric_connections_l1_info_t)
+#if (MEM_TENSIX_FABRIC_CONNECTIONS_BASE % 16 != 0) || (MEM_TENSIX_FABRIC_CONNECTIONS_SIZE % 16 != 0)
+#error "Tensix fabric connections base and size must be 16-byte aligned"
+#endif
+
+#define MEM_MAP_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
 
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"
@@ -149,7 +156,7 @@
 #define MEM_MAX_NUM_CONCURRENT_TRANSACTIONS 8
 #define MEM_ERISC_SYNC_INFO_SIZE (160 + 16 * MEM_MAX_NUM_CONCURRENT_TRANSACTIONS)
 #define MEM_ERISC_FABRIC_ROUTER_CONFIG_SIZE 2064
-#define MEM_ERISC_MAILBOX_SIZE 12544
+#define MEM_ERISC_MAILBOX_SIZE 12576
 #define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
 #define MEM_ERISC_BASE 0
 

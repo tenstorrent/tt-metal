@@ -101,7 +101,6 @@ def run_conv(
     output_mesh_composer=None,
     enable_split_reader=False,
     activation="",
-    preprocess_weights_on_device=True,
     in_place=False,
     run_twice=False,
     fast_compare=False,
@@ -213,7 +212,6 @@ def run_conv(
     )
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=output_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout if not auto_shard else None,
         deallocate_activation=deallocate_activation,
@@ -224,8 +222,6 @@ def run_conv(
         output_layout=output_layout,
         activation=activation,
         transpose_shards=transpose_shards,
-        preprocess_weights_on_device=preprocess_weights_on_device,
-        always_preprocess_weights=False,
         in_place=in_place,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
@@ -268,6 +264,7 @@ def run_conv(
         slice_config=slice_config,
         return_output_dim=True,
         return_weights_and_bias=True,
+        dtype=output_dtype,
     )
     if run_twice:
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
@@ -291,6 +288,7 @@ def run_conv(
             slice_config=slice_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=output_dtype,
         )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
@@ -425,7 +423,6 @@ def run_conv_with_split(
         split_weight_tensors[i] = torch.split(split_weight_tensors[i], split_input_channels, 1)
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=output_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout if not auto_shard else None,
     )
@@ -472,6 +469,7 @@ def run_conv_with_split(
                 conv_config=conv_config,
                 compute_config=compute_config,
                 return_output_dim=True,
+                dtype=output_dtype,
             )
             tt_conv_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
             ttnn.deallocate(tt_output_tensor_on_device, True)
@@ -770,7 +768,6 @@ def test_conv_dram(
         input_dtype=input_dtype,
         input_layout=input_layout,
         packer_l1_acc=packer_l1_acc,
-        preprocess_weights_on_device=False,
         run_twice=False,
         fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(
@@ -897,7 +894,6 @@ def test_conv_ws(
             pytest.skip("Test is not supported on n300 (8,7) grid due to #13541")
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=output_dtype,
         weights_dtype=weights_dtype,
         shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED if not auto_shard else None,
         deallocate_activation=deallocate_activation,
@@ -932,6 +928,7 @@ def test_conv_ws(
         compute_config=compute_config,
         groups=groups,
         return_output_dim=True,
+        dtype=output_dtype,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -3103,7 +3100,6 @@ def test_conv2d_model_fruit(
         input_layout= input_layout,
         activation="relu",
         enable_act_double_buffer=enable_act_double_buffer,
-        preprocess_weights_on_device=False,
         input_dtype = input_dtype,
     )
 
@@ -3281,6 +3277,7 @@ def test_conv2d_sdxl(
         (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1, 0),
 
         # channels 4
+        # Skip specific test case for Blackhole devices
         (1, 4, 4, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1, 0),
     ),
 )
@@ -3309,6 +3306,10 @@ def test_conv2d_vae_sdxl(
     num_slices,
     act_block_h_override
 ):
+
+    # Skip specific test case for Blackhole devices
+    if is_blackhole() and (batch, input_channels, output_channels, input_height, input_width, weights_dtype) == (1, 4, 4, 128, 128, ttnn.bfloat8_b):
+        pytest.skip("Skipping this test case for Blackhole devices due to PCC issue, tracked in ISSUE-24463")
 
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
@@ -3536,9 +3537,16 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
     height = 512
     width = 512
     torch.manual_seed(20250416)
+
+    # In case of output dtype is bfloat8_b, we need to pad the input channels to be divisible by 8.
+    required_padding = (8 - num_channels % 8) % 8
+    padded_num_channels = num_channels + required_padding
+
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
+    torch_input_tensor = torch.nn.functional.pad(torch_input_tensor, (0, 0, 0, 0, 0, required_padding), mode="constant", value=0)
 
     torch_weights = torch.randn((hidden_size, num_channels, patch_size, patch_size), dtype=torch.bfloat16).float()
+    torch_weights = torch.nn.functional.pad(torch_weights, (0, 0, 0, 0, 0, required_padding), mode="constant", value=0)
     torch_bias = torch.randn((1, 1, 1, hidden_size), dtype=torch.bfloat16).float()
 
     torch_output_tensor = (
@@ -3576,7 +3584,6 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
     )
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat8_b,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_split_reader=enable_split_reader,
@@ -3586,7 +3593,7 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
         input_tensor=ttnn_input_tensor,
         weight_tensor=ttnn_weights,
         bias_tensor=ttnn_bias,
-        in_channels=num_channels,
+        in_channels=padded_num_channels,
         out_channels=hidden_size,
         batch_size=batch_size,
         input_height=height,
@@ -3596,6 +3603,7 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
         device=device,
         padding=(patch_size // 2, patch_size // 2),
         conv_config=conv_config,
+        dtype=ttnn.bfloat8_b,
     )
     ttnn_output_tensor = ttnn.to_torch(ttnn_output_tensor)
 
@@ -3604,13 +3612,25 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("input_channels", [3, 320])
-@pytest.mark.parametrize("output_channels", [32])
-@pytest.mark.parametrize("input_height,input_width", [(224, 224), (512, 672)])
-@pytest.mark.parametrize("kernel_height,kernel_width", [(16, 16), (32, 32)])
-@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "input_channels, output_channels, input_height, input_width, kernel_height, kernel_width, stride_height, stride_width",
+    [
+        (3, 32, 224, 224, 16, 16, 16, 16),
+        (3, 32, 224, 224, 32, 32, 32, 32),
+        (3, 32, 224, 224, 16, 16, 2, 2),
+        (3, 32, 224, 224, 7, 7, 2, 2),
+        (3, 32, 224, 224, 6, 6, 2, 2),
+        (3, 32, 1280, 1280, 6, 6, 2, 2),
+        (3, 32, 512, 672, 16, 16, 16, 16),
+        (3, 32, 512, 672, 32, 32, 32, 32),
+        (320, 32, 224, 224, 16, 16, 16, 16),
+        (320, 32, 224, 224, 32, 32, 32, 32),
+        (320, 32, 512, 672, 16, 16, 16, 16),
+        (320, 32, 512, 672, 32, 32, 32, 32),
+    ]
+)
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("has_bias", [True, False])
-@pytest.mark.parametrize("preprocess_weights_on_device", [True, False])
 def test_conv2d_with_fold(
     device,
     torch_tensor_map,
@@ -3621,9 +3641,10 @@ def test_conv2d_with_fold(
     input_width,
     kernel_height,
     kernel_width,
+    stride_height,
+    stride_width,
     input_layout,
     has_bias,
-    preprocess_weights_on_device,
 ):
     run_conv(
         device=device,
@@ -3639,14 +3660,13 @@ def test_conv2d_with_fold(
         input_width=input_width,
         filter_height=kernel_height,
         filter_width=kernel_width,
-        stride_h=kernel_height,
-        stride_w=kernel_width,
+        stride_h=stride_height,
+        stride_w=stride_width,
         padding=(0, 0),
         config_override=None,
         input_layout=input_layout,
         has_bias=has_bias,
         enable_kernel_stride_folding=True,
-        preprocess_weights_on_device=preprocess_weights_on_device,
     )
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -3859,7 +3879,6 @@ def test_conv2d_act_dealloc(
     )
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=output_dtype,
         weights_dtype=weights_dtype,
         deallocate_activation=True,
         output_layout=output_layout,
@@ -3888,5 +3907,6 @@ def test_conv2d_act_dealloc(
         conv_config=conv_config,
         groups=groups,
         slice_config=slice_config,
+        dtype=output_dtype,
     )
     assert not tt_input_tensor.is_allocated(), "Input tensor is allocated"

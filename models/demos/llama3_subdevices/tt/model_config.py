@@ -603,6 +603,16 @@ class TtModelArgs:
         device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape)
         self.is_galaxy = self.num_devices == 32
+        self.galaxy_type = None
+
+        if self.is_galaxy:
+            self.galaxy_type = "6U" if ttnn.GetNumPCIeDevices() == 32 else "4U"
+        else:
+            raise ValueError(
+                f"Unsupported number of devices: {self.num_devices}. Only 32 devices (Galaxy) are supported."
+            )
+        self.model_config["GALAXY_NUM_LINKS"] = {"6U": 4, "4U": 3}.get(self.galaxy_type)
+        self.model_config["CCL_TOPOLOGY"] = {"6U": ttnn.Topology.Ring, "4U": ttnn.Topology.Linear}.get(self.galaxy_type)
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
 
@@ -1549,7 +1559,7 @@ class TtModelArgs:
             )
 
             # Note PACKET_WORKER_CRS is 8 cores and it can NOT use any core in the following ranges:
-            # {1,6}-{2,7} (Reduce scatter ethernet worker cores),
+            # {2,8}-{3,8},{5,3}-{6,3}  (Reduce scatter ethernet worker cores),
             # {1,0}-{2,0}, {1,4}-{2,5}, {1,9}-{2,9}, {5,0}-{6,2}, {5,4}-{6,7}, {5,9}-{6,9} (Matmul)
             # {0,0}-{0,9}, {4,0}-{4,9} (Prefetcher)
             # {3,6} (Matmul hop core)

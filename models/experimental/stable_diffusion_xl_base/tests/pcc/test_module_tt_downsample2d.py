@@ -62,7 +62,6 @@ def test_downsample2d(
     )
 
     ttnn_output_tensor, output_shape = tt_downsample.forward(ttnn_input_tensor, input_shape)
-    model_config.clear_weight_preprocess()
 
     output_tensor = from_channel_last_ttnn(
         ttnn_output_tensor, [input_shape[0], output_shape[1], output_shape[2], output_shape[0]]
