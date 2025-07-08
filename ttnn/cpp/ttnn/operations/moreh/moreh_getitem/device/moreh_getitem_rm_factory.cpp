@@ -98,7 +98,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
     auto cb_src0_config = CircularBufferConfig(rounded_input_page_size, {{src_cb_index, src_cb_data_format}})
                               .set_page_size(src_cb_index, rounded_input_page_size);
-    auto cb_src0 = CreateCircularBuffer(program, all_cores, cb_src0_config);
+    CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     for (uint32_t dim = 0; dim < 5; dim++) {
         if (!index_info[dim].is_defined) {
@@ -109,14 +109,13 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         auto index_page_size = round_up_to_mul32(index_info[dim].unit_size);
         auto cb_index_config = CircularBufferConfig(index_page_size, {{src1_cb_index, index_cb_data_format}})
                                    .set_page_size(src1_cb_index, index_page_size);
-        auto cb_src1 = CreateCircularBuffer(program, all_cores, cb_index_config);
+        CreateCircularBuffer(program, all_cores, cb_index_config);
     }
 
     auto out_cb_index = CBIndex::c_16;
-    auto rounded_output_page_size = round_up_to_mul32(input_unit_size);
     auto cb_out0_config = CircularBufferConfig(rounded_input_page_size, {{out_cb_index, output_cb_data_format}})
                               .set_page_size(out_cb_index, rounded_input_page_size);
-    auto cb_out0 = CreateCircularBuffer(program, all_cores, cb_out0_config);
+    CreateCircularBuffer(program, all_cores, cb_out0_config);
 
     // create read/wrtie kernel
     auto src_is_dram = is_dram(input_5d);
@@ -157,7 +156,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     uint32_t g1_numcores = core_group_1.num_cores();
 
     uint32_t start_id = 0;
-    for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
         uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
 

@@ -27,17 +27,13 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
         init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
 
     auto device = input.device();
-    auto kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
     const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     const auto& input_shape = input.padded_shape();
-    const auto& input_shape_without_padding = input.logical_shape();
 
     const auto Ht = input_shape[-2] / constants::TILE_HEIGHT;
     const auto Wt = input_shape[-1] / constants::TILE_WIDTH;
@@ -76,7 +72,6 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     ////////////////////////////////////////////////////////////////////////////
     tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
 
-    auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
     CreateCircularBuffer(
         program,
         all_cores,

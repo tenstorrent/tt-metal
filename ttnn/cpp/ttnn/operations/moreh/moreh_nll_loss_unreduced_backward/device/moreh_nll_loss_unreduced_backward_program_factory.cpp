@@ -26,8 +26,6 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
-    auto W = input_grad_shape[-1];
-
     const bool weight_has_value = weight.has_value();
 
     tt::tt_metal::IDevice* device = target.device();
