@@ -30,9 +30,6 @@ MorehNormOperation::ProgramFactoryNCOther::cached_program_t MorehNormOperation::
     const auto H = input_shape[-2];
     const auto W = input_shape[-1];
 
-    const auto Ht = H / tt::constants::TILE_HEIGHT;
-    const auto Wt = W / tt::constants::TILE_WIDTH;
-
     const auto num_reduced_tiles_along_dim = input_shape[dim];
     const auto num_output_tiles = output.physical_volume() / tt::constants::TILE_HW;
 

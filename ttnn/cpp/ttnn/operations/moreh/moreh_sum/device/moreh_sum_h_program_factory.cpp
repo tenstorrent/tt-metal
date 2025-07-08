@@ -79,7 +79,6 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_sum_h.cpp";
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    CBHandle cb_src1 = 0;
     uint32_t num_input_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(
@@ -91,22 +90,22 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     tt::tt_metal::CircularBufferConfig cb_scaler_config =
         tt::tt_metal::CircularBufferConfig(1 * scaler_single_tile_size, {{scaler_cb_index, scaler_cb_data_format}})
             .set_page_size(scaler_cb_index, scaler_single_tile_size);
-    auto cb_scaler = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
     tt::tt_metal::CircularBufferConfig cb_mask_h_config =
         tt::tt_metal::CircularBufferConfig(mask_h_single_tile_size, {{tt::CBIndex::c_3, mask_h_cb_data_format}})
             .set_page_size(tt::CBIndex::c_3, mask_h_single_tile_size);
-    auto cb_mask_h = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_mask_h_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_mask_h_config);
 
     tt::tt_metal::CircularBufferConfig cb_intermed0_config =
         tt::tt_metal::CircularBufferConfig(intermed_single_tile_size, {{tt::CBIndex::c_24, intermed_cb_data_format}})
             .set_page_size(tt::CBIndex::c_24, intermed_single_tile_size);
-    auto cb_intermed0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
     tt::tt_metal::CircularBufferConfig cb_intermed1_config =
         tt::tt_metal::CircularBufferConfig(intermed_single_tile_size, {{tt::CBIndex::c_25, intermed1_cb_data_format}})
             .set_page_size(tt::CBIndex::c_25, intermed_single_tile_size);
-    auto cb_intermed1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;  // output operands start at index 16
     uint32_t num_output_tiles = 2;
@@ -159,7 +158,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[tt::CBIndex::c_24] = UnpackToDestMode::UnpackToDestFp32;
     }
-    auto reduce_compute_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         compute_kernel_name,
         core_group_1,
@@ -178,7 +177,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
             1,                          // NC
             origin_H};
 
-        auto reduce_compute_kernel_group_2_id = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             compute_kernel_name,
             core_group_2,
@@ -241,7 +240,7 @@ void MorehSumOperation::MorehSumHFactory::override_runtime_arguments(
     auto src_buffer = tensor_args.input.buffer();
     auto dst_buffer = tensor_return_value.buffer();
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {
