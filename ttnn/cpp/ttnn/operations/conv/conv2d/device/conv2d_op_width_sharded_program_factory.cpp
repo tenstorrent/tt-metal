@@ -319,10 +319,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     std::map<string, string> reader_defines;
 
-    if (act_matrix_height_unpadded < act_matrix_height) {
-        reader_defines["ACT_BLOCK_HEIGHT_PADDING"] = "1";
-    }
-
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (input_num_cores * per_core_num_blocks_act_w);
 
     std::string compute_kernel_path =
@@ -383,7 +379,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     }
 
     Conv2dConfig conv_config = Conv2dConfig{
-        .dtype = output.dtype(),
         .weights_dtype = b.dtype(),
         .shard_layout = a.memory_config().memory_layout(),
         .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
@@ -397,6 +392,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         {filter_h, filter_w},
         conv_config,
         a.dtype(),
+        output.dtype(),
         a.memory_config().shard_spec().value().shape,
         has_bias,
         false);

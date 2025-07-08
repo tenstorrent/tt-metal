@@ -27,47 +27,6 @@ inline bool is_dram(const Tensor& input_tensor) {
 inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
-inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
-
-inline bool cbs_fit_in_DRAM(
-    uint32_t in0_CB_size,
-    uint32_t in_CB_size,
-    uint32_t in2_CB_size,
-    uint32_t in3_CB_size,
-    uint32_t in5_CB_size,
-    uint32_t in6_CB_size,
-    uint32_t in_mask_CB_size,
-    uint32_t repack_CB_size,
-    uint32_t x_CB_size,
-    uint32_t xmm_CB_size,
-    uint32_t ex_partial_CB_size,
-    uint32_t ex_global_CB_size,
-    uint32_t ex2_global_CB_size,
-    uint32_t xmm2_CB_size,
-    uint32_t xmm3_CB_size,
-    uint32_t ex2pe_CB_size,
-    uint32_t out_CB_size,
-    uint32_t l1_size) {
-    uint32_t sum = 0;
-    sum += in0_CB_size;
-    sum += in_CB_size;
-    sum += in2_CB_size;
-    sum += in3_CB_size;
-    sum += in5_CB_size;
-    sum += in6_CB_size;
-    sum += in_mask_CB_size;
-    sum += repack_CB_size;
-    sum += x_CB_size;
-    sum += xmm_CB_size;
-    sum += ex_partial_CB_size;
-    sum += ex_global_CB_size;
-    sum += ex2_global_CB_size;
-    sum += xmm2_CB_size;
-    sum += xmm3_CB_size;
-    sum += ex2pe_CB_size;
-    sum += out_CB_size;
-    return sum < l1_size;
-}
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     if (n <= max_subblock_w) {
@@ -169,12 +128,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const std::optional<const Tensor>& input_mask,
     Tensor& output,
     float eps,
-    const uint32_t num_groups,
-    const uint32_t num_batches,
-    MathFidelity fidelity,
+    uint32_t num_groups,
+    uint32_t num_batches,
     DataType im_data_format,
     CoreCoord grid_size,
-    bool inplace) {
+    bool inplace,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (gamma.has_value()) {
         TT_FATAL(
@@ -228,7 +187,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
     // tensor shape
-    const auto shape = a.padded_shape();
+    const auto& shape = a.padded_shape();
     uint32_t H = shape[2] * num_batches;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
@@ -496,6 +455,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         for (int i = 0; i < num_cores_c / num_cores_per_group; ++i) {
             for (int j = 0; j < num_cores_r; ++j) {
                 std::vector<CoreCoord> temp;
+                temp.reserve(num_cores_per_group);
                 for (int k = 0; k < num_cores_per_group; ++k) {
                     temp.push_back(CoreCoord{(std::size_t)(k + i * num_cores_per_group), (std::size_t)j});
                 }
@@ -506,6 +466,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         for (int i = 0; i < num_cores_r / num_cores_per_group; ++i) {
             for (int j = 0; j < num_cores_c; ++j) {
                 std::vector<CoreCoord> temp;
+                temp.reserve(num_cores_per_group);
                 for (int k = 0; k < num_cores_per_group; ++k) {
                     temp.push_back(CoreCoord{(std::size_t)j, (std::size_t)(k + i * num_cores_per_group)});
                 }
@@ -781,14 +742,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH};
     // compute kernel
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = true;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     auto mcast_sender_compute_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp",
         mcast_sender_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_sender_compute_compile_time_args,
@@ -798,7 +759,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp",
         mcast_receiver_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_receiver_compute_compile_time_args,
@@ -1154,13 +1115,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     const std::optional<const Tensor>& input_mask,
     Tensor& output,
     float eps,
-    const uint32_t num_groups,
-    const uint32_t num_batches,
-    MathFidelity fidelity,
+    uint32_t num_groups,
+    uint32_t num_batches,
     DataType im_data_format,
     CoreCoord grid_size,
     bool inplace,
-    uint32_t num_out_blocks) {
+    uint32_t num_out_blocks,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     if (gamma.has_value()) {
@@ -1208,7 +1169,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, true);
 
     // tensor shape
-    const auto shape = a.padded_shape();
+    const auto& shape = a.padded_shape();
     uint32_t H = shape[2] * num_batches;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
@@ -1548,6 +1509,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     for (int j = 0; j < num_cores_c; ++j) {
         for (int i = 0; i < num_cores_r / num_cores_per_group; ++i) {
             std::vector<CoreCoord> temp;
+            temp.reserve(num_cores_per_group);
             for (int k = 0; k < num_cores_per_group; ++k) {
                 temp.push_back(CoreCoord{(std::size_t)(k + i * num_cores_per_group), (std::size_t)j});
             }
@@ -2036,14 +1998,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks,
     };
     // compute kernel
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = true;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     auto mcast_sender_compute_kernels_id_group_1 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
         mcast_sender_cores_group_1,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_sender_compute_compile_time_args_group_1,
@@ -2053,7 +2015,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
         mcast_sender_cores_group_2,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_sender_compute_compile_time_args_group_2,
@@ -2063,7 +2025,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
         mcast_receiver_cores_group_1,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_receiver_compute_compile_time_args_group_1,
@@ -2073,7 +2035,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
         mcast_receiver_cores_group_2,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = fidelity,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_receiver_compute_compile_time_args_group_2,

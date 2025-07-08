@@ -79,7 +79,7 @@ Tensor ProdOperation::invoke(
     const int size = static_cast<int>(input_a.logical_shape().rank());
 
     const auto old_rank = input_a.logical_shape().rank();
-    const ttnn::Shape input_shape = input_a.logical_shape();
+    const ttnn::Shape& input_shape = input_a.logical_shape();
 
     // If no dim is provided, compute the prod across all dimensions
     if (!dim.has_value()) {

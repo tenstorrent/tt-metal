@@ -6,6 +6,7 @@
 #include <tt-metalium/host_api.hpp>
 
 #include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
@@ -15,12 +16,6 @@
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
-
-namespace tt {
-namespace tt_metal {
-class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -37,14 +32,26 @@ void run_softmax(distributed::MeshDevice* device, const ttnn::Shape& shape) {
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv) {
     bool pass = true;
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Device Setup
-    ////////////////////////////////////////////////////////////////////////////
-    int device_id = 0;
-    auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
-    run_softmax(device.get(), Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}));
-    run_softmax(device.get(), Shape({1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2}));
+    try {
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Device Setup
+        ////////////////////////////////////////////////////////////////////////////
+        int device_id = 0;
+        auto device_owner = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+        auto device = device_owner.get();
+        // https://github.com/tenstorrent/tt-metal/issues/23824
+        device->disable_and_clear_program_cache();
+
+        run_softmax(device, Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}));
+        run_softmax(device, Shape({1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2}));
+    } catch (const std::exception& e) {
+        pass = false;
+        // Capture the exception error message
+        log_error(LogTest, "{}", e.what());
+        // Capture system call errors that may have returned from driver/kernel
+        log_error(LogTest, "System error message: {}", std::strerror(errno));
+    }
 
     if (pass) {
         log_info(LogTest, "Test Passed");

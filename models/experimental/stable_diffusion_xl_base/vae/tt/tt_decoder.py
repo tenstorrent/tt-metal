@@ -17,10 +17,11 @@ from loguru import logger
 
 
 class TtDecoder(nn.Module):
-    def __init__(self, device, state_dict, model_config, gn_fallback=False):
+    def __init__(self, device, state_dict, model_config, batch_size=1, gn_fallback=False):
         super().__init__()
 
         self.device = device
+        self.batch_size = batch_size
 
         self.norm_groups = 32
         self.norm_eps = 1e-5
@@ -99,6 +100,7 @@ class TtDecoder(nn.Module):
         )
         self.conv_out_slice_config = get_DRAM_conv_config(None, 2)
         self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, sample, input_shape):
         B, C, H, W = input_shape
@@ -128,6 +130,7 @@ class TtDecoder(nn.Module):
             slice_config=self.conv_in_slice_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv_in_params["output_channels"]
 
@@ -185,12 +188,13 @@ class TtDecoder(nn.Module):
             slice_config=self.conv_out_slice_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv_out_params["output_channels"]
 
         # Convert to torch
-        hidden_states = ttnn.to_torch(hidden_states).float()
-        hidden_states = hidden_states.reshape(B, H, W, C)
+        hidden_states = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)).float()
+        hidden_states = hidden_states.reshape(self.batch_size * B, H, W, C)
         hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
 
         return hidden_states

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -37,20 +37,18 @@ filterwarnings("ignore")
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
-        # True,  # Requires downloading pretrained weights from Google Drive
+        True,
     ],
     ids=[
-        "pretrained_weight_false",
-        # "pretrained_weight_true",
+        "pretrained_weight_true",
     ],
 )
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
-def test_demo(
-    device, use_program_cache, model_location_generator, reset_seeds, demo_type, model_type, use_pretrained_weight
-):
+def test_demo(device, model_location_generator, reset_seeds, demo_type, model_type, use_pretrained_weight):
+    # The below line is commented due to the issue https://github.com/tenstorrent/tt-metal/issues/23270
+    # device.disable_and_clear_program_cache()
     disable_persistent_kernel_cache()
     # Download latest version of the dataset
     path = kagglehub.dataset_download("mateuszbuda/lgg-mri-segmentation")
@@ -59,6 +57,8 @@ def test_demo(
             print(os.path.join(dirname, filename))
     model_seg = UNetVGG19()
     if use_pretrained_weight:
+        if not os.path.exists("models/demos/vgg_unet/vgg_unet_torch.pth"):
+            os.system("bash models/demos/vgg_unet/weights_download.sh")
         model_seg.load_state_dict(torch.load("models/demos/vgg_unet/vgg_unet_torch.pth"))
     model_seg.eval()  # Set to evaluation mode
 
@@ -68,6 +68,7 @@ def test_demo(
         vgg_unet_trace_2cq.initialize_vgg_unet_trace_2cqs_inference(
             device,
             model_location_generator,
+            use_pretrained_weight=use_pretrained_weight,
         )
 
     if demo_type == "multi":

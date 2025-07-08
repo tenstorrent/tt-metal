@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,6 +20,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     const int8_t dim,
     const bool largest,
     const bool sorted,
+    const bool uint16_output,
     const CoreRangeSet& sub_core_grids,
     Tensor& value_tensor,
     Tensor& index_tensor) {
@@ -128,7 +129,8 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
             .set_page_size(output_ind_cb_index, index_tile_size);
     auto cb_output_ind_tensor = tt::tt_metal::CreateCircularBuffer(program, core, output_ind_cb_config);
 
-    std::vector<uint32_t> reader_compile_time_args = {input_cb_index, index_cb_index, (uint32_t)input_is_dram, Ht, Wt};
+    std::vector<uint32_t> reader_compile_time_args = {
+        input_cb_index, index_cb_index, (uint32_t)input_is_dram, Ht, Wt, (uint32_t)uint16_output};
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp",
@@ -184,7 +186,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp",
         core,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_args});
+        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = !uint16_output, .compile_args = compute_args});
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, binary_writer_kernel_id, core](
                                               const void* operation,

@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <tt-metalium/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/serialization/intermesh_link_table.hpp"
 #include <iomanip>
 #include <sstream>
 #include <set>
@@ -71,7 +72,7 @@ TEST(IntermeshAPIs, ConsistencyChecks) {
     }
 }
 
-TEST(IntermeshAPIs, IntermeshLinksAreDistinctFromEthernetLinks) {
+TEST(IntermeshAPIs, LocalIntermeshLinkTable) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -79,29 +80,37 @@ TEST(IntermeshAPIs, IntermeshLinksAreDistinctFromEthernetLinks) {
         GTEST_SKIP() << "Cluster does not support intermesh links";
     }
 
-    log_info(tt::LogTest, "=== Verifying Intermesh Links are Distinct from Ethernet Links ===");
+    log_info(tt::LogTest, "=== Verifying Local Intermesh Link Table Serialization ===");
 
-    // This test documents that intermesh links are a distinct category from regular ethernet links
-    auto all_intermesh_links = control_plane.get_all_intermesh_eth_links();
+    // Get the local intermesh link table
+    const auto& intermesh_link_table = control_plane.get_local_intermesh_link_table();
+    auto serialized_table = serialize_to_bytes(intermesh_link_table);
+    IntermeshLinkTable deserialized_table = deserialize_from_bytes(serialized_table);
+    EXPECT_EQ(intermesh_link_table.local_mesh_id, deserialized_table.local_mesh_id)
+        << "Deserialized local mesh ID does not match original";
 
-    for (const auto& [chip_id, intermesh_links] : all_intermesh_links) {
-        auto active_eth_cores = cluster.get_active_ethernet_cores(chip_id);
-        auto inactive_eth_cores = cluster.get_inactive_ethernet_cores(chip_id);
+    for (const auto& [local_chan, remote_chan] : intermesh_link_table.intermesh_links) {
+        EXPECT_TRUE(deserialized_table.intermesh_links.contains(local_chan))
+            << "Deserialized table does not contain local channel Board " << local_chan.board_id << " Chan "
+            << local_chan.chan_id;
+        EXPECT_EQ(deserialized_table.intermesh_links.at(local_chan), remote_chan)
+            << "Remote channel for Board " << local_chan.board_id << " Chan "
+            << local_chan.chan_id << " does not match after deserialization";
 
-        // Verify no overlap between intermesh links and active ethernet cores
-        for (const auto& [eth_core, channel] : intermesh_links) {
-            EXPECT_TRUE(active_eth_cores.find(eth_core) == active_eth_cores.end())
-                << "Intermesh link at " << eth_core.str() << " on chip " << chip_id
-                << " should not be in active ethernet cores";
-
-            // Intermesh links appear in inactive ethernet cores
-            EXPECT_TRUE(inactive_eth_cores.find(eth_core) != inactive_eth_cores.end())
-                << "Intermesh link at " << eth_core.str() << " on chip " << chip_id
-                << " should be in inactive ethernet cores";
+        auto board_id = local_chan.board_id;
+        bool chip_found = false;
+        for (auto chip_id : cluster.user_exposed_chip_ids()) {
+            if (control_plane.has_intermesh_links(chip_id) == false) {
+                continue;
+            }
+            if (control_plane.get_asic_id(chip_id) == board_id) {
+                EXPECT_TRUE(control_plane.is_intermesh_eth_link(chip_id, CoreCoord{0, local_chan.chan_id}))
+                    << "Expected valid intermesh links in the local intermesh link table";
+                chip_found = true;
+                break;
+            }
         }
-
-        log_info(tt::LogTest, "Chip {}: {} intermesh links are distinct from {} active ethernet cores",
-                 chip_id, intermesh_links.size(), active_eth_cores.size());
+        EXPECT_TRUE(chip_found) << "No chip found with ASIC ID " << board_id;
     }
 }
 

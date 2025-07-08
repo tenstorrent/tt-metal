@@ -145,7 +145,6 @@ def test_mamba_perplexity(
     expected_ppl: int,
     expected_top1: int,
     expected_top5: int,
-    use_program_cache,
     get_tt_cache_path,
     reset_seeds,
 ):

@@ -27,6 +27,7 @@ class TtMobileNetV2Conv2D:
         reshard_if_not_optimal=True,
         activation_dtype=ttnn.bfloat8_b,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        activation_function=None,
     ):
         self.device = device
         self.parameters = parameters
@@ -45,6 +46,7 @@ class TtMobileNetV2Conv2D:
         self.reshard_if_not_optimal = reshard_if_not_optimal
         self.batch_size = batch_size
         self.shard_layout = shard_layout
+        self.activation_function = activation_function
         if self.block_shard:
             self.shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
         if self.width_shard:
@@ -56,18 +58,20 @@ class TtMobileNetV2Conv2D:
 
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
-            dtype=self.activation_dtype,
             weights_dtype=ttnn.bfloat8_b,
-            activation="",
+            activation=self.activation_function if self.activation_function is not None else "",
             shard_layout=self.shard_layout,
             act_block_w_div=1,
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=self.enable_act_double_buffer,
-            enable_split_reader=self.enable_split_reader,
+            enable_split_reader=True
+            if self.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            else self.enable_split_reader,
             enable_subblock_padding=False,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,
+            enable_weights_double_buffer=True,
         )
 
         if self.act_block_h:
@@ -113,6 +117,7 @@ class TtMobileNetV2Conv2D:
             groups=self.groups,
             return_weights_and_bias=True,
             return_output_dim=True,
+            dtype=self.activation_dtype,
         )
         return x, h, w
 
@@ -140,6 +145,9 @@ class TtInvertedResidual:
                 device,
                 batchsize,
                 block_shard=False if id == 6 and (11 < id <= 16) else self.block_shard,
+                deallocate_activation=True if not self.use_res_connect else False,
+                enable_act_double_buffer=True,
+                activation_function="relu6",
             )
 
         self.conv2 = TtMobileNetV2Conv2D(
@@ -149,6 +157,8 @@ class TtInvertedResidual:
             batchsize,
             groups=hidden_dim,
             block_shard=self.block_shard,
+            deallocate_activation=True,
+            activation_function="relu6",
         )
         self.conv3 = TtMobileNetV2Conv2D(
             [1, 1, 0, out_channels],
@@ -156,17 +166,19 @@ class TtInvertedResidual:
             device,
             batchsize,
             block_shard=False if (10 <= id <= 16) else self.block_shard,
+            deallocate_activation=True,
+            enable_act_double_buffer=True,
         )
 
     def __call__(self, x):
         identity = x
         if self.conv1 is not None:
-            out, h, w = self.conv1(x)
-            out = ttnn.relu6(out)
-            x = out
+            x, h, w = self.conv1(x)
         out, h, w = self.conv2(x)
-        out = ttnn.relu6(out)
         out, h, w = self.conv3(out)
         if self.use_res_connect:
-            return ttnn.add(identity, out)
+            tmp = ttnn.add(identity, out)
+            ttnn.deallocate(identity)
+            ttnn.deallocate(out)
+            out = tmp
         return out

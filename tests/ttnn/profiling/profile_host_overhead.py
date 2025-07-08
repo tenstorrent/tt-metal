@@ -326,9 +326,6 @@ def test_host_overhead(device, user_input):
     python -m tracy -v -r -p -o host_overhead_profile --no-device -m "pytest tests/ttnn/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile"
     """
 
-    # Enable program cache
-    device.enable_program_cache()
-
     if "::" in user_input[0]:
         splitted = user_input[0].split("::")
         out_directory = splitted[0]

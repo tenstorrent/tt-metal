@@ -47,7 +47,7 @@ void MAIN {
             reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
             pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
-            tilize_init_short(untilized_cache2_cb, Wt, out_cb);
+            tilize_init(untilized_cache2_cb, Wt, out_cb);
 
             for (uint32_t g = 0; g < granularity; ++g) {
                 // Wait on writer to update block. Tilize.

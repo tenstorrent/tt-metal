@@ -171,7 +171,7 @@ Tensor QuantOp::invoke(
         const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point);
 
         const int32_t axis_v = axis.value();
-        const ttnn::Shape input_shape = input_a.logical_shape();
+        const ttnn::Shape& input_shape = input_a.logical_shape();
 
         check_per_channel_tensor_args(input_a, scale_p, zero_point_p, axis_v, input_shape.rank());
 
@@ -310,7 +310,7 @@ Tensor RequantOp::invoke(
         const Tensor* out_zero_point_p = std::get_if<Tensor>(&out_zero_point);
 
         const int32_t axis_v = axis.value();
-        const ttnn::Shape input_shape = input_tensor.logical_shape();
+        const ttnn::Shape& input_shape = input_tensor.logical_shape();
 
         check_per_channel_tensor_args(input_tensor, in_scale_p, in_zero_point_p, axis_v, input_shape.rank());
         check_per_channel_tensor_args(input_tensor, out_scale_p, out_zero_point_p, axis_v, input_shape.rank());
@@ -450,7 +450,7 @@ Tensor DequantOp::invoke(
         const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point);
 
         const int32_t axis_v = axis.value();
-        const ttnn::Shape input_shape = input_tensor.logical_shape();
+        const ttnn::Shape& input_shape = input_tensor.logical_shape();
 
         check_per_channel_tensor_args(input_tensor, scale_p, zero_point_p, axis_v, input_shape.rank());
 

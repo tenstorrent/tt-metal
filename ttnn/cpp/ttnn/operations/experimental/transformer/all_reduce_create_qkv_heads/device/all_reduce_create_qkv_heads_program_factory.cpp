@@ -4,7 +4,6 @@
 ///
 #include "all_reduce_create_qkv_heads_program_factory.hpp"
 #include <tt-metalium/fabric.hpp>
-
 namespace ttnn {
 
 using namespace ccl;
@@ -24,8 +23,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const uint32_t num_q_heads,
     const uint32_t num_kv_heads,
-    const uint32_t head_dim) {
+    const uint32_t head_dim,
+    bool use_noc1_only) {
     tt::tt_metal::Program program{};
+    // KERNEL CREATION
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_1;
+    tt::tt_metal::NOC writer_noc = use_noc1_only ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
     const Tensor& input_tensor = input_tensors[0];
     const Tensor& buffer_tensor = input_tensors[1];
@@ -210,7 +213,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CBIndex::c_3;
     static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
@@ -371,8 +374,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         out_cb_index,
     };
 
-    auto reduction_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
-    auto reduction_writer_kernel_config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args);
+    auto reduction_reader_kernel_config = tt::tt_metal::DataMovementConfig{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = use_noc1_only ? tt::tt_metal::NOC::NOC_1 : reader_noc,
+        .noc_mode = use_noc1_only ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
+        .compile_args = std::move(reader_compile_time_args)};
+
+    auto reduction_writer_kernel_config = tt::tt_metal::DataMovementConfig{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = use_noc1_only ? tt::tt_metal::NOC::NOC_1 : writer_noc,
+        .noc_mode = use_noc1_only ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
+        .compile_args = std::move(writer_compile_time_args)};
 
     auto reduction_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -431,9 +443,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         reader_writer_runtime_args_template.end(), vcores_noc_x_coords.begin(), vcores_noc_x_coords.end());
     reader_writer_runtime_args_template.insert(
         reader_writer_runtime_args_template.end(), vcores_noc_y_coords.begin(), vcores_noc_y_coords.end());
-    // KERNEL CREATION
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_1;
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;
     // Reader
     std::vector<uint32_t> reader_compile_args = {
         ring_index,                 // my_chip_id
@@ -449,6 +458,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = reader_noc,
+            .noc_mode =
+                use_noc1_only ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = reader_compile_args});
 
     // Writer
@@ -471,6 +482,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = writer_noc,
+            .noc_mode =
+                use_noc1_only ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = writer_compile_args});
 
     // Kernel Runtime Args
@@ -571,14 +584,22 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
 
         writer_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
+            const auto target_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+            const auto forward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                target_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+                target_device_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }
 
         writer_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
+            const auto target_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+            const auto backward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                target_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+                target_device_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }
 
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);

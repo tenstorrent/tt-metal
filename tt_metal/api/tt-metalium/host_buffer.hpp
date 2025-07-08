@@ -62,6 +62,9 @@ public:
     template <typename T>
     tt::stl::Span<const T> view_as() const&& = delete;
 
+    // Returns the memory pin of the host buffer.
+    MemoryPin pin() const { return pin_; }
+
 private:
     MemoryPin pin_;
     tt::stl::Span<std::byte> view_;

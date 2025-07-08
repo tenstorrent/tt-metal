@@ -77,7 +77,8 @@ std::tuple<Matmul_RS::operation_attributes_t, Matmul_RS::tensor_args_t> Matmul_R
     const std::optional<const std::string>& activation,                                  // default std::nullopt
     const std::optional<const tt::tt_metal::Tile>& output_tile,                          // default std::nullopt
     const std::optional<Tensor>& optional_output_tensor,                                 // default std::nullopt
-    tt::tt_fabric::Topology topology) {
+    tt::tt_fabric::Topology topology,
+    bool use_noc1_only) {
     LlamaReduceScatterDeviceOperation rs_struct{};
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
@@ -95,7 +96,8 @@ std::tuple<Matmul_RS::operation_attributes_t, Matmul_RS::tensor_args_t> Matmul_R
                 .output_mem_config = memory_config_rs,
                 .ring_devices = ring_devices,
                 .num_links = num_links,
-                .topology = topology},
+                .topology = topology,
+                .use_noc1_only = use_noc1_only},
             operations::matmul::create_matmul_struct(
                 input_tensor,
                 weight_tensor,

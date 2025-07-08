@@ -1634,7 +1634,7 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<CoreRangeSet> restricted_cores) {
-    const auto b = b_tensors[0];
+    const auto& b = b_tensors[0];
     const auto num_output_cb = out_buffers.size();
     const auto batch = b_tensors.size();
     const bool in1_is_dram_interleaved = in1_buffer->is_dram() && !b.is_sharded();
@@ -2458,12 +2458,13 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
     std::optional<CoreRangeSet> restricted_cores) {
-    const auto b = b_tensors[0];
-    const auto output = output_tensors[0];
+    const auto& b = b_tensors[0];
+    const auto& output = output_tensors[0];
 
     TT_FATAL(output_tensors.size() == b_tensors.size(), "number of outputs must match number of inputs b");
 
-    const auto &ashape = a.padded_shape(), bshape = b.padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
     auto in0_tile = a.tensor_spec().tile();
     auto in1_tile = b.tensor_spec().tile();
     // cannot use the output tensor tile directly as that might be changed by user override
@@ -2559,6 +2560,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
 
     if (gather_in0) {
         std::vector<tt_metal::Buffer*> out_buffers;
+        out_buffers.reserve(output_tensors.size());
         for (const auto& output_tensor : output_tensors) {
             out_buffers.push_back(output_tensor.buffer());
         }

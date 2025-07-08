@@ -279,7 +279,6 @@ void test_program_cache() {
         run_test<UnaryOpType::SQRT>(device, ttnn::Shape({1, 1, 384, 4096}), 0.0f, 1.0f, 1e-1f, 1e-5f);
     };
 
-    device->enable_program_cache();
     run_tests();
 
     TT_FATAL(device->num_program_cache_entries() == 4, "There are {} entries", device->num_program_cache_entries());

@@ -10,7 +10,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include "dprint_server.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/jit_build/build_env_manager.hpp"
 
