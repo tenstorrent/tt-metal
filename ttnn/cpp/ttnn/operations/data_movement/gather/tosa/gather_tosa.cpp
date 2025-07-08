@@ -13,7 +13,7 @@
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/expand/expand.hpp"
 
-namespace ttnn::operations::experimental::tosa::gather {
+namespace ttnn::operations::tosa::gather {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 Tensor pre_tosa_gather_transform_input_index_tensor(const Tensor& input_tensor, const int8_t dim, const uint32_t C) {
@@ -81,7 +81,7 @@ Tensor ExecuteTosaGather::invoke(
     Tensor expanded_index_tensor =
         CMAKE_UNIQUE_NAMESPACE::pre_tosa_gather_transform_input_index_tensor(input_index_tensor, dim, C);
 
-    return ttnn::experimental::gather(
+    return ttnn::gather(
         queue_id,
         input_tensor,
         dim,
@@ -91,4 +91,4 @@ Tensor ExecuteTosaGather::invoke(
         optional_output_tensor_value);
 }
 
-}  // namespace ttnn::operations::experimental::tosa::gather
+}  // namespace ttnn::operations::tosa::gather

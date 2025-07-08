@@ -46,8 +46,6 @@
 #include "ttnn/operations/experimental/scatter/scatter_pybind.hpp"
 #include "ttnn/operations/experimental/scatter/tosa_scatter_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/sort/sort_pybind.hpp"
-#include "ttnn/operations/experimental/gather/gather_pybind.hpp"
-#include "ttnn/operations/experimental/gather/tosa/gather_tosa_pybind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_pybind.hpp"
 #include "ttnn/operations/experimental/where/where_pybind.hpp"
 
@@ -108,10 +106,6 @@ void py_module(py::module& module) {
     tosa_scatter::detail::bind_tosa_scatter_operation(module);
 
     reduction::sort::detail::bind_reduction_sort_operation(module);
-
-    gather::detail::bind_gather_operation(module);
-
-    tosa::gather::detail::bind_gather_tosa_operation(module);
 
     // CCL ops
     auto m_experimental_ccl =
