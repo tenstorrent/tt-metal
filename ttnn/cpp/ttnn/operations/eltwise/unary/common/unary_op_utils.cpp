@@ -66,6 +66,18 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::FMOD: return "SFPU_OP_FMOD_INCLUDE";
         case UnaryOpType::FILL: return "SFPU_OP_FILL_INCLUDE";
         case UnaryOpType::LOG1P: return "SFPU_OP_LOG1P_INCLUDE";
+        case UnaryOpType::UNARY_NE:
+        case UnaryOpType::UNARY_EQ:
+        case UnaryOpType::UNARY_GT:
+        case UnaryOpType::UNARY_LT:
+        case UnaryOpType::UNARY_GE:
+        case UnaryOpType::UNARY_LE:
+        case UnaryOpType::GTZ:
+        case UnaryOpType::LTZ:
+        case UnaryOpType::EQZ:
+        case UnaryOpType::LEZ:
+        case UnaryOpType::GEZ:
+        case UnaryOpType::NEZ: return "SFPU_OP_UNARY_COMP_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -263,6 +275,28 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 op_init_and_name = {
                     "unary_lt_tile_init();",
                     fmt::format("unary_lt_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
+            break;
+        case UnaryOpType::UNARY_GE:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+                op_init_and_name = {"unary_ge_tile_init();", fmt::format("unary_ge_tile_int32({}, {});", idst, param0)};
+            } else {
+                op_init_and_name = {
+                    "unary_ge_tile_init();",
+                    fmt::format("unary_ge_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
+            break;
+        case UnaryOpType::UNARY_LE:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+                op_init_and_name = {"unary_le_tile_init();", fmt::format("unary_le_tile_int32({}, {});", idst, param0)};
+            } else {
+                op_init_and_name = {
+                    "unary_le_tile_init();",
+                    fmt::format("unary_le_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
             break;
         case UnaryOpType::SOFTPLUS: {
