@@ -86,14 +86,20 @@ jobs:
             echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name-310 }}" >> $GITHUB_OUTPUT
             echo "wheel-artifact-name-profiler=${{ needs.build-artifact-profiler.outputs.wheel-artifact-name-310 }}" >> $GITHUB_OUTPUT
             echo "Using Python 3.10 wheels for Ubuntu 22.04"
+            echo "Wheel artifact names set for version: $wheel_artifact_name"
+            echo "Wheel artifact names profiler set for version: $wheel_artifact_name"
           elif [[ "$VERSION" == "24.04" ]]; then
             echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name-312 }}" >> $GITHUB_OUTPUT
             echo "wheel-artifact-name-profiler=${{ needs.build-artifact-profiler.outputs.wheel-artifact-name-312 }}" >> $GITHUB_OUTPUT
             echo "Using Python 3.12 wheels for Ubuntu 24.04"
+            echo "Wheel artifact names set for version: $wheel_artifact_name"
+            echo "Wheel artifact names profiler set for version: $wheel_artifact_name"
           else
             echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name-312 }}" >> $GITHUB_OUTPUT
             echo "wheel-artifact-name-profiler=${{ needs.build-artifact-profiler.outputs.wheel-artifact-name-312 }}" >> $GITHUB_OUTPUT
             echo "Using Python 3.12 wheels as default for version: $VERSION"
+            echo "Wheel artifact names set for version: $wheel_artifact_name"
+            echo "Wheel artifact names profiler set for version: $wheel_artifact_name"
           fi
 
   # Slow Dispatch Unit Tests
