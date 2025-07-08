@@ -9,10 +9,10 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/data_movement/flip/device/flip_device_operation.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-
-#include "ttnn/operations/data_movement/flip/device/flip_device_operation.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace detail {
@@ -33,7 +33,19 @@ ttnn::Tensor flip_impl(
     //    const auto rank = input_tensor.get_logical_shape().rank();
 
     // Execute device operation
-    auto output = ttnn::prim::flip(input_tensor, dims, memory_config);
+    auto formatted_input_tensor = input_tensor;
+
+    // uint32_t N = dims[0], C = dims[1], H = dims[2], W = dims[3];
+    // // WH and CN should be supported without typecast
+    // bool wh = N == 0 && C == 1 && H == 3 && W == 2;
+    // bool cn = N == 1 && C == 0 && H == 2 && W == 3;
+    // bool cnwh = N == 1 && C == 0 && H == 3 && W == 2;
+    // bool bfloat8_supported = wh || cn || cnwh;
+    // bool typecast = formatted_input_tensor.dtype() == DataType::BFLOAT8_B and !bfloat8_supported &&
+    // !input_tensor.is_sharded(); formatted_input_tensor = typecast ? ttnn::typecast(formatted_input_tensor,
+    // DataType::BFLOAT16) : formatted_input_tensor;
+
+    auto output = ttnn::prim::flip(formatted_input_tensor, dims, memory_config, std::nullopt);
 
     return output;
 }
@@ -57,7 +69,7 @@ ttnn::Tensor ExecuteFlip::invoke(
         return input_tensor.logical_shape().get_normalized_index(idx);
     });
 
-    auto mem_conf = memory_config.value_or(input_tensor.memory_config()
+    auto mem_conf = memory_config.value_or(input_tensor.memory_config());
 
     // Check for no-op case
     if (detail::is_flip_nop(input_tensor, normalized_dims)) {
