@@ -473,7 +473,7 @@ def run_test_paged_update_cache_decode(
 
 @skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
-@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("head_dim", [128, 512])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [32])
 @pytest.mark.parametrize("num_heads", [1, 8])
