@@ -329,6 +329,7 @@ struct WorkerToFabricEdmSenderImpl {
     template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
+        *this->from_remote_buffer_free_slots_ptr = 0;
 
         tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
             reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
