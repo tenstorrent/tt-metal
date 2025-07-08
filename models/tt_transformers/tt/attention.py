@@ -133,10 +133,10 @@ class Attention(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
 
-        wq_str = f"{layer_name}.wq"
-        wk_str = f"{layer_name}.wk"
-        wv_str = f"{layer_name}.wv"
-        wo_str = f"{layer_name}.wo"
+        wq_str = f"{layer_name}.q_proj"
+        wk_str = f"{layer_name}.k_proj"
+        wv_str = f"{layer_name}.v_proj"
+        wo_str = f"{layer_name}.o_proj"
         q_norm_str = f"{layer_name}.q_norm"
         k_norm_str = f"{layer_name}.k_norm"
 

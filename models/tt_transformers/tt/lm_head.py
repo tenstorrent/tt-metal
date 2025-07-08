@@ -40,7 +40,7 @@ class LMHead(LightweightModule):
         split_sizes.append(size_per_device - sum(split_sizes))  # remaining columns
 
         # Split the output weights
-        torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+        torch_output_weights = state_dict[f"{state_dict_prefix}lm_head.weight"].permute(1, 0)
 
         self.output_weights = []
         if args.is_galaxy:

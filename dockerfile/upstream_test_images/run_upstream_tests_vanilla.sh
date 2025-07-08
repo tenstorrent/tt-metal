@@ -43,7 +43,7 @@ verify_llama_dir_() {
 test_suite_bh_single_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH upstream Llama demo model tests"
 
-    verify_llama_dir_
+    # verify_llama_dir_
 
     # TODO: remove me , just testing this out
     pip3 install -r models/tt_transformers/requirements.txt
@@ -53,7 +53,7 @@ test_suite_bh_single_pcie_llama_demo_tests() {
 test_suite_bh_single_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH upstream Llama demo model tests"
 
-    verify_llama_dir_
+    # verify_llama_dir_
 
     # TODO: remove me , just testing this out
     pip3 install -r models/tt_transformers/requirements.txt
@@ -72,7 +72,7 @@ test_suite_bh_llmbox_metal_unit_tests() {
 test_suite_bh_llmbox_llama_demo_tests() {
     echo "[upstream-tests] Running BH LLMBox upstream Llama demo model tests"
 
-    verify_llama_dir_
+    # verify_llama_dir_
 
     # TODO: remove me once upgraded
     pip3 install -r models/tt_transformers/requirements.txt

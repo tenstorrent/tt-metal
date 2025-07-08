@@ -40,14 +40,18 @@ class MLP(LightweightModule):
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
         as_sharded_tensor = lambda name, type, dims: ttnn.as_tensor(
             pad_hidden_dim(
-                torch_weight(name[:2]), dims[0] if args.is_galaxy else dims[-1]
-            ),  # Grab only the wX part of the name
+                torch_weight(name.removesuffix("_sharded")), dims[0] if args.is_galaxy else dims[-1]
+            ),  # Grab only the X_proj part of the name
             dtype=type,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=(
-                ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else w2_mem_config if "w2" in name else w1_w3_mem_config
+                ttnn.DRAM_MEMORY_CONFIG
+                if args.is_galaxy
+                else w2_mem_config
+                if "down_proj" in name
+                else w1_w3_mem_config
             ),
             cache_file_name=cache_name(name),
         )
@@ -66,10 +70,10 @@ class MLP(LightweightModule):
         )
 
         self.w1 = as_sharded_tensor(
-            "w1_sharded", ff1_3_dtype, dims=w1_dims
+            "gate_proj_sharded", ff1_3_dtype, dims=w1_dims
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
-        self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
+        self.w2 = as_sharded_tensor("down_proj_sharded", ff2_dtype, dims=w2_dims)
+        self.w3 = as_sharded_tensor("up_proj_sharded", ff1_3_dtype, dims=w1_dims)
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """

@@ -224,8 +224,8 @@ def gather_cos_sin(position_ids, cos, sin):
     position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
     cos = cos.gather(0, position_id_expanded)
     sin = sin.gather(0, position_id_expanded)
-    cos = torch.stack([cos, cos], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
-    sin = torch.stack([sin, sin], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    cos = cos.repeat(*cos.size()[:-1], 2).unsqueeze(0).unsqueeze(0)
+    sin = sin.repeat(*sin.size()[:-1], 2).unsqueeze(0).unsqueeze(0)
     return cos, sin
 
 
