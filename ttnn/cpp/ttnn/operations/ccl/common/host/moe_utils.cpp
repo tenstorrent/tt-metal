@@ -2,6 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <limits>
+#include <utility>
+#include <vector>
+
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+
 namespace ttnn::operations::ccl::common {
 
 namespace detail {
