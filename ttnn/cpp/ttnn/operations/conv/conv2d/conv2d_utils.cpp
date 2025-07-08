@@ -1041,19 +1041,20 @@ ttnn::Tensor fold_tensor(
     T* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4,
-    std::optional<DataType> dtype) {
+    std::array<uint32_t, 4> padding_n4) {
     // Validation checks
-    TT_FATAL(!tensor.memory_config().is_l1(), "Input tensor must not be in L1 memory for folding");
+    TT_FATAL(
+        !tensor.memory_config().is_l1(),
+        "Conv2D kernel stride folding: Input tensor must not be in L1 memory for folding");
     TT_FATAL(
         padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0,
-        "Padding must be 0 for folding");
-    if (!dtype.has_value()) {
-        dtype = tensor.dtype();
-    }
-    TT_FATAL(dtype.value() != tt_metal::DataType::BFLOAT8_B, "Conv2D DRAM folding currently doesn't support BFLOAT8_B");
+        "Conv2D kernel stride folding: Padding must be 0 for folding");
     TT_FATAL(
-        stride[0] <= kernel_size[0] && stride[1] <= kernel_size[1], "Stride must be less than or equal to kernel size");
+        tensor.dtype() != tt_metal::DataType::BFLOAT8_B,
+        "Conv2D kernel stride folding: Currently doesn't support BFLOAT8_B");
+    TT_FATAL(
+        stride[0] <= kernel_size[0] && stride[1] <= kernel_size[1],
+        "Conv2D kernel stride folding: Stride must be less than or equal to kernel size");
 
     // Move to device if needed
     ttnn::Tensor tensor_on_device = tensor;
@@ -1171,16 +1172,14 @@ template ttnn::Tensor fold_tensor<IDevice>(
     tt::tt_metal::IDevice* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4,
-    std::optional<DataType> dtype);
+    std::array<uint32_t, 4> padding_n4);
 
 template ttnn::Tensor fold_tensor<MeshDevice>(
     const ttnn::Tensor& tensor,
     tt::tt_metal::distributed::MeshDevice* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4,
-    std::optional<DataType> dtype);
+    std::array<uint32_t, 4> padding_n4);
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
     tt::stl::reflection::operator<<(os, config);

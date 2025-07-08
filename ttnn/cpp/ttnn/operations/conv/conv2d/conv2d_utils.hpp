@@ -191,8 +191,7 @@ ttnn::Tensor fold_tensor(
     T* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4,
-    std::optional<DataType> dtype);
+    std::array<uint32_t, 4> padding_n4);
 
 struct KernelStrideFoldingResult {
     uint32_t input_height;
