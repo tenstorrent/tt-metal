@@ -13,6 +13,7 @@ struct RunningStatistics {
     struct operation_attributes_t {
         const float momentum;
         const MemoryConfig memory_config;
+        const DeviceComputeKernelConfig compute_kernel_config;
 
         DataType input_dtype;
         std::optional<DataType> dtype;
@@ -65,7 +66,8 @@ struct RunningStatistics {
         float momentum,
         std::optional<Tensor> running_mean,
         std::optional<Tensor> running_var,
-        const std::optional<MemoryConfig>& memory_config);
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::normalization
 
