@@ -394,6 +394,7 @@ ALWI void cb_matmul_blocks(
  * Template Parameters:
  * @tparam St - Total sequence length in tiles
  * @tparam DHt - Head dimension in tiles
+ * @tparam vDHt - Head dimension for v in tiles
  * @tparam Sq_chunk_t - Query chunk size in tiles
  * @tparam Sk_chunk_t - Key chunk size in tiles
  * @tparam qk_in0_block_w - QK matmul block width
@@ -441,6 +442,7 @@ template <
     // Compile-time dimension parameters
     uint32_t St,
     uint32_t DHt,
+    uint32_t vDHt,
     uint32_t Sq_chunk_t,
     uint32_t out_chunk_tiles,
     // QK matmul block parameters
@@ -553,7 +555,7 @@ void flash_attention_loop(
             cb_v_in,
             cb_out_im,
             Sq_chunk_t,
-            DHt,
+            vDHt,
             Sk_chunk_t,
             out_num_blocks,
             out_in0_num_subblocks,
@@ -583,7 +585,7 @@ void flash_attention_loop(
             /* cb_out_accumulate_im *= cb_exp_max_diff */
             reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);  // DEBUG
             pack_reconfig_data_format(cb_out_accumulate_im);
-            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, DHt);
+            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, vDHt);
 
             /* cb_cur_sum += cb_prev_sum */
             reconfig_data_format(cb_cur_sum, cb_prev_sum);  // DEBUG

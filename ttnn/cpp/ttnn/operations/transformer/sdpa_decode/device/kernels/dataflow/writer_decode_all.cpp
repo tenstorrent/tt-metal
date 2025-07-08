@@ -15,24 +15,26 @@ void kernel_main() {
     constexpr uint32_t PNHt = get_compile_time_arg_val(1);  // padded number of heads in tiles
     constexpr uint32_t St = get_compile_time_arg_val(2);    // full sequence length of kv cache in tiles
     constexpr uint32_t DHt = get_compile_time_arg_val(3);   // head dim
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);  // number of tiles in seqlen of a k/v/mask chunk
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(5);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(6);
-    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(7);          // num cores per batch
-    constexpr uint32_t num_cores = get_compile_time_arg_val(8);                    // num running cores in total
-    uint32_t reducer_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));  // semaphore for reducer
-    uint32_t output_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));  // semaphore for sender
-    constexpr bool is_out_sharded = get_compile_time_arg_val(11);
-    constexpr uint32_t k_chunk_size = get_compile_time_arg_val(12);
-    constexpr uint32_t num_q_heads = get_compile_time_arg_val(13);
-    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(14);
-    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(15);
-    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(16);
-    constexpr uint32_t num_reducer_cores = get_compile_time_arg_val(17);
-    constexpr uint32_t num_output_cores = get_compile_time_arg_val(18);
-    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(19);
-    constexpr bool is_causal = get_compile_time_arg_val(20) == 1;
-    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(21);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(4);  // head dim for V
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);  // number of tiles in seqlen of a k/v/mask chunk
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(6);
+    constexpr uint32_t scale_val = get_compile_time_arg_val(7);
+    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(8);           // num cores per batch
+    constexpr uint32_t num_cores = get_compile_time_arg_val(9);                     // num running cores in total
+    uint32_t reducer_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));  // semaphore for reducer
+    uint32_t output_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));   // semaphore for sender
+    constexpr bool is_out_sharded = get_compile_time_arg_val(12);
+    constexpr uint32_t k_chunk_size = get_compile_time_arg_val(13);
+    constexpr uint32_t num_q_heads = get_compile_time_arg_val(14);
+    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(15);
+    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(16);
+    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(17);
+    constexpr uint32_t num_reducer_cores = get_compile_time_arg_val(18);
+    constexpr uint32_t num_output_cores = get_compile_time_arg_val(19);
+    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(20);
+    constexpr bool is_causal = get_compile_time_arg_val(21) == 1;
+    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(22);
+    constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(23);
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -63,7 +65,7 @@ void kernel_main() {
             cb_wait_front(cb_index_id, 1);
             uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
             volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
-            cur_pos = index_ptr[cur_batch];
+            cur_pos = index_ptr[(uint32_t)(cur_batch / q_heads_parallel_factor)];
         }
 
         if (cur_pos == UINT32_MAX) {
@@ -98,7 +100,7 @@ void kernel_main() {
     const uint64_t in0_sender_semaphore_noc_addr =
         get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, reducer_semaphore_addr);
 
-    constexpr uint32_t out_chunk_tiles = PNHt * DHt;
+    constexpr uint32_t out_chunk_tiles = PNHt * vDHt;
     uint32_t num_cores_to_wait = num_cores_per_head - 1;
     if (num_cores_per_head > k_num_chunks) {
         num_cores_to_wait = k_num_chunks - 1;
