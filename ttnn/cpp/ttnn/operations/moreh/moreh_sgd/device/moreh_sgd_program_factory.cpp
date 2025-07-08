@@ -163,15 +163,6 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto param_in_addr = param_in.buffer()->address();
-    const auto grad_addr = grad.buffer()->address();
-    const auto momentum_buffer_in_addr =
-        momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer()->address() : 0;
-
-    const auto param_out_addr = param_out.buffer()->address();
-    const auto momentum_buffer_out_addr =
-        momentum_buffer_out.has_value() ? momentum_buffer_out->buffer()->address() : 0;
-
     auto core_x_offset = 0;
     auto core_y_offset = 0;
 
