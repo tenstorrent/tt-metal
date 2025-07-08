@@ -4,6 +4,7 @@
 
 #pragma once
 #include "ttnn/distributed/types.hpp"
+#include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::operations::ccl::common {
 

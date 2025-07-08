@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <limits>
+#include <utility>
+#include <vector>
+
 namespace ttnn::operations::ccl::common {
 
 namespace detail {
