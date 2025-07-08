@@ -53,7 +53,7 @@ void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n
     static constexpr uint32_t inner_loop = 8;
     constexpr uint32_t inner_blk_size = inner_loop * sizeof(__m256i);  // 256 bytes
 
-    uint8_t* src8 = (uint8_t*)src;
+    const auto* src8 = static_cast<const uint8_t *>(src);
     uint8_t* dst8 = (uint8_t*)dst;
 
     size_t num_lines = n / inner_blk_size;  // Number of 256-byte blocks to process
