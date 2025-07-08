@@ -4,6 +4,7 @@
 
 #include "unary.hpp"
 
+#include "common/unary_op_types.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "device/unary_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
@@ -79,6 +80,7 @@ template struct ExecuteUnary<UnaryOpType::ACOS>;
 template struct ExecuteUnary<UnaryOpType::ASIN>;
 template struct ExecuteUnary<UnaryOpType::ASINH>;
 template struct ExecuteUnary<UnaryOpType::ATAN>;
+template struct ExecuteUnary<UnaryOpType::ATANH>;
 template struct ExecuteUnary<UnaryOpType::COS>;
 template struct ExecuteUnary<UnaryOpType::ACOSH>;
 template struct ExecuteUnary<UnaryOpType::ERFINV>;
