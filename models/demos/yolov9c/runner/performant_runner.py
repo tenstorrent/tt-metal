@@ -16,22 +16,31 @@ class YOLOv9PerformantRunner:
         act_dtype=ttnn.bfloat16,
         weight_dtype=ttnn.bfloat16,
         model_task="segment",
-        model_location_generator=None,
         resolution=(640, 640),
         torch_input_tensor=None,
+        mesh_mapper=None,
+        weights_mesh_mapper=None,
+        mesh_composer=None,
     ):
         self.device = device
         self.resolution = resolution
         self.torch_input_tensor = torch_input_tensor
+
+        self.mesh_mapper = mesh_mapper
+        self.weights_mesh_mapper = weights_mesh_mapper
+        self.mesh_composer = mesh_composer
+
         self.runner_infra = YOLOv9PerformanceRunnerInfra(
             device,
             device_batch_size,
             act_dtype,
             weight_dtype,
             model_task,
-            model_location_generator,
             resolution=resolution,
             torch_input_tensor=self.torch_input_tensor,
+            mesh_mapper=mesh_mapper,
+            weights_mesh_mapper=weights_mesh_mapper,
+            mesh_composer=mesh_composer,
         )
 
         (
@@ -40,6 +49,7 @@ class YOLOv9PerformantRunner:
             self.input_mem_config,
         ) = self.runner_infra.setup_dram_sharded_input(device)
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
+        self._capture_yolov9_trace_2cqs()
 
     def _capture_yolov9_trace_2cqs(self):
         # Initialize the op event so we can write
@@ -89,14 +99,11 @@ class YOLOv9PerformantRunner:
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
         # TODO: Add in place support to ttnn to_memory_config
-        if self.input_tensor.is_sharded():
-            self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
+        self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
         ttnn.synchronize_device(self.device)
-
-        ttnn_output_tensor = self.runner_infra.output_tensor
-        return ttnn_output_tensor
+        return self.runner_infra.output_tensor
 
     def _validate(self, input_tensor, result_output_tensor):
         torch_output_tensor = self.runner_infra.torch_output_tensor
@@ -104,11 +111,9 @@ class YOLOv9PerformantRunner:
 
     def run(self, torch_input_tensor, check_pcc=False):
         tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
-        output = self._execute_yolov9_trace_2cqs_inference(tt_inputs_host)
+        output = self._execute_yolov9_trace_2cqs_inference(tt_inputs_host=tt_inputs_host)
         if check_pcc:
-            torch_input_tensor = torch_input_tensor.reshape(n, h, w, c)
-            torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
-            self._validate(torch_input_tensor, output)
+            self._validate(torch_input_tensor, output[0])
 
         return output
 
