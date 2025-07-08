@@ -216,7 +216,8 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.select-wheels.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.select-wheels.outputs.wheel-artifact-name }}
   run-profiler-regression:
     needs: [build-artifact-profiler, select-wheels]
     strategy:
