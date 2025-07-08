@@ -6,12 +6,12 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov11.tt.model_preprocessing import (
+from models.demos.yolov11.tt.model_preprocessing import (
     create_yolov11_input_tensors,
     create_yolov11_model_parameters,
 )
-from models.experimental.yolov11.reference.yolov11 import C2PSA as torch_c2psa_block
-from models.experimental.yolov11.tt.ttnn_yolov11_c2psa import TtnnC2PSA as ttnn_c2psa_block
+from models.demos.yolov11.reference.yolov11 import C2PSA as torch_c2psa_block
+from models.demos.yolov11.tt.ttnn_yolov11_c2psa import TtnnC2PSA as ttnn_c2psa_block
 
 
 @pytest.mark.parametrize(

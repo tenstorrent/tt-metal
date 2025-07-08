@@ -4,9 +4,10 @@
 
 import torch
 import torch.nn as nn
+from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
+
 import ttnn
-from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_parameters, fold_batch_norm2d_into_conv2d
-from models.experimental.yolov11.reference.yolov11 import YoloV11, Conv
+from models.demos.yolov11.reference.yolov11 import Conv, YoloV11
 
 
 def create_yolov11_input_tensors(
