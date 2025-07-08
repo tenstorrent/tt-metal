@@ -51,16 +51,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     const uint32_t sub_tile_line_bytes = 16 * element_size;
     const auto q_shard_spec = q_output_tensor.shard_spec().value();
     const auto q_cores = q_shard_spec.grid;
-    const auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / tt::constants::TILE_HW;
     const auto k_shard_spec = k_output_tensor.shard_spec().value();
     const auto k_cores = k_shard_spec.grid;
-    const auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / tt::constants::TILE_HW;
     const auto v_shard_spec = v_output_tensor.shard_spec().value();
     const auto v_cores = v_shard_spec.grid;
-    const auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / tt::constants::TILE_HW;
     const auto in_shard_spec = output_tensor.shard_spec().value();
     const auto in_cores = in_shard_spec.grid;
-    const auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / tt::constants::TILE_HW;
     uint32_t batch_offset_index_stick_size = 0;
     // auto qk_cores = q_cores;
 
@@ -136,8 +132,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         vcores_noc_y_coords.push_back(worker_core.y);
     }
 
-    uint32_t process_qv = 1, process_k = 0;
-
     // End of qkv heads fuse
 
     // TODO: Remove this once we have a way to get the number of cores per link
@@ -208,8 +202,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_src0_workers =
-        tt::tt_metal::CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CBIndex::c_3;
     static constexpr auto num_packet_headers_storable = 8;
@@ -219,8 +212,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_CB_handle =
-        tt::tt_metal::CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
+    tt::tt_metal::CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
     // Reduction kernel setup
     auto all_cores = output_tensor_cores.merge(sender_worker_core_range);

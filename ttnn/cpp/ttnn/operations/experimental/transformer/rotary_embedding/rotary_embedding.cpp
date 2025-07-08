@@ -24,7 +24,6 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
         tt::constants::TILE_WIDTH * 2);
 
     uint32_t seq_len = input_tensor.padded_shape()[-2];
-    uint32_t B = input_tensor.padded_shape()[0];
     uint32_t X = input_tensor.padded_shape()[-1];
 
     TT_FATAL(
