@@ -81,13 +81,19 @@ static bool eth_direct_send_multi_txq_rxq(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program sender_program = tt_metal::Program();
 
+    constexpr size_t PAYLOAD_SIZE = 32;
     const size_t unreserved_l1_start = tt::tt_metal::MetalContext::instance().hal().get_dev_size(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_multi_txq_rxq_bidirectional.cpp",
         eth_sender_core,
-        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {data_txq_id, ack_txq_id}});
+        tt_metal::EthernetConfig{.compile_args = {data_txq_id, ack_txq_id, PAYLOAD_SIZE}});
+
+    size_t local_eth_l1_src_addr = unreserved_l1_start + 16;
+    size_t receiver_credit_ack_src = local_eth_l1_src_addr + PAYLOAD_SIZE;
+    size_t receiver_credit_ack_dest = receiver_credit_ack_src + 32;
+    size_t remote_eth_l1_dst_addr = receiver_credit_ack_dest + 32;
 
     tt_metal::SetRuntimeArgs(
         sender_program,
@@ -95,8 +101,10 @@ static bool eth_direct_send_multi_txq_rxq(
         eth_sender_core,
         {unreserved_l1_start,
          true,  // HS sender
-         unreserved_l1_start + 16,
-         unreserved_l1_start + 32,
+         local_eth_l1_src_addr,
+         receiver_credit_ack_src,
+         receiver_credit_ack_dest,
+         remote_eth_l1_dst_addr,
          num_messages});
 
     ////////////////////////////////////////////////////////////////////////////
@@ -109,8 +117,7 @@ static bool eth_direct_send_multi_txq_rxq(
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_multi_txq_rxq_bidirectional.cpp",
         eth_receiver_core,
         tt_metal::EthernetConfig{
-            .noc = tt_metal::NOC::NOC_0,
-            .compile_args = {data_txq_id, ack_txq_id}});  // probably want to use NOC_1 here
+            .compile_args = {data_txq_id, ack_txq_id, PAYLOAD_SIZE}});  // probably want to use NOC_1 here
 
     tt_metal::SetRuntimeArgs(
         receiver_program,
@@ -118,8 +125,10 @@ static bool eth_direct_send_multi_txq_rxq(
         eth_receiver_core,
         {unreserved_l1_start,
          false,  // HS sender
-         unreserved_l1_start + 16,
-         unreserved_l1_start + 32,
+         local_eth_l1_src_addr,
+         receiver_credit_ack_src,
+         receiver_credit_ack_dest,
+         remote_eth_l1_dst_addr,
          num_messages});
 
     ////////////////////////////////////////////////////////////////////////////
@@ -202,13 +211,13 @@ static void run_multi_txq_rxq_test(
 }  // namespace tt::tt_metal
 
 TEST_F(P300DeviceFixture, ActiveEthChipToChipMultiTxqRxq_Both0) {
-    run_multi_txq_rxq_test(this, this->devices_.at(0), this->devices_.at(1), 0, 0, 1000);
+    run_multi_txq_rxq_test(this, this->devices_.at(0), this->devices_.at(1), 0, 0, 100000);
 }
 TEST_F(P300DeviceFixture, ActiveEthChipToChipMultiTxqRxq_Qs_0_and_1) {
-    run_multi_txq_rxq_test(this, this->devices_.at(0), this->devices_.at(1), 0, 1, 1000);
+    run_multi_txq_rxq_test(this, this->devices_.at(0), this->devices_.at(1), 0, 1, 100000);
 }
 TEST_F(P300DeviceFixture, ActiveEthChipToChipMultiTxqRxq_Both1) {
-    run_multi_txq_rxq_test(this, this->devices_.at(0), this->devices_.at(1), 1, 1, 1000);
+    run_multi_txq_rxq_test(this, this->devices_.at(0), this->devices_.at(1), 1, 1, 100000);
 }
 
 }  // namespace tt::tt_metal
