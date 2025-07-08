@@ -824,14 +824,15 @@ class TT_CCL:
             input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
         )
         seqlen = input_tensor_mesh.shape[-2]
-        persistent_buffers = self.persistent_buffers[seqlen].get(buffer_key, None)
-
+        persistent_buffers = (
+            self.persistent_buffers[seqlen].get(buffer_key, None) if seqlen in self.persistent_buffers else None
+        )
+        persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
         num_links = 4
         num_semaphores = 3 * num_links
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor=input_tensor_mesh,
-            persistent_intermediate_buffer=persistent_buffers["intermediate"],
-            persistent_output_buffer=persistent_buffers["output"],
+            persistent_output_buffers=persistent_buffers_list,
             dim=dim,
             multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][
                 :num_semaphores
@@ -864,7 +865,9 @@ class TT_CCL:
             if self.use_ring_ag_prefill and buffer_key is not None:
                 if buffer_key in USE_LINE_AG:
                     seqlen = input_tensor_mesh.shape[1] * input_tensor_mesh.shape[-2]
-                    persistent_buffer = self.all_gather_buffers[seqlen][buffer_key]
+                    persistent_buffer = (
+                        self.all_gather_buffers[seqlen][buffer_key] if seqlen in self.all_gather_buffers else None
+                    )
                 else:
                     return self.ring_all_gather(
                         input_tensor_mesh,
@@ -883,7 +886,11 @@ class TT_CCL:
                 )
                 seqlen = input_tensor_mesh.shape[-2]
                 if persistent_buffer is None and seqlen in self.all_gather_buffers:
-                    persistent_buffer = self.all_gather_buffers[seqlen].get(buffer_key, None)
+                    persistent_buffer = (
+                        self.all_gather_buffers[seqlen].get(buffer_key, None)
+                        if seqlen in self.all_gather_buffers
+                        else None
+                    )
 
         else:
             topology = self.model_config["CCL_TOPOLOGY"]
@@ -924,7 +931,10 @@ class TT_CCL:
             input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
         )
         seqlen = input_tensor_mesh.shape[-2]
-        persistent_buffers = self.all_gather_buffers[seqlen].get(buffer_key, None)
+        persistent_buffers = (
+            self.all_gather_buffers[seqlen].get(buffer_key, None) if seqlen in self.all_gather_buffers else None
+        )
+        # persistent_buffers = None
 
         num_links = 4
         ttnn_tensor_out = ttnn.experimental.all_gather_async(

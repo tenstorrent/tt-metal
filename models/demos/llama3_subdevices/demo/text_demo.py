@@ -365,8 +365,8 @@ def test_demo_text(
         if batch_size == 32
         else [15384 * 8]
     )
-    if galaxy_type == "6U" and not run_on_6U:
-        pytest.skip("Skipping test as persistent buffers for ring ccl ops are stored only for seqlens up to 8k")
+    # if galaxy_type == "6U" and not run_on_6U:
+    #     pytest.skip("Skipping test as persistent buffers for ring ccl ops are stored only for seqlens up to 8k")
 
     # Creat batch output file
     benchmark_data = BenchmarkData()
