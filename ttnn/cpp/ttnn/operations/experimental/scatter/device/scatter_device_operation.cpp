@@ -32,7 +32,6 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     const auto& src_shape{src_tensor.logical_shape()};
     const uint32_t input_rank{input_shape.rank()};
     const uint32_t index_rank{index_shape.rank()};
-    const uint32_t src_rank{src_shape.rank()};
 
     TT_FATAL(
         index_shape == src_shape,

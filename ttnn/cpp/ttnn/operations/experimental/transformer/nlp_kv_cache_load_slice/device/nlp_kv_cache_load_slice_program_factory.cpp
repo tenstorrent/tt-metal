@@ -31,7 +31,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
     uint32_t start_id = ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, output_tensor_start);
     const uint32_t num_tiles_shifted_per_core = input_shape[-2] * input_shape[-1] / TILE_HW;
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
+    for (uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
 
         // reader and writer kernel args
@@ -56,8 +56,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice
     tt_metal::Program program = tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::IDevice* device = a.device();
-
     auto shard_spec = output.shard_spec().value();
     auto all_cores = shard_spec.grid;
     auto num_cores_total = all_cores.num_cores();

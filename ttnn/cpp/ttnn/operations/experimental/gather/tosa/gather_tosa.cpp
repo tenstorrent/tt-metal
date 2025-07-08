@@ -64,7 +64,6 @@ Tensor ExecuteTosaGather::invoke(
         input_tensor_rank_constraint,
         input_tensor_rank);
     const auto N = original_input_tensor_lshape[0];
-    const auto K = original_input_tensor_lshape[1];
     const auto C = original_input_tensor_lshape[-1];
 
     // Index tensor
@@ -78,7 +77,6 @@ Tensor ExecuteTosaGather::invoke(
     TT_FATAL(
         N == original_input_index_tensor_lshape[0],
         "Index tensor first dimension must be equal to input tensor first dimension");
-    const auto W = original_input_index_tensor_lshape[1];
 
     Tensor expanded_index_tensor =
         CMAKE_UNIQUE_NAMESPACE::pre_tosa_gather_transform_input_index_tensor(input_index_tensor, dim, C);

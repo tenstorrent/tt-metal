@@ -46,7 +46,6 @@ std::vector<ttnn::TensorSpec> NlpCreateHeadsFalcon7BDeviceOperation::compute_out
 tt::tt_metal::operation::ProgramWithCallbacks NlpCreateHeadsFalcon7BDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto& output_tensor = output_tensors.at(0);
 
     CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 

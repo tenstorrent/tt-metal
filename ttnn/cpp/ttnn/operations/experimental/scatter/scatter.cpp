@@ -23,12 +23,8 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 // validate dimension constraints before sending down to device operation working on the last dimension
 void validate_inputs(
     const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& source_tensor, const int32_t& dim) {
-    const auto& input_dtype{input_tensor.dtype()};
-    const auto& index_dtype{index_tensor.dtype()};
-    const auto& src_dtype{source_tensor.dtype()};
     const auto& input_shape{input_tensor.logical_shape()};
     const auto& index_shape{index_tensor.logical_shape()};
-    const auto& src_shape{source_tensor.logical_shape()};
     const int32_t input_rank{input_shape.rank()};
     const int32_t normalized_dim{(dim < 0) ? (dim + input_rank) : dim};
 
