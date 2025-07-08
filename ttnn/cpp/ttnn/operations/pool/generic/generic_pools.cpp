@@ -90,6 +90,7 @@ static Tensor pool2d_invoke(
                 false,
                 0);
         } else {  // auto-sharding
+            // TODO update auto-sharding to support tiled output
             std::optional<sliding_window::ParallelConfig> sw_parallel_config =
                 pool::determine_pool_config_for_auto_shard(input_tensor, sliding_window_config, channels, pool_type);
             TT_FATAL(
