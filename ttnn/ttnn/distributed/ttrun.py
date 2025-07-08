@@ -91,7 +91,7 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         "TT_METAL_CACHE": os.environ.get(
             "TT_METAL_CACHE",
             DEFAULT_CACHE_DIR_PATTERN.format(home=str(Path.home()), hostname=os.uname().nodename, rank=binding.rank),
-        ),
+        ), # Need to explicitly configure this because kernel cache is not multi-process safe (#21089)
         "TT_MESH_ID": str(binding.mesh_id),
         "TT_HOST_RANK": str(binding.host_rank_id),
         "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
