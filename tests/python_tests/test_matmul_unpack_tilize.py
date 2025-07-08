@@ -26,7 +26,10 @@ from helpers.utils import passed_test
 supported_formats = [
     DataFormat.Float16_b,
     DataFormat.Float16,
-]  # Add DataFormat.Float32 when Data format Inference Model 2.0 supports format conversions for > 1 pipeline run
+    DataFormat.Float32,
+]  #  Add DataFormat.Bfp8_b only as input when Data format Inference Model 2.0 supports format conversions for > 1 pipeline run with different inputs and outputs.
+#  Now tests run by requiring input format to be same as output format.
+#  We cannot unpack tilize on Bfp8_b format, so it will be included only as input format.
 
 #   INPUT-OUTPUT FORMAT SWEEP
 #   input_output_formats(supported_formats)
@@ -91,6 +94,7 @@ def test_matmul_unpack_tilize(testname, formats, dest_acc, math_fidelity):
         "testname": testname,
         "dest_acc": dest_acc,
         "math_fidelity": math_fidelity,
+        "L1_to_L1_iterations": 2,
     }
 
     run_test(test_config)
@@ -100,4 +104,11 @@ def test_matmul_unpack_tilize(testname, formats, dest_acc, math_fidelity):
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        test_config.get(
+            "L1_to_L1_iterations"  # Needed to calculate accumulated percision loss for fused tests that copy result tensor as input for next runs
+        ),
+    )

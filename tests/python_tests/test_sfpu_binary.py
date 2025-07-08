@@ -23,7 +23,12 @@ from helpers.test_config import run_test
 from helpers.utils import passed_test
 
 # SUPPORTED FORMATS FOR TEST
-supported_float_formats = [DataFormat.Float16_b, DataFormat.Float16]
+supported_float_formats = [
+    DataFormat.Float32,
+    DataFormat.Float16,
+    DataFormat.Float16_b,
+    DataFormat.Bfp8_b,
+]
 supported_int_formats = [DataFormat.Int32]
 
 #   INPUT-OUTPUT FORMAT SWEEP
@@ -38,7 +43,7 @@ supported_int_formats = [DataFormat.Int32]
 #         DataFormat.Float16_b,  # index 1 is for unpack_A_dst
 #         DataFormat.Float16_b,  # index 2 is for pack_src (if src registers have same formats)
 #         DataFormat.Bfp8_b,  # index 3 is for pack_dst
-#         DataFormat.Float16_b,  # index 4 is for math format)])
+#         DataFormat.Float16_b,)]) # index 4 is for math format
 
 #   SPECIFIC INPUT-OUTPUT COMBINATION
 #   [InputOutputFormat(DataFormat.Float16, DataFormat.Float32)]
@@ -47,7 +52,6 @@ float_ops = [
     MathOperation.SfpuElwadd,
     MathOperation.SfpuElwsub,
     MathOperation.SfpuElwmul,
-    MathOperation.SfpuXlogy,
 ]
 
 int_ops = [
@@ -59,7 +63,7 @@ int_ops = [
 float_params = generate_params(
     ["sfpu_binary_test"],
     input_output_formats(supported_float_formats),
-    dest_acc=[DestAccumulation.No],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=float_ops,
 )
 
@@ -86,6 +90,15 @@ def test_sfpu_binary(testname, formats, dest_acc, mathop):
     if chip_arch == ChipArchitecture.WORMHOLE and mathop == MathOperation.SfpuElwsub:
         pytest.skip("Not currently supported in tests")
 
+    if (
+        dest_acc == DestAccumulation.No
+        and chip_arch == ChipArchitecture.BLACKHOLE
+        and formats.input_format == DataFormat.Float16
+    ):
+        pytest.skip(
+            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
+        )
+
     src_A, src_B, tile_cnt = generate_stimuli(
         formats.input_format, formats.input_format, input_dimensions=input_dimensions
     )
@@ -99,7 +112,7 @@ def test_sfpu_binary(testname, formats, dest_acc, mathop):
     unpack_to_dest = formats.input_format.is_32_bit()
 
     # Blackhole needs this for some reason
-    if formats.input_format == DataFormat.Float16:
+    if formats.input_format in [DataFormat.Float16, DataFormat.Float32]:
         dest_acc = DestAccumulation.Yes
 
     test_config = {

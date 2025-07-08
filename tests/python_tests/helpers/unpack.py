@@ -8,7 +8,10 @@ from itertools import chain
 
 import torch
 
-from .format_arg_mapping import DataFormat, format_dict, format_tile_sizes
+from helpers.format_arg_mapping import format_dict
+from helpers.format_config import DataFormat
+
+from .format_arg_mapping import format_dict, format_tile_sizes
 
 
 def unpack_fp16(packed_list):
