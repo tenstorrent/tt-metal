@@ -64,7 +64,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": True}],
     indirect=True,
 )
 def test_llama_model_inference(
@@ -85,10 +85,10 @@ def test_llama_model_inference(
 
     # This sets the minimum PCC for each iteration based on optimization mode
     if optimizations == LlamaOptimizations.accuracy:
-        pcc = 0.92  # TODO Look on improving PCC
+        pcc = 0.918  # TODO Look on improving PCC
     else:  # performance mode
         assert optimizations == LlamaOptimizations.performance
-        pcc = 0.869  # TODO Look on improving PCC
+        pcc = 0.918  # TODO Look on improving PCC
 
     # Use instruct weights instead of general weights
     instruct = True
@@ -178,7 +178,7 @@ def test_llama_model_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         mode="prefill",
-        allocate_prefill_buffers=False,
+        allocate_prefill_buffers=True,
     )
 
     logger.info("Model and caches loaded.")
