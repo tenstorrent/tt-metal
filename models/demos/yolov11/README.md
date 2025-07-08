@@ -23,7 +23,7 @@ To obtain the perf reports through profiler, please build with following command
 
 ### Details
 
-- The entry point to the yolov11 is located at:`models/experimental/yolov11/tt/ttnn_yolov11.py`
+- The entry point to the yolov11 is located at:`models/demos/yolov11/tt/ttnn_yolov11.py`
 - Batch Size :1
 - Supported Input Resolution - (640,640) (Height,Width)
 - Dataset used for evaluation - **coco-2017**
@@ -42,7 +42,14 @@ pytest --disable-warnings tests/ttnn/integration_tests/yolov11/test_ttnn_yolov11
 Use the following command to run the performant Model with Trace+2CQs:
 
 ```
-pytest --disable-warnings models/experimental/yolov11/tests/test_e2e_performant.py
+pytest --disable-warnings models/demos/yolov11/tests/test_e2e_performant.py
+```
+### Performant Demo with Trace+2CQ
+
+Use the following command to run the performant Demo with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/yolov11/demo/demo.py::test_demo
 ```
 
 ### Performant evaluation with Trace+2CQ

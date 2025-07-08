@@ -663,7 +663,7 @@ def test_yolov8s(device, model_type, res, reset_seeds):
 )
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_yolov11n(device, model_type, res, reset_seeds):
-    from models.experimental.yolov11.runner.performant_runner import YOLOv11PerformantRunner
+    from models.demos.yolov11.runner.performant_runner import YOLOv11PerformantRunner
 
     if model_type == "torch_model":
         model = YOLO("yolo11n.pt")
@@ -673,7 +673,7 @@ def test_yolov11n(device, model_type, res, reset_seeds):
         model._capture_yolov11_trace_2cqs()
         logger.info("Inferencing using ttnn Model")
 
-    save_dir = "models/experimental/yolov11/demo/runs"
+    save_dir = "models/demos/yolov11/demo/runs"
 
     input_dtype = ttnn.bfloat16
     input_layout = ttnn.ROW_MAJOR_LAYOUT
