@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "command_queue_fixture.hpp"
 #include "fabric_types.hpp"
 #include "gtest/gtest.h"
 #include "dispatch_fixture.hpp"
@@ -21,6 +22,9 @@ namespace tt::tt_metal {
 
 class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
@@ -112,54 +116,51 @@ protected:
     DispatchCoreType dispatch_core_type_;
 };
 
-class MultiCommandQueueMultiDeviceFixture : public DispatchFixture {
+class MultiCommandQueueMultiDeviceFixture : public CommandQueueMultiDeviceFixture {
 protected:
+    static bool ShouldSkip() {
+        if (CommandQueueMultiDeviceFixture::ShouldSkip()) {
+            return true;
+        }
+
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs() != 2) {
+            return true;
+        }
+
+        return false;
+    }
+
+    static std::string GetSkipMessage() {
+        return "Requires fast dispatch, TT_METAL_GTEST_NUM_HW_CQS=2, at least 2 devices";
+    }
+
+    static void SetUpTestSuite() {
+        if (ShouldSkip()) {
+            return;
+        }
+        CommandQueueMultiDeviceFixture::DoSetUpTestSuite(2);
+    }
+
+    static void TearDownTestSuite() {
+        if (ShouldSkip()) {
+            return;
+        }
+        CommandQueueMultiDeviceFixture::DoTearDownTestSuite();
+    }
+
     void SetUp() override {
-        this->slow_dispatch_ = false;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
-            this->slow_dispatch_ = true;
-            GTEST_SKIP();
+        if (ShouldSkip()) {
+            GTEST_SKIP() << GetSkipMessage();
         }
-
-        auto num_cqs = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
-        if (num_cqs != 2) {
-            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
-            GTEST_SKIP();
-        }
-
-        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
-        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
-        if (arch == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
-            if (!tt::tt_metal::IsGalaxyCluster()) {
-                log_warning(
-                    tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
-                dispatch_core_type = DispatchCoreType::ETH;
-            }
-        }
-
-        std::vector<int> devices_to_open;
-        devices_to_open.reserve(tt::tt_metal::GetNumAvailableDevices());
-        for (int i = 0; i < tt::tt_metal::GetNumAvailableDevices(); ++i) {
-            devices_to_open.push_back(i);
-        }
-        reserved_devices_ = tt::tt_metal::detail::CreateDevices(
-            devices_to_open, num_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
-        for (const auto& [id, device] : reserved_devices_) {
-            devices_.push_back(device);
-        }
+        CommandQueueMultiDeviceFixture::SetUp();
     }
 
     void TearDown() override {
-        if (!reserved_devices_.empty()) {
-            tt::tt_metal::detail::CloseDevices(reserved_devices_);
+        if (ShouldSkip()) {
+            return;
         }
+        CommandQueueMultiDeviceFixture::TearDown();
     }
-
-    std::vector<tt::tt_metal::IDevice*> devices_;
-    std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
 };
 
 class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture {};
@@ -169,17 +170,36 @@ class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDe
 class MultiCommandQueueMultiDeviceOnFabricFixture : public MultiCommandQueueMultiDeviceFixture,
                                                     public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
 protected:
-    void SetUp() override {
+    static bool ShouldSkip() {
+        if (MultiCommandQueueMultiDeviceFixture::ShouldSkip()) {
+            return true;
+        }
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
+            return true;
         }
         // Skip for TG as it's still being implemented
         if (tt::tt_metal::IsGalaxyCluster()) {
-            GTEST_SKIP();
+            return true;
+        }
+        return false;
+    }
+
+    static std::string GetSkipMessage() {
+        return MultiCommandQueueMultiDeviceFixture::GetSkipMessage() + ", Wormhole B0, not Galaxy Cluster";
+    }
+
+    // Multiple fabric configs so need to reset the devices for each test
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
+    void SetUp() override {
+        if (ShouldSkip()) {
+            GTEST_SKIP() << GetSkipMessage();
         }
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param
         tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+        MultiCommandQueueMultiDeviceFixture::DoSetUpTestSuite(2);
         MultiCommandQueueMultiDeviceFixture::SetUp();
 
         if (::testing::Test::IsSkipped()) {
@@ -189,7 +209,11 @@ protected:
     }
 
     void TearDown() override {
+        if (ShouldSkip()) {
+            return;
+        }
         MultiCommandQueueMultiDeviceFixture::TearDown();
+        MultiCommandQueueMultiDeviceFixture::DoTearDownTestSuite();
         tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
     }
