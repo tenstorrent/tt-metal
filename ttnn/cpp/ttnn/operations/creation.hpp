@@ -87,7 +87,7 @@ Tensor full_impl(
     Tensor host_tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), shape, data_type, layout);
 
     if (optional_output_tensor.has_value()) {
-        tt::tt_metal::write_tensor(host_tensor, *optional_output_tensor, queue_id);
+        tt::tt_metal::write_tensor(host_tensor, *optional_output_tensor, /*blocking=*/false, queue_id);
         return *optional_output_tensor;
     } else if (device != nullptr) {
         return host_tensor.to_device(device, output_mem_config);
@@ -266,7 +266,7 @@ struct Empty {
         const Layout& layout,
         MeshDevice* device,
         const MemoryConfig& memory_config) {
-        return allocate_tensor_on_mesh(
+        return allocate_tensor_on_device(
             TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
     }
 };
@@ -281,7 +281,7 @@ struct EmptyLike {
         Layout layout_value = layout.value_or(tensor.layout());
         DataType dtype_value = dtype.value_or(tensor.dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
-        return allocate_tensor_on_mesh(
+        return allocate_tensor_on_device(
             TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
             device.has_value() ? &device->get() : tensor.mesh_device());
     }
