@@ -178,8 +178,9 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileNumbers) {
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Parameters
-    uint32_t max_num_tiles = 512;            // Bound for testing different transaction sizes
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t max_num_tiles =
+        max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -208,7 +209,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileNumbers) {
 /* ========== Test case for varying core location; Test id = 61 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileCoreLocations) {
     // Parameters
-    uint32_t num_tiles = 256;
+    uint32_t num_tiles = 128;
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
 
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -241,8 +242,9 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileReadNumbers) {
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Parameters
-    uint32_t max_num_tiles = 512;            // Bound for testing different transaction sizes
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t max_num_tiles =
+        max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -278,8 +280,9 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileWriteNumbers) {
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Parameters
-    uint32_t max_num_tiles = 512;            // Bound for testing different transaction sizes
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t max_num_tiles =
+        max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -315,8 +318,8 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileDirectedIdeal) {
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Parameters
-    uint32_t num_tiles = 512;
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t num_tiles = max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -345,8 +348,9 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileNumbers) {
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Parameters
-    uint32_t max_num_tiles = 512;            // Bound for testing different transaction sizes
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t max_num_tiles =
+        max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -376,7 +380,7 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileNumbers) {
 /* ========== Test case for varying core location; Test id = 66 ========== */
 TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileCoreLocations) {
     // Parameters
-    uint32_t num_tiles = 256;
+    uint32_t num_tiles = 128;
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
 
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -410,8 +414,9 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileReadNumbers) {
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Parameters
-    uint32_t max_num_tiles = 512;            // Bound for testing different transaction sizes
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t max_num_tiles =
+        max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -446,8 +451,9 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileWriteNumbers) {
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Parameters
-    uint32_t max_num_tiles = 512;            // Bound for testing different transaction sizes
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t max_num_tiles =
+        max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -483,8 +489,8 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileDirectedIdeal) {
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Parameters
-    uint32_t num_tiles = 512;
     uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t num_tiles = max_transmittable_bytes / tile_size_bytes;  // Bound for testing different transaction sizes
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
