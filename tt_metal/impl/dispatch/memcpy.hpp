@@ -117,7 +117,7 @@ void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n
             n -= num_lines * sizeof(int32_t);
         }
 
-        // PHASE 2.4: Handle the final few bytes (< 4 bytes)i
+        // PHASE 2.4: Handle the final few bytes (< 4 bytes)
         // We are the ones in control of and allocating the dst buffer,
         // so writing a few bytes extra is okay because we are guaranteeing the size is adequate.
         if (n > 0) {
