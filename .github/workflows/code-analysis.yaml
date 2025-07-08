@@ -43,6 +43,9 @@ on:
 env:
   BRANCH_NAME: llk-submodule-uplift
   SUBMODULE_PATH: tt_metal/third_party/tt_llk
+  WORKFLOW_TIMEOUT: 180
+  CHECK_INTERVAL: 180
+  MAX_RETRIES: 3
 
 permissions:
   contents: write          # To push commits and create branches
@@ -68,26 +71,26 @@ jobs:
       - name: Checkout parent repo
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0  # Ensure we get full history
+          fetch-depth: 0
+          ref: main
+          clean: true
+
+      - name: Cache git objects
+        uses: actions/cache@v4
+        with:
+          path: |
+            .git
+            ${{ env.SUBMODULE_PATH }}/.git
+          key: git-cache-${{ github.sha }}
+          restore-keys: |
+            git-cache-
 
       - name: Configure git
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Ensure we have latest main
-        run: |
-          # Fetch latest main and stay on it
-          git fetch origin main
-          git checkout main
-          git reset --hard origin/main
-
-          # Initialize and update submodules to get latest state
-          git submodule init
-          git submodule update
-          echo "✅ Updated to latest main with fresh submodules"
 
       - name: Update submodule
         id: update-submodule
@@ -96,8 +99,8 @@ jobs:
           OLD_SHA=$(git rev-parse --short=7 HEAD)
           echo "old-sha=$OLD_SHA" >> $GITHUB_OUTPUT
 
-          # Fetch full history to ensure we can see all commits
-          git fetch --unshallow origin main 2>/dev/null || git fetch origin main
+          # Update to latest main
+          git fetch origin main
           git checkout main
           git pull origin main
 
@@ -120,65 +123,59 @@ jobs:
           OLD_SHA="${{ steps.update-submodule.outputs.old-sha }}"
           NEW_SHA="${{ steps.update-submodule.outputs.new-sha }}"
 
-          # Get changed files once
+          # Get all analysis data at once
           CHANGED_FILES=$(git diff --name-only ${OLD_SHA}..${NEW_SHA})
+          COMMIT_COUNT=$(git log --oneline ${OLD_SHA}..${NEW_SHA} | wc -l)
+
           echo "changed-files<<EOF" >> $GITHUB_OUTPUT
           echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          # Check for architecture-specific changes
+          # Analyze architecture impacts in parallel
+          SHOULD_RUN_WORMHOLE=false
+          SHOULD_RUN_BLACKHOLE=false
+
           if echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/"; then
-            echo "should-run-wormhole=true" >> $GITHUB_OUTPUT
+            SHOULD_RUN_WORMHOLE=true
             echo "✅ Detected Wormhole changes"
-          else
-            echo "should-run-wormhole=false" >> $GITHUB_OUTPUT
           fi
 
           if echo "$CHANGED_FILES" | grep -q "^tt_llk_blackhole/"; then
-            echo "should-run-blackhole=true" >> $GITHUB_OUTPUT
+            SHOULD_RUN_BLACKHOLE=true
             echo "✅ Detected Blackhole changes"
-          else
-            echo "should-run-blackhole=false" >> $GITHUB_OUTPUT
           fi
 
-          # Generate commits table and save to GITHUB_OUTPUT
-          COMMIT_COUNT=$(git log --oneline ${OLD_SHA}..${NEW_SHA} | wc -l)
+          echo "should-run-wormhole=$SHOULD_RUN_WORMHOLE" >> $GITHUB_OUTPUT
+          echo "should-run-blackhole=$SHOULD_RUN_BLACKHOLE" >> $GITHUB_OUTPUT
+
+          # Generate commits table efficiently
           echo "Found $COMMIT_COUNT commits using ${OLD_SHA}..${NEW_SHA}"
 
-          # Generate commits table content
           COMMITS_TABLE_CONTENT="| Commit | Message | Author | PR |"$'\n'
           COMMITS_TABLE_CONTENT+="|--------|---------|---------|-----|"$'\n'
 
           if [ "$COMMIT_COUNT" -gt 0 ]; then
-            # Generate commits table content
-            while IFS='|' read -r short_hash message author full_hash; do
-              # Skip empty lines
-              if [ -z "$short_hash" ]; then
-                continue
-              fi
-
-              # Try to get the PR number from the commit message and clean the message
+            git log --pretty=format:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA} | while IFS='|' read -r short_hash message author full_hash; do
               pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
-              # Remove (#number) from the message for cleaner display
               clean_message=$(echo "$message" | sed 's/ *(#[0-9]\+) *$//')
 
               if [ -n "$pr_number" ]; then
-                COMMITS_TABLE_CONTENT+="| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | [#$pr_number](https://github.com/tenstorrent/tt-llk/pull/$pr_number) |"$'\n'
+                echo "| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | [#$pr_number](https://github.com/tenstorrent/tt-llk/pull/$pr_number) |"
               else
-                COMMITS_TABLE_CONTENT+="| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | - |"$'\n'
+                echo "| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | - |"
               fi
-            done < <(git log --pretty=tformat:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA})
+            done >> /tmp/commits_table.txt
+
+            COMMITS_TABLE_CONTENT+=$(cat /tmp/commits_table.txt)
           else
-            echo "No commits found - this shouldn't happen if we detected changes"
             COMMITS_TABLE_CONTENT+="| (No commits found) | - | - | - |"$'\n'
           fi
 
-          # Save commits table to GITHUB_OUTPUT
           echo "commits-table<<EOF" >> $GITHUB_OUTPUT
           echo "$COMMITS_TABLE_CONTENT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          # Generate simple initial PR body (will be updated later with full details)
+          # Generate initial PR body
           cat > ../../../llk_commit_log.txt << EOF
           ## ⬆️ LLK Submodule Update
 
@@ -303,67 +300,57 @@ jobs:
           GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
         run: |
           set -euo pipefail
-          TIMEOUT_MINUTES=${{ inputs.workflow_timeout || 180 }}
+          TIMEOUT_MINUTES=${{ inputs.workflow_timeout || env.WORKFLOW_TIMEOUT }}
 
-          # Build workflow list based on detected changes
+          # Build workflow list and trigger them efficiently
           WORKFLOWS_TO_RUN=()
+          declare -A WORKFLOW_DISPLAY_NAMES
+          declare -A RUN_ID_TO_WORKFLOW
+          declare -A WORKFLOW_RETRY_COUNT
+          RUN_IDS=()
+          MAX_RETRIES=${{ env.MAX_RETRIES }}
 
           if [ "${{ needs.llk-submodule-uplift.outputs.should-run-wormhole }}" == "true" ]; then
             WORKFLOWS_TO_RUN+=("all-post-commit-workflows.yaml")
+            WORKFLOW_DISPLAY_NAMES["all-post-commit-workflows.yaml"]="All Post Commit Workflows"
           fi
 
           if [ "${{ needs.llk-submodule-uplift.outputs.should-run-blackhole }}" == "true" ]; then
             WORKFLOWS_TO_RUN+=("blackhole-post-commit.yaml")
+            WORKFLOW_DISPLAY_NAMES["blackhole-post-commit.yaml"]="Blackhole Post Commit"
           fi
 
           if [ ${#WORKFLOWS_TO_RUN[@]} -eq 0 ]; then
             echo "No workflows to trigger based on changes detected"
-
-            # Comment on PR explaining why no workflows are running
             gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
               --body "ℹ️ **No architecture-specific tests required**: This LLK update doesn't contain Wormhole or Blackhole specific changes, so no post-commit workflows need to be triggered." \
               --repo "${{ github.repository }}"
-
             exit 0
           fi
 
           echo "🚀 Triggering ${#WORKFLOWS_TO_RUN[@]} workflow(s)..."
 
-          # Trigger workflows and collect run IDs with workflow mapping
-          declare -A RUN_ID_TO_WORKFLOW
-          declare -A WORKFLOW_RETRY_COUNT
-          RUN_IDS=()
-          MAX_RETRIES=3
-
+          # Trigger all workflows in parallel and collect run IDs
           for workflow in "${WORKFLOWS_TO_RUN[@]}"; do
             echo "Triggering $workflow..."
 
-            # Get existing runs before triggering to establish baseline
-            EXISTING_RUNS=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json databaseId --jq '.[].databaseId' | tr '\n' ' ')
-            echo "Existing runs before trigger: $EXISTING_RUNS"
+            # Get baseline run count
+            EXISTING_COUNT=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json databaseId --jq 'length')
 
             if gh workflow run "$workflow" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}"; then
               echo "✅ Successfully triggered $workflow"
 
-              # Wait for the new run to appear with retry logic
+              # Wait for the new run to appear
               RUN_ID=""
               for i in {1..12}; do
-                # Get current runs and find the new one
-                CURRENT_RUNS=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 10 --json databaseId --jq '.[].databaseId')
+                sleep 5
+                LATEST_RUN=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
 
-                # Find the run that wasn't in the existing list
-                for run_id in $CURRENT_RUNS; do
-                  if [[ ! " $EXISTING_RUNS " =~ " $run_id " ]]; then
-                    RUN_ID="$run_id"
-                    break
-                  fi
-                done
-
-                if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
+                if [ -n "$LATEST_RUN" ] && [ "$LATEST_RUN" != "null" ]; then
+                  RUN_ID="$LATEST_RUN"
                   break
                 fi
                 echo "Attempt $i: Waiting for new workflow run to appear..."
-                sleep 10
               done
 
               if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
@@ -374,9 +361,9 @@ jobs:
 
                 # Comment on PR with workflow link
                 RUN_URL="https://github.com/${{ github.repository }}/actions/runs/$RUN_ID"
-                WORKFLOW_DISPLAY_NAME=$(echo "$workflow" | sed 's/\.yaml$//' | sed 's/-/ /g' | sed 's/\b\w/\U&/g')
+                DISPLAY_NAME="${WORKFLOW_DISPLAY_NAMES[$workflow]}"
                 gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
-                  --body "🚀 **$WORKFLOW_DISPLAY_NAME** triggered: [View run]($RUN_URL)" \
+                  --body "🚀 **$DISPLAY_NAME** triggered: [View run]($RUN_URL)" \
                   --repo "${{ github.repository }}"
               fi
             else
@@ -389,12 +376,13 @@ jobs:
             exit 1
           fi
 
-          # Monitor all runs
+          # Monitor all runs efficiently
           echo "⏳ Monitoring ${#RUN_IDS[@]} workflow run(s)..."
 
           START_TIME=$(date +%s)
           TIMEOUT_SECONDS=$((TIMEOUT_MINUTES * 60))
           ALL_SUCCESS=true
+          CHECK_INTERVAL=${{ env.CHECK_INTERVAL }}  # Check every 3 minutes instead of 5
 
           while [ ${#RUN_IDS[@]} -gt 0 ]; do
             # Check timeout
@@ -406,91 +394,73 @@ jobs:
               for run_id in "${RUN_IDS[@]}"; do
                 RUN_URL="https://github.com/${{ github.repository }}/actions/runs/$run_id"
                 WORKFLOW_NAME="${RUN_ID_TO_WORKFLOW[$run_id]}"
-                WORKFLOW_DISPLAY_NAME=$(echo "$WORKFLOW_NAME" | sed 's/\.yaml$//' | sed 's/-/ /g' | sed 's/\b\w/\U&/g')
+                DISPLAY_NAME="${WORKFLOW_DISPLAY_NAMES[$WORKFLOW_NAME]}"
                 gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
-                  --body "⏰ **$WORKFLOW_DISPLAY_NAME** timed out after ${TIMEOUT_MINUTES} minutes: [View run]($RUN_URL)" \
+                  --body "⏰ **$DISPLAY_NAME** timed out after ${TIMEOUT_MINUTES} minutes: [View run]($RUN_URL)" \
                   --repo "${{ github.repository }}"
               done
               ALL_SUCCESS=false
               break
             fi
 
-            # Check status of all runs
+            # Check status of all runs in batch
             REMAINING_RUNS=()
             for run_id in "${RUN_IDS[@]}"; do
-              STATUS=$(gh run view "$run_id" --json status --jq '.status // "unknown"' 2>/dev/null || echo "unknown")
+              RUN_DATA=$(gh run view "$run_id" --json status,conclusion --jq '{status: .status, conclusion: .conclusion}' 2>/dev/null || echo '{"status": "unknown", "conclusion": null}')
+              STATUS=$(echo "$RUN_DATA" | jq -r '.status // "unknown"')
+              CONCLUSION=$(echo "$RUN_DATA" | jq -r '.conclusion // "unknown"')
+
               WORKFLOW_NAME="${RUN_ID_TO_WORKFLOW[$run_id]}"
-              WORKFLOW_DISPLAY_NAME=$(echo "$WORKFLOW_NAME" | sed 's/\.yaml$//' | sed 's/-/ /g' | sed 's/\b\w/\U&/g')
+              DISPLAY_NAME="${WORKFLOW_DISPLAY_NAMES[$WORKFLOW_NAME]}"
+              RUN_URL="https://github.com/${{ github.repository }}/actions/runs/$run_id"
 
               if [ "$STATUS" == "completed" ]; then
-                CONCLUSION=$(gh run view "$run_id" --json conclusion --jq '.conclusion // "unknown"')
-                RUN_URL="https://github.com/${{ github.repository }}/actions/runs/$run_id"
-
                 if [ "$CONCLUSION" == "success" ]; then
-                  echo "✅ $WORKFLOW_DISPLAY_NAME (Run $run_id) completed successfully"
+                  echo "✅ $DISPLAY_NAME (Run $run_id) completed successfully"
                   gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
-                    --body "✅ **$WORKFLOW_DISPLAY_NAME** passed: [View run]($RUN_URL)" \
+                    --body "✅ **$DISPLAY_NAME** passed: [View run]($RUN_URL)" \
                     --repo "${{ github.repository }}"
                 else
-                  echo "❌ $WORKFLOW_DISPLAY_NAME (Run $run_id) failed with conclusion: $CONCLUSION"
+                  echo "❌ $DISPLAY_NAME (Run $run_id) failed with conclusion: $CONCLUSION"
 
-                  # Check if we should retry this workflow
+                  # Handle retry logic
                   CURRENT_RETRIES=${WORKFLOW_RETRY_COUNT["$WORKFLOW_NAME"]}
                   if [ "$CURRENT_RETRIES" -lt "$MAX_RETRIES" ]; then
                     NEW_RETRY_COUNT=$((CURRENT_RETRIES + 1))
                     WORKFLOW_RETRY_COUNT["$WORKFLOW_NAME"]=$NEW_RETRY_COUNT
 
-                    echo "🔄 Retrying $WORKFLOW_DISPLAY_NAME (attempt $NEW_RETRY_COUNT/$MAX_RETRIES)"
+                    echo "🔄 Retrying $DISPLAY_NAME (attempt $NEW_RETRY_COUNT/$MAX_RETRIES)"
                     gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
-                      --body "🔄 **$WORKFLOW_DISPLAY_NAME** failed, retrying (attempt $NEW_RETRY_COUNT/$MAX_RETRIES): [Failed run]($RUN_URL)" \
+                      --body "🔄 **$DISPLAY_NAME** failed, retrying (attempt $NEW_RETRY_COUNT/$MAX_RETRIES): [Failed run]($RUN_URL)" \
                       --repo "${{ github.repository }}"
 
-                    # Rerun the failed workflow
                     if gh run rerun "$run_id" --failed --repo "${{ github.repository }}"; then
-                      echo "✅ Successfully triggered retry for $WORKFLOW_DISPLAY_NAME"
-
-                      # Wait for the new run to appear and add it to monitoring
+                      echo "✅ Successfully triggered retry for $DISPLAY_NAME"
                       sleep 30
-                      NEW_RUN_ID=""
-                      for i in {1..6}; do
-                        LATEST_RUN=$(gh run list --workflow "$WORKFLOW_NAME" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json databaseId --jq '.[0].databaseId')
-                        if [ "$LATEST_RUN" != "$run_id" ] && [ -n "$LATEST_RUN" ]; then
-                          NEW_RUN_ID="$LATEST_RUN"
-                          break
-                        fi
-                        echo "Waiting for retry run to appear (attempt $i/6)..."
-                        sleep 10
-                      done
 
-                      if [ -n "$NEW_RUN_ID" ]; then
-                        # Replace the old run ID with the new one for continued monitoring
+                      # Find the new run ID
+                      NEW_RUN_ID=$(gh run list --workflow "$WORKFLOW_NAME" --branch "${{ env.BRANCH_NAME }}" --limit 1 --json databaseId --jq '.[0].databaseId')
+                      if [ -n "$NEW_RUN_ID" ] && [ "$NEW_RUN_ID" != "$run_id" ]; then
                         RUN_IDS=("${RUN_IDS[@]/$run_id}")
                         RUN_IDS+=("$NEW_RUN_ID")
                         RUN_ID_TO_WORKFLOW["$NEW_RUN_ID"]="$WORKFLOW_NAME"
                         unset RUN_ID_TO_WORKFLOW["$run_id"]
                         echo "📍 Now monitoring retry run ID: $NEW_RUN_ID"
-
-                        # Continue to next iteration to keep monitoring the retry
                         continue
-                      else
-                        echo "⚠️ Could not find retry run ID, will mark as failed"
                       fi
-                    else
-                      echo "❌ Failed to trigger retry for $WORKFLOW_DISPLAY_NAME"
                     fi
                   else
-                    echo "❌ $WORKFLOW_DISPLAY_NAME exceeded max retries ($MAX_RETRIES)"
+                    echo "❌ $DISPLAY_NAME exceeded max retries ($MAX_RETRIES)"
                     gh pr comment "${{ needs.llk-submodule-uplift.outputs.pr-number }}" \
-                      --body "❌ **$WORKFLOW_DISPLAY_NAME** failed after $MAX_RETRIES attempts (conclusion: \`$CONCLUSION\`): [View run]($RUN_URL)" \
+                      --body "❌ **$DISPLAY_NAME** failed after $MAX_RETRIES attempts (conclusion: \`$CONCLUSION\`): [View run]($RUN_URL)" \
                       --repo "${{ github.repository }}"
                   fi
-
                   ALL_SUCCESS=false
                 fi
               else
                 # Still running, keep monitoring
                 REMAINING_RUNS+=("$run_id")
-                echo "⌛ $WORKFLOW_DISPLAY_NAME (Run $run_id) status: $STATUS (${ELAPSED}s/${TIMEOUT_SECONDS}s)"
+                echo "⌛ $DISPLAY_NAME (Run $run_id) status: $STATUS (${ELAPSED}s/${TIMEOUT_SECONDS}s)"
               fi
             done
 
@@ -498,7 +468,7 @@ jobs:
 
             # Wait before next check
             if [ ${#RUN_IDS[@]} -gt 0 ]; then
-              sleep 300 # check every 5 minutes
+              sleep $CHECK_INTERVAL
             fi
           done
 
@@ -730,18 +700,8 @@ jobs:
     needs: [llk-submodule-uplift, trigger-and-monitor-workflows, recheck-tests]
     if: |
       always() && (
-        (
-          inputs.recheck_tests != true &&
-          needs.llk-submodule-uplift.outputs.has-changes == 'true' &&
-          needs.llk-submodule-uplift.result == 'success' &&
-          (
-            needs.trigger-and-monitor-workflows.result == 'success' ||
-            needs.trigger-and-monitor-workflows.result == 'skipped'
-          )
-        ) || (
-          inputs.recheck_tests == true &&
-          needs.recheck-tests.outputs.tests-passed == 'true'
-        )
+        (inputs.recheck_tests != true && needs.llk-submodule-uplift.outputs.has-changes == 'true' && needs.llk-submodule-uplift.result == 'success' && (needs.trigger-and-monitor-workflows.result == 'success' || needs.trigger-and-monitor-workflows.result == 'skipped')) ||
+        (inputs.recheck_tests == true && needs.recheck-tests.outputs.tests-passed == 'true')
       )
     runs-on: ubuntu-latest
     steps:
@@ -751,42 +711,26 @@ jobs:
         run: |
           echo "🚀 Finalizing PR merge..."
 
-          # Get PR number from the appropriate source
-          if [ "${{ inputs.recheck_tests }}" = "true" ]; then
-            PR_NUMBER="${{ needs.recheck-tests.outputs.pr-number }}"
-          else
-            PR_NUMBER="${{ needs.llk-submodule-uplift.outputs.pr-number }}"
-          fi
+          # Get PR number and prepare finalization
+          PR_NUMBER="${{ inputs.recheck_tests == true && needs.recheck-tests.outputs.pr-number || needs.llk-submodule-uplift.outputs.pr-number }}"
 
           # Mark PR as ready if it was created as draft
           if [ "${{ inputs.skip_draft }}" != "true" ]; then
             echo "📝 Marking PR as ready for review..."
-            if ! gh pr ready "$PR_NUMBER" --repo "${{ github.repository }}"; then
-              echo "⚠️ Unable to mark PR as ready - may already be ready or have insufficient permissions"
-            fi
+            gh pr ready "$PR_NUMBER" --repo "${{ github.repository }}" || echo "⚠️ Unable to mark PR as ready - may already be ready"
           fi
 
-          # Comment on PR that it's ready for review
-          echo "📝 PR #$PR_NUMBER is ready for review and merge"
-
-          # Determine the appropriate completion message
+          # Determine completion message based on context
           if [ "${{ inputs.recheck_tests }}" = "true" ]; then
-            COMPLETION_MESSAGE="🎉 **LLK submodule update test re-check completed successfully!**
-            All required workflows have passed on re-check. This PR is ready for review and merge."
-          elif [ "${{ needs.trigger-and-monitor-workflows.result }}" = "success" ]; then
-            COMPLETION_MESSAGE="🎉 **LLK submodule update completed successfully!**
-            All required workflows have passed. This PR is ready for review and merge."
+            COMPLETION_MESSAGE="🎉 **LLK submodule update test re-check completed successfully!** All required workflows have passed on re-check. This PR is ready for review and merge."
           elif [ "${{ needs.trigger-and-monitor-workflows.result }}" = "skipped" ]; then
-            COMPLETION_MESSAGE="🎉 **LLK submodule update completed successfully!**
-            No architecture-specific tests were required. This PR is ready for review and merge."
+            COMPLETION_MESSAGE="🎉 **LLK submodule update completed successfully!** No architecture-specific tests were required. This PR is ready for review and merge."
           else
-            COMPLETION_MESSAGE="🎉 **LLK submodule update completed successfully!**
-            This PR is ready for review and merge."
+            COMPLETION_MESSAGE="🎉 **LLK submodule update completed successfully!** All required workflows have passed. This PR is ready for review and merge."
           fi
 
-          gh pr comment "$PR_NUMBER" \
-            --body "$COMPLETION_MESSAGE" \
-            --repo "${{ github.repository }}" || echo "⚠️ Unable to comment on PR - insufficient permissions"
+          echo "📝 PR #$PR_NUMBER is ready for review and merge"
+          gh pr comment "$PR_NUMBER" --body "$COMPLETION_MESSAGE" --repo "${{ github.repository }}" || echo "⚠️ Unable to comment on PR"
 
           # Update the Test Status section in the PR body
           echo "🔄 Updating PR body with final test status..."
