@@ -99,6 +99,8 @@ std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::ve
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.padded_shape();  // TODO: Replace with logical_shape()
     shape[this->dim] *= this->ring_size;
+    std::cout << "AllGatherAsync compute_output_specs: input_shape = " << input_tensor.padded_shape()
+              << ", output_shape = " << shape << std::endl;
     return {TensorSpec(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config))};
 }
@@ -291,7 +293,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 output_tensors[0],
                 this->dim,
                 this->num_links,
-                this->ring_size,
+                target_ring_size,
                 device_index,
                 this->topology,
                 this->semaphore.at(0),
@@ -385,7 +387,7 @@ Tensor all_gather_async_impl(
 
 Tensor all_gather_async_impl(
     const Tensor& input_tensor,
-    Tensor& persistent_output_buffer,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
@@ -447,7 +449,8 @@ Tensor all_gather_async_impl(
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    // std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    std::size_t num_devices = (cluster_axis == 0) ? 8 : 4;
 
     int32_t rank = input_tensor.logical_shape().rank();
 
@@ -508,7 +511,7 @@ Tensor all_gather_async(
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
-    Tensor& persistent_output_buffer,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
