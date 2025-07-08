@@ -11,7 +11,6 @@ from models.utility_functions import is_wormhole_b0, is_blackhole, skip_for_blac
 from tests.ttnn.unit_tests.operations.prefetcher_common import run_prefetcher_mm
 
 
-@skip_for_blackhole("Hangs on Blackhole. Issue #21304")
 @pytest.mark.parametrize(
     "num_reader_cores, num_tensors, input_shapes, dtypes, num_layers",
     [
@@ -44,7 +43,6 @@ def test_run_prefetcher_post_commit(
     num_layers,
     num_reader_cores,
     dtypes,
-    use_program_cache,
     function_level_defaults,
 ):
     run_prefetcher_mm(
@@ -91,7 +89,6 @@ def test_run_prefetcher_post_commit_multi_device(
     num_layers,
     num_reader_cores,
     dtypes,
-    use_program_cache,
     function_level_defaults,
 ):
     if mesh_device.get_num_devices() <= 1:

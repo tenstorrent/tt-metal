@@ -214,7 +214,7 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
         this->ring_size,
         config.device_index,
         this->topology,
-        num_links,
+        num_links.value(),
         this->from_remote_sem,
         this->to_remote_sem,
         this->sub_device_id);

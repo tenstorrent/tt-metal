@@ -109,7 +109,7 @@ struct address_map {
     };
 
     static constexpr std::int32_t RISC_LOCAL_MEM_BASE =
-        0xffb00000;  // Actaul local memory address as seen from risc firmware
+        0xffb00000;  // Actual local memory address as seen from risc firmware
                      // As part of the init risc firmware will copy local memory data from
                      // l1 locations listed above into internal local memory that starts
                      // at RISC_LOCAL_MEM_BASE address
@@ -117,6 +117,7 @@ struct address_map {
     static constexpr std::uint32_t RETRAIN_COUNT_ADDR = 0x1EDC;
     static constexpr std::uint32_t RETRAIN_FORCE_ADDR = 0x1EFC;
 
+    static constexpr uint32_t ETH_LINK_REMOTE_INFO_ADDR = 0x1EC0;
     static constexpr std::uint32_t INTERMESH_ETH_LINK_CONFIG_ADDR = 0x104C;
     static constexpr std::uint32_t INTERMESH_ETH_LINK_STATUS_ADDR = 0x1104;
 };

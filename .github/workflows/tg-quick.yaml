@@ -115,7 +115,7 @@ jobs:
         # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
         # TODO #23350: This should use TORUS_2D topology not MESH since there are tests that depend on ring here.
         run: |
-          ./build/test/tt_metal/tt_fabric/test_system_health --system-topology MESH
+          ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_2D
           TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardFixture.*";
           TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*";
           TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites";
@@ -167,7 +167,7 @@ jobs:
         timeout-minutes: 20
         # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
         run: |
-          ./build/test/tt_metal/tt_fabric/test_system_health --system-topology MESH
+          ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_2D
           pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick";
           pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "quick";
           pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py;

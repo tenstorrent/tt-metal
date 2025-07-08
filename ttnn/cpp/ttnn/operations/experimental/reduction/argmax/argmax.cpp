@@ -29,7 +29,7 @@ Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& out
 Tensor ArgmaxOperation::invoke(
     const Tensor& input, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
-    auto input_shape = input.padded_shape();
+    const auto& input_shape = input.padded_shape();
     TT_FATAL(input_shape.rank() == 4, "supported for rank-4 tensors at this time");
 
     Tensor input_a = create_mask(input, output_memory_config);
@@ -88,6 +88,7 @@ Tensor ArgmaxOperation::invoke(
             Tensor max_val = ttnn::max(input_a, (int)dim, true, output_memory_config);
             int repeat = input.logical_shape()[dim];
             std::vector<Tensor> combined_tensors;
+            combined_tensors.reserve(repeat);
             for (int cid = 0; cid < repeat; cid++) {
                 combined_tensors.emplace_back(max_val);
             }

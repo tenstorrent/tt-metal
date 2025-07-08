@@ -120,6 +120,7 @@ bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
         chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     vector<uint32_t> packed_golden = packed_input;
 
     // Launch program and record outputs
@@ -147,7 +148,8 @@ bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
 TEST_F(DeviceFixture, TensixDataMovementLoopbackPacketSizes) {
     // Parameters
     uint32_t max_transactions = 256;
-    uint32_t max_transaction_size_pages = 64;
+    uint32_t max_transaction_size_pages =
+        arch_ == tt::ARCH::BLACKHOLE ? 1024 : 2048;                     // Max total transaction size == 64 KB
     uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
     CoreCoord master_core_coord = {0, 0};
     NOC noc_id = NOC::NOC_0;

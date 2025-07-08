@@ -14,10 +14,12 @@ class VitTrace2CQ:
         self,
         device,
         device_batch_size=8,
+        use_random_input_tensor=False,
     ):
         self.test_infra = create_test_infra(
             device,
             device_batch_size,
+            use_random_input_tensor=use_random_input_tensor,
         )
         self.device = device
         self.tt_inputs_host, sharded_mem_config_DRAM, self.input_mem_config = self.test_infra.setup_dram_sharded_input(

@@ -80,8 +80,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
 
     const bool skip_untilize = input_tensor.layout() == Layout::ROW_MAJOR;
 
-    const auto input_shape = input_tensor.padded_shape();
-    const auto output_shape = output_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     const tt::DataFormat in_df = datatype_to_dataformat_converter(input_tensor.dtype());
     const tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.dtype());
@@ -362,7 +361,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     auto input_shape = input_tensor.padded_shape();
-    auto output_shape = output_tensor.padded_shape();
 
     tt::DataFormat in_df = datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.dtype());

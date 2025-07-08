@@ -97,7 +97,6 @@ def test_concat_head(
     head_dim,
     batch_size,
     all_devices,
-    use_program_cache,
 ):
     devices = get_devices_for_t3000(all_devices, num_devices=1)
     device = devices[0]
@@ -133,7 +132,6 @@ def test_concat_head_subcoregrids(
     batch_size,
     sub_core_grids,
     all_devices,
-    use_program_cache,
 ):
     devices = get_devices_for_t3000(all_devices, num_devices=1)
     device = devices[0]

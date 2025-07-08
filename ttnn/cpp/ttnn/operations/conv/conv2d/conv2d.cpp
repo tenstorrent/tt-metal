@@ -74,6 +74,7 @@ ResultWithOptions conv2d(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
@@ -98,6 +99,7 @@ ResultWithOptions conv2d(
                 padding,
                 dilation,
                 groups,
+                dtype,
                 bias_tensor,
                 conv_config_,
                 compute_config_,
@@ -122,6 +124,7 @@ ResultWithOptions conv2d(
                 padding,
                 dilation,
                 groups,
+                dtype,
                 bias_tensor,
                 conv_config_,
                 compute_config_,
@@ -156,12 +159,14 @@ Result conv2d_DRAM(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
     const Conv2dSliceConfig& dram_slice_config) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    const DataType output_dtype = dtype.value_or(input_tensor.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     auto [output_height, output_width] =
@@ -193,7 +198,7 @@ Result conv2d_DRAM(
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
-    TT_FATAL(conv_config.dtype != tt::tt_metal::DataType::BFLOAT8_B, "Conv DRAM currently doesn't support BFLOAT8_B");
+    TT_FATAL(output_dtype != tt::tt_metal::DataType::BFLOAT8_B, "Conv DRAM currently doesn't support BFLOAT8_B");
 
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -203,7 +208,7 @@ Result conv2d_DRAM(
         TensorSpec(
             ttnn::Shape({batch_size, output_height, output_width, out_channels}),
             tt_metal::TensorLayout(
-                conv_config.dtype,
+                output_dtype,
                 tt_metal::PageConfig(tt_metal::Layout::ROW_MAJOR),
                 MemoryConfig{
                     TensorMemoryLayout::INTERLEAVED,
@@ -297,18 +302,12 @@ Result conv2d_DRAM(
                 compute_grid_size,
                 input_tensor_on_device.layout(),
                 input_tensor_on_device.dtype(),
+                output_dtype,
                 std::make_optional(input_tensor_on_device.memory_config()),
                 kernel_size,
                 groups,
                 bias_tensor.has_value(),
                 compute_config);
-        }
-        if (!first_run) {
-            // After the first run, never preprocess weights.
-            TT_ASSERT(
-                conv_config.shard_layout.has_value(),
-                " Conv2D DRAM Slicing must have fixed a shard layout after the first run.");
-            conv_config.always_preprocess_weights = false;
         }
         Tensor sliced_input_tensor;
         if (conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
@@ -363,6 +362,7 @@ Result conv2d_DRAM(
                 std::array<uint32_t, 4>({pad_top, pad_bottom, pad_left, pad_right}),
                 dilation,
                 groups,
+                output_dtype,
                 first_run ? bias_tensor : (std::optional<const ttnn::Tensor>)(bias_tensor_on_device),
                 conv_config_l1,
                 compute_config_,
@@ -422,14 +422,16 @@ Result conv2d_L1(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor_,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    const DataType output_dtype = dtype.value_or(input_tensor_.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     auto input_tensor = input_tensor_;
-    auto weight_tensor = weight_tensor_;
+    const auto& weight_tensor = weight_tensor_;
     std::optional<ttnn::Tensor> bias_tensor = bias_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     // Store the original stride size for weight folding
@@ -437,7 +439,11 @@ Result conv2d_L1(
     if (conv_config.enable_kernel_stride_folding) {
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
-        input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, false);
+        input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4);
+        if (conv_config.deallocate_activation) {
+            Tensor input_tensor_pre_folded = input_tensor_;
+            input_tensor_pre_folded.deallocate(true);
+        }
 
         // Update the input tensor parameters to the folding result
         input_height = folding_result.input_height;
@@ -474,6 +480,7 @@ Result conv2d_L1(
             compute_grid_size,
             input_tensor.layout(),
             input_tensor.dtype(),
+            output_dtype,
             tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                          : std::nullopt,
             kernel_size,
@@ -522,6 +529,7 @@ Result conv2d_L1(
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
 
+    // Configure weight and bias preparation parameters
     Conv2dWeightsBiasPrepConfig params(
         input_channels_alignment,
         conv_config.weights_dtype,
@@ -539,16 +547,48 @@ Result conv2d_L1(
         orig_stride,
         padding_n4);
 
-    if (!tt::tt_metal::is_device_tensor(weight_tensor) || conv_config.always_preprocess_weights) {
-        // prepare weights in desired layout and move to device
-
-        // TODO: Implement heuristic to decide if weights should be preprocessed on device.
-        if (!conv_config.preprocess_weights_on_device) {
-            std::tie(weight_tensor_on_device, bias_tensor_on_device) =
-                prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, params, device);
+    // Prepare weights and move to device if necessary
+    if (!is_device_tensor(weight_tensor)) {
+        log_debug(tt::LogOp, "conv2d: Preprocessing weights on host and moving to device.");
+        std::tie(weight_tensor_on_device, bias_tensor_on_device) =
+            prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, params, device);
+    } else {
+        // Check if device weights are properly prepared
+        if (is_valid_device_conv_weights(
+                weight_tensor_on_device, in_channels, out_channels, conv_config.weights_dtype)) {
+            log_debug(tt::LogOp, "conv2d: Using preprocessed weights from device.");
         } else {
+            log_warning(
+                tt::LogOp,
+                "conv2d: Device weights not properly prepared, pulling back to host and trying to reprocess.");
+            // Pull weights back to host, prepare them, and push back to device
+            ttnn::Tensor host_weight_tensor = ttnn::operations::core::from_device(weight_tensor_on_device);
             std::tie(weight_tensor_on_device, bias_tensor_on_device) =
-                prepare_conv_weights_biases_on_device(weight_tensor, bias_tensor, params, device);
+                prepare_conv_weights_biases_and_move_to_device(host_weight_tensor, bias_tensor, params, device);
+        }
+    }
+
+    // Prepare bias tensor if it exists and is not yet on device
+    if (bias_tensor_on_device.has_value()) {
+        if (!is_device_tensor(bias_tensor_on_device.value())) {
+            bias_tensor_on_device = prepare_conv_bias_internal(
+                bias_tensor_on_device, out_channels, params, weight_tensor_on_device.dtype(), device);
+        } else {
+            // Check if device bias is properly prepared
+            if (is_valid_device_conv_bias(bias_tensor_on_device.value(), out_channels, conv_config.weights_dtype)) {
+                log_debug(tt::LogOp, "conv2d: Using preprocessed bias from device.");
+            } else {
+                log_warning(
+                    tt::LogOp, "conv2d: Device bias not properly prepared, pulling back to host and reprocessing.");
+                // Pull bias back to host, prepare it, and push back to device
+                ttnn::Tensor host_bias_tensor = ttnn::operations::core::from_device(bias_tensor_on_device.value());
+                bias_tensor_on_device = prepare_conv_bias_internal(
+                    std::optional<const ttnn::Tensor>(host_bias_tensor),
+                    out_channels,
+                    params,
+                    weight_tensor_on_device.dtype(),
+                    device);
+            }
         }
     }
 
@@ -626,7 +666,7 @@ Result conv2d_L1(
             opt_conv_op_parallel_config,
             opt_conv_op_block_config,
             conv_out_memory_config,
-            conv_config.dtype,
+            output_dtype,
             {batch_size, input_height, input_width, in_channels},
             compute_config,
             conv_config.enable_act_double_buffer,
@@ -639,7 +679,13 @@ Result conv2d_L1(
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         if (input_tensor_post_tm.layout() != Layout::TILE) {
-            input_tensor_post_tm = ttnn::to_layout(input_tensor_post_tm, Layout::TILE);
+            Tensor input_tensor_post_tm_tilized =
+                ttnn::to_layout(input_tensor_post_tm, Layout::TILE);
+            if (conv_config.deallocate_activation) {
+                input_tensor_post_tm.deallocate(/*force*/ true);
+                input_tensor_post_tm_tilized = ttnn::move(input_tensor_post_tm_tilized);
+            }
+            input_tensor_post_tm = input_tensor_post_tm_tilized;
         }
 
         // run conv as matmul
@@ -669,11 +715,14 @@ Result conv2d_L1(
             false,
             false,
             mm_output_memory_config,
-            conv_config.dtype,
+            output_dtype,
             program_config,
             activation,
             compute_config);
 
+        if (conv_config.deallocate_activation) {
+            input_tensor_post_tm.deallocate(/*force*/ true);
+        }
         if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }
@@ -697,6 +746,7 @@ template ResultWithOptions conv2d<IDevice>(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
@@ -720,6 +770,7 @@ template ResultWithOptions conv2d<MeshDevice>(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
@@ -743,6 +794,7 @@ ResultWithOptions Conv2dOperation::invoke(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
@@ -765,6 +817,7 @@ ResultWithOptions Conv2dOperation::invoke(
         padding,
         dilation,
         groups,
+        std::move(dtype),
         std::move(bias_tensor),
         std::move(conv_config_),
         std::move(compute_config_),
@@ -789,6 +842,7 @@ ResultWithOptions Conv2dOperation::invoke(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
+    const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
@@ -811,6 +865,7 @@ ResultWithOptions Conv2dOperation::invoke(
         padding,
         dilation,
         groups,
+        std::move(dtype),
         std::move(bias_tensor),
         std::move(conv_config_),
         std::move(compute_config_),

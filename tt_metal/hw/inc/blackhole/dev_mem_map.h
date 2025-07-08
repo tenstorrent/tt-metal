@@ -79,12 +79,14 @@
 // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no mechanism
 // to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on Blackhole by
 // writing the value to be written to local L1 first and then issue a noc async write.
-#define MEM_L1_INLINE_BASE 32  // MEM_L1_ARC_FW_SCRATCH + MEM_L1_ARC_FW_SCRATCH_SIZE
 // Each noc has 16B to store value written out by inline writes.
-// Base address for each noc to store the value to be written will be `MEM_L1_INLINE_BASE + (noc_index * 16)`
+// Base address for each noc to store the value to be written will be `MEM_{E,B,NC}RISC_L1_INLINE_BASE + (noc_index *
+// 16)`
 #define MEM_L1_INLINE_SIZE_PER_NOC 16
+#define MEM_L1_INLINE_BASE 32  // MEM_L1_ARC_FW_SCRATCH + MEM_L1_ARC_FW_SCRATCH_SIZE
+
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
-#define MEM_MAILBOX_BASE 64  // (MEM_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2))  // 2 nocs
+#define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
 #define MEM_MAILBOX_SIZE 12640
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
@@ -102,7 +104,21 @@
 #define MEM_NOC_COUNTER_L1_SIZE 5 * 2 * 2 * MEM_NOC_COUNTER_SIZE
 #define MEM_NOC_COUNTER_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
 
-#define MEM_MAP_END (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
+// Tensix routing table for fabric networking
+#define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
+#define MEM_TENSIX_ROUTING_TABLE_SIZE 2064
+#if (MEM_TENSIX_ROUTING_TABLE_BASE % 16 != 0) || (MEM_TENSIX_ROUTING_TABLE_SIZE % 16 != 0)
+#error "Tensix routing table base and size must be 16-byte aligned"
+#endif
+
+// Tensix fabric connection metadata for workers
+#define MEM_TENSIX_FABRIC_CONNECTIONS_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_TENSIX_ROUTING_TABLE_SIZE)
+#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 592  // sizeof(tensix_fabric_connections_l1_info_t)
+#if (MEM_TENSIX_FABRIC_CONNECTIONS_BASE % 16 != 0) || (MEM_TENSIX_FABRIC_CONNECTIONS_SIZE % 16 != 0)
+#error "Tensix fabric connections base and size must be 16-byte aligned"
+#endif
+
+#define MEM_MAP_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
 
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"
@@ -140,7 +156,7 @@
 #define MEM_MAX_NUM_CONCURRENT_TRANSACTIONS 8
 #define MEM_ERISC_SYNC_INFO_SIZE (160 + 16 * MEM_MAX_NUM_CONCURRENT_TRANSACTIONS)
 #define MEM_ERISC_FABRIC_ROUTER_CONFIG_SIZE 2064
-#define MEM_ERISC_MAILBOX_SIZE 12544
+#define MEM_ERISC_MAILBOX_SIZE 12576
 #define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
 #define MEM_ERISC_BASE 0
 
@@ -159,8 +175,10 @@
 #define MEM_RETRAIN_FORCE_ADDR 0x1EFC
 // These values are taken from WH, These may need to be updated when BH needs to support
 // intermesh routing.
+#define MEM_ETH_LINK_REMOTE_INFO_ADDR 0x1EC0
 #define MEM_INTERMESH_ETH_LINK_CONFIG_ADDR 0x104C
 #define MEM_INTERMESH_ETH_LINK_STATUS_ADDR 0x1104
+
 #define MEM_SYSENG_ETH_RESULTS_BASE_ADDR 0x7CC00
 #define MEM_SYSENG_ETH_MAILBOX_BASE_ADDR 0x7D000
 

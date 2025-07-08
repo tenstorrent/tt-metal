@@ -26,13 +26,8 @@ namespace ttnn::operations::normalization {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) {
-    return input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
-}
-inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
-    return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
-}
-inline bool is_dram(const tt::tt_metal::Buffer* b) { return b->buffer_type() == tt::tt_metal::BufferType::DRAM; }
+
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
@@ -46,7 +41,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     bool numeric_stable,
     bool inplace) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const auto shape = input_tensor.padded_shape();
+    const auto& shape = input_tensor.padded_shape();
     uint32_t W = shape[-1], H = (input_tensor.physical_volume() / (shape[0] * shape[-1])), NC = shape[0];
     uint32_t HW = H * W;
 
@@ -639,7 +634,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
 
     // tensor shape
     const auto shard_orient = input_tensor.shard_spec().value().orientation;
-    const auto shape = input_tensor.padded_shape();
+    const auto& shape = input_tensor.padded_shape();
     uint32_t M = shape[2] * shape[0];
     uint32_t K = shape[3] * shape[1];
     uint32_t Mt = M / TILE_WIDTH;

@@ -71,6 +71,13 @@ enum class FabricEriscDatamoverAxis : std::size_t {
     Invalid = 2,
 };
 
+enum class FabricEriscDatamoverContextSwitchType : uint8_t {
+    // Context switch at the interval only if idle for a certain number of cycles
+    WAIT_FOR_IDLE = 0,
+    // Context switch every interval
+    INTERVAL = 1,
+};
+
 struct FabricRouterBufferConfig {
     bool enable_dateline_sender_extra_buffer_slots = false;
     bool enable_dateline_receiver_extra_buffer_slots = false;
@@ -298,6 +305,23 @@ void get_runtime_args_for_edm_termination_infos(
 void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
     size_t sender_worker_flow_control_semaphore_id,
+    size_t sender_worker_terminate_semaphore_id,
+    size_t sender_worker_buffer_index_semaphore_id,
+    std::vector<uint32_t>& args_out);
+
+void append_worker_to_fabric_edm_sender_rt_args(
+    tt::tt_fabric::chan_id_t eth_channel,
+    size_t sender_worker_flow_control_semaphore_id,
+    size_t sender_worker_teardown_semaphore_id,
+    size_t sender_worker_buffer_index_semaphore_id,
+    std::vector<uint32_t>& args_out);
+
+// TODO: will be deprecated
+void append_worker_to_fabric_edm_sender_rt_args(
+    const SenderWorkerAdapterSpec& connection,
+    chip_id_t chip_id,
+    const CoreRangeSet& worker_cores,
+    size_t sender_worker_flow_control_semaphore_id,
     size_t sender_worker_teardown_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out);
@@ -306,6 +330,7 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
 class FabricEriscDatamoverBuilder {
 public:
     static constexpr size_t default_firmware_context_switch_interval = 10000;
+    static constexpr auto default_firmware_context_switch_type = FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE;
     // payload only, no header
     static constexpr size_t default_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
     static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 2;
@@ -379,6 +404,7 @@ public:
             tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE) const;
 
     void set_firmware_context_switch_interval(size_t interval);
+    void set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type);
     void set_wait_for_host_signal(bool wait_for_host_signal);
 
     //    protected:
@@ -443,6 +469,7 @@ public:
 
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
+    FabricEriscDatamoverContextSwitchType firmware_context_switch_type = default_firmware_context_switch_type;
     bool enable_first_level_ack = false;
     bool fuse_receiver_flush_and_completion_ptr = true;
     bool dateline_connection = false;

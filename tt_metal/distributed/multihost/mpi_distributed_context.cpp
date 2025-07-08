@@ -182,7 +182,10 @@ void MPIContext::create(int argc, char** argv) {
 }
 
 const ContextPtr& MPIContext::get_current_world() {
-    TT_FATAL(current_world_, "MPIContext::get_current_world() called before MPIContext::create()");
+    if (!current_world_) {
+        // Default initialization of MPIContext if not already initialized
+        MPIContext::create(0, nullptr);
+    }
     return current_world_;
 }
 
@@ -191,6 +194,12 @@ void MPIContext::set_current_world(const ContextPtr& ctx) {
         ctx != nullptr && std::dynamic_pointer_cast<MPIContext>(ctx) != nullptr,
         "MPIContext::set_current_world: context is not a MPIContext or a nullptr");
     MPIContext::current_world_ = ctx;
+}
+
+bool MPIContext::is_initialized() {
+    int is_mpi_initialized;
+    MPI_CHECK(MPI_Initialized(&is_mpi_initialized));
+    return is_mpi_initialized != 0;
 }
 
 MPIContext::MPIContext(MPI_Comm comm) : comm_(comm) {
@@ -518,6 +527,14 @@ bool MPIContext::is_revoked() {
     MPI_Comm_test_inter(comm_, &flag);
     return flag != 0;
 #endif
+}
+
+std::size_t MPIContext::snoop_incoming_msg_size(Rank source, Tag tag) const {
+    int size_bytes = 0;
+    MPI_Status status;
+    MPI_CHECK(MPI_Probe(*source, *tag, comm_, &status));
+    MPI_CHECK(MPI_Get_count(&status, MPI_CHAR, &size_bytes));
+    return static_cast<std::size_t>(size_bytes);
 }
 
 MPIContext::~MPIContext() {

@@ -90,7 +90,7 @@ struct WatcherSettings {
 
 struct InspectorSettings {
     bool enabled = true;
-    bool initialization_is_important = true;
+    bool initialization_is_important = false;
     bool warn_on_write_exceptions = true;
     std::filesystem::path log_path;
 };
@@ -106,8 +106,8 @@ class RunTimeOptions {
     std::string kernel_dir;
     std::string system_kernel_dir;
 
-    bool is_visible_device_env_var_set = false;
-    uint32_t visible_device;
+    bool is_visible_devices_env_var_set = false;
+    std::vector<uint32_t> visible_devices;
 
     bool build_map_enabled = false;
 
@@ -163,6 +163,8 @@ class RunTimeOptions {
 
     bool erisc_iram_enabled = false;
 
+    bool fast_dispatch = true;
+
     bool skip_eth_cores_with_retrain = false;
 
     // Relaxed ordering on BH allows loads to bypass stores when going to separate addresses
@@ -195,8 +197,8 @@ public:
     // Location where kernels are installed via package manager.
     const std::string& get_system_kernel_dir() const;
 
-    inline bool is_visible_device_specified() const { return this->is_visible_device_env_var_set; }
-    inline uint32_t get_visible_device() const { return this->visible_device; }
+    inline bool is_visible_devices_specified() const { return this->is_visible_devices_env_var_set; }
+    inline const std::vector<uint32_t>& get_visible_devices() const { return this->visible_devices; }
 
     inline bool get_build_map_enabled() const { return build_map_enabled; }
 
@@ -318,7 +320,11 @@ public:
     // Returns the string representation for hash computation.
     inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) const {
         switch (feature) {
-            case RunTimeDebugFeatureDprint: return std::to_string(get_feature_enabled(feature));
+            case RunTimeDebugFeatureDprint: {
+                std::string hash_str = std::to_string(get_feature_enabled(feature));
+                hash_str += std::to_string(get_feature_all_chips(feature));
+                return hash_str;
+            }
             case RunTimeDebugFeatureReadDebugDelay:
             case RunTimeDebugFeatureWriteDebugDelay:
             case RunTimeDebugFeatureAtomicDebugDelay:
@@ -400,6 +406,7 @@ public:
     inline const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
     inline bool get_erisc_iram_enabled() const { return erisc_iram_enabled; }
+    inline bool get_fast_dispatch() const { return fast_dispatch; }
 
     inline bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 

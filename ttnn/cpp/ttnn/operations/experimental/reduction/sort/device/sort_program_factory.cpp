@@ -145,6 +145,13 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     auto cb_index_tensor_output =
         tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_output_cb_config);
 
+    constexpr uint32_t synchronization_cb_index = tt::CBIndex::c_6;
+    constexpr uint32_t synchronization_cb_size = tt::constants::TILE_HW * sizeof(uint8_t);
+    const tt::tt_metal::CircularBufferConfig synchronization_cb_config =
+        tt::tt_metal::CircularBufferConfig(synchronization_cb_size, {{synchronization_cb_index, tt::DataFormat::UInt8}})
+            .set_page_size(synchronization_cb_index, synchronization_cb_size);
+    auto cb_synchronization = tt::tt_metal::CreateCircularBuffer(program, core_range, synchronization_cb_config);
+
     // Kernels
     const std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_index,
@@ -199,8 +206,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
         Wt,
         static_cast<uint32_t>(attributes.descending),
         static_cast<uint32_t>(attributes.stable),
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y};
+        synchronization_cb_index};
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(

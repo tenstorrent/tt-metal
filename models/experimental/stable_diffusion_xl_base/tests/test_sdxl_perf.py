@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttnn
 
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 
@@ -19,8 +18,6 @@ UNET_DEVICE_TEST_TOTAL_ITERATIONS = 3
         ((1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
     ],
 )
-@pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
 def test_unet(
@@ -30,10 +27,7 @@ def test_unet(
     encoder_shape,
     temb_shape,
     time_ids_shape,
-    conv_weights_dtype,
-    transformer_weights_dtype,
     iterations,
-    use_program_cache,
     reset_seeds,
 ):
     run_unet_model(
@@ -43,15 +37,13 @@ def test_unet(
         encoder_shape,
         temb_shape,
         time_ids_shape,
-        conv_weights_dtype,
-        transformer_weights_dtype,
         iterations=iterations,
     )
 
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_unet_perf_device():
-    expected_device_perf_cycles_per_iteration = 274_713_570
+    expected_device_perf_cycles_per_iteration = 259_207_833
 
     command = f"pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

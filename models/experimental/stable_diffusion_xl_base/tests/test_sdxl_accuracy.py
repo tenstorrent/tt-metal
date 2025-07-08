@@ -13,6 +13,7 @@ import statistics
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 import json
+from models.utility_functions import profiler
 
 test_demo.__test__ = False
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
@@ -22,12 +23,6 @@ COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d11
 @pytest.mark.parametrize(
     "num_inference_steps",
     ((50),),
-)
-@pytest.mark.parametrize(
-    "classifier_free_guidance",
-    [
-        (True),
-    ],
 )
 @pytest.mark.parametrize(
     "vae_on_device",
@@ -40,11 +35,9 @@ COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d11
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
 def test_accuracy_sdxl(
-    device,
-    use_program_cache,
+    mesh_device,
     is_ci_env,
     num_inference_steps,
-    classifier_free_guidance,
     vae_on_device,
     captions_path,
     coco_statistics_path,
@@ -73,12 +66,10 @@ def test_accuracy_sdxl(
     logger.info(f"Start inference from prompt index: {start_from} to {start_from + num_prompts}")
 
     images = test_demo(
-        device,
-        use_program_cache,
+        mesh_device,
         is_ci_env,
         prompts[start_from : start_from + num_prompts],
         num_inference_steps,
-        classifier_free_guidance,
         vae_on_device,
         evaluation_range,
     )
@@ -106,6 +97,7 @@ def test_accuracy_sdxl(
     print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
 
     data = {
+        "model": "sdxl",  # For compatibility with current processes
         "metadata": {
             "device": "N150",
             "device_vae": vae_on_device,
@@ -113,11 +105,24 @@ def test_accuracy_sdxl(
             "num_prompts": num_prompts,
             "model_name": "sdxl",
         },
-        "metrics": {
-            "average_clip": average_clip_score,
-            "deviation_clip": deviation_clip_score,
-            "fid_score": fid_score,
-        },
+        "benchmarks_summary": [
+            {
+                "device": "N150",
+                "model": "sdxl",
+                "average_denoising_time": profiler.get("denoising_loop"),
+                "average_vae_time": profiler.get("vae_decode"),
+                "average_inference_time": profiler.get("denoising_loop") + profiler.get("vae_decode"),
+                "min_inference_time": min(
+                    i + j for i, j in zip(profiler.times["denoising_loop"], profiler.times["vae_decode"])
+                ),
+                "max_inference_time": max(
+                    i + j for i, j in zip(profiler.times["denoising_loop"], profiler.times["vae_decode"])
+                ),
+                "average_clip": average_clip_score,
+                "deviation_clip": deviation_clip_score,
+                "fid_score": fid_score,
+            }
+        ],
     }
 
     out_root, file_name = "test_reports", "sdxl_test_results.json"

@@ -222,9 +222,9 @@ namespace detail {
 template <typename T>
 class MeshCoordinateValueProxy {
 public:
-    MeshCoordinateValueProxy(const MeshCoordinate* coord, T* value_ptr) : coord_(coord), value_ptr_(value_ptr) {}
+    MeshCoordinateValueProxy(const MeshCoordinate& coord, T* value_ptr) : coord_(coord), value_ptr_(value_ptr) {}
 
-    const MeshCoordinate& coord() const { return *coord_; }
+    const MeshCoordinate& coord() const { return coord_; }
     T& value() { return *value_ptr_; }
     const T& value() const { return *value_ptr_; }
 
@@ -257,7 +257,7 @@ public:
     }
 
 private:
-    const MeshCoordinate* coord_ = nullptr;
+    MeshCoordinate coord_;
     T* value_ptr_ = nullptr;
 };
 
@@ -282,9 +282,15 @@ public:
     const T& at(const MeshCoordinate& coord) const;
 
     // Allows to iterate over the container elements, returning a pair of (coordinate, value reference).
+    // Note: End iterators have undefined coordinates and should not be dereferenced, following C++ iterator conventions.
     class Iterator {
     public:
         using ValueProxy = detail::MeshCoordinateValueProxy<T>;
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = ValueProxy;
+        using difference_type = std::ptrdiff_t;
+        using pointer = ValueProxy*;
+        using reference = ValueProxy&;
 
         Iterator& operator++();
         ValueProxy& operator*() { return value_proxy_; }
@@ -309,6 +315,11 @@ public:
     class ConstIterator {
     public:
         using ValueProxy = detail::MeshCoordinateValueProxy<const T>;
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = ValueProxy;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const ValueProxy*;
+        using reference = const ValueProxy&;
 
         ConstIterator& operator++();
         const ValueProxy& operator*() const { return value_proxy_; }
@@ -390,13 +401,17 @@ MeshContainer<T>::Iterator::Iterator(
     container_(container),
     coord_iter_(coord_iter),
     linear_index_(linear_index),
-    value_proxy_(&(*coord_iter_), &container_->values_[linear_index_]) {}
+    value_proxy_(
+        coord_iter_ != container_->coord_range_.end() ? *coord_iter_ : MeshCoordinate::zero_coordinate(container->shape().dims()),
+        linear_index_ < container_->values_.size() ? &container_->values_[linear_index_] : nullptr) {}
 
 template <typename T>
 typename MeshContainer<T>::Iterator& MeshContainer<T>::Iterator::operator++() {
     ++linear_index_;
     ++coord_iter_;
-    value_proxy_ = ValueProxy(&(*coord_iter_), &container_->values_[linear_index_]);
+    value_proxy_ = ValueProxy(
+        coord_iter_ != container_->coord_range_.end() ? *coord_iter_ : MeshCoordinate::zero_coordinate(container_->shape().dims()),
+        linear_index_ < container_->values_.size() ? &container_->values_[linear_index_] : nullptr);
     return *this;
 }
 
@@ -406,13 +421,17 @@ MeshContainer<T>::ConstIterator::ConstIterator(
     container_(container),
     coord_iter_(coord_iter),
     linear_index_(linear_index),
-    value_proxy_(&(*coord_iter_), &container_->values_[linear_index_]) {}
+    value_proxy_(
+        coord_iter_ != container_->coord_range_.end() ? *coord_iter_ : MeshCoordinate::zero_coordinate(container->shape().dims()),
+        linear_index_ < container_->values_.size() ? &container_->values_[linear_index_] : nullptr) {}
 
 template <typename T>
 typename MeshContainer<T>::ConstIterator& MeshContainer<T>::ConstIterator::operator++() {
     ++linear_index_;
     ++coord_iter_;
-    value_proxy_ = ValueProxy(&(*coord_iter_), &container_->values_[linear_index_]);
+    value_proxy_ = ValueProxy(
+        coord_iter_ != container_->coord_range_.end() ? *coord_iter_ : MeshCoordinate::zero_coordinate(container_->shape().dims()),
+        linear_index_ < container_->values_.size() ? &container_->values_[linear_index_] : nullptr);
     return *this;
 }
 

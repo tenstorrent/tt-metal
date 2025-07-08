@@ -73,7 +73,13 @@ class TtLinearParameters:
             bias = bias.unsqueeze(0)
 
         if shard_dim in [0, -2]:
-            bias_mm = _ShardBias(device)
+            # Shard the bias of a linear operation on the first dimension.
+            # A single device receive the bias as is, while the other ones receive zero tensors of the same
+            # shape so that the bias is not added multiple times after gathering.
+            mesh_height, mesh_width = device.shape
+            zeros = torch.zeros_like(bias)
+            bias = torch.cat([bias] + [zeros] * (mesh_width - 1), dim=0)
+            bias_mm = ttnn.ShardTensor2dMesh(device, mesh_shape=(mesh_height, mesh_width), dims=(None, 0))
         elif shard_dim in [1, -1]:
             bias_mm = ttnn.ShardTensorToMesh(device, 1)
         else:
@@ -286,30 +292,3 @@ def sd_linear(
         output = output.reshape([output.shape[0], 1, 1, output.shape[-1]])
 
     return output
-
-
-class _ShardBias(ttnn.TensorToMesh):
-    """A mesh mapper for sharding the bias of a linear operation.
-
-    This mesh mapper is intended for sharding the bias of a linear operation on the first dimension.
-    A single device receive the bias as is, while the other ones receive zero tensors of the same
-    shape so that the bias is not added multiple times after gathering.
-    """
-
-    def __init__(self, mesh_device: ttnn.MeshDevice) -> None:
-        super().__init__(mesh_device)
-
-    def map(self, tensor: torch.Tensor) -> dict[int, ttnn.Tensor]:
-        mesh_height, mesh_width = self.mesh_device.shape
-
-        zeros = torch.zeros_like(tensor)
-        return ([tensor] + [zeros] * (mesh_width - 1)) * mesh_height
-
-    def config(self) -> dict[str, str]:
-        mesh_height, mesh_width = self.mesh_device.shape
-
-        return {
-            "strategy": "shard_2d",
-            "mesh_shape_y": str(mesh_height),
-            "mesh_shape_x": str(mesh_width),
-        }

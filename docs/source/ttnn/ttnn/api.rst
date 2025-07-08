@@ -400,7 +400,7 @@ Reduction
    :nosignatures:
    :template: function.rst
 
-   ttnn.experimental.cumprod
+   ttnn.cumprod
    ttnn.max
    ttnn.mean
    ttnn.min
@@ -411,7 +411,7 @@ Reduction
    ttnn.prod
    ttnn.topk
    ttnn.experimental.sort
-   ttnn.experimental.cumsum
+   ttnn.cumsum
 
 Data Movement
 =============

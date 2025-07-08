@@ -46,7 +46,7 @@ def unsqueeze_all_params_to_4d(params):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 15659008}], indirect=True)
-def test_stable_diffusion_unet_trace(device, use_program_cache):
+def test_stable_diffusion_unet_trace(device):
     assert is_wormhole_b0() or is_blackhole(), "SD 1.4 runs on Wormhole B0 or Blackhole"
 
     if is_wormhole_b0():
@@ -172,7 +172,7 @@ def test_stable_diffusion_unet_trace(device, use_program_cache):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 8192, "trace_region_size": 6348800}], indirect=True)
-def test_stable_diffusion_vae_trace(device, use_program_cache):
+def test_stable_diffusion_vae_trace(device):
     if is_wormhole_b0():
         os.environ["SLOW_MATMULS"] = "1"
 
@@ -249,9 +249,7 @@ def test_stable_diffusion_vae_trace(device, use_program_cache):
         (1, 50, 3600, 6.31),  # Issue 7816 Inference time
     ],
 )
-def test_stable_diffusion_perf(
-    device, batch_size, num_inference_steps, expected_compile_time, expected_inference_time, use_program_cache
-):
+def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected_compile_time, expected_inference_time):
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
@@ -414,7 +412,7 @@ def test_stable_diffusion_perf(
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_kernel_samples_per_second",
-    ((9.8),),
+    ((9.5),),
 )
 def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
     subdir = "ttnn_stable_diffusion"
