@@ -1,9 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-# SPDX-License-Identifier: Apache-2.0
-
 # Multihost mesh rank binding configuration for testing
-# Basic configuration with 2 processes on a single mesh
-
+# Basic configuration with 2 processes on a single loudbox
+# Rank 0: PCIe Devices {0,1}
+# Rank 1: PCIe Devices {2,3}
 rank_bindings:
   - rank: 0
     mesh_id: 0

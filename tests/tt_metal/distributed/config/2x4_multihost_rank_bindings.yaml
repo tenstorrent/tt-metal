@@ -1,9 +1,3 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-# SPDX-License-Identifier: Apache-2.0
-
-# Multihost mesh rank binding configuration for testing
-# Basic configuration with 2 hosts on a single mesh
-
 rank_bindings:
   - rank: 0
     mesh_id: 0
