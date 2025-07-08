@@ -86,7 +86,7 @@ static Tensor pool2d_invoke(
                 input_tensor.device()->compute_with_storage_grid_size(),
                 ShardOrientation::ROW_MAJOR,
                 false,
-                false,
+                is_out_tiled,  // set shard height to tile multiple if output is tiled
                 false,
                 0);
         } else {  // auto-sharding

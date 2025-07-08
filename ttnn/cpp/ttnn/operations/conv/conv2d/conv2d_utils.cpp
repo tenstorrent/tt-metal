@@ -158,6 +158,8 @@ ParallelConfig determine_parallel_config(
     // calculate num_core_nhw and the grid
     uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
     CoreRangeSet grid;
+    printf("CONV out_nhw_ntiles: %d\n", out_nhw_ntiles);
+    printf("CONV max_num_cores: %d\n", max_num_cores);
     if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding_and_mult(
             out_nhw_ntiles, max_num_cores, act_block_h_override_ntiles);
