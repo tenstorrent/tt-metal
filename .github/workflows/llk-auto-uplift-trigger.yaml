@@ -78,16 +78,13 @@ jobs:
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Ensure we have latest main
-        run: |
-          # Fetch latest main and stay on it
-          git fetch origin main
-          git checkout main
-          git reset --hard origin/main
-
-          # Initialize and update submodules to get latest state
-          git submodule init
-          git submodule update
-          echo "✅ Updated to latest main with fresh submodules"
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          clean: true
 
       - name: Update submodule
         id: update-submodule
