@@ -65,18 +65,15 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
 
     // Compute writes transposed tile (loopback)
     const uint32_t intermed_cb_id0 = tt::CBIndex::c_24;
-    const auto intermed_cb0 =
-        create_circular_buffer(intermed_cb_id0, cb_size, intermediary_tile_size, intermediary_format);
+    create_circular_buffer(intermed_cb_id0, cb_size, intermediary_tile_size, intermediary_format);
 
     // Compute writes reduced tile for writer
     const uint32_t intermed_cb_id1 = tt::CBIndex::c_25;
-    const auto intermed_cb1 =
-        create_circular_buffer(intermed_cb_id1, cb_size, intermediary_tile_size, intermediary_format);
+    create_circular_buffer(intermed_cb_id1, cb_size, intermediary_tile_size, intermediary_format);
 
     // Writer concats and writes back to compute
     const uint32_t intermed_cb_id2 = tt::CBIndex::c_26;
-    const auto intermed_cb2 =
-        create_circular_buffer(intermed_cb_id2, cb_size, intermediary_tile_size, intermediary_format);
+    create_circular_buffer(intermed_cb_id2, cb_size, intermediary_tile_size, intermediary_format);
 
     // Compute transposes and writes back to writer
     const uint32_t output_cb_id = tt::CBIndex::c_16;
