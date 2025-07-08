@@ -96,7 +96,7 @@ TEST_P(MeshDeviceReshapeRoundtripTest, ReshapeBetweenConfigurations) {
     if (old_shape.mesh_size() != new_shape.mesh_size()) {
         GTEST_SKIP() << "Device counts don't match; we test this in InvalidReshapeDimensions";
     }
-    if (is_line_topology(old_shape) or is_line_topology(new_shape)) {
+    if (old_shape.is_line_topology() or new_shape.is_line_topology()) {
         GTEST_SKIP() << "Either old or new shape is in line configuration; we test this in From1x4To2x2Invalid";
     }
 
