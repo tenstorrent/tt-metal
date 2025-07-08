@@ -68,9 +68,7 @@ public:
 
     void TearDown() {
         device_open = false;
-        for (auto [device_id, device_ptr] : devices_) {
-            tt::tt_metal::CloseDevice(device_ptr);
-        }
+        tt::tt_metal::detail::CloseDevices(devices_);
     }
 
     std::map<chip_id_t, tt_metal::IDevice*> devices_;

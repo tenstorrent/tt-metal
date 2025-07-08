@@ -18,6 +18,10 @@ namespace fabric_router_tests {
 
 class InterMeshRoutingFabric2DFixture : public BaseFabricFixture {
 public:
+    // This test fixture closes/opens devices on each test
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         if (not system_supported()) {
             GTEST_SKIP() << "Skipping since this is not a supported system.";
@@ -43,12 +47,12 @@ public:
         TT_FATAL(
             *(tt::tt_metal::MetalContext::instance().get_distributed_context().size()) > 1,
             "Multi-Host Routing tests require multiple hosts in the system");
-        this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
+        this->DoSetUpTestSuite(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
     }
 
     void TearDown() override {
         if (system_supported()) {
-            BaseFabricFixture::TearDown();
+            BaseFabricFixture::DoTearDownTestSuite();
         }
     }
 

@@ -11,17 +11,32 @@
 namespace tt::tt_metal {
 
 class DebugToolsFixture : public DispatchFixture {
-   protected:
+protected:
     bool watcher_previous_enabled;
+
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
+    // This fixture closes/reopens the device on each test
+    void SetUp() override {
+        DispatchFixture::SetUpTestSuite();
+        DispatchFixture::SetUp();
+    }
 
     void TearDown() override {
         DispatchFixture::TearDown();
+        DispatchFixture::TearDownTestSuite();
     }
 
     template <typename T>
     void RunTestOnDevice(const std::function<void(T*, IDevice*)>& run_function, IDevice* device) {
         auto run_function_no_args = [=,this]() { run_function(static_cast<T*>(this), device); };
         DispatchFixture::RunTestOnDevice(run_function_no_args, device);
+    }
+
+public:
+    void EarlyTeardown() {
+        DispatchFixture::TearDown();
     }
 };
 

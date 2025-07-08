@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device_pool.hpp>
@@ -15,20 +16,31 @@ namespace tt::tt_metal {
 
 class GalaxyFixture : public DispatchFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     bool SkipTestSuiteIfNotGalaxyMotherboard() {
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        if (!(this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices >= 32)) {
+        if (!(tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) == tt::ARCH::WORMHOLE_B0 &&
+              num_devices >= 32)) {
+            log_info(tt::LogTest, "Not a Galaxy motherboard");
             return true;
         }
         return false;
     }
 
     void SetUp() override {
-        this->DetectDispatchMode();
         if (this->SkipTestSuiteIfNotGalaxyMotherboard()) {
-            GTEST_SKIP() << "Not a galaxy mobo";
+            GTEST_SKIP();
         }
         DispatchFixture::SetUp();
+    }
+
+    void TearDown() override {
+        if (this->SkipTestSuiteIfNotGalaxyMotherboard()) {
+            return;
+        }
+        DispatchFixture::TearDownTestSuite();
     }
 
 private:
@@ -37,30 +49,60 @@ private:
 
 class TGFixture : public GalaxyFixture {
 protected:
-    void SkipTestSuiteIfNotTG() {
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
+    bool SkipTestSuiteIfNotTG() {
         if (this->SkipTestSuiteIfNotGalaxyMotherboard()) {
-            GTEST_SKIP() << "Not a galaxy mobo";
+            return true;
         }
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         const size_t num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
         if (!(num_devices == 32 && num_pcie_devices == 4)) {
-            GTEST_SKIP() << "This test can only run on TG";
+            log_info(tt::LogTest, "Not a TG");
+            return true;
         }
+        return false;
     }
+
+    void SetUp() override {
+        if (this->SkipTestSuiteIfNotTG()) {
+            GTEST_SKIP();
+        }
+        DispatchFixture::SetUp();
+    }
+
+    void TearDown() override { DispatchFixture::TearDownTestSuite(); }
 };
 
-class TGGFixture : public GalaxyFixture {
+// TGG is no longer supported
+class DISABLED_TGGFixture : public GalaxyFixture {
 protected:
-    void SkipTestSuiteIfNotTGG() {
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
+    bool SkipTestSuiteIfNotTGG() {
         if (this->SkipTestSuiteIfNotGalaxyMotherboard()) {
-            GTEST_SKIP() << "Not a galaxy mobo";
+            return true;
         }
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         const size_t num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
         if (!(num_devices == 64 && num_pcie_devices == 8)) {
-            GTEST_SKIP() << "This test can only run on TGG";
+            log_info(tt::LogTest, "Not a TGG");
+            return true;
         }
+
+        return false;
     }
+
+    void SetUp() override {
+        if (this->SkipTestSuiteIfNotTGG()) {
+            GTEST_SKIP();
+        }
+        DispatchFixture::SetUp();
+    }
+
+    void TearDown() override { DispatchFixture::TearDownTestSuite(); }
 };
 
 }  // namespace tt::tt_metal
