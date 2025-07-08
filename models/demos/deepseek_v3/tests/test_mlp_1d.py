@@ -16,6 +16,7 @@ import ttnn
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP
 from models.demos.deepseek_v3.tt.mlp_1d import MLP1D
+from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
 
 
@@ -120,14 +121,17 @@ def test_forward_pass(
     # Setup: Convert weights and get weight_config
     weight_config = MLP1D.convert_weights(hf_config, hf_state_dict, temp_dir, mesh_device)
 
-    # Generate appropriate configs
-    model_prefill_config = MLP1D.prefill_model_config(hf_config, mesh_device)
-    model_decode_config = MLP1D.decode_model_config(hf_config, mesh_device)
+    # Generate appropriate config
+    if mode == "prefill":
+        model_config = MLP1D.prefill_model_config(hf_config, mesh_device)
+    else:
+        model_config = MLP1D.decode_model_config(hf_config, mesh_device)
+
+    # Create a new model state
+    model_state = MLP1D.create_state(hf_config, mesh_device=mesh_device)
 
     # Create RunConfig using both weight_config and model_config
-    run_prefill_config, run_decode_config = MLP1D.run_config(
-        model_prefill_config, model_decode_config, weight_config, mesh_device
-    )
+    run_config = create_run_config(model_config, weight_config, model_state)
 
     # Create input tensor
     torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
@@ -147,13 +151,13 @@ def test_forward_pass(
 
     # TTNN forward pass
     if mode == "prefill":
-        tt_input = ttnn.to_memory_config(tt_input, run_prefill_config["input_memory_config"])
-        tt_output = MLP1D.forward_prefill(tt_input, run_prefill_config)
-        expected_output_memory_config = run_prefill_config["output_memory_config"]
+        tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+        tt_output = MLP1D.forward_prefill(tt_input, run_config)
+        expected_output_memory_config = run_config["output_memory_config"]
     else:
-        tt_input = ttnn.to_memory_config(tt_input, run_decode_config["input_memory_config"])
-        tt_output = MLP1D.forward_decode(tt_input, run_decode_config)
-        expected_output_memory_config = run_decode_config["output_memory_config"]
+        tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+        tt_output = MLP1D.forward_decode(tt_input, run_config)
+        expected_output_memory_config = run_config["output_memory_config"]
 
     # Verify output memory config matches expected
     actual_output_memory_config = tt_output.memory_config()
