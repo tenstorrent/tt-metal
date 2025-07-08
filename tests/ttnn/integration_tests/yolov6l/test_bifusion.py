@@ -50,10 +50,11 @@ def test_yolov6l_bifusion(device, reset_seeds):
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    output = ttnn_model([ttnn_input_0, ttnn_input_1, ttnn_input_2])
+    output, out_h, out_w = ttnn_model([ttnn_input_0, ttnn_input_1, ttnn_input_2])
 
     torch_output = model([torch_input_0, torch_input_1, torch_input_2])
 
     output = ttnn.to_torch(output)
+    output = output.reshape(1, out_h, out_w, output.shape[-1])
     output = output.permute(0, 3, 1, 2)
     assert_with_pcc(torch_output, output, pcc=0.99)

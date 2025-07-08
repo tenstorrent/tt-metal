@@ -56,11 +56,11 @@ class TtCSPRepBiFPANNeck:
         (input_tensor_3, input_tensor_2, input_tensor_1, input_tensor_0) = input_list
 
         fpn_out0 = self.reduce_layer0(input_tensor_0)
-        f_concat_layer0 = self.Bifusion0([fpn_out0, input_tensor_1, input_tensor_2])
+        f_concat_layer0, _, _ = self.Bifusion0([fpn_out0, input_tensor_1, input_tensor_2])
         f_out0 = self.Rep_p4(f_concat_layer0)
 
         fpn_out1 = self.reduce_layer1(f_out0)
-        f_concat_layer1 = self.Bifusion1([fpn_out1, input_tensor_2, input_tensor_3])
+        f_concat_layer1, _, _ = self.Bifusion1([fpn_out1, input_tensor_2, input_tensor_3])
         pan_out2 = self.Rep_p3(f_concat_layer1)
 
         down_feat1 = self.downsample2(pan_out2)

@@ -27,8 +27,8 @@ class TtBiFusion:
             conv=model_params.cv3.block.conv,
             conv_pth=parameters.cv3.block.conv,
             activation="relu",
-            reshape=True,
             deallocate_activation=True,
+            return_height_width=True,
         )
         self.upsample = Yolov6x_Conv_T_2D(
             model_params.upsample.upsample_transpose,
@@ -53,5 +53,5 @@ class TtBiFusion:
         conv1 = ttnn.sharded_to_interleaved(conv1, ttnn.L1_MEMORY_CONFIG)
         downsample = ttnn.sharded_to_interleaved(downsample, ttnn.L1_MEMORY_CONFIG)
         output = ttnn.concat([conv_t, conv1, downsample], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        output = self.cv3(output)
-        return output
+        output, out_h, out_w = self.cv3(output)
+        return output, out_h, out_w
