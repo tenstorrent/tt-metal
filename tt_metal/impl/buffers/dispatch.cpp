@@ -694,21 +694,9 @@ void write_sharded_buffer_to_core(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     const CoreCoord core,
     CoreType dispatch_core_type) {
-    // // Skip writing the padded pages along the bottom
-    // // Currently since writing sharded tensors uses write_linear, we write the padded pages on width
-    // // Alternative write each page row into separate commands, or have a strided linear write
-    // dispatch_params.core_num_pages_remaining_to_write = core_page_mapping.num_pages;
-
-    // // reset dispatch params for core
-    // uint32_t bank_base_address = buffer.address();
-    // bank_base_address += core_page_mapping.device_start_page * buffer.aligned_page_size();
-    // if (buffer.is_dram()) {
-    //     bank_base_address += buffer.device()->allocator()->get_bank_offset(
-    //         BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
-    // }
-
-    // dispatch_params.core_page_mapping_it = core_page_mapping.begin();
-    // dispatch_params.core = core;
+    // Skip writing the padded pages along the bottom
+    // Currently since writing sharded tensors uses write_linear, we write the padded pages on width
+    // Alternative write each page row into separate commands, or have a strided linear write
 
     dispatch_params.reset_params_for_core(core, core_page_mapping);
 
@@ -730,14 +718,8 @@ void write_sharded_buffer_to_core(
 
         log_debug(tt::LogDispatch, "EnqueueWriteBuffer for command queue {}", dispatch_params.cq_id);
 
-        // calculate dispatch params before write
-        // dispatch_params.pages_per_txn = std::min(dispatch_params.core_num_pages_remaining_to_write,
-        // (uint32_t)num_pages_available_in_cq); dispatch_params.address =
-        //     bank_base_address + (core_page_mapping.num_pages - dispatch_params.core_num_pages_remaining_to_write) *
-        //     dispatch_params.page_size_to_write;
         dispatch_params.calculate_params_for_write_transaction(num_pages_available_in_cq);
         issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);
-        // update dispatch params after write
         dispatch_params.update_params_after_write_transaction();
     }
 }
