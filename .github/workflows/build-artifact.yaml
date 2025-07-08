@@ -323,7 +323,6 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: /work
 
     steps:
       - name: Check Redis credentials
