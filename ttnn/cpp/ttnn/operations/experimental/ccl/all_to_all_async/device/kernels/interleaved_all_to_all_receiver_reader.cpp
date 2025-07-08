@@ -101,7 +101,7 @@ void kernel_main() {
                 uint32_t current_chunk_id = packet_id / chunk_granularity;
                 uint32_t wait_chunk_id = current_chunk_id + 1;  // Chunks are 1-based
                 // Ensure that current chunk has been sent
-                while (*global_semaphore_ptr < wait_chunk_id);
+                noc_semaphore_wait_min(global_semaphore_ptr, wait_chunk_id);
 
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t global_id = sender_relative_ring_id + packet_id * NUM_SENDERS;

@@ -163,7 +163,7 @@ void kernel_main() {
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
 
     // 3. wait for mcast output ready semaphore
-    while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
+    noc_semaphore_waitreinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr, out_ready_sem_wait_value);
 
     // loop over mcast ranges
     for (uint32_t i = 0; i < num_mcast_ranges; i++) {
