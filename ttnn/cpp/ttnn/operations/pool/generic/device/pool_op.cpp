@@ -122,10 +122,20 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
             mem_config.with_shard_spec(tt::tt_metal::ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR});
     }
 
+    tt::tt_metal::Layout output_layout = is_out_tiled ? tt::tt_metal::Layout::TILE : tt::tt_metal::Layout::ROW_MAJOR;
+    printf("POOL OP output layout: %d\n", (int)output_layout);
+
     return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
-            output_dtype, tt::tt_metal::PageConfig(input.layout()), mem_config, output_shape, padded_output_shape));
+            output_dtype,
+            output_layout,
+            mem_config,
+            output_shape,
+            padded_output_shape));  // THIS BREAKS FOR NOW, BUT SHOULD BE MADE TO WORK
+                                    // tt::tt_metal::TensorLayout::fromPaddedShape(
+    //     output_dtype, tt::tt_metal::PageConfig(input.layout()), mem_config, output_shape, padded_output_shape); //
+    //     THIS WORKS FOR NOW
 }
 
 Pool2D::tensor_return_value_t Pool2D::create_output_tensors(

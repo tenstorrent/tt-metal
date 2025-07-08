@@ -57,6 +57,8 @@ static Tensor pool2d_invoke(
 
     printf("GENERIC output shape: %d, %d, %d, %d\n", output_shape[0], output_shape[1], output_shape[2], channels);
 
+    printf("GENERIC input layout: %d\n", (int)(input_tensor.layout()));
+
     // pool output is row major
     bool is_in_tiled = input_tensor.dtype() == DataType::BFLOAT8_B;  // input tiled for bfp8_b
     bool is_out_tiled = is_in_tiled;                                 // output tiled for bfp8_b
@@ -194,6 +196,7 @@ static Tensor pool2d_invoke(
         pre_allocate_size);
 
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {
+        printf("TO MEM CONFIG CALLED\n");
         output_tensor = ttnn::to_memory_config(output_tensor, memory_config.value(), std::nullopt);
     }
 
