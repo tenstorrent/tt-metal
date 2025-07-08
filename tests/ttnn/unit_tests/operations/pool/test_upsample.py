@@ -66,27 +66,31 @@ def get_shard_grid_from_num_cores(device, ncores: Union[int, Tuple[int, int]]) -
         [2, 1280, 8, 8],  # 512x512
         [2, 1280, 16, 16],
         [2, 1280, 16, 16],
+        [1, 256, 28, 28],
+        [1, 512, 14, 14],
     ],
 )
 @pytest.mark.parametrize("scale_h", [2])
 @pytest.mark.parametrize("scale_w", [2])
-def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
+@pytest.mark.parametrize("mode", ["nearest", "bilinear"])
+def test_upsample_single_core(device, input_shapes, mode, scale_h, scale_w):
     batch_size, height, width, num_channels = input_shapes
+    if mode == "bilinear":
+        pytest.skip("Disabled until single core bilinear mode is supported (#18399)")
 
     torch.manual_seed(0)
     input = torch.rand(input_shapes, dtype=torch.bfloat16)
-    tt_input = input.permute(0, 3, 1, 2)
+    tt_input = input.permute(0, 2, 3, 1)
 
     scale_factor = (scale_h, scale_w)
-    m = nn.Upsample(scale_factor=scale_factor, mode="nearest")
-    torch_result = m(tt_input)
-    torch_result = torch_result.permute(0, 2, 3, 1)
+    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode=mode)
+    torch_result = torch_upsample(input)
 
-    ## ttnn uses NHWC, so need to set scale_factor_c = 1
     scale_factor = (scale_h, scale_w)
-    input_tensor = ttnn.from_torch(input, device=device)
-    output_tensor = ttnn.upsample(input_tensor, scale_factor)
+    input_tensor = ttnn.from_torch(tt_input, device=device)
+    output_tensor = ttnn.upsample(input_tensor, scale_factor, mode=mode)
     output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = output_tensor.permute(0, 3, 1, 2)
 
     assert_with_pcc(torch_result, output_tensor)
 
@@ -338,6 +342,8 @@ def test_upsample_multicore_corerange(
         (1, 72, 8, 8, 2, 2),
         (1, 288, 8, 8, 2, 2),
         (1, 1024, 8, 8, 2, 2),
+        (1, 256, 28, 28, 2, 2),
+        (1, 512, 14, 14, 2, 2),
     ),
 )
 @pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT])
