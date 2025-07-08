@@ -10,8 +10,7 @@ from loguru import logger
 def main():
     torch.manual_seed(0)
 
-    device_params = {"l1_small_size": 8192}
-    device = ttnn.CreateDevice(device_id=0, **device_params)
+    device = ttnn.open_device(device_id=0, l1_small_size=8192)
 
     def forward(
         input_tensor: ttnn.Tensor,
