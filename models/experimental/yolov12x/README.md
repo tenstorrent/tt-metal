@@ -25,3 +25,12 @@ Use the following command to run the Yolo12x model with pre-trained weights :
 ```sh
 pytest models/experimental/yolov12x/tests/pcc/test_ttnn_yolov12x.py::test_yolov12x[pretrained_weight_true-0]
 ```
+### Performant Model with Trace+2CQ
+
+- end-2-end perf is 14 FPS
+
+Use the following command to run the performant Model with Trace+2CQs:
+
+```
+pytest models/experimental/yolov12x/tests/test_e2e_performant.py
+```
