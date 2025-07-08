@@ -275,18 +275,23 @@ struct ConsumedMemoryBytesPerBankTestParams {
     size_t expected_consumed_memory_bytes_per_bank = 0;
 };
 
-class ConsumedMemoryBytesPerBankTests : public ttnn::TTNNFixtureWithDevice,
-                                        public ::testing::WithParamInterface<ConsumedMemoryBytesPerBankTestParams> {};
+class ConsumedMemoryBytesPerBankTests : public ::testing::TestWithParam<ConsumedMemoryBytesPerBankTestParams> {};
 
 TEST_P(ConsumedMemoryBytesPerBankTests, TestConsumedMemoryBytesPerBank) {
-    if (device_->arch() != tt::ARCH::WORMHOLE_B0 || device_->compute_with_storage_grid_size() != CoreCoord{8, 8} ||
-        device_->num_dram_channels() != 12) {
-        GTEST_SKIP() << "This test is only supported on Wormhole N150";
+    const auto& params = GetParam();
+
+    size_t page_alignment = 0;
+    size_t num_banks = 0;
+    if (params.tensor_layout.get_memory_config().buffer_type() == BufferType::L1) {
+        num_banks = 64;
+        page_alignment = 16;
+    } else {
+        num_banks = 12;
+        page_alignment = 32;
     }
 
-    const auto& params = GetParam();
     EXPECT_EQ(
-        params.tensor_layout.compute_consumed_memory_bytes_per_bank(params.shape, *device_),
+        params.tensor_layout.compute_consumed_memory_bytes_per_bank(params.shape, page_alignment, num_banks),
         params.expected_consumed_memory_bytes_per_bank);
 }
 
@@ -441,4 +446,30 @@ INSTANTIATE_TEST_SUITE_P(
                         .grid = CoreRangeSet(CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}),
                     })),
             .expected_consumed_memory_bytes_per_bank = 63 * 2 * 32 * 2 * 32 * 2,
+        },
+        ConsumedMemoryBytesPerBankTestParams{
+            .shape = Shape{5, 17, 4 * 32, 4 * 32},
+            .tensor_layout = TensorLayout(
+                DataType::UINT8,
+                PageConfig(Layout::TILE),
+                MemoryConfig(
+                    BufferType::L1,
+                    NdShardSpec{
+                        .shard_shape = Shape{5, 1, 32, 32},
+                        .grid = CoreRangeSet(CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}),
+                    })),
+            .expected_consumed_memory_bytes_per_bank = 5 * 5 * 32 * 32,
+        },
+        ConsumedMemoryBytesPerBankTestParams{
+            .shape = Shape{5, 17, 4 * 32, 4 * 32},
+            .tensor_layout = TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::TILE),
+                MemoryConfig(
+                    BufferType::L1,
+                    NdShardSpec{
+                        .shard_shape = Shape{5, 1, 32, 32},
+                        .grid = CoreRangeSet(CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}),
+                    })),
+            .expected_consumed_memory_bytes_per_bank = 5 * 5 * 32 * 32 * 2,
         }));
