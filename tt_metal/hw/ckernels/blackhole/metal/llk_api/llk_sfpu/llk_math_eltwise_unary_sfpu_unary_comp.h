@@ -92,7 +92,7 @@ inline void llk_math_eltwise_unary_sfpu_unary_lt(uint dst_index, uint param0, in
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_ge_int32(
     uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::_calculate_comp_unary_int_<APPROXIMATE, SfpuType::unary_ge>, dst_index, vector_mode, param0);
 }
 
@@ -103,7 +103,7 @@ inline void llk_math_eltwise_unary_sfpu_unary_ge_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_ge(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::_calculate_comp_unary_<APPROXIMATE, SfpuType::unary_ge>, dst_index, vector_mode, param0);
 }
 
@@ -111,7 +111,7 @@ inline void llk_math_eltwise_unary_sfpu_unary_ge(uint dst_index, uint param0, in
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_le_int32(
     uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::_calculate_comp_unary_int_<APPROXIMATE, SfpuType::unary_le>, dst_index, vector_mode, param0);
 }
 
@@ -122,7 +122,7 @@ inline void llk_math_eltwise_unary_sfpu_unary_le_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_le(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::_calculate_comp_unary_<APPROXIMATE, SfpuType::unary_le>, dst_index, vector_mode, param0);
 }
 }  // namespace ckernel
