@@ -40,10 +40,9 @@ def test_mistral_vision_tower(mesh_device, use_program_cache, reset_seeds):
     ##### Reference model output (Torch) #####
     reference_model = model_args.reference_vision_model()
     reference_model.load_state_dict(partial_state_dict)
-    reference_output = reference_model(input_tensor, image_sizes=[(H, W)])[0]
+    reference_output = reference_model(input_tensor, image_sizes=[(H, W)])
 
-    print("reference_output:", reference_output.shape)
-
+    reference_output = reference_output.last_hidden_state
     ##### TT Model: MistralVisionTower #####
     vision_model = MistralVisionTower(
         mesh_device=mesh_device,
@@ -57,16 +56,11 @@ def test_mistral_vision_tower(mesh_device, use_program_cache, reset_seeds):
     reference_submodule = model_args.reference_vision_rot_emb()
     reference_submodule.load_state_dict(submodule_partial_state_dict)
 
-    tt_output = vision_model(input_tensor, reference_submodule)[0]
-    reference_output = reference_output.to(torch.bfloat16)
-    print("reference_output:", reference_output)
-    print("tt_output:", tt_output)
-    print("tt_output:", tt_output.shape)
-    out = ttnn.from_device(tt_output)
-    out = ttnn.to_torch(out).squeeze(0)
-    print("tt_output:", out.shape)
-    passing, pcc_message = comp_pcc(reference_output, out)
+    tt_output = vision_model(input_tensor)  # [0]
+    tt_output = ttnn.from_device(tt_output)
+    tt_output = ttnn.to_torch(tt_output).squeeze(0)
+    passing, pcc_message = comp_pcc(reference_output, tt_output)
 
-    logger.info(comp_allclose(reference_output, out))
+    logger.info(comp_allclose(reference_output, tt_output))
     logger.info(f"PCC: {pcc_message}")
     assert passing, f"PCC below {pcc_required}. {pcc_message}"

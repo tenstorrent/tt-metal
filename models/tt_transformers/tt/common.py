@@ -79,6 +79,32 @@ def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
         return None
     else:
         raise ValueError(f"Unexpected RoPE scaling type: {rope_scaling_type}")
+
+def generate_block_attention_mask_tt(patch_embeds_list, tensor, tt_device):
+    tensor = ttnn.to_torch(tensor)
+    device = tensor.device
+    dtype = tensor.dtype
+    seq_len = tensor.shape[1]
+    d_min = torch.finfo(dtype).min
+    causal_mask = torch.full((seq_len, seq_len), fill_value=d_min, dtype=dtype, device=device)
+
+    block_end_idx = torch.tensor(patch_embeds_list).cumsum(-1)
+    block_start_idx = torch.tensor([0] + patch_embeds_list[:-1]).cumsum(-1)
+    for start, end in zip(block_start_idx, block_end_idx):
+        causal_mask[start:end, start:end] = 0
+
+    causal_mask = causal_mask[None, None, :, :].expand(tensor.shape[0], 1, -1, -1)
+
+    causal_mask_tt = ttnn.from_torch(
+        causal_mask,
+        device=tt_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return causal_mask_tt
+
+
 def position_ids_in_meshgrid_tt(tt_patch_embeds_list, max_width, device):
     position_ids_tt = []
     for tt_patch in tt_patch_embeds_list:

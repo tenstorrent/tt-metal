@@ -8,11 +8,11 @@ from models.experimental.mistral_24b.tt.vision_conv2d import TtMistralConv2dPatc
 from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
-from models.tt_transformers.tt.common import position_ids_in_meshgrid_tt
+from models.tt_transformers.tt.common import position_ids_in_meshgrid_tt, generate_block_attention_mask_tt
 from models.experimental.mistral_24b.tt.vision_rope import VisionRotarySetup as RotarySetup
 
-from models.utility_functions import comp_allclose, comp_pcc
-from loguru import logger
+from models.experimental.mistral_24b.tt.vision_pixtral_transformer import TtPixtralTransformer
+import torch
 
 
 class MistralVisionTower(LightweightModule):
@@ -45,6 +45,7 @@ class MistralVisionTower(LightweightModule):
         self.n_global_layers = configuration.vision_n_global_layers
         self.max_seq_len = configuration.max_seq_len
         self.return_intermediate = return_intermediate
+        self.n_layers = configuration.vision_n_layers
 
         in_channels, out_channels, kernel_size, stride, bias = (
             3,
@@ -95,6 +96,8 @@ class MistralVisionTower(LightweightModule):
         print("dim:", dim)
         print("num_patches_per_dim:", num_patches_per_dim)
         print("num_patches:", num_patches)
+        print("self.n_layers:", self.n_layers)
+        print("configuration.n_layers:", configuration.vision_n_layers)
 
         self.patch_positional_embedding = RotarySetup(
             self.mesh_device,
@@ -109,7 +112,17 @@ class MistralVisionTower(LightweightModule):
             datatype=dtype,
         )
 
-    def forward(self, input_tensor, reference_submodule):
+        self.transformer = TtPixtralTransformer(
+            mesh_device=self.mesh_device,
+            state_dict=self.state_dict,
+            state_dict_prefix=f"{state_dict_prefix}transformer.",
+            weight_cache_path=configuration.weight_cache_path(dtype),
+            dtype=self.dtype,
+            configuration=configuration,
+            layers=self.n_layers,
+        )
+
+    def forward(self, input_tensor):
         """
         input_tensor shape: (B, C, H, W)
         """
@@ -149,29 +162,17 @@ class MistralVisionTower(LightweightModule):
             max_width=self.config.vision_image_size // self.config.vision_patch_size,
             device=self.mesh_device,
         )
-        import torch
 
-        refpatch_embeds = ttnn.to_torch(patch_embeds)
         position_ids = ttnn.to_torch(position_ids).to(torch.long)
-
-        ref_output = reference_submodule(refpatch_embeds, position_ids)
-        refcos, refsin = ref_output
-        print("ref cos shape:", refcos)
-        print("ref sin shape:", refsin.shape)
-
         position_embeddings = self.patch_positional_embedding.get_rot_mats(position_ids)
-        tt_output = position_embeddings[0]
 
-        print("tt_output:", tt_output)
+        attention_mask = generate_block_attention_mask_tt(
+            [p.shape[-2] * p.shape[-1] for p in patch_embeds_list], patch_embeds, tt_device=self.mesh_device
+        )
 
-        print("tt_output:", tt_output.shape)
-        out = ttnn.from_device(tt_output)
-        out = ttnn.to_torch(out).squeeze(0)
-        print("tt_output:", out.shape)
-
-        passing, pcc_message = comp_pcc(refcos, out)
-
-        logger.info(comp_allclose(refcos, out))
-        logger.info(f"PCC: {pcc_message}")
-        assert passing, f"PCC below {0.99}. {pcc_message}"
-        return position_embeddings
+        patch_embeds = ttnn.unsqueeze(patch_embeds, 0)
+        out = self.transformer(
+            patch_embeds,
+            mask=attention_mask,
+        )
+        return out
