@@ -48,7 +48,7 @@ Semantic segmentation: [source](https://huggingface.co/nvidia/segformer-b0-finet
   pytest tests/ttnn/integration_tests/segformer/test_segformer_for_semantic_segmentation.py
   ```
 
-### Segformer Semantic Segmentation Demo
+### Segformer Semantic Segmentation Performant Demo
 
 - Use the following command to run the demo script(Segmentation) which returns **mIoU** score for both reference, and ttnn models:
   ```python
@@ -81,6 +81,3 @@ Use the following command to run Model performant running with Trace+2CQ
 ```
 pytest models/demos/segformer/tests/test_e2e_performant.py
 ```
-
-## ToDo:
-To add the performant model demo.
