@@ -682,19 +682,11 @@ void append_worker_to_fabric_edm_sender_rt_args(
 
 void append_worker_to_fabric_edm_sender_rt_args(
     chan_id_t eth_channel,
-    size_t sender_worker_flow_control_semaphore_id,
     size_t sender_worker_terminate_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out) {
-    TT_FATAL(
-        (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
-        "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
-
     const std::vector<uint32_t> values = {
-        eth_channel,
-        sender_worker_flow_control_semaphore_id,
-        sender_worker_terminate_semaphore_id,
-        sender_worker_buffer_index_semaphore_id};
+        eth_channel, sender_worker_terminate_semaphore_id, sender_worker_buffer_index_semaphore_id};
     args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
     std::ranges::copy(values, std::back_inserter(args_out));
 }
@@ -704,14 +696,9 @@ void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
     chip_id_t chip_id,
     const CoreRangeSet& worker_cores,
-    size_t sender_worker_flow_control_semaphore_id,
     size_t sender_worker_terminate_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out) {
-    TT_FATAL(
-        (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
-        "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
-
     chan_id_t eth_channel =
         tt::tt_metal::MetalContext::instance()
             .get_cluster()
@@ -754,10 +741,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     }
 
     const std::vector<uint32_t> values = {
-        eth_channel,
-        sender_worker_flow_control_semaphore_id,
-        sender_worker_terminate_semaphore_id,
-        sender_worker_buffer_index_semaphore_id};
+        eth_channel, sender_worker_terminate_semaphore_id, sender_worker_buffer_index_semaphore_id};
     args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
     std::ranges::copy(values, std::back_inserter(args_out));
 }

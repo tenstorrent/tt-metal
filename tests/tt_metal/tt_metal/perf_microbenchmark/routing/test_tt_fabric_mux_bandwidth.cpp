@@ -165,7 +165,6 @@ void create_mux_kernel(
         hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX)};
 
     // semaphores needed to build connection with drainer core using the build_from_args API
-    auto worker_flow_control_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
     auto worker_teardown_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
     auto worker_buffer_index_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
 
@@ -189,7 +188,6 @@ void create_mux_kernel(
         sender_worker_adapter_spec,
         device->id(),
         {mux_logical_core},
-        worker_flow_control_semaphore_id,
         worker_teardown_semaphore_id,
         worker_buffer_index_semaphore_id,
         mux_rt_args);

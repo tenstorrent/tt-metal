@@ -79,26 +79,22 @@ struct WorkerToFabricEdmSenderImpl {
         volatile uint32_t* writer_send_sem_addr;
 
         if constexpr (my_core_type == ProgrammableCoreType::TENSIX) {
+            // TODO: pass fabric_connection_info_t to avoid copy
             tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
                 reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
             uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
-            const auto& conn = connection_info->connections[eth_channel];
-            direction = conn.edm_direction;
-            edm_worker_xy = WorkerXY::from_uint32(conn.edm_noc_xy);
-            edm_buffer_base_addr = conn.edm_buffer_base_addr;
-            num_buffers_per_channel = conn.num_buffers_per_channel;
-            edm_l1_sem_id = conn.edm_l1_sem_addr;
-            edm_connection_handshake_l1_addr = conn.edm_connection_handshake_addr;
-            edm_worker_location_info_addr = conn.edm_worker_location_info_addr;
-            buffer_size_bytes = conn.buffer_size_bytes;
-            edm_copy_of_wr_counter_addr = conn.buffer_index_semaphore_id;
-
-            auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
-            // writer_send_sem_addr =
-            //     reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
-
-            writer_send_sem_addr = reinterpret_cast<volatile uint32_t*>(
-                reinterpret_cast<uintptr_t>(&conn.worker_flow_control_semaphore_id));
+            const auto conn = &connection_info->connections[eth_channel];
+            direction = conn->edm_direction;
+            edm_worker_xy = WorkerXY::from_uint32(conn->edm_noc_xy);
+            edm_buffer_base_addr = conn->edm_buffer_base_addr;
+            num_buffers_per_channel = conn->num_buffers_per_channel;
+            edm_l1_sem_id = conn->edm_l1_sem_addr;
+            edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
+            edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
+            buffer_size_bytes = conn->buffer_size_bytes;
+            edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
+            writer_send_sem_addr =
+                reinterpret_cast<volatile uint32_t*>(reinterpret_cast<uintptr_t>(&conn->worker_flow_control_semaphore));
         } else {
             // TODO: will be deprecated. currently for ethernet dispatch case
             //       ethernet core need to have same memory mapping as worker
