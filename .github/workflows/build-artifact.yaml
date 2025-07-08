@@ -367,7 +367,7 @@ jobs:
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
         env:
-          CIBW_BUILD: "cp${{ matrix.python-version | replace('.', '') }}-manylinux_x86_64*"
+          CIBW_BUILD: "cp${{ fromJSON('{\"3.10\":\"310\",\"3.12\":\"312\"}')[matrix.python-version] }}-manylinux_x86_64*"
           CIBW_SKIP: "*-musllinux_*"
           CIBW_BUILD_VERBOSITY: 2
           CIBW_BUILD_FRONTEND: build
@@ -394,6 +394,6 @@ jobs:
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
-          name: ${{ steps.set_wheel_artifact_name.outputs[format('wheel_artifact_name_{0}', matrix.python-version | replace('.', ''))] }}
+          name: ${{ steps.set_wheel_artifact_name.outputs[format('wheel_artifact_name_{0}', fromJSON('{"3.10":"310","3.12":"312"}')[matrix.python-version])] }}
           path: wheelhouse
           if-no-files-found: error
