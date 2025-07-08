@@ -187,8 +187,6 @@ uint32_t calculate_L1_usage(
         TT_FATAL(input_shape[3] == 16, "Error");
     }
 
-    uint32_t nblocks = 1;
-
     // CBs
     uint32_t multi_buffering_factor = 2;
 
@@ -217,7 +215,6 @@ uint32_t calculate_L1_usage(
     }
 
     uint32_t in_cb_sz = 0;
-    // uint32_t in_nblocks_c = 1;
     if (is_wide_reduction) {
         in_cb_sz = MAX_TILES_PER_REDUCTION * tt::constants::TILE_HW;
     } else {
@@ -228,7 +225,7 @@ uint32_t calculate_L1_usage(
         in_cb_sz,
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
-    uint32_t in_cb_npages = multi_buffering_factor * nblocks;
+    uint32_t in_cb_npages = multi_buffering_factor;
     uint32_t in_cb_config_0_size = in_cb_npages * in_cb_pagesize;
     uint32_t in_cb_config_1_size = 0;
 
