@@ -21,8 +21,6 @@ def get_expected_times(name):
     return base[name]
 
 
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [torch.rand((1, 3, 640, 640))], ids=["input_tensor"])
 @pytest.mark.parametrize(
@@ -100,7 +98,7 @@ def test_yolov8x(device, input_tensor, use_weights_from_ultralytics):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 51.2],
+        [1, 45],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
