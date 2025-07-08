@@ -345,7 +345,7 @@ jobs:
           submodules: recursive
           fetch-depth: 500 # Need enough history for `git describe`
           fetch-tags: true # Need tags for `git describe`
-    
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v4
         with:
@@ -387,6 +387,7 @@ jobs:
           PYTHON_VERSION_NODOT=$(echo "${{ matrix.python-version }}" | tr -d '.')
           WHEEL_ARTIFACT_NAME="eager-dist-cp${PYTHON_VERSION_NODOT}-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}"
           echo "wheel_artifact_name_${PYTHON_VERSION_NODOT}=${WHEEL_ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+          echo "wheel_artifact_name_${PYTHON_VERSION_NODOT}=${WHEEL_ARTIFACT_NAME}" >> "$GITHUB_ENV"
 
       - name: ☁️ Upload wheel
         if: ${{ inputs.build-wheel }}
