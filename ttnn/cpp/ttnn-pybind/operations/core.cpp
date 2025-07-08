@@ -211,43 +211,82 @@ void py_module(py::module& module) {
         )doc",
         ttnn::pybind_arguments_t{py::arg("tensor"), py::arg("dtype")});
 
-    module.def(
-        "allocate_tensor_on_device",
-        [](const ttnn::TensorSpec& spec, MeshDevice* device) {
-            return tt::tt_metal::allocate_tensor_on_mesh(spec, device);
-        },
-        py::arg("tensor_spec"),
-        py::arg("mesh_device"));
+    module
+        .def(
+            "allocate_tensor_on_device",
+            [](const ttnn::TensorSpec& spec, MeshDevice* device) {
+                return tt::tt_metal::allocate_tensor_on_device(spec, device);
+            },
+            py::arg("tensor_spec"),
+            py::arg("mesh_device"))
+        .def(
+            "allocate_tensor_on_host",
+            [](const ttnn::TensorSpec& spec, MeshDevice* device) {
+                return tt::tt_metal::allocate_tensor_on_host(spec, device);
+            },
+            py::arg("tensor_spec"),
+            py::arg("mesh_device"));
 
-    module.def(
-        "allocate_tensor_on_device",
-        [](const ttnn::Shape& shape,
-           ttnn::DataType dtype,
-           ttnn::Layout layout,
-           MeshDevice* device,
-           const std::optional<ttnn::MemoryConfig>& mem_config) {
-            return tt::tt_metal::allocate_tensor_on_mesh(
-                TensorSpec(
-                    shape,
-                    tt::tt_metal::TensorLayout(
-                        dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),
-                device);
-        },
-        py::arg("shape"),
-        py::arg("dtype"),
-        py::arg("layout"),
-        py::arg("mesh_device"),
-        py::arg("memory_config") = std::nullopt);
+    module
+        .def(
+            "allocate_tensor_on_device",
+            [](const ttnn::Shape& shape,
+               ttnn::DataType dtype,
+               ttnn::Layout layout,
+               MeshDevice* device,
+               const std::optional<ttnn::MemoryConfig>& mem_config) {
+                return tt::tt_metal::allocate_tensor_on_device(
+                    TensorSpec(
+                        shape,
+                        tt::tt_metal::TensorLayout(
+                            dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),
+                    device);
+            },
+            py::arg("shape"),
+            py::arg("dtype"),
+            py::arg("layout"),
+            py::arg("mesh_device"),
+            py::arg("memory_config") = std::nullopt)
+        .def(
+            "allocate_tensor_on_host",
+            [](const ttnn::Shape& shape,
+               ttnn::DataType dtype,
+               ttnn::Layout layout,
+               MeshDevice* device,
+               const std::optional<ttnn::MemoryConfig>& mem_config) {
+                return tt::tt_metal::allocate_tensor_on_host(
+                    TensorSpec(
+                        shape,
+                        tt::tt_metal::TensorLayout(
+                            dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),
+                    device);
+            },
+            py::arg("shape"),
+            py::arg("dtype"),
+            py::arg("layout"),
+            py::arg("mesh_device"),
+            py::arg("memory_config") = std::nullopt);
 
     module.def(
         "copy_host_to_device_tensor",
-        [](const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, QueueId cq_id = ttnn::DefaultQueueId) {
-            // Copies `device_tensor`, to be able to asynchronously populate metadata in tensor attributes, stored as a
-            // shared pointer.
-            tt::tt_metal::write_tensor(host_tensor, std::move(device_tensor), cq_id);
+        [](const ttnn::Tensor& host_tensor, ttnn::Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId) {
+            tt::tt_metal::write_tensor(host_tensor, device_tensor, /*blocking=*/false, cq_id);
         },
         py::arg("host_tensor"),
         py::arg("device_tensor"),
+        py::arg("cq_id") = ttnn::DefaultQueueId);
+
+    module.def(
+        "copy_device_to_host_tensor",
+        [](const ttnn::Tensor& device_tensor,
+           ttnn::Tensor& host_tensor,
+           bool blocking = true,
+           QueueId cq_id = ttnn::DefaultQueueId) {
+            tt::tt_metal::write_tensor(device_tensor, host_tensor, blocking, cq_id);
+        },
+        py::arg("device_tensor"),
+        py::arg("host_tensor"),
+        py::arg("blocking") = true,
         py::arg("cq_id") = ttnn::DefaultQueueId);
 
     bind_registered_operation(

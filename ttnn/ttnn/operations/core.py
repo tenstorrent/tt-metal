@@ -426,10 +426,16 @@ ttnn.register_python_operation(
 ttnn.register_python_operation(
     name="ttnn.allocate_tensor_on_device",
 )(ttnn._ttnn.operations.core.allocate_tensor_on_device)
+ttnn.register_python_operation(
+    name="ttnn.allocate_tensor_on_host",
+)(ttnn._ttnn.operations.core.allocate_tensor_on_host)
 
 ttnn.register_python_operation(
     name="ttnn.copy_host_to_device_tensor",
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor)
+ttnn.register_python_operation(
+    name="ttnn.copy_device_to_host_tensor",
+)(ttnn._ttnn.operations.core.copy_device_to_host_tensor)
 
 doc = """
 Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.

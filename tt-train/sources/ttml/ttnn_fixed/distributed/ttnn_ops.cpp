@@ -84,7 +84,7 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     ttnn::SmallVector<uint32_t> scattered_shape{tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]};
     scattered_shape[dim] = split_size_per_device;
 
-    ttnn::Tensor scattered_tensor = tt::tt_metal::allocate_tensor_on_mesh(
+    ttnn::Tensor scattered_tensor = tt::tt_metal::allocate_tensor_on_device(
         ttnn::TensorSpec(
             ttnn::Shape(scattered_shape),
             tt::tt_metal::TensorLayout(tensor.dtype(), tensor.layout(), tensor.memory_config())),
