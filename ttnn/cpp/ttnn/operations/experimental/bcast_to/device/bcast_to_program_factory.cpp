@@ -145,7 +145,6 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
     auto output_data_format = datatype_to_dataformat_converter(output.dtype());
 
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_data_format);
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
 
     // Device Setup
     auto* device = input.device();
