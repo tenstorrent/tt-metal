@@ -107,7 +107,7 @@ class Generator:
                     continue
 
                 user_id = group_user_id + model_id * max_batch_size_per_model
-                out = out_list[group_user_id]
+                out = out_list[user_id]
 
                 seq_len = int(prompt_lens[user_id])
                 last_token_idx = seq_len - 1
