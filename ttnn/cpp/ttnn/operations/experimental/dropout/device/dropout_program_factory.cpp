@@ -204,8 +204,7 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     auto cb_src0 =
         create_circular_buffer(program, all_cores, kSrc0CbIndex, data_fmt_in, single_tile_size_in, kNumInputTiles);
 
-    auto cb_output =
-        create_circular_buffer(program, all_cores, kOutputCbIndex, data_fmt_out, single_tile_size_out, kNumOutputTiles);
+    create_circular_buffer(program, all_cores, kOutputCbIndex, data_fmt_out, single_tile_size_out, kNumOutputTiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels

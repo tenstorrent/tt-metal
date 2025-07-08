@@ -169,7 +169,7 @@ void TypecastProgramFactory::override_runtime_arguments(
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {
@@ -203,8 +203,6 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
-
-    tt::tt_metal::IDevice* device = input.device();
 
     uint32_t ntiles = input.physical_volume() / tt::constants::TILE_HW;
     uint32_t ncores = sub_core_grids->num_cores();
