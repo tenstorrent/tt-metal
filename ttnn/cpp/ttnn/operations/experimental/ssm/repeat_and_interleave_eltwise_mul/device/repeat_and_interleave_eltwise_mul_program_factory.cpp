@@ -22,8 +22,6 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
 
-    tt::tt_metal::IDevice* device = a.device();
-
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* src1_buffer = b.buffer();
 
