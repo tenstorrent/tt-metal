@@ -43,6 +43,9 @@ public:
     size_t compute_consumed_memory_bytes_per_bank(const IDevice& device) const {
         return tensor_layout_.compute_consumed_memory_bytes_per_bank(logical_shape_, device);
     }
+    size_t compute_consumed_memory_bytes_per_bank(size_t page_alignment, size_t num_banks) const {
+        return tensor_layout_.compute_consumed_memory_bytes_per_bank(logical_shape_, page_alignment, num_banks);
+    }
 
     TensorSpec with_memory_config(MemoryConfig memory_config) const;
 
