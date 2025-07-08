@@ -6,12 +6,12 @@ import pytest
 import ttnn
 import torch
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov11.tt.model_preprocessing import (
+from models.demos.yolov11.tt.model_preprocessing import (
     create_yolov11_input_tensors,
     create_yolov11_model_parameters_detect,
 )
-from models.experimental.yolov11.reference.yolov11 import Detect as torch_detect
-from models.experimental.yolov11.tt.ttnn_yolov11_detect import TtnnDetect as ttnn_detect
+from models.demos.yolov11.reference.yolov11 import Detect as torch_detect
+from models.demos.yolov11.tt.ttnn_yolov11_detect import TtnnDetect as ttnn_detect
 
 
 @pytest.mark.parametrize(
