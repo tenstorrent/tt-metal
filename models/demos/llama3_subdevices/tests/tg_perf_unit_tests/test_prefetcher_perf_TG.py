@@ -47,7 +47,9 @@ def test_dram_prefetcher_perf(
 
     profiler.start("run")
     profiler.start(step_name)
-    results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True)
+    results = run_device_perf_detailed(
+        command, subdir, cols, op_name, has_signposts=True, device_analysis_types=["device_ncrisc_kernel_duration"]
+    )
     profiler.end(step_name)
     profiler.end("run")
 

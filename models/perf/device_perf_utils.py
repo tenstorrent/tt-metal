@@ -112,7 +112,9 @@ def post_process_ops_log_detailed(
     return results
 
 
-def run_device_perf_detailed(command, subdir, cols, op_name="", has_signposts=False, warmup_iters=0):
+def run_device_perf_detailed(
+    command, subdir, cols, op_name="", has_signposts=False, warmup_iters=0, device_analysis_types=None
+):
     duration_cols = [col + " DURATION [ns]" for col in cols]
 
     clear_profiler_runtime_artifacts()
@@ -124,7 +126,10 @@ def run_device_perf_detailed(command, subdir, cols, op_name="", has_signposts=Fa
         results[f"MAX {d_col}"] = -float("inf")
         results[f"STD {d_col}"] = 0
 
-    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    if device_analysis_types is None:
+        device_analysis_types = ["device_kernel_duration"]
+
+    run_device_profiler(command, subdir, device_analysis_types=device_analysis_types)
     r = post_process_ops_log_detailed(
         subdir, duration_cols, op_name=op_name, has_signposts=has_signposts, detailed=True, warmup_iters=warmup_iters
     )
