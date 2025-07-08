@@ -16,6 +16,7 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.embedding_1d import Embedding1D
+from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
 
 
@@ -77,13 +78,16 @@ def test_embedding_forward_pass(
     weight_config = Embedding1D.convert_weights(hf_config, hf_state_dict, temp_dir, mesh_device)
 
     # Generate appropriate config
-    model_prefill_config = Embedding1D.prefill_model_config(hf_config, mesh_device)
-    model_decode_config = Embedding1D.decode_model_config(hf_config, mesh_device)
+    if mode == "prefill":
+        model_config = Embedding1D.prefill_model_config(hf_config, mesh_device)
+    else:
+        model_config = Embedding1D.decode_model_config(hf_config, mesh_device)
+
+    # Create a new model state
+    model_state = Embedding1D.create_state(hf_config, mesh_device=mesh_device)
 
     # Create RunConfig using both weight_config and model_config
-    run_prefill_config, run_decode_config = Embedding1D.run_config(
-        model_prefill_config, model_decode_config, weight_config, mesh_device
-    )
+    run_config = create_run_config(model_config, weight_config, model_state)
 
     # Prepare input - in decode mode batch is placed into seq_len dimension anyway
     torch_input_ids = torch.randint(0, min(1000, hf_config.vocab_size), (1, seq_len))
@@ -99,9 +103,9 @@ def test_embedding_forward_pass(
 
     # TTNN forward pass
     if mode == "prefill":
-        tt_output = Embedding1D.forward_prefill(tt_input_ids, run_prefill_config)
+        tt_output = Embedding1D.forward_prefill(tt_input_ids, run_config)
     else:
-        tt_output = Embedding1D.forward_decode(tt_input_ids, run_decode_config)
+        tt_output = Embedding1D.forward_decode(tt_input_ids, run_config)
 
     logger.info(tt_output)
     tt_output_torch = ttnn.to_torch(
