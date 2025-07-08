@@ -151,29 +151,24 @@ def run_tt_image_gen(
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
-        print("Before all gather")
 
         noise_pred = ttnn.to_layout(noise_pred, ttnn.ROW_MAJOR_LAYOUT)
-        noise_pred = ttnn.pad(noise_pred, (0, 0, 0, 0, 0, 4))  # pad to (2, 1, H * W, 8)
+        noise_pred = ttnn.pad(noise_pred, [(0, 0), (0, 0), (0, 0), (0, 4)], 0)
+        noise_pred = ttnn.sharded_to_interleaved(noise_pred, ttnn.L1_MEMORY_CONFIG)
 
         noise_pred = ttnn.all_gather(noise_pred, dim=0, memory_config=mem_config)
-        print("After all gather")
         noise_pred = ttnn.to_memory_config(noise_pred, ttnn.DRAM_MEMORY_CONFIG)
         noise_pred = ttnn.to_layout(noise_pred, ttnn.TILE_LAYOUT)
 
         # perform guidance
         noise_pred_uncond, noise_pred_text = noise_pred[0], noise_pred[1]
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-        mem_config_2 = ttnn.create_sharded_memory_config(
-            shape=(1, 1, H * W, 32),
-            core_grid=ttnn.CoreGrid(y=8, x=8),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        noise_pred = ttnn.to_memory_config(noise_pred, mem_config_2)
 
         ttnn.deallocate(noise_pred_uncond)
         ttnn.deallocate(noise_pred_text)
+
+        noise_pred = noise_pred[..., :4]
+        noise_pred = ttnn.unsqueeze(noise_pred, dim=0)
 
         tt_latents = tt_scheduler.step(
             noise_pred, tt_scheduler.timesteps[i], tt_latents, **tt_extra_step_kwargs, return_dict=False
