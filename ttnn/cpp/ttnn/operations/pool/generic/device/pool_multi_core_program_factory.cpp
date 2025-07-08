@@ -245,7 +245,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t dilation_w,
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
-    uint32_t nblocks,
     std::optional<int32_t> divisor_override,
     uint32_t memory_used) {
     // This should allocate a DRAM buffer on the device
@@ -289,12 +288,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // is 1 remainder C tile
     const uint32_t max_rows_for_reduction =
         !is_partial_tile ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
-    TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
 
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
         TT_FATAL(input_shape[3] == 16, "Error");
     }
-    const uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
 
     // distributing out_hw across the grid
     auto grid_size = device->compute_with_storage_grid_size();
@@ -304,13 +301,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
 
     const uint32_t ncores_w = grid_size.x;
-
-    // TODO: support generic nblocks
-    TT_FATAL(
-        out_nhw_per_core % nblocks == 0,
-        "number of sticks per core ({}) should be divisible by nblocks ({})",
-        out_nhw_per_core,
-        nblocks);
 
     // CBs
     const uint32_t multi_buffering_factor = 2;
@@ -401,7 +391,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_cb_sz,
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     const uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
-    const uint32_t in_cb_npages = multi_buffering_factor * nblocks;
+    const uint32_t in_cb_npages = multi_buffering_factor;
 
     tt::tt_metal::create_cb(in_cb_id_0, program, all_cores, in_cb_pagesize, in_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
@@ -532,8 +522,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     std::vector<uint32_t> compute_ct_args = {
         in_ntiles_c,
         kernel_size_hw,
-        split_reader,                // enable split reader
-        out_nhw_per_core / nblocks,  // loop count with blocks
+        split_reader,
+        out_nhw_per_core,
         input_shape[3] / num_shards_c,
         in_nblocks_c,
         max_rows_for_reduction,
@@ -621,7 +611,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "pad_w: {}", pad_w);
         log_debug(tt::LogOp, "out_h: {}", out_h);
         log_debug(tt::LogOp, "out_w: {}", out_w);
-        log_debug(tt::LogOp, "out_w_loop_count: {}", out_w_loop_count);
         log_debug(tt::LogOp, "out_c: {}", output_shape[3]);
         log_debug(tt::LogOp, "out_nbytes_c: {}", out_nbytes_c);
         log_debug(tt::LogOp, "in_h: {}", in_h);
@@ -631,7 +620,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "in_nblocks_c: {}", in_nblocks_c);
         log_debug(tt::LogOp, "in_nbytes_c: {}", in_nbytes_c);
         log_debug(tt::LogOp, "out_ntiles_c: {}", out_ntiles_c);
-        log_debug(tt::LogOp, "nblocks: {}", nblocks);
         log_debug(tt::LogOp, "ncores: {}", ncores);
         log_debug(tt::LogOp, "in_nhw_per_core: {}", in_nhw_per_core);
         log_debug(tt::LogOp, "out_nhw_per_core: {}", out_nhw_per_core);
@@ -731,7 +719,6 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         dilation_w,
         num_shards_c,
         out_mem_config,
-        1,
         divisor_override,
         op_attr.memory_used);
 }
