@@ -10,7 +10,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -114,8 +113,8 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
         .set_page_size(16, single_tile_size);
     auto l1_dst_cb = tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
 
-    string reader_kernel_name, writer_kernel_name;
-    std::map<string, string> defines = {};
+    std::string reader_kernel_name, writer_kernel_name;
+    std::map<std::string, std::string> defines = {};
     std::vector<uint32_t> compile_args = {};
 
     if (test_config.rowwise) {

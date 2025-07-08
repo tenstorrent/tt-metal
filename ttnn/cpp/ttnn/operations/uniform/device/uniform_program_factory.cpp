@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#include <string>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
@@ -60,7 +63,7 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
     const std::vector<uint32_t> compute_compile_time_args{intermed_cb_id};
     const std::string compute_file_path = kernels_dir_path + "compute_uniform.cpp";
 
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     switch (output_dtype) {
         case DataType::BFLOAT16: writer_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
         case DataType::FLOAT32: writer_defines["OUTPUT_DTYPE_FLOAT32"] = "1"; break;

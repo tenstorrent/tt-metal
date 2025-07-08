@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <variant>
 #include <optional>
+#include <string>
 
 #include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
@@ -415,7 +416,7 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def(
         py::init<
             std::optional<DataType>,
-            string,
+            std::string,
             bool,
             bool,
             uint32_t,
