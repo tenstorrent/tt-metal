@@ -93,8 +93,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
 
     ///////////// K transpose ////////////////////
     const bool transpose_k_heads = false;
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
     if (transpose_k_heads) {
         std::vector<uint32_t> compute_args_core_group_1 = {num_blocks_per_core_group_1 * kv_num_tiles};
         tt_metal::CreateKernel(

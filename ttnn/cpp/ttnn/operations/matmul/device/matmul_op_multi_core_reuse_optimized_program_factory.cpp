@@ -169,8 +169,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     std::vector<uint32_t> reader_writer_compile_time_args = {// interleaved accessor args
                                                              (std::uint32_t)in1_is_dram,
                                                              (std::uint32_t)out_is_dram};
-    std::map<string, string> mm_kernel_in0_reader_defines;
-    std::map<string, string> mm_kernel_in1_reader_writer_defines;
+    std::map<std::string, std::string> mm_kernel_in0_reader_defines;
+    std::map<std::string, std::string> mm_kernel_in1_reader_writer_defines;
     if (in0_is_sharded) {
         mm_kernel_in0_reader_defines["IN0_SHARDED"] = "1";
     }
@@ -215,7 +215,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
 
         untilize_out};
 
-    std::map<string, string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
     if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }

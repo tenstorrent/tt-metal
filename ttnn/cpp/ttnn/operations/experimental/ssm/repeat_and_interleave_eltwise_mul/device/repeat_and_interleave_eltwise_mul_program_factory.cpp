@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include "repeat_and_interleave_eltwise_mul_program_factory.hpp"
 
 #include "ttnn/common/queue_id.hpp"
@@ -129,7 +131,7 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
         (std::uint32_t)cb_intermed3_index,
     };
 
-    std::map<string, string> ssm_eltwise_defines;
+    std::map<std::string, std::string> ssm_eltwise_defines;
     if (ashape[-1] == TILE_WIDTH) {
         ssm_eltwise_defines["REPEAT_IN0"] = "1";
     }

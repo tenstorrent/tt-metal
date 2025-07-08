@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
@@ -647,11 +649,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
     const tt::tt_metal::CBHandle cb_partials = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).handle;
 
-    string reader_kernel;
-    string compute_kernel =
+    std::string reader_kernel;
+    std::string compute_kernel =
         "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
-    string writer_mcast_sender_kernel;
-    string writer_mcast_receiver_kernel;
+    std::string writer_mcast_sender_kernel;
+    std::string writer_mcast_receiver_kernel;
 
     // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
     if (filter_h >= 1 and filter_w >= 1) {
@@ -749,10 +751,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index,
     };
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
-    std::map<string, string> writer_mcast_sender_defines;
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
+    std::map<std::string, std::string> writer_mcast_sender_defines;
+    std::map<std::string, std::string> compute_defines;
     if (total_num_cores == 1) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }

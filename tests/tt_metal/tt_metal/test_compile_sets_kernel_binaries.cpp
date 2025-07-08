@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <chrono>
 #include <errno.h>
 #include <fmt/base.h>
 #include <magic_enum/magic_enum.hpp>
@@ -12,17 +11,13 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
-#include <compare>
 #include <cstring>
 #include <exception>
 #include <filesystem>
 #include <map>
 #include <memory>
-#include <optional>
 #include <string>
 #include <thread>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -60,7 +55,7 @@ using std::vector;
 using namespace tt;
 
 std::string get_latest_kernel_binary_path(
-    const string& kernel_root_path, const std::shared_ptr<tt_metal::Kernel>& kernel) {
+    const std::string& kernel_root_path, const std::shared_ptr<tt_metal::Kernel>& kernel) {
     TT_FATAL(kernel != nullptr, "Error");
     TT_FATAL(std::filesystem::exists(kernel_root_path + kernel->name()), "Error");
 
@@ -206,7 +201,7 @@ int main(int argc, char** argv) {
 
         int num_compiles = 3;
         for (int i = 0; i < 3; i++) {
-            std::vector<string> kernel_names = {"reader_unary_push_4", "writer_unary", "eltwise_copy_3m"};
+            std::vector<std::string> kernel_names = {"reader_unary_push_4", "writer_unary", "eltwise_copy_3m"};
             for (int i = 0; i < num_devices; i++) {
                 for (const auto& kernel_name : kernel_names) {
                     std::filesystem::remove_all(

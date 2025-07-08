@@ -6,8 +6,6 @@
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <functional>
-#include <initializer_list>
-#include <map>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -131,12 +129,12 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
     fixture->RunProgram(device, program);
 
     // Check that the pause message is present for each core in the watcher log.
-    vector<string> expected_strings;
+    vector<std::string> expected_strings;
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             CoreCoord virtual_core = device->worker_core_from_logical_core({x, y});
             for (auto &risc_str : {"brisc", "ncrisc", "trisc0", "trisc1", "trisc2"}) {
-                string expected = fmt::format("{}:{}", virtual_core.str(), risc_str);
+                std::string expected = fmt::format("{}:{}", virtual_core.str(), risc_str);
                 expected_strings.push_back(expected);
             }
         }
@@ -144,14 +142,14 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
     if (has_eth_cores) {
         for (const auto& core : device->get_active_ethernet_cores(true)) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
-            string expected = fmt::format("{}:erisc", virtual_core.str());
+            std::string expected = fmt::format("{}:erisc", virtual_core.str());
             expected_strings.push_back(expected);
         }
     }
     if (has_ieth_cores) {
         for (const auto& core : device->get_inactive_ethernet_cores()) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
-            string expected = fmt::format("{}:ierisc", virtual_core.str());
+            std::string expected = fmt::format("{}:ierisc", virtual_core.str());
             expected_strings.push_back(expected);
         }
     }

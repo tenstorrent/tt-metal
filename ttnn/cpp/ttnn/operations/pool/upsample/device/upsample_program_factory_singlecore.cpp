@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <math.h>
+#include <string>
 
 #include "upsample_op.hpp"
 #include "ttnn/operations/cb_utils.hpp"
@@ -78,7 +79,7 @@ operation::ProgramWithCallbacks upsample_single_core(
         (std::uint32_t)dst_stick_size_is_power_of_two,
         (std::uint32_t)dst_log2_stick_size};
 
-    std::map<string, string> kernel_defines;
+    std::map<std::string, std::string> kernel_defines;
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/"
