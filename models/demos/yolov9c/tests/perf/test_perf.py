@@ -114,7 +114,7 @@ def test_perf_device_bare_metal_yolov9c(model_task, batch_size):
     num_iterations = 1
     margin = 0.03
     enable_segment = model_task == "segment"
-    expected_perf = 30.6 if enable_segment else 30.7
+    expected_perf = 31 if enable_segment else 31.7
 
     command = f"pytest tests/ttnn/integration_tests/yolov9c/test_ttnn_yolov9c.py::test_yolov9c"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
