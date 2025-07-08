@@ -1515,6 +1515,7 @@ void build_tt_fabric_program(
             auto eth_chans_dir2 = active_fabric_eth_channels.at(dir2);
 
             // Hack for TG to connect the last routing plane correctly for dispatch
+            // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
             if (is_TG && (eth_chans_dir1.size() != eth_chans_dir2.size())) {
                 log_info(tt::LogMetal, "applying hack for chip: {}", device->id());
                 std::reverse(eth_chans_dir1.begin(), eth_chans_dir1.end());

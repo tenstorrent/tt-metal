@@ -197,6 +197,7 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rt
 
     this->initialize_device_drivers();
 
+    // Only enable for non TG for now
     if (!this->is_galaxy_cluster() && this->arch_ != tt::ARCH::BLACKHOLE) {
         rtoptions.set_fd_fabric(true);
     }

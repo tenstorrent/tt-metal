@@ -85,11 +85,11 @@ void RelayMux::GenerateStaticConfigs() {
 
     uint32_t mux_buffer_end =
         mux_kernel_config_->get_start_address_to_clear() + mux_kernel_config_->get_num_bytes_to_clear();
-    TT_ASSERT(mux_buffer_end < l1_size, "RelayMux Buffer End {} Exceeds Max L1 {}", mux_buffer_end, l1_size);
+    TT_FATAL(mux_buffer_end < l1_size, "RelayMux Buffer End {} Exceeds Max L1 {}", mux_buffer_end, l1_size);
 
     mux_rt_args_.clear();
     int destination_device_id = -1;
-    TT_ASSERT(!(d2h_ && device_->is_mmio_capable()), "There is no D2H (return path) for MMIO devices");
+    TT_FATAL(!(d2h_ && device_->is_mmio_capable()), "There is no D2H (return path) for MMIO devices");
     if (d2h_) {
         // Get the device which is upstream
         destination_device_id = tt::tt_metal::FDKernel::GetUpstreamDeviceId(device_id_);
@@ -105,7 +105,11 @@ void RelayMux::GenerateStaticConfigs() {
         if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device_->is_mmio_capable()) {
             const auto forwarding_direction =
                 control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
-            TT_ASSERT(forwarding_direction.has_value());
+            TT_FATAL(
+                forwarding_direction.has_value(),
+                "No forwarding directions found from {} to {}",
+                src_fabric_node_id,
+                dst_fabric_node_id);
             const auto& fabric_channels =
                 control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, *forwarding_direction);
 
@@ -119,7 +123,8 @@ void RelayMux::GenerateStaticConfigs() {
         } else {
             const auto& available_links =
                 tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
-            TT_ASSERT(!available_links.empty());
+            TT_FATAL(
+                !available_links.empty(), "No links available from {} to {}", src_fabric_node_id, dst_fabric_node_id);
             return available_links.back();
         }
 
@@ -219,7 +224,7 @@ int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id) {
 
     constexpr size_t k_MaxTunnelSize = 5;  // 4 remote + 1 mmio
     for (const auto& tunnel : tunnels_from_mmio) {
-        TT_ASSERT(
+        TT_FATAL(
             tunnel.size() <= k_MaxTunnelSize,
             "Unexpected tunnel size {}. Max tunnel size expected {}",
             tunnel.size(),
