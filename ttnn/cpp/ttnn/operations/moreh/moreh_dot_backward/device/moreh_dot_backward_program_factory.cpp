@@ -26,7 +26,6 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     const uint32_t core_num = 1;
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     auto* src0_buffer = output_grad.buffer();
     auto* src1_buffer = input.buffer();
@@ -37,8 +36,6 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     const auto& a_shape_wo_padding = input.logical_shape();
     uint32_t pad_h = a_shape_wo_padding[2] % tt::constants::TILE_HEIGHT;
     uint32_t pad_w = a_shape_wo_padding[3] % tt::constants::TILE_WIDTH;
-    uint32_t mask_h = (pad_h == 0) ? (tt::constants::TILE_HEIGHT) : (pad_h);
-    uint32_t mask_w = (pad_w == 0) ? (tt::constants::TILE_WIDTH) : (pad_w);
 
     IDevice* device = input.device();
 

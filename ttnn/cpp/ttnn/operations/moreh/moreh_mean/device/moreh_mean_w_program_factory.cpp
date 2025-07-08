@@ -33,7 +33,6 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
     uint32_t W = shape[-1], H = shape[-2];
-    uint32_t HW = H * W;
 
     uint32_t Wt = W / constants::TILE_WIDTH;
     uint32_t Ht = H / constants::TILE_HEIGHT;
@@ -62,7 +61,6 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     uint32_t num_input_tiles = 2;
-    uint32_t num_output_tiles = 2;
     CreateCircularBuffer(
         program,
         all_cores,

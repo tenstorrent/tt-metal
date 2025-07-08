@@ -28,7 +28,6 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     const auto& shape = input.padded_shape();
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
 
-    uint32_t HW = H * W;
     uint32_t Wt = W / tt::constants::TILE_WIDTH;
     uint32_t Ht = H / tt::constants::TILE_HEIGHT;
 
@@ -62,8 +61,6 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     uint32_t intermed_single_tile_size = tt::tt_metal::detail::TileSize(intermed_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
-
-    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
     tt::tt_metal::IDevice* device = input.device();
 

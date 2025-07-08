@@ -111,7 +111,6 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             output_5d_shape_without_padding[2] * output_5d_shape_without_padding[3] *
             ((output_5d_shape_without_padding[4] + num_elements_per_alignment - 1) / num_elements_per_alignment);
 
-        uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
         uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
         auto
@@ -224,7 +223,6 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         auto core_y_offset = core_range.start_coord.y;
 
         uint32_t g1_numcores = core_group_1.num_cores();
-        uint32_t g2_numcores = core_group_2.num_cores();
 
         uint32_t start_id = 0;
         for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
@@ -345,7 +343,6 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                              output_5d_shape_without_padding[2] * output_5d_shape_without_padding[3] *
                              ((output_5d_shape_without_padding[4] + 15) / 16);
 
-        uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
         uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
         auto
@@ -452,7 +449,6 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         auto core_x_offset = core_range.start_coord.x;
         auto core_y_offset = core_range.start_coord.y;
         uint32_t g1_numcores = core_group_1.num_cores();
-        uint32_t g2_numcores = core_group_2.num_cores();
 
         uint32_t start_id = 0;
         for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {

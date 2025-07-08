@@ -145,7 +145,6 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
             fp32_dest_acc_en,
             math_approx_mode);
     }
-    uint32_t out_dim_divider{Wt};
     for (uint32_t i = 0, num_cols_read = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 

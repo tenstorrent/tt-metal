@@ -63,8 +63,6 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
 
-    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
-
     tt::tt_metal::IDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -81,7 +79,6 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_sum_h.cpp";
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
     CBHandle cb_src1 = 0;
     uint32_t num_input_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_src0_config =

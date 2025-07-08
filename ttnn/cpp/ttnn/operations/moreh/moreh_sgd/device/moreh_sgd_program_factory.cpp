@@ -48,7 +48,6 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     tt::tt_metal::IDevice* device = param_in.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t units_to_divide = num * Ht * Wt;
-    uint32_t core_w = grid.x;
     uint32_t core_h = grid.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =

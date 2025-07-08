@@ -82,7 +82,6 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     // split work
     uint32_t num_units = output.physical_volume() / output_shape[-1];
 
-    uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
@@ -156,7 +155,6 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     auto core_y_offset = core_range.start_coord.y;
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
 
     uint32_t start_id = 0;
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
