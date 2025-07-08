@@ -34,20 +34,19 @@ namespace ttnn::operations::experimental::detail {
 
 uint32_t get_num_cores_channels_from_sharded_tensor(const Tensor& tensor) {
     auto shard_spec = tensor.shard_spec().value();
-    auto input_cores = shard_spec.grid;
+    auto core_grid = shard_spec.grid;
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
     uint32_t num_cores_channels = 1;
-    auto total_cores = shard_spec.grid;
     if (tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         if (rm_orientation) {
-            num_cores_channels = total_cores.bounding_box().grid_size().x;
+            num_cores_channels = core_grid.bounding_box().grid_size().x;
         } else {
-            num_cores_channels = total_cores.bounding_box().grid_size().y;
+            num_cores_channels = core_grid.bounding_box().grid_size().y;
         }
     } else if (tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-        num_cores_channels = input_cores.num_cores();
+        num_cores_channels = core_grid.num_cores();
     }
     return num_cores_channels;
 }
