@@ -89,8 +89,7 @@ jobs:
             pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             pytest models/demos/roberta/tests/ -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/resnet50/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
-            #WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/ufld_v2/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
-            # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov11/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
+            # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/ufld_v2/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/sentence_bert/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
@@ -98,7 +97,6 @@ jobs:
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov4/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
-            # issue 24652: https://github.com/tenstorrent/tt-metal/issues/24652
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/mobilenetv2/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov8x/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
             # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov8s/tests -m models_device_performance_bare_metal || FAILED=$((FAILED+1))
