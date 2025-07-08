@@ -683,9 +683,9 @@ def test_demo_text(
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
-            else:
-                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+            # else:
+            #     profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+            #     decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # If there is PCC check we perform teacher forcing, swap token with reference model (decode check only done for 80 layers)
             teacher_forcing = (
@@ -694,6 +694,9 @@ def test_demo_text(
             if iteration > 0:
                 ttnn.event_synchronize(read_events.pop(0))
                 tt_out_tok = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks.pop(0))[0])[0, 0, 0, :32]
+                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 
                 if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
