@@ -15,20 +15,26 @@
 #include <emmintrin.h>
 #endif
 
-#define LOAD_STREAM_32                                                             \
-    _mm256_stream_si256((__m256i*)dst8, _mm256_loadu_si256((const __m256i*)src8)); \
-    src8 += sizeof(__m256i);                                                       \
-    dst8 += sizeof(__m256i);
+#define LOAD_STREAM_32                                                                 \
+    do {                                                                               \
+        _mm256_stream_si256((__m256i*)dst8, _mm256_loadu_si256((const __m256i*)src8)); \
+        src8 += sizeof(__m256i);                                                       \
+        dst8 += sizeof(__m256i);                                                       \
+    } while (0)
 
-#define LOAD_STREAM_16                                                       \
-    _mm_stream_si128((__m128i*)dst8, _mm_loadu_si128((const __m128i*)src8)); \
-    src8 += sizeof(__m128i);                                                 \
-    dst8 += sizeof(__m128i);
+#define LOAD_STREAM_16                                                           \
+    do {                                                                         \
+        _mm_stream_si128((__m128i*)dst8, _mm_loadu_si128((const __m128i*)src8)); \
+        src8 += sizeof(__m128i);                                                 \
+        dst8 += sizeof(__m128i);                                                 \
+    } while (0)
 
-#define LOAD_STREAM_4                                 \
-    _mm_stream_si32((int32_t*)dst8, *(int32_t*)src8); \
-    src8 += sizeof(int32_t);                          \
-    dst8 += sizeof(int32_t);
+#define LOAD_STREAM_4                                     \
+    do {                                                  \
+        _mm_stream_si32((int32_t*)dst8, *(int32_t*)src8); \
+        src8 += sizeof(int32_t);                          \
+        dst8 += sizeof(int32_t);                          \
+    } while (0)
 
 namespace tt::tt_metal {
 
@@ -142,3 +148,7 @@ __attribute((nonnull(1, 2))) static inline void memcpy_to_device(
 #endif
 
 }  // namespace tt::tt_metal
+
+#undef LOAD_STREAM_32
+#undef LOAD_STREAM_16
+#undef LOAD_STREAM_4
