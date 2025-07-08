@@ -13,6 +13,7 @@ void kernel_main() {
     constexpr uint32_t bytes_per_transaction = get_compile_time_arg_val(2);
     constexpr uint32_t test_id = get_compile_time_arg_val(3);
     constexpr uint32_t sem_id = get_compile_time_arg_val(4);
+    constexpr uint32_t virtual_channel = get_compile_time_arg_val(5);
 
     // Runtime arguments
     uint32_t receiver_x_coord = get_arg_val<uint32_t>(0);
@@ -30,7 +31,8 @@ void kernel_main() {
         DeviceZoneScopedN("RISCV0");
         uint64_t dst_noc_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, l1_local_addr);
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            noc_async_write(l1_local_addr, dst_noc_addr, bytes_per_transaction);
+            DPRINT << "Virtual Channel: " << virtual_channel << ENDL();
+            noc_async_write(l1_local_addr, dst_noc_addr, bytes_per_transaction, virtual_channel);
         }
         noc_async_write_barrier();
     }
