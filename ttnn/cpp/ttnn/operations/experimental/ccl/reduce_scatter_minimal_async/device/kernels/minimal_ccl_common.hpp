@@ -12,11 +12,12 @@
 #include <utility>
 
 #ifdef ARCH_WORMHOLE
-FORCE_INLINE void scatter_write_and_advance_local_read_address_for_fabric(
+template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
+void scatter_write_and_advance_local_read_address_for_fabric(
     uint64_t first_noc0_dest_noc_addr,
     uint64_t second_noc0_dest_noc_addr,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
-    tt::tt_fabric::WorkerToFabricEdmSender* fabric_direction_connection,
+    tt::tt_fabric::WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& fabric_mux_connection,
     size_t& l1_read_addr,
     uint32_t first_payload_size_bytes,
     uint32_t second_payload_size_bytes) {
@@ -25,30 +26,24 @@ FORCE_INLINE void scatter_write_and_advance_local_read_address_for_fabric(
             {first_noc0_dest_noc_addr, second_noc0_dest_noc_addr}, (uint16_t)first_payload_size_bytes},
         first_payload_size_bytes + second_payload_size_bytes);
 
-    fabric_direction_connection->wait_for_empty_write_slot();
-    fabric_direction_connection->send_payload_without_header_non_blocking_from_address(
-        l1_read_addr, first_payload_size_bytes + second_payload_size_bytes);
-    fabric_direction_connection->send_payload_flush_non_blocking_from_address(
-        (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+    tt::tt_fabric::fabric_async_write(
+        fabric_mux_connection, pkt_hdr, l1_read_addr, first_payload_size_bytes + second_payload_size_bytes);
     noc_async_writes_flushed();
 
     l1_read_addr += first_payload_size_bytes + second_payload_size_bytes;
 }
 #endif
 
-FORCE_INLINE void write_and_advance_local_read_address_for_fabric(
+template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
+void write_and_advance_local_read_address_for_fabric(
     uint64_t noc0_dest_noc_addr,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
-    tt::tt_fabric::WorkerToFabricEdmSender* fabric_direction_connection,
+    tt::tt_fabric::WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& fabric_mux_connection,
     size_t& l1_read_addr,
     uint32_t payload_size_bytes) {
     pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
 
-    fabric_direction_connection->wait_for_empty_write_slot();
-    fabric_direction_connection->send_payload_without_header_non_blocking_from_address(
-        l1_read_addr, payload_size_bytes);
-    fabric_direction_connection->send_payload_flush_non_blocking_from_address(
-        (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+    tt::tt_fabric::fabric_async_write(fabric_mux_connection, pkt_hdr, l1_read_addr, payload_size_bytes);
     noc_async_writes_flushed();
 
     l1_read_addr += payload_size_bytes;
