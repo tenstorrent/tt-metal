@@ -84,7 +84,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     uint32_t out_h = sliding_window_config.get_output_shape()[1];
     uint32_t out_w = sliding_window_config.get_output_shape()[2];
 
-    bool is_out_tiled = output_dtype == DataType::BFLOAT8_B;
+    bool is_out_tiled = op_attr.is_out_tiled_;
 
     // need to pad the last dim to TILE_WIDTH
     uint32_t out_c = input_shape[3];
@@ -97,6 +97,15 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     // {1, 1, N * H * W, C}
     const ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
     const ttnn::Shape output_shape({1, 1, out_nhw, out_c});
+
+    printf(
+        "POOL OP output_shape: %d, %d, %d, %d\n", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);
+    printf(
+        "POOL OP padded_output_shape: %d, %d, %d, %d\n",
+        padded_output_shape[0],
+        padded_output_shape[1],
+        padded_output_shape[2],
+        padded_output_shape[3]);
 
     auto mem_config = out_mem_config;
     if (mem_config.shard_spec().has_value()) {
@@ -135,6 +144,7 @@ tt::stl::hash::hash_t Pool2D::compute_program_hash(
         op_attr.memory_config_,
         op_attr.divisor_override_,
         op_attr.count_include_pad_,
+        op_attr.is_out_tiled_,
         input_mem_config,
         dtype);
 }
@@ -184,6 +194,7 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
     MemoryConfig memory_config,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
+    bool is_out_tiled,
     uint32_t memory_used) {
     return {
         operation_attributes_t{
@@ -193,7 +204,8 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
             .memory_config_ = std::move(memory_config),
             .count_include_pad_ = count_include_pad,
             .divisor_override_ = divisor_override,
-            .memory_used = memory_used},
+            .is_out_tiled_ = is_out_tiled,
+            .memory_used_ = memory_used},
         tensor_args_t{input_tensor}};
 }
 

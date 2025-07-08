@@ -320,6 +320,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_nhw_per_core = input.shard_spec()->shape[0];
     const uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
 
+    printf("FACTORY output shard shape: %d, %d\n", output.shard_spec()->shape[0], output.shard_spec()->shape[1]);
+
     const uint32_t ncores_w = grid_size.x;
 
     // TODO: support generic nblocks
@@ -815,7 +817,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         out_mem_config,
         1,
         divisor_override,
-        op_attr.memory_used);
+        op_attr.memory_used_);
 }
 
 void Pool2D::MultiCore::override_runtime_arguments(

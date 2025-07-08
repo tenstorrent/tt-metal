@@ -55,9 +55,11 @@ static Tensor pool2d_invoke(
     auto output_shape = sliding_window_config.get_output_shape();  // last dim/width is 0
     auto input_tensor_sharded = input_tensor;
 
+    printf("GENERIC output shape: %d, %d, %d, %d\n", output_shape[0], output_shape[1], output_shape[2], channels);
+
     // pool output is row major
-    bool is_out_tiled = false;
     bool is_in_tiled = input_tensor.dtype() == DataType::BFLOAT8_B;  // input tiled for bfp8_b
+    bool is_out_tiled = is_in_tiled;                                 // output tiled for bfp8_b
 
     sliding_window::ParallelConfig parallel_config;
     MemoryConfig out_memory_config = input_tensor_sharded.memory_config();
@@ -119,6 +121,9 @@ static Tensor pool2d_invoke(
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
     }
 
+    printf("GENERIC num_cores_nhw: %d\n", num_cores_nhw);
+    printf("GENERIC num_cores_c: %d\n", num_cores_c);
+
     // update the shard spec to match the output shape
     auto shard_spec = out_memory_config.shard_spec().value();
     uint32_t output_shard_width_padded =
@@ -132,6 +137,10 @@ static Tensor pool2d_invoke(
     uint32_t output_nhw_padded =
         tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
+    printf("GENERIC output_nhw: %d\n", output_nhw);
+    printf("GENERIC output_nhw_padded: %d\n", output_nhw_padded);
+    printf("GENERIC num_cores_nhw: %d\n", num_cores_nhw);
+    printf("GENERIC output_shard_height_padded: %d\n", output_shard_height_padded);
     log_debug(
         tt::LogOp,
         "output_nhw: {}, output_nhw_padded: {}, output_shard_height_padded: {}, output_shard_width_padded: {}",
@@ -180,6 +189,7 @@ static Tensor pool2d_invoke(
         out_memory_config,
         count_include_pad,
         divisor_override,
+        is_out_tiled,
         pre_allocate_size);
 
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {

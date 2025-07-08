@@ -28,7 +28,8 @@ struct Pool2D {
         MemoryConfig memory_config_;
         bool count_include_pad_;
         std::optional<int32_t> divisor_override_;
-        uint32_t memory_used;
+        bool is_out_tiled_;
+        uint32_t memory_used_;
     };
 
     struct tensor_args_t {
@@ -82,6 +83,7 @@ struct Pool2D {
         MemoryConfig memory_config,
         bool count_include_pad,
         std::optional<int32_t> divisor_override,
+        bool is_out_tiled,
         uint32_t memory_used);
 };
 
