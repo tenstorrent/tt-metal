@@ -75,29 +75,26 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
 
     const uint32_t num_tiles_in_row_to_tile_cb = 32;  // Tilizing 32 tiles will pack tensor rows into seperate tiles
     const uint32_t cb_a_tilize_in_id = tt::CBIndex::c_24;
-    const auto cb_a_tilize_in = create_circular_buffer(
-        cb_a_tilize_in_id, num_tiles_in_row_to_tile_cb, intermediary_tile_size, intermediary_format);
+    create_circular_buffer(cb_a_tilize_in_id, num_tiles_in_row_to_tile_cb, intermediary_tile_size, intermediary_format);
 
     const uint32_t cb_bx_tilize_in_id = tt::CBIndex::c_25;
-    const auto cb_b_tilize_in = create_circular_buffer(
+    create_circular_buffer(
         cb_bx_tilize_in_id, num_tiles_in_row_to_tile_cb, intermediary_tile_size, intermediary_format);
 
     const uint32_t cb_tilize_out_id = tt::CBIndex::c_26;
-    const auto cb_tilize_out = create_circular_buffer(
-        cb_tilize_out_id, num_tiles_in_row_to_tile_cb, intermediary_tile_size, intermediary_format);
+    create_circular_buffer(cb_tilize_out_id, num_tiles_in_row_to_tile_cb, intermediary_tile_size, intermediary_format);
 
     const uint32_t cb_h_prev_id = tt::CBIndex::c_27;
-    const auto cb_h_prev = create_circular_buffer(cb_h_prev_id, 2, intermediary_tile_size, intermediary_format);
+    create_circular_buffer(cb_h_prev_id, 2, intermediary_tile_size, intermediary_format);
 
     const uint32_t cb_ah_id = tt::CBIndex::c_28;
-    const auto cb_ah = create_circular_buffer(cb_ah_id, 2, intermediary_tile_size, intermediary_format);
+    create_circular_buffer(cb_ah_id, 2, intermediary_tile_size, intermediary_format);
 
     const uint32_t cb_h_id = tt::CBIndex::c_29;
-    const auto cb_h = create_circular_buffer(cb_h_id, 2, intermediary_tile_size, intermediary_format);
+    create_circular_buffer(cb_h_id, 2, intermediary_tile_size, intermediary_format);
 
     const uint32_t cb_h_acc_id = tt::CBIndex::c_31;
-    const auto cb_h_acc =
-        create_circular_buffer(cb_h_acc_id, num_chunks_per_row, intermediary_tile_size, intermediary_format);
+    create_circular_buffer(cb_h_acc_id, num_chunks_per_row, intermediary_tile_size, intermediary_format);
 
     std::vector<uint32_t> reader_compile_time_args = {cb_a_in_id, cb_bx_in_id, cb_h_in_id};
     std::vector<uint32_t> writer_compile_time_args = {cb_out_id, cb_h_acc_id, cb_h_in_id};
@@ -172,9 +169,7 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
                 cores.size(),
                 {0, 0, 0, 0}};  // (total_tiles, total_tiles_per_row, total_tiles_per_col, num_chunks_per_row)
 
-            for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); i++) {
-                const CoreCoord& core = cores.at(i);
-
+            for (uint32_t i = 0; i < cores.size(); i++) {
                 reader_runtime_args[i][0] = total_tiles;
                 reader_runtime_args[i][1] = total_tiles_per_row;
 
