@@ -83,23 +83,29 @@ jobs:
           VERSION="${{ inputs.version || '22.04' }}"
 
           if [[ "$VERSION" == "22.04" ]]; then
-            echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name-310 }}" >> $GITHUB_OUTPUT
-            echo "wheel-artifact-name-profiler=${{ needs.build-artifact-profiler.outputs.wheel-artifact-name-310 }}" >> $GITHUB_OUTPUT
+            WHEEL_NAME="${{ needs.build-artifact.outputs.wheel-artifact-name-310 }}"
+            PROFILER_WHEEL_NAME="${{ needs.build-artifact-profiler.outputs.wheel-artifact-name-310 }}"
+            echo "wheel-artifact-name=$WHEEL_NAME" >> $GITHUB_OUTPUT
+            echo "wheel-artifact-name-profiler=$PROFILER_WHEEL_NAME" >> $GITHUB_OUTPUT
             echo "Using Python 3.10 wheels for Ubuntu 22.04"
-            echo "Wheel artifact names set for version: $wheel_artifact_name"
-            echo "Wheel artifact names profiler set for version: $wheel_artifact_name"
+            echo "Wheel artifact name set: $WHEEL_NAME"
+            echo "Profiler wheel artifact name set: $PROFILER_WHEEL_NAME"
           elif [[ "$VERSION" == "24.04" ]]; then
-            echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name-312 }}" >> $GITHUB_OUTPUT
-            echo "wheel-artifact-name-profiler=${{ needs.build-artifact-profiler.outputs.wheel-artifact-name-312 }}" >> $GITHUB_OUTPUT
+            WHEEL_NAME="${{ needs.build-artifact.outputs.wheel-artifact-name-312 }}"
+            PROFILER_WHEEL_NAME="${{ needs.build-artifact-profiler.outputs.wheel-artifact-name-312 }}"
+            echo "wheel-artifact-name=$WHEEL_NAME" >> $GITHUB_OUTPUT
+            echo "wheel-artifact-name-profiler=$PROFILER_WHEEL_NAME" >> $GITHUB_OUTPUT
             echo "Using Python 3.12 wheels for Ubuntu 24.04"
-            echo "Wheel artifact names set for version: $wheel_artifact_name"
-            echo "Wheel artifact names profiler set for version: $wheel_artifact_name"
+            echo "Wheel artifact name set: $WHEEL_NAME"
+            echo "Profiler wheel artifact name set: $PROFILER_WHEEL_NAME"
           else
-            echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name-312 }}" >> $GITHUB_OUTPUT
-            echo "wheel-artifact-name-profiler=${{ needs.build-artifact-profiler.outputs.wheel-artifact-name-312 }}" >> $GITHUB_OUTPUT
+            WHEEL_NAME="${{ needs.build-artifact.outputs.wheel-artifact-name-312 }}"
+            PROFILER_WHEEL_NAME="${{ needs.build-artifact-profiler.outputs.wheel-artifact-name-312 }}"
+            echo "wheel-artifact-name=$WHEEL_NAME" >> $GITHUB_OUTPUT
+            echo "wheel-artifact-name-profiler=$PROFILER_WHEEL_NAME" >> $GITHUB_OUTPUT
             echo "Using Python 3.12 wheels as default for version: $VERSION"
-            echo "Wheel artifact names set for version: $wheel_artifact_name"
-            echo "Wheel artifact names profiler set for version: $wheel_artifact_name"
+            echo "Wheel artifact name set: $WHEEL_NAME"
+            echo "Profiler wheel artifact name set: $PROFILER_WHEEL_NAME"
           fi
 
   # Slow Dispatch Unit Tests
