@@ -734,7 +734,7 @@ def test_transpose_2D(dtype, shape, layout, device):
     "dtype",
     (
         ttnn.bfloat16,
-        # ttnn.int32, issue 24704
+        # ttnn.int32,
         ttnn.float32,
     ),
     ids=[
