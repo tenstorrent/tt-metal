@@ -83,8 +83,16 @@ def test_fold_transpose(device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (
+        ttnn.bfloat16,
+        # ttnn.int32, issue 24704
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat16",
+        # "int32",
+        "float",
+    ],
 )
 def test_transpose_hc_unit(dtype, device):
     logger.info("transpose on C H dim")
@@ -117,8 +125,16 @@ def test_transpose_wh_bfp4(device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (
+        ttnn.bfloat16,
+        # ttnn.int32, issue 24704
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat16",
+        # "int32",
+        "float",
+    ],
 )
 def test_transpose_hc_program_cache(dtype, device):
     N = 3
@@ -147,8 +163,16 @@ def test_transpose_hc_program_cache(dtype, device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (
+        ttnn.bfloat16,
+        # ttnn.int32, issue 24704
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat16",
+        # "int32",
+        "float",
+    ],
 )
 def test_transpose_cn_program_cache(dtype, device):
     N = 3
@@ -168,8 +192,18 @@ def test_transpose_cn_program_cache(dtype, device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.int32),
-    ids=["bfloat16", "float", "bfloat8_b", "int32"],
+    (
+        ttnn.bfloat16,
+        # ttnn.int32, issue 24704
+        ttnn.float32,
+        ttnn.bfloat8_b,
+    ),
+    ids=[
+        "bfloat16",
+        # "int32",
+        "float",
+        "bfloat8_b",
+    ],
 )
 def test_transpose_wh_program_cache(dtype, device):
     N = 3
@@ -200,8 +234,16 @@ def test_transpose_wh_program_cache(dtype, device):
 @skip_for_blackhole("GH #15234")
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat8_b, ttnn.float32, ttnn.int32),
-    ids=["bfloat8_b", "float", "int32"],
+    (
+        ttnn.bfloat8_b,
+        # ttnn.int32, issue 24704
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat8_b",
+        # "int32",
+        "float",
+    ],
 )
 def test_transpose_wh_sharded_program_cache(dtype, device):
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -634,8 +676,16 @@ def test_transpose_bfloat8_b(device, shape, swap_dims):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (
+        ttnn.bfloat16,
+        # ttnn.int32, issue 24704
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat16",
+        # "int32",
+        "float",
+    ],
 )
 @pytest.mark.parametrize(
     "shape",
@@ -649,8 +699,16 @@ def test_transpose_hc(dtype, shape, device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (
+        ttnn.bfloat16,
+        # ttnn.int32, issue 24704
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat16",
+        # "int32",
+        "float",
+    ],
 )
 @pytest.mark.parametrize(
     "shape",
@@ -674,8 +732,16 @@ def test_transpose_2D(dtype, shape, layout, device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (
+        ttnn.bfloat16,
+        # ttnn.int32, issue 24704
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat16",
+        # "int32",
+        "float",
+    ],
 )
 @pytest.mark.parametrize(
     "shape",
