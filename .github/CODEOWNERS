@@ -174,6 +174,7 @@ ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_q
 ttnn/tracy/ @mo-tenstorrent @sagarwalTT
 ttnn/api/tools/profiler/ @mo-tenstorrent
 tests/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/multidevice_perf_tests/ @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @yugi957 @jvegaTT
 tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu @omilyutin-tt @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @cfjchu @omilyutin-tt @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
