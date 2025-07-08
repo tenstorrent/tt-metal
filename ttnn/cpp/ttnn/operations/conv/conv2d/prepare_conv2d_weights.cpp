@@ -494,8 +494,7 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
         output_conv_weight_tensor_shape);
 }
 
-static Tensor to_folded_weight_layout(
-    const Tensor& conv_weight_tensor, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> kernel_size) {
+static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::array<uint32_t, 2> stride) {
     auto w_shape = conv_weight_tensor.padded_shape();
     uint32_t out_channels = w_shape[0];
     uint32_t in_channels = w_shape[1];
@@ -505,8 +504,8 @@ static Tensor to_folded_weight_layout(
     // Get input data type
     auto dtype = conv_weight_tensor.dtype();
 
-    auto pad_h = kernel_size[0] % stride[0];
-    auto pad_w = kernel_size[1] % stride[1];
+    auto pad_h = kernel_h % stride[0];
+    auto pad_w = kernel_w % stride[1];
 
     auto padded_kernel_h = kernel_h + pad_h;
     auto padded_kernel_w = kernel_w + pad_w;
@@ -535,17 +534,14 @@ static Tensor to_folded_weight_layout(
                         int y = kh / stride[0];
                         int x = kw / stride[1];
 
-                        if (y < new_h && x < new_w) {
-                            // Calculate folded input channel index
-                            int folded_ic_idx = (sh * stride[1] + sw) * in_channels + ic;
+                        // Calculate folded input channel index
+                        int folded_ic_idx = (sh * stride[1] + sw) * in_channels + ic;
 
-                            // Calculate final destination index
-                            int dst_idx = oc * in_channels * stride[0] * stride[1] * new_h * new_w +
-                                          folded_ic_idx * new_h * new_w + y * new_w + x;
+                        // Calculate final destination index
+                        int dst_idx = oc * in_channels * stride[0] * stride[1] * new_h * new_w +
+                                      folded_ic_idx * new_h * new_w + y * new_w + x;
 
-                            // Direct copy from input to output
-                            output_buffer[dst_idx] = input_buffer[src_idx];
-                        }
+                        output_buffer[dst_idx] = input_buffer[src_idx];
                     }
                 }
             }
@@ -938,8 +934,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
         }
     }
     if (params.enable_kernel_stride_folding) {
-        weight_tensor_ = to_folded_weight_layout(
-            weight_tensor_, params.stride, {original_weights_window_h, original_weights_window_w});
+        weight_tensor_ = to_folded_weight_layout(weight_tensor_, params.stride);
     }
     const auto& weights_shape = weight_tensor_.logical_shape();
     uint32_t out_channels = weights_shape[0];
