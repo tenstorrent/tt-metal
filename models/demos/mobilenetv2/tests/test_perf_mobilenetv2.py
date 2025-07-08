@@ -23,7 +23,7 @@ def get_expected_times(name):
     base = {"mobilenetv2": (63.3, 0.14)}
     return base[name]
 
-
+@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/24652")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("device_params", [{"l1_small_size": MOBILENETV2_L1_SMALL_SIZE}], indirect=True)

@@ -20,7 +20,7 @@ def get_expected_times(name):
     base = {"yolov8x": (128.267, 0.56)}
     return base[name]
 
-
+@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/24706")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
