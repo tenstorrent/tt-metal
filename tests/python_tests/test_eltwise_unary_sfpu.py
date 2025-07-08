@@ -16,7 +16,7 @@ from helpers.format_arg_mapping import (
     MathOperation,
     format_dict,
 )
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.param_config import (
     clean_params,
@@ -29,7 +29,13 @@ from helpers.test_config import run_test
 from helpers.utils import passed_test
 
 # SUPPORTED FORMATS FOR TEST
-supported_formats = [DataFormat.Float32, DataFormat.Float16, DataFormat.Float16_b]
+supported_formats = [
+    DataFormat.Float32,
+    DataFormat.Float16,
+    DataFormat.Float16_b,
+    DataFormat.Bfp8_b,
+]
+
 
 #   INPUT-OUTPUT FORMAT SWEEP
 #   input_output_formats(supported_formats)
@@ -77,31 +83,31 @@ param_ids = generate_param_ids(all_params)
 )
 def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
     arch = get_chip_architecture()
-    if (
-        formats.input_format in [DataFormat.Float32, DataFormat.Int32]
-        and dest_acc != DestAccumulation.Yes
-    ):
-        pytest.skip(
-            reason="Skipping test for 32 bit wide data without 32 bit accumulation in Dest"
-        )
 
-    if formats.input_format == DataFormat.Float16 and (
-        dest_acc == DestAccumulation.No and arch == ChipArchitecture.BLACKHOLE
-    ):
-        pytest.skip(reason="This combination is not fully implemented in testing")
+    if dest_acc == DestAccumulation.No and arch == ChipArchitecture.BLACKHOLE:
+        if formats.input_format == DataFormat.Float16 or formats == InputOutputFormat(
+            DataFormat.Float32, DataFormat.Float16
+        ):
+            pytest.skip(reason="This combination is not supported on BH architecture")
 
     input_dimensions = [64, 64]
 
     src_A, src_B, tile_cnt = generate_stimuli(
         formats.input_format, formats.input_format, input_dimensions=input_dimensions
     )
+
     generate_golden = get_golden_generator(UnarySFPUGolden)
     golden_tensor = generate_golden(mathop, src_A, formats.output_format)
+
     res_address = write_stimuli_to_l1(
         src_A, src_B, formats.input_format, formats.input_format, tile_count=tile_cnt
     )
 
-    unpack_to_dest = formats.input_format.is_32_bit()
+    unpack_to_dest = (
+        formats.input_format.is_32_bit()
+        and dest_acc
+        == DestAccumulation.Yes  # If dest_acc is off, we unpack Float32 into 16-bit format in src regsiters (later copied over in dest reg for SFPU op)
+    )
     test_config = {
         "formats": formats,
         "testname": testname,
@@ -115,6 +121,7 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
     run_test(test_config)
 
     res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
+
     # res_from_L1 = res_from_L1[:1024]
     assert len(res_from_L1) == len(golden_tensor)
 

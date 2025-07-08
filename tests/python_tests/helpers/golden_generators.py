@@ -11,8 +11,29 @@ from helpers.format_arg_mapping import (
     ReducePool,
     format_dict,
 )
+from helpers.format_config import DataFormat
 
 golden_registry = {}
+
+
+def check_bfp8_b(operand: list) -> list:
+    """Check if datum is BFP8_B there is a +/- inf then zero out entire row of 16 elements because they inherit the same exponent and therefore get zeroed out in tensix."""
+    # tensor_bytes = pack_bfp8_b(torch.tensor(operand, dtype=torch.bfloat16))
+    # tensor = unpack_bfp8_b(tensor_bytes)
+    # return tensor
+
+    not_finite = [1.7014118346046923e38, float("inf"), float("-inf"), float("nan")]
+    for i in range(len(operand)):
+        if operand[i] in not_finite:
+            # Zero out the entire row of 16 elements
+            inf_index = i
+            for col in range(16):
+                row = inf_index // 16
+                index = row * 16 + col
+                if operand[index] not in not_finite:
+                    operand[index] = 0.0
+
+    return operand
 
 
 def register_golden(cls):
@@ -97,14 +118,33 @@ class UnarySFPUGolden:
             MathOperation.Gelu: self._gelu,
         }
         self.data_format = None
+        self.shared_exponent_zeroed = False
 
     def __call__(self, operation, operand1, data_format):
+        self.data_format = data_format
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
-        self.data_format = data_format
-        tensor = to_tensor(operand1, data_format)
+        tensor = to_tensor(operand1, self.data_format)
         result = [self.ops[operation](x) for x in tensor.tolist()]
+        if self.shared_exponent_zeroed:
+            check_bfp8_b(result)
         return torch.tensor(result, dtype=format_dict[data_format])
+
+    # Helper functions
+    def handle_infinite_numbers(self, expected: float) -> float:
+        """Handle infinite numbers based on the data format.
+        Tensix will return inf, -inf for B_exponent formats, and NaN for Float16.
+        Returns:
+            float: Infinite number
+            Depending on our format we either return NaN or +/- inf.
+        """
+        if self.data_format.is_exponent_B():
+
+            if self.data_format == DataFormat.Bfp8_b:
+                self.shared_exponent_zeroed = True
+            return expected
+        else:  # self.data_format == DataFormat.Float16:
+            return float("NaN")
 
     # Operation methods
     def _abs(self, x):
@@ -114,18 +154,27 @@ class UnarySFPUGolden:
         return math.cos(x)
 
     def _log(self, x):
-        return math.log(x) if x != 0 else float("nan")
+        if x == 0.0:
+            return self.handle_infinite_numbers(float("-inf"))
+        return math.log(x)
 
     def _reciprocal(self, x):
-        return 1 / x if x != 0 else float("nan")
+        if x == 0.0:
+            return self.handle_infinite_numbers(1.7014118346046923e38)
+        return 1 / x
 
     def _sin(self, x):
+        # Never not finite, values range from [-1, 1]
         return math.sin(x)
 
     def _sqrt(self, x):
+        if x < 0.0:
+            self.handle_infinite_numbers(float("inf"))
         return math.sqrt(x)
 
     def _square(self, x):
+        if not math.isfinite(x * x):
+            return self.handle_infinite_numbers(float("inf"))
         return x * x
 
     def _celu(self, x):
@@ -187,34 +236,46 @@ class EltwiseBinaryGolden(FidelityMasking):
 @register_golden
 class BinarySFPUGolden(EltwiseBinaryGolden):
     def __init__(self):
-        self.ops = {
-            MathOperation.SfpuElwadd: self._add,
-            MathOperation.SfpuElwsub: self._sub,
-            MathOperation.SfpuElwmul: self._mul,
-            MathOperation.SfpuXlogy: self._xlogy,
-            MathOperation.SfpuElwRightShift: self._right_shift,
-            MathOperation.SfpuElwLeftShift: self._left_shift,
-            MathOperation.SfpuElwLogicalRightShift: self._logical_right_shift,
-        }
+        super().__init__()
+        self.ops.update(
+            {
+                MathOperation.SfpuElwadd: self._add,
+                MathOperation.SfpuElwsub: self._sub,
+                MathOperation.SfpuElwmul: self._mul,
+                MathOperation.SfpuXlogy: self._xlogy,
+                MathOperation.SfpuElwRightShift: self._right_shift,
+                MathOperation.SfpuElwLeftShift: self._left_shift,
+                MathOperation.SfpuElwLogicalRightShift: self._logical_right_shift,
+            }
+        )
 
-    def __call__(self, operation, operand1, operand2, data_format):
+    def __call__(
+        self, operation: MathOperation, operand1, operand2, data_format: DataFormat
+    ):
         if operation not in self.ops:
             raise ValueError(f"Unsupported SFPU operation: {operation}")
 
         t1 = to_tensor(operand1, data_format)
         t2 = to_tensor(operand2, data_format)
 
-        return self.ops[operation](t1, t2)
+        result = [self.ops[operation](t1[i], t2[i]) for i in range(len(t1))]
+        return torch.tensor(result, dtype=format_dict[data_format])
 
     # Operation methods are cover by Eltwise Binary Golden
-    def _xlogy(self, t1, t2):
-        return torch.xlogy(t1, t2)
+    def _xlogy(self, x, y):
+        # Unable to model edge cases for Tensix behavior in golden.
+        # Tensix shows inconsistent patterns in handling non-finite results for xlogy, depending on the input,
+        # data format (both input and output), and destination accumulation (dest_acc).
+        # We need to work with the Tensix team to understand when and why certain results are returned,
+        # what configuration dependencies exist, and how to handle them appropriately.
+        # Without this understanding, discrepancies will occur between golden and Tensix results due to differing edge case handling.
+        pass
 
     def _right_shift(self, t1, t2):
-        return torch.bitwise_right_shift(t1, t2)
+        return torch.bitwise_right_shift(t1, t2).item()
 
     def _left_shift(self, t1, t2):
-        return torch.bitwise_left_shift(t1, t2)
+        return torch.bitwise_left_shift(t1, t2).item()
 
     def _logical_right_shift(self, t1, t2):
         # Perform logical right shift by treating t1 as unsigned 32-bit
