@@ -22,6 +22,11 @@ constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(2);
  * dispatch implementations depending on those invocation parameters.
  */
 void kernel_main() {
+    DPRINT << "Kernel = worker_reader" << ENDL();
+    DPRINT << "my_chip_id: " << my_chip_id << ENDL();
+    DPRINT << "cb0_id: " << cb0_id << ENDL();
+    DPRINT << "tensor0_page_size: " << tensor0_page_size << ENDL();
+    DPRINT << ENDL();
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -33,6 +38,12 @@ void kernel_main() {
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
+    DPRINT << "tensor_address0: " << tensor_address0 << ENDL();
+    DPRINT << "num_tiles_per_core: " << num_tiles_per_core << ENDL();
+    DPRINT << "num_tiles_to_read: " << num_tiles_to_read << ENDL();
+    DPRINT << "first_core_tile_start_offset: " << first_core_tile_start_offset << ENDL();
+    DPRINT << "num_cores: " << num_cores << ENDL();
+    DPRINT << ENDL();
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -43,20 +54,25 @@ void kernel_main() {
     uint32_t tiles_read = 0;
     uint32_t shard_tile_id = first_core_tile_start_offset;
     uint32_t core_id = 0;
+    cb_reserve_back(cb0_id, num_tiles_to_read);
+    uint32_t l1_write_addr = get_write_ptr(cb0_id);
     while (tiles_read < num_tiles_to_read) {
         uint32_t num_tiles_to_read_this_core =
             std::min(num_tiles_per_core - shard_tile_id, num_tiles_to_read - tiles_read);
-        cb_reserve_back(cb0_id, num_tiles_to_read_this_core);
-        const uint32_t l1_write_addr = get_write_ptr(cb0_id);
+        // cb_reserve_back(cb0_id, num_tiles_to_read_this_core);
+        // const uint32_t l1_write_addr = get_write_ptr(cb0_id);
         uint64_t read_addr = get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0);
         read_addr += shard_tile_id * tensor0_page_size;
 
         noc_async_read(read_addr, l1_write_addr, num_tiles_to_read_this_core * tensor0_page_size);
-        noc_async_read_barrier();
+        // noc_async_read_barrier();
 
-        cb_push_back(cb0_id, num_tiles_to_read_this_core);
+        // cb_push_back(cb0_id, num_tiles_to_read_this_core);
+        l1_write_addr += num_tiles_to_read_this_core * tensor0_page_size;
         tiles_read += num_tiles_to_read_this_core;
         shard_tile_id = 0;
         core_id++;
     }
+    noc_async_read_barrier();
+    cb_push_back(cb0_id, num_tiles_to_read);
 }

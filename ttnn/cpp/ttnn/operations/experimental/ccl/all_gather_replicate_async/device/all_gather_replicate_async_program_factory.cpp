@@ -188,13 +188,20 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
         intermediate_tensor_cores,
         {
             semaphore.address(),  // sem_address
+            0,  // core id, corresponds to the id of which device it expect data from, will be reset later
         });
-
     // Kernel Runtime Args
 
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
     auto intermediate_cores_vec = corerange_to_cores(intermediate_tensor_cores, std::nullopt, true);
     auto cores_per_device = (intermediate_cores_vec.size() + ring_size - 1) / ring_size;
+
+    // Set runtime args for each core
+    for (uint32_t i = 0; i < intermediate_cores_vec.size(); i++) {
+        tt::tt_metal::SetRuntimeArgs(
+            program, worker_receiver_kernel_id, {intermediate_cores_vec[i]}, {semaphore.address(), i});
+    }
+    log_info(tt::LogOp, "LLONG cores_per_device: {}", cores_per_device);
     uint32_t start_core_index_for_device = intermediate_cores_vec.size() / ring_size * ring_index;
     uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
 
@@ -262,7 +269,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
             input_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,            // num_tiles_to_read
             input_first_core_tile_start_offset,  // first_core_tile_start_offset
-            input_tensor_cores_x.size(),         // num_cores
+            input_tensor_cores_x.size(),         // num_cores it reads from
         };
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
@@ -279,7 +286,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
             intermediate_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,                   // num_tiles_to_read
             intermediate_first_core_tile_start_offset,  // first_core_tile_start_offset
-            intermediate_tensor_cores_x.size(),         // num_cores
+            intermediate_tensor_cores_x.size(),         // num_cores it writes to
             drain_sync_core.x,                          // out_ready_sem_noc0_x
             drain_sync_core.y,                          // out_ready_sem_noc0_y
         };
