@@ -314,31 +314,20 @@ void DevicePool::initialize(
         // Must launch for TG
         any_remote_devices |= tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
 
-        const auto disable_dispatch_fabric = [&]() {
-            tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
-            // Need to reinitialize because FD Fabric setting has changed
-            tt::tt_metal::MetalContext::instance().initialize(
-                dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
-        };
-
         if (any_remote_devices) {
             FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-            if (hal::get_arch() == tt::ARCH::BLACKHOLE) {
-                disable_dispatch_fabric();
+            if (fabric_config == FabricConfig::DISABLED) {
+                tt::tt_metal::detail::SetFabricConfig(
+                    FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+                // Call initialize again because previously it was a no-op
+                tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+                fabric_config = FabricConfig::FABRIC_1D;
             } else {
-                if (fabric_config == FabricConfig::DISABLED) {
-                    tt::tt_metal::detail::SetFabricConfig(
-                        FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-                    // Call initialize again because previously it was a no-op
-                    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-                    fabric_config = FabricConfig::FABRIC_1D;
-                } else {
-                    // Use the same mode
-                    tt::tt_metal::detail::SetFabricConfig(
-                        fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-                }
-                std::cerr << fmt::format("Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs);
+                // Use the same mode
+                tt::tt_metal::detail::SetFabricConfig(
+                    fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
             }
+            log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs);
         }
     }
 

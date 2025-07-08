@@ -36,7 +36,6 @@ static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 // Set this var to change the cache dir.
 static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 // Used for demonstration purposes and will be removed in the future.
-static const char* TT_METAL_FD_FABRIC_DEMO = "TT_METAL_FD_FABRIC";
 static const char* TT_METAL_VISIBLE_DEVICES_ENV_VAR = "TT_METAL_VISIBLE_DEVICES";
 
 RunTimeOptions::RunTimeOptions() {
@@ -180,7 +179,6 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     using_slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
-    fd_fabric_en = true;  // getenv(TT_METAL_FD_FABRIC_DEMO) != nullptr;
 
     const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
     if (dispatch_data_collection_str != nullptr) {

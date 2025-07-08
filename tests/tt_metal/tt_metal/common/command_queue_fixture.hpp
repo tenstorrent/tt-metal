@@ -257,6 +257,9 @@ class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixtu
 
 class CommandQueueMultiDeviceOnFabricFixture : public CommandQueueMultiDeviceFixture,
                                                public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
+private:
+    bool original_fd_fabric_en_ = false;
+
 protected:
     void SetUp() override {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
@@ -266,6 +269,8 @@ protected:
         if (tt::tt_metal::IsGalaxyCluster()) {
             GTEST_SKIP();
         }
+        original_fd_fabric_en_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric();
+        // Enable Fabric Dispatch
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param
         tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
@@ -279,7 +284,7 @@ protected:
     void TearDown() override {
         CommandQueueMultiDeviceFixture::TearDown();
         tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(original_fd_fabric_en_);
     }
 };
 

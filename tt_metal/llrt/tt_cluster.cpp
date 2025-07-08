@@ -186,7 +186,7 @@ bool Cluster::is_base_routing_fw_enabled(ClusterType cluster_type) {
         cluster_type == ClusterType::N300 || cluster_type == ClusterType::T3K || cluster_type == ClusterType::TG);
 }
 
-Cluster::Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
+Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
     ZoneScoped;
     log_info(tt::LogDevice, "Opening user mode device driver");
 
@@ -196,6 +196,10 @@ Cluster::Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
 
     this->initialize_device_drivers();
+
+    if (!this->is_galaxy_cluster() && this->arch_ != tt::ARCH::BLACKHOLE) {
+        rtoptions.set_fd_fabric(true);
+    }
 
     this->disable_ethernet_cores_with_retrain();
 
