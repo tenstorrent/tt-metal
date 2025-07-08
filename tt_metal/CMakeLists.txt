@@ -159,6 +159,8 @@ target_sources(
             fabric/hw/inc/fabric_routing_mode.h
             fabric/hw/inc/tt_fabric_utils.h
             fabric/hw/inc/noc_addr.h
+            fabric/hw/inc/tt_fabric_mux.hpp
+            fabric/hw/inc/tt_fabric_mux_interface.hpp
             fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp
             fabric/hw/inc/edm_fabric/named_types.hpp
             fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp
@@ -383,6 +385,7 @@ target_sources(
             impl/dispatch/kernels/vc_eth_tunneler.cpp
             impl/dispatch/kernels/vc_packet_router.cpp
             fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp
+            fabric/impl/kernels/tt_fabric_mux.cpp
             kernels/compute/blank.cpp
             kernels/compute/eltwise_binary.cpp
             kernels/compute/eltwise_sfpu.cpp
