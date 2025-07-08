@@ -127,7 +127,7 @@ void kernel_main() {
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), i);
                 if (i == (ring_size - 1)) {
                     // Reset the semaphore before the next batch
-                    noc_semaphore_set(out_ready_sem, 0);
+                    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
                 }
             }
             while (tiles_read < tiles_to_read) {
