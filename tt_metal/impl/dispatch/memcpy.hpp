@@ -44,7 +44,7 @@ namespace tt::tt_metal {
 // TODO: ditto alignment isues
 #if defined(__x86_64__) || defined(__i386__)
 template <bool debug_sync = false>
-static inline void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n) {
+void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n) {
     // Ensure destination is properly aligned for optimal SIMD performance
     TT_ASSERT((uintptr_t)dst % MEMCPY_ALIGNMENT == 0);
 
