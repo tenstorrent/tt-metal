@@ -19,6 +19,8 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
 #include "../../../../../kernel_helper_functions/reduce_cb.hpp"
+#include "debug/dprint_pages.h"
+#include "dprint_tensix.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -126,6 +128,8 @@ void MAIN {
          */
 
         pairwise_reduce_cb<false>(cb_x, cb_scaler, cb_xmm2, cb_ex, Wt, 4);
+        // cb_wait_front(cb_ex, 1);
+        // UNPACK(tt::compute::common::print_full_tile(cb_ex, 0, true));
 
         /*
          * x - E[x]
@@ -159,6 +163,7 @@ void MAIN {
         /* (x - E[x])^2
          * compute temp = xmm*xmm = (x-E[x])^2
          */
+        // binary_op_init_common(cb_xmm, cb_xmm, cb_xmm2);
         mul_tiles_init(cb_xmm, cb_xmm);
         reconfig_data_format(cb_xmm, cb_xmm);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
@@ -174,6 +179,7 @@ void MAIN {
         }
 
         pairwise_reduce_cb<true>(cb_xmm2, cb_scaler, cb_xmm2, cb_ex2, Wt, 4);
+        // UNPACK(tt::compute::common::print_full_tile(cb_ex2, 0, true));
 
         reconfig_data_format(cb_ex2, cb_eps);
         ACQ();

@@ -10,6 +10,8 @@
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
+#include "debug/dprint_pages.h"
+#include "dprint_tensix.h"
 
 // pairwise_reduce_cb
 // DISCLAIMER EXAMPLE USES SMALL TILE SHAPES PURELY FOR EXPLANATION REASONS
@@ -46,9 +48,7 @@ void pairwise_reduce_cb(
     uint32_t num_dst_regs) {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;
-    // binary_op_init_common(cb_in, cb_scaler, cb_intermediate);
     init_bcast<ELWMUL, BroadcastType::SCALAR>(cb_in, cb_scaler, cb_intermediate);
-    // mul_tiles_bcast_scalar_init_short(cb_in, cb_scaler);
     reconfig_data_format(cb_in, cb_scaler);
     pack_reconfig_data_format(cb_intermediate);
     // always 0 if are popping cb_in, increases if we are not popping cb_in
@@ -69,10 +69,28 @@ void pairwise_reduce_cb(
         tile_regs_wait();
         cb_reserve_back(cb_intermediate, blk);
         for (uint32_t wtr = 0; wtr < blk; wtr++) {
+            if constexpr (pop_input) {
+                PACK(
+                    auto addr = get_local_cb_interface(cb_intermediate).fifo_wr_ptr +
+                                get_local_cb_interface(cb_intermediate).fifo_wr_tile_ptr - 1);
+                PACK(DPRINT << "TILE: " << (tile + wtr) << ENDL());
+                PACK(DPRINT << "addr: " << addr << ENDL());
+                PACK(DPRINT << "fifo_wr_ptr: " << get_local_cb_interface(cb_intermediate).fifo_wr_ptr << ENDL());
+                PACK(
+                    DPRINT << "fifo_wr_tile_ptr: " << get_local_cb_interface(cb_intermediate).fifo_wr_tile_ptr << ENDL()
+                           << ENDL() << ENDL());
+            }
             pack_tile(wtr, cb_intermediate);
         }
         cb_push_back(cb_intermediate, blk);
         tile_regs_release();
+    }
+    if constexpr (pop_input) {
+        cb_wait_front(cb_intermediate, cb_length);
+        for (uint32_t tile = 0; tile < cb_length; tile++) {
+            DPRINT << "tile: " << tile << ENDL();
+            UNPACK(tt::compute::common::print_full_tile(cb_intermediate, tile, true));
+        }
     }
     reconfig_data_format(cb_intermediate, cb_intermediate);
     pack_reconfig_data_format(cb_intermediate);
