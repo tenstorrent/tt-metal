@@ -50,11 +50,11 @@ void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n
 
     // Configuration for bulk processing: inner loop processes 8 x 32-byte operations
     // This creates 256-byte blocks (8 * 32 = 256 bytes) for maximum throughput
-    static constexpr uint32_t inner_loop = 8;
+    constexpr uint32_t inner_loop = 8;
     constexpr uint32_t inner_blk_size = inner_loop * sizeof(__m256i);  // 256 bytes
 
     const auto* src8 = static_cast<const uint8_t *>(src);
-    uint8_t* dst8 = (uint8_t*)dst;
+    auto* dst8 = static_cast<uint8_t*>(dst);
 
     size_t num_lines = n / inner_blk_size;  // Number of 256-byte blocks to process
 
@@ -72,14 +72,9 @@ void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n
 
         // Main bulk processing loop: Each iteration processes a 256 byte block. Blocks are processed 32 bytes at a time.
         for (size_t i = 0; i < num_lines; ++i) {
-            LOAD_STREAM_32();
-            LOAD_STREAM_32();
-            LOAD_STREAM_32();
-            LOAD_STREAM_32();
-            LOAD_STREAM_32();
-            LOAD_STREAM_32();
-            LOAD_STREAM_32();
-            LOAD_STREAM_32();
+            for (size_t j = 0; j < inner_loop; ++j) {
+                LOAD_STREAM_32();
+            }
             n -= inner_blk_size;
         }
     }
@@ -122,9 +117,13 @@ void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n
             n -= num_lines * sizeof(int32_t);
         }
 
-        // PHASE 2.4: Handle the final few bytes (< 4 bytes)
+        // PHASE 2.4: Handle the final few bytes (< 4 bytes)i
+        // We are the ones in control of and allocating the dst buffer,
+        // so writing a few bytes extra is okay because we are guaranteeing the size is adequate.
         if (n > 0) {
-            std::memcpy(dst8, src8, n);
+            int32_t val = 0;
+            std::memcpy(&val, src8, n);
+            _mm_stream_si32((int32_t*)dst8, val);
         }
     }
 
