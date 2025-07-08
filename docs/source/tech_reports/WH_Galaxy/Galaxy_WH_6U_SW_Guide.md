@@ -68,44 +68,9 @@ The following Ethernet bandwidth tests loop over all active Ethernet links and p
 
 ![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/Ethernet_Link_Latency_Test.png)
 
-# FAQ
-## What does Metal infra provision vs. what does Cloud provision?
-Cloud owns:
-- Physical hardware and data center installation.
-- Initial boot.
-- Any Tenstorrent related health checks like ensuring devices come up and smoke tests.
-Infra owns:
-- System-dependency provisioning for Metalium.
-- Firmware and driver installation if Metal has specific needs.
-- Enabling and access of development environment.
-- Installation of CI runner.
-- Weka MLPerf Mount.
-- Metalium infra smoke tests: [sw-hello-world repository](https://github.com/tt-rkim/sw-hello-world)
+## Internal Tenstorrent Members
 
-## How does Metal Infra deal with hardware-related issues?
-After we have attempted to revive a machine we will execute the following:
-- File and issue with the cloud team.
-- If in CI, we will take the machine out of service and mark it with an issue number label describing the problem.
-- Post a cloud issue in our cloud support channel.
-- The cloud team will assist and further escalate the issue if needed.
+> [!WARNING]
+> For internal Tentorrent memebers only!
 
-## For 6U, what is the difference between POR and C5?
-The C5 is an early 6U build that does not meet certain power draw requirements. Lightweight functional bring-up is possible however it is not recommended for tasks like model-development and benchmarking.
-
-## Cloud 6U will not boot up after a reset?
-Run the following command from any cloud machine with access to the -oob of the 6U machine:
-
-`ipmitool -C 17 -I lanplus -H <GALAXY_HOST>-oob -U root -P 0penBmc chassis power reset`
-
-## What is -oob?
-All BMCs for cloud hosts have the -oob (out of band) suffix. For example, g05glx6u01-oob.
-
-To perform a full power drain run the following command:
-
-`ipmitool -C 17 -I lanplus -H <GALAXY_HOST>-oob -U root -P 0penBmc chassis power off
-sleep 300
-ipmitool -C 17 -I lanplus -H <GALAXY_HOST>-oob -U root -P 0penBmc chassis power on`
-
-If this is a first time setup you must run the following command prior to the previous power reset command:
-
-`ipmitool -C 17 -I lanplus -H <GALAXY_HOST>-oob -U root -P 0penBmc chassis bootdev disk options=efiboot,persistent`
+For users with internal Tenstorrent access see this document for futher information regarding 6U Galaxy installation and troubleshooting: [TG/6U Metal Infra Galaxy Notes and FAQ](https://tenstorrent.atlassian.net/wiki/spaces/MI6/pages/1074659406/External+TG+6U+Metal+infra+Galaxy+notes+FAQ).
