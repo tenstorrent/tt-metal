@@ -300,7 +300,7 @@ void RunTestUnicastRaw(
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
     FabricNodeId dst_fabric_node_id(MeshId{0}, 0);
@@ -320,7 +320,6 @@ void RunTestUnicastRaw(
 
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
-    const auto& edm_config = fabric_context.get_fabric_router_config();
     uint32_t is_2d_fabric = topology == Topology::Mesh;
 
     if (!is_2d_fabric) {
@@ -382,9 +381,6 @@ void RunTestUnicastRaw(
     log_info(tt::LogTest, "Dst MeshId {} ChipId {}", dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
 
     auto edm_direction = control_plane.get_eth_chan_direction(src_fabric_node_id, edm_port);
-    CoreCoord edm_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-        src_physical_device_id, edm_port);
-
     log_info(tt::LogTest, "Using edm port {} in direction {}", edm_port, edm_direction);
 
     auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
@@ -445,26 +441,11 @@ void RunTestUnicastRaw(
         dst_fabric_node_id.chip_id,
         *dst_fabric_node_id.mesh_id};
 
-    // append the EDM connection rt args
-    const auto sender_channel = topology == Topology::Mesh ? edm_direction : 0;
-    tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
-        .edm_noc_x = edm_eth_core.x,
-        .edm_noc_y = edm_eth_core.y,
-        .edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel],
-        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel],
-        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
-        .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
-        .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
-        .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
-        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
-        .edm_direction = edm_direction};
-
     auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
     auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
     auto worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
-
     append_worker_to_fabric_edm_sender_rt_args(
-        edm_connection,
+        edm_port,
         worker_flow_control_semaphore_id,
         worker_teardown_semaphore_id,
         worker_buffer_index_semaphore_id,
