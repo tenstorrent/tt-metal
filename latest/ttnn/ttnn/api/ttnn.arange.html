@@ -143,7 +143,7 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">arange</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.arange',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.creation.arange_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.arange" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Creates a tensor with values ranging from <cite>start</cite> (inclusive) to <cite>end</cite> (exclusive) with a specified <cite>step</cite> size. The data type, device, and memory configuration of the resulting tensor can be specified.</p>
+<p>Creates a tensor with values ranging from <cite>start</cite> (inclusive) to <cite>end</cite> (exclusive) with a specified <cite>step</cite> size. The data type, device, layout and memory configuration of the resulting tensor can be specified.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -155,6 +155,7 @@
 <li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – The data type of the tensor. Defaults to <cite>ttnn.bfloat16</cite>.</p></li>
 <li><p><strong>device</strong> (<em>ttnn.Device</em><em>, </em><em>optional</em>) – The device where the tensor will be allocated. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – The memory configuration for the tensor. Defaults to <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</p></li>
+<li><p><strong>layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – The tensor layout. Defaults to <cite>ttnn.ROW_MAJOR</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span>
