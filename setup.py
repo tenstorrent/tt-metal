@@ -279,6 +279,7 @@ class CMakeBuild(build_ext):
             "ttnn/operations/ccl/**/*",
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
+            "ttnn/kernel/*",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",

@@ -6,6 +6,7 @@
 
 #include "topk.hpp"
 #include "device/topk_op.hpp"
+#include "device/topk_constants.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
@@ -37,8 +38,7 @@ std::vector<Tensor> post_topk_transform_tensor(
     const uint32_t adjusted_k,
     const Shape& original_lshape,
     const MemoryConfig& input_memory_config,
-    const CoreRangeSet& sub_core_grids,
-    const std::optional<Tensor>& indices_tensor = std::nullopt) {
+    const CoreRangeSet& sub_core_grids) {
     const auto& input_shape = input_tensor.padded_shape();
     const auto orig_rank = input_shape.rank();
 
@@ -109,7 +109,6 @@ std::vector<Tensor> ExecuteTopK::invoke(
     const bool sorted,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<Tensor>& indices_tensor,
     std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
@@ -123,21 +122,34 @@ std::vector<Tensor> ExecuteTopK::invoke(
 
     // K must be a supported shape
     uint32_t adjusted_k = CMAKE_UNIQUE_NAMESPACE::get_nearest_supported_k_value(k);
+
     // if dim is not last dimension, transpose it
     Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
+
     // if input is not 4d, convert it to 4d
     Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
-    // add padding if needed
-    Tensor padded_tensor = ttnn::fill_implicit_tile_padding(
-        transformed_tensor, largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max());
+
+    // pad the last dimension to satisfy the minimum size requirements
+    auto padded_tensor = transformed_tensor;
+    const auto pad_amount = std::max(
+        static_cast<int>(topk::constants::min_dim_per_core) - static_cast<int>(transformed_tensor.logical_shape()[-1]),
+        0);
+    const auto pad_val = largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max();
+    if (pad_amount > 0) {
+        ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
+        padded_tensor = ttnn::pad(transformed_tensor, padding, pad_val);
+    }
+
+    // fill implicit padding, if any
+    padded_tensor = ttnn::fill_implicit_tile_padding(padded_tensor, pad_val);
 
     auto output_tensor_vec = tt::tt_metal::operation::run(
         TopK{adjusted_k, -1, largest, sorted, input_memory_config, used_sub_core_grids},
         {padded_tensor},
-        {indices_tensor},
+        {},
         optional_output_tensors.has_value()
             ? reduction_common::tuple_to_vector_optional(optional_output_tensors.value())
-            : std::vector<std::optional<Tensor>>{std::nullopt, std::nullopt},
+            : std::vector<std::optional<Tensor>>{},
         queue_id);
 
     return CMAKE_UNIQUE_NAMESPACE::post_topk_transform_tensor(
@@ -149,8 +161,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
         adjusted_k,
         original_lshape,
         input_memory_config,
-        used_sub_core_grids,
-        indices_tensor);
+        used_sub_core_grids);
 }
 
 }  // namespace ttnn::operations::reduction
