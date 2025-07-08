@@ -6,7 +6,6 @@
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
-#include "tt-metalium/math.hpp"
 
 namespace tt::tt_metal {
 
@@ -20,6 +19,8 @@ size_t round_up(size_t value, size_t multiple) {
 
     return ((value + multiple - 1) / multiple) * multiple;
 };
+
+size_t div_up(size_t value, size_t multiple) { return (value + multiple - 1) / multiple; }
 
 Alignment legacyShapeToAlignment(
     const ttnn::Shape& logical_shape,
@@ -277,14 +278,14 @@ size_t TensorLayout::compute_consumed_memory_bytes_per_bank(const ttnn::Shape& s
         } else {
             num_banks = device.num_dram_channels();
         }
-        num_pages_per_bank = div_up(num_pages, num_banks);
+        num_pages_per_bank = CMAKE_UNIQUE_NAMESPACE::div_up(num_pages, num_banks);
     } else if (const auto& shard_spec = memory_config_.shard_spec()) {
         Shape2D shard_shape = Shape2D(shard_spec->shape);
         if (shard_spec->physical_shard_shape.has_value()) {
             shard_shape = shard_spec->physical_shard_shape.value();
         }
-        num_pages_per_bank =
-            div_up(shard_shape.height(), page_shape.height()) * div_up(shard_shape.width(), page_shape.width());
+        num_pages_per_bank = CMAKE_UNIQUE_NAMESPACE::div_up(shard_shape.height(), page_shape.height()) *
+                             CMAKE_UNIQUE_NAMESPACE::div_up(shard_shape.width(), page_shape.width());
     } else {
         auto sharding_args = compute_buffer_sharding_args(shape);
         const auto& dist_spec = sharding_args.buffer_distribution_spec().value();
