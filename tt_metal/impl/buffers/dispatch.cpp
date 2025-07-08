@@ -13,7 +13,6 @@
 #include <utility>
 
 #include "assert.hpp"
-#include "buffer_page_mapping.hpp"
 #include "buffer_types.hpp"
 #include "dispatch.hpp"
 #include "impl/context/metal_context.hpp"
@@ -52,19 +51,23 @@ struct BufferWriteDispatchParams {
     tt::stl::Span<const uint32_t> expected_num_workers_completed;
     uint32_t address = 0;
     uint32_t page_size_to_write = 0;
+    uint32_t data_size_to_copy = 0;
     uint32_t total_pages_to_write = 0;
     uint32_t total_pages_written = 0;
     uint32_t pages_per_txn = 0;
     bool issue_wait = false;
     IDevice* device = nullptr;
     uint32_t cq_id = 0;
+
+    virtual void calculate_issue_wait() {
+        this->issue_wait = this->total_pages_written == 0;  // only stall for the first write of the buffer
+    }
 };
 
 // Parameters specific to interleaved buffers
 class InterleavedBufferWriteDispatchParams : public BufferWriteDispatchParams {
 public:
     uint32_t dst_page_index = 0;
-    uint32_t data_size_to_copy = 0;
 
     InterleavedBufferWriteDispatchParams(
         const Buffer& buffer,
@@ -84,10 +87,6 @@ public:
     }
 
     virtual ~InterleavedBufferWriteDispatchParams() = default;
-
-    void calculate_issue_wait() {
-        this->issue_wait = this->total_pages_written == 0;  // only stall for the first write of the buffer
-    }
 
     virtual void calculate_num_pages_for_write_transaction(uint32_t num_pages_available_in_cq) {
         this->pages_per_txn = std::min(this->total_pages_to_write, num_pages_available_in_cq);
@@ -252,7 +251,6 @@ public:
     BufferCorePageMapping::Iterator core_page_mapping_it;
     CoreCoord core;
     uint32_t core_num_pages_remaining_to_write = 0;
-    uint32_t data_size_to_copy = 0;
 
     ShardedBufferWriteDispatchParams(
         Buffer& buffer,
@@ -272,15 +270,10 @@ public:
 
     virtual ~ShardedBufferWriteDispatchParams() = default;
 
-    void calculate_issue_wait() {
-        this->issue_wait = this->total_pages_written == 0;  // only stall for the first write of the buffer
-    }
-
     virtual void reset_params_for_core(const CoreCoord& core, const BufferCorePageMapping& core_page_mapping) {
         this->core = core;
         this->core_page_mapping_it = core_page_mapping.begin();
-        this->core_num_pages_remaining_to_write =
-            core_page_mapping.num_pages;  // this needs to be updated for large pages
+        this->core_num_pages_remaining_to_write = core_page_mapping.num_pages;
         this->address = this->buffer.address() + core_page_mapping.device_start_page * this->buffer.aligned_page_size();
         if (this->buffer.is_dram()) {
             this->address += this->buffer.device()->allocator()->get_bank_offset(
@@ -311,9 +304,6 @@ protected:
 
 class ShardedBufferWriteLargePageDispatchParams : public ShardedBufferWriteDispatchParams {
 public:
-    uint32_t size_of_partial_page = 0;
-    // uint32_t full_pages_to_write = 0;
-
     ShardedBufferWriteLargePageDispatchParams(
         Buffer& buffer,
         const PartialPageSpec& partial_page_spec,
@@ -325,7 +315,6 @@ public:
         this->size_of_partial_page = partial_page_spec.partial_page_size;
         this->page_size_to_write = partial_page_spec.partial_page_size;
         this->data_size_to_copy = partial_page_spec.partial_page_size;
-        // this->full_pages_to_write = num_full_pages;
         this->num_partial_pages_in_single_full_page = partial_page_spec.num_partial_pages_per_full_page;
     }
 
@@ -343,7 +332,7 @@ public:
     }
 
     void calculate_params_for_write_transaction(uint32_t num_pages_available_in_cq) override {
-        const uint32_t num_partial_pages_remaining_in_curr_full_page =
+        const int32_t num_partial_pages_remaining_in_curr_full_page =
             this->num_partial_pages_in_single_full_page - this->num_partial_pages_written_for_curr_full_page;
         TT_ASSERT(num_partial_pages_remaining_in_curr_full_page > 0);
         const uint32_t max_num_partial_pages_to_write_in_curr_txn =
@@ -370,24 +359,16 @@ public:
         this->address += this->pages_per_txn * this->page_size_to_write;
         this->core_num_pages_remaining_to_write -= this->pages_per_txn;
         if (this->num_partial_pages_written_for_curr_full_page == this->num_partial_pages_in_single_full_page) {
-            // this->full_pages_to_write -= 1;
-            // this->full_pages_written += 1;
-
             this->page_size_to_write = this->size_of_partial_page;
             this->data_size_to_copy = this->size_of_partial_page;
 
             this->num_partial_pages_written_for_curr_full_page = 0;
             ++this->core_page_mapping_it;
         }
-        // if (this->will_full_page_be_written_in_next_write_transaction()) {
-        //     this->page_size_to_write =
-        //         this->buffer.aligned_page_size() - (this->address - this->curr_full_pages_start_address);
-        //     this->data_size_to_copy = this->buffer.page_size() - (this->address -
-        //     this->curr_full_pages_start_address);
-        // }
     }
 
 private:
+    uint32_t size_of_partial_page = 0;
     uint32_t num_partial_pages_written_for_curr_full_page = 0;
     uint32_t num_partial_pages_in_single_full_page = 0;
 };
@@ -840,8 +821,6 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     dispatch_params.unpadded_dst_offset = 0;
     dispatch_params.buffer_page_mapping = buffer.get_buffer_page_mapping();
     dispatch_params.total_pages_to_read = buffer.size() / buffer.page_size();
-    log_info(tt::LogDispatch, "total_pages_to_read: {}", dispatch_params.total_pages_to_read);
-    log_info(tt::LogDispatch, "padded_page_size: {}", dispatch_params.padded_page_size);
     dispatch_params.total_pages_read = 0;
     dispatch_params.expected_num_workers_completed = expected_num_workers_completed;
     return dispatch_params;
