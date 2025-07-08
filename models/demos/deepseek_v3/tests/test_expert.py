@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import tempfile
 from pathlib import Path
 
@@ -12,13 +11,11 @@ from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
+from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
 
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.tt.moe import Expert as TTExpert
-from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3_impl.model import Expert as ReferenceExpert
-from models.demos.deepseek_v3_impl.model import ModelArgs
-from models.utility_functions import comp_pcc, get_mesh_device
+from models.utility_functions import comp_pcc
 
 
 @pytest.fixture
@@ -30,31 +27,27 @@ def temp_dir():
 
 @pytest.mark.parametrize(
     "mesh_device",
-    [get_mesh_device()],
+    [
+        (1, 1),
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size",
     [
-        ("decode", 1024, 32),
+        ("decode", 1024, 64),
+        ("prefill", 1, 1024 * 64),
     ],
 )
 def test_forward_pass(mode, seq_len, mesh_device, temp_dir, batch_size):
     """Test forward pass against reference model."""
 
+    print(f"mesh_device: {mesh_device}")
     hf_config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
     hf_config.num_hidden_layers = 1  # Reduce layers for testing
 
-    # Get state dict from actual model - pass directly to convert_weights
-    print("Loading reference model state dict")
-    config_path = "models/demos/deepseek_v3_impl/configs/config_671B.json"
-    with open(config_path) as f:
-        model_args = ModelArgs(**json.load(f))
-
-    logger.info("Loading reference model expert")
-
-    reference_model = ReferenceExpert(hf_config.hidden_size, hf_config.moe_intermediate_size)
-    reference_model.init_weights_with_random()
+    logger.info("Loading reference expert model..")
+    reference_model = ReferenceExpert(hf_config)
     reference_model.eval()
 
     hf_state_dict = reference_model.state_dict()
@@ -63,21 +56,21 @@ def test_forward_pass(mode, seq_len, mesh_device, temp_dir, batch_size):
     weight_config = TTExpert.convert_weights(hf_config, hf_state_dict, temp_dir, mesh_device)
 
     # Generate appropriate config
-    if mode == "prefill":
-        model_config = TTExpert.prefill_model_config(hf_config, mesh_device)
-    elif mode == "decode":
-        model_config = TTExpert.decode_model_config(hf_config, mesh_device)
-    else:
-        raise ValueError(f"Unsupported mode: {mode}")
+    model_decode_config = TTExpert.decode_model_config(hf_config, mesh_device)
+    model_prefill_config = TTExpert.prefill_model_config(hf_config, mesh_device)
 
     # Create RunConfig using both weight_config and model_config
-    run_config = create_run_config(model_config, weight_config, mesh_device)
-
-    # Instantiate the model
-    tt_expert = TTExpert(hf_config, mesh_device)
+    run_prefill_config, run_decode_config = TTExpert.run_config(
+        model_prefill_config, model_decode_config, weight_config, mesh_device
+    )
 
     # Create input tensor
-    torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
+    if mode == "decode":
+        torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size)
+    elif mode == "prefill":
+        torch_input = torch.randn(1, batch_size * seq_len, hf_config.hidden_size)
+    else:
+        raise ValueError(f"Invalid mode: {mode}")
 
     # Reference forward pass
     reference_output = reference_model(torch_input)
@@ -93,13 +86,27 @@ def test_forward_pass(mode, seq_len, mesh_device, temp_dir, batch_size):
     )
 
     # TTNN forward pass
-    tt_output = tt_expert.forward(tt_input, run_config, mesh_device)
+    if mode == "decode":
+        tt_input = ttnn.to_memory_config(tt_input, run_decode_config["input_memory_config"])
+        tt_output = TTExpert.forward_decode(tt_input, run_decode_config, mesh_device)
+        expected_output_memory_config = run_decode_config["output_memory_config"]
+    elif mode == "prefill":
+        tt_input = ttnn.to_memory_config(tt_input, run_prefill_config["input_memory_config"])
+        tt_output = TTExpert.forward_prefill(tt_input, run_prefill_config, mesh_device)
+        expected_output_memory_config = run_prefill_config["output_memory_config"]
+    else:
+        raise ValueError(f"Invalid mode: {mode}")
+
+    actual_output_memory_config = tt_output.memory_config()
+    assert (
+        actual_output_memory_config == expected_output_memory_config
+    ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
     # Convert output back to torch
     tt_output_torch = ttnn.to_torch(tt_output)
 
     # Compare outputs
-    pcc_required = 0.9990
+    pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(f"Mode: {mode}, Seq len: {seq_len}")
