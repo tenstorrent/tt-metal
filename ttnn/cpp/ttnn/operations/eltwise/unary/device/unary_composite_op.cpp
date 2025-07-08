@@ -26,34 +26,6 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::operations::unary {
 
-// atanh[x] = 0.5 * ln((1 + x) / (1 - x))
-Tensor _atanh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL(input_a.storage_type() == StorageType::DEVICE, "Unary operation requires input to be on Device.");
-
-    Tensor comp_result(input_a);
-    {
-        Tensor nr_term(input_a);
-        {
-            Tensor pos_x = ttnn::add(input_a, 1.0f, std::nullopt, output_mem_config);
-            Tensor neg_x = ttnn::subtract(input_a, 1.0f, std::nullopt, output_mem_config);
-            nr_term = ttnn::log(
-                ttnn::multiply(
-                    pos_x,
-                    ttnn::reciprocal(ttnn::neg(neg_x, output_mem_config), output_mem_config),
-                    std::nullopt,
-                    output_mem_config),
-                output_mem_config);
-        }
-        comp_result = ttnn::multiply(nr_term, 0.5f, std::nullopt, output_mem_config);
-    }
-    // Input is -1 > value > 1, output is nan
-    // Input is -1 < value < 1, output is atanh(input)
-    float t_nan = std::nanf("");
-    Tensor abs_temp = ttnn::subtract(ttnn::abs(input_a, output_mem_config), 1.0f, std::nullopt, output_mem_config);
-    Tensor result = ttnn::where(ttnn::ltz(abs_temp, output_mem_config), comp_result, t_nan);
-    return result;
-}
-
 // cbrt(a) = pow(a,1/3) or (cbrt(a))**3 = a.
 //         = exp[ (1/3)*log[a] ]
 Tensor _cbrt(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
