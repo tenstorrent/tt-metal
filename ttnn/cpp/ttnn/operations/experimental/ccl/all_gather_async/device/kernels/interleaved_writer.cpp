@@ -106,6 +106,7 @@ void kernel_main() {
 
             // Will have more cases once scatter-write supports more than 2 distinct addresses
             switch (tiles_to_put_in_current_packet) {
+#ifdef ARCH_WORMHOLE
                 case 2: {
                     uint32_t tile_one_id = tile_id_start + row_offset + pages_read_in_row;
                     pages_read_in_row++;
@@ -152,8 +153,10 @@ void kernel_main() {
                                 output_page_size);
                         }
                     }
+                    tiles_read += 2;
                     break;
                 }
+#endif
                 case 1:
                 default: {
                     uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
@@ -178,10 +181,11 @@ void kernel_main() {
                                 noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
                         }
                     }
+                    tiles_read++;
                     break;
                 }
             }
-            tiles_read += tiles_to_put_in_current_packet;
+
             cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
         }
 
@@ -282,6 +286,7 @@ void kernel_main() {
 
                 // Will have more cases once scatter-write supports more than 2 distinct addresses
                 switch (tiles_to_put_in_current_packet) {
+#ifdef ARCH_WORMHOLE
                     case 2: {
                         uint32_t tile_one_id = tile_id_start + row_offset + pages_read_in_row;
                         pages_read_in_row++;
@@ -321,8 +326,10 @@ void kernel_main() {
                                 output_page_size,
                                 output_page_size);
                         }
+                        tiles_read += 2;
                         break;
                     }
+#endif
                     case 1:
                     default: {
                         uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
@@ -341,10 +348,11 @@ void kernel_main() {
                             write_for_fabric_write_forward(
                                 noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
                         }
+                        tiles_read++;
                         break;
                     }
                 }
-                tiles_read += tiles_to_put_in_current_packet;
+
                 cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
             }
 
