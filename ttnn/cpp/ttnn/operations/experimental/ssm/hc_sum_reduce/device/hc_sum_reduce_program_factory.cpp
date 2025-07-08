@@ -57,11 +57,11 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
 
     // Reader writes input tiles to this
     const uint32_t input_cb_id = tt::CBIndex::c_0;
-    const auto input_cb = create_circular_buffer(input_cb_id, cb_size, input_tile_size, input_format);
+    create_circular_buffer(input_cb_id, cb_size, input_tile_size, input_format);
 
     // Reader writes scaling tile to this CB. We need it because the reduce LLK requires a scaling factor tile.
     const uint32_t scalar_cb_id = tt::CBIndex::c_2;
-    const auto scalar_cb = create_circular_buffer(scalar_cb_id, cb_size, intermediary_tile_size, intermediary_format);
+    create_circular_buffer(scalar_cb_id, cb_size, intermediary_tile_size, intermediary_format);
 
     // Compute writes transposed tile (loopback)
     const uint32_t intermed_cb_id0 = tt::CBIndex::c_24;
@@ -77,7 +77,7 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
 
     // Compute transposes and writes back to writer
     const uint32_t output_cb_id = tt::CBIndex::c_16;
-    const auto output_cb = create_circular_buffer(output_cb_id, cb_size, input_tile_size, input_format);
+    create_circular_buffer(output_cb_id, cb_size, input_tile_size, input_format);
 
     const bfloat16 bfloat_scaler_value = bfloat16(1.0f);
     const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
