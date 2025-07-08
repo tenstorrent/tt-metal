@@ -60,7 +60,11 @@ def test_accuracy_sdxl(
     with open(captions_path, "r") as tsv_file:
         reader = csv.reader(tsv_file, delimiter="\t")
         next(reader)
-        for row in reader:
+        for index, row in enumerate(reader):
+            if index < start_from:
+                continue
+            if index >= start_from + num_prompts:
+                break
             prompts.append(row[2])
 
     logger.info(f"Start inference from prompt index: {start_from} to {start_from + num_prompts}")
@@ -68,7 +72,7 @@ def test_accuracy_sdxl(
     images = test_demo(
         mesh_device,
         is_ci_env,
-        prompts[start_from : start_from + num_prompts],
+        prompts,
         num_inference_steps,
         vae_on_device,
         evaluation_range,
