@@ -7,8 +7,11 @@
 #include <limits>
 #include <optional>
 
+#include "tt-metalium/buffer_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::constants;
 
@@ -51,50 +54,41 @@ std::vector<ttnn::TensorSpec> Reduce::compute_output_specs(const std::vector<Ten
     // - Get output alignment from input alignment and output dtype, layout, mem_config
     // - Get shard spec from output strides (logical shape + alignment)?
     auto output_shape = input_tensor.logical_shape();
-    auto output_padded_shape = input_tensor.padded_shape();
     switch (this->dim) {
-        case ReduceOpDim::H:
-            output_shape[2] = 1;
-            output_padded_shape[2] = TILE_HEIGHT;
-            break;
-        case ReduceOpDim::W:
-            output_shape[3] = 1;
-            output_padded_shape[3] = TILE_WIDTH;
-            break;
+        case ReduceOpDim::H: output_shape[2] = 1; break;
+        case ReduceOpDim::W: output_shape[3] = 1; break;
         case ReduceOpDim::HW:
             output_shape[2] = 1;
             output_shape[3] = 1;
-            output_padded_shape[2] = TILE_HEIGHT;
-            output_padded_shape[3] = TILE_WIDTH;
             break;
     }
 
-    auto output_mem_config = this->output_mem_config;
-    if (output_mem_config.is_sharded()) {
-        if (input_tensor.shard_spec().has_value()) {
-            auto shard_spec = input_tensor.shard_spec().value();
-            shard_spec.shape[0] = output_padded_shape.volume() / output_padded_shape[-1];
-            output_mem_config = output_mem_config.with_shard_spec(shard_spec);
-        } else {
-            TT_FATAL(
-                input_tensor.nd_shard_spec().has_value(),
-                "Sharded input needs nd shard spec when there is no shard spec");
-            auto nd_shard_spec = input_tensor.nd_shard_spec().value();
-            auto tile = input_tensor.tensor_spec().tile().get_tile_shape();
-            if (dim == ReduceOpDim::W || dim == ReduceOpDim::HW) {
-                nd_shard_spec.shard_shape[-1] = tile[1];
-            }
-            if ((dim == ReduceOpDim::H || dim == ReduceOpDim::HW) && nd_shard_spec.shard_shape.rank() > 1) {
-                nd_shard_spec.shard_shape[-2] = tile[0];
-            }
-            output_mem_config = MemoryConfig(output_mem_config.buffer_type(), nd_shard_spec);
+    TensorSpec tensor_spec(
+        output_shape,
+        TensorLayout(output_dtype, PageConfig(Layout::TILE), MemoryConfig(output_mem_config.buffer_type())));
+
+    if (input_tensor.nd_shard_spec().has_value()) {
+        auto nd_shard_spec = *input_tensor.nd_shard_spec();
+
+        if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+            return {tensor_spec.width_sharded(nd_shard_spec.grid, nd_shard_spec.orientation)};
         }
+
+        if (dim == ReduceOpDim::W || dim == ReduceOpDim::HW) {
+            nd_shard_spec.shard_shape[-1] = 1;
+        }
+        if ((dim == ReduceOpDim::H || dim == ReduceOpDim::HW) && nd_shard_spec.shard_shape.rank() > 1) {
+            nd_shard_spec.shard_shape[-2] = div_up(nd_shard_spec.shard_shape[-2], input_tensor.logical_shape()[-2]);
+        }
+        auto page_config = PageConfig(Layout::TILE);
+        nd_shard_spec.apply_required_alignment(page_config);
+        tensor_spec = TensorSpec(
+            output_shape,
+            TensorLayout(
+                output_dtype, page_config, MemoryConfig(output_mem_config.buffer_type(), std::move(nd_shard_spec))));
     }
 
-    return {ttnn::TensorSpec(
-        output_shape,
-        TensorLayout::fromPaddedShape(
-            this->output_dtype, PageConfig(Layout::TILE), output_mem_config, output_shape, output_padded_shape))};
+    return {tensor_spec};
 }
 
 operation::ProgramWithCallbacks Reduce::create_program(

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/tensor_spec.hpp"
+#include <utility>
+#include "ttnn/tensor/types.hpp"
 
 namespace tt::tt_metal {
 
@@ -139,6 +141,64 @@ TensorSpec TensorSpec::with_memory_config(MemoryConfig memory_config) const {
     result.tensor_layout_ = tensor_layout_.with_memory_config(std::move(memory_config));
     result.populate_sharding_specs();
     return result;
+}
+
+TensorSpec TensorSpec::sharded_across_dims(
+    tt::stl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
+    Shape shard_shape = padded_shape();
+    for (auto dim : dims) {
+        shard_shape[dim] = 1;
+    }
+    auto buffer_type = memory_config().buffer_type();
+    NdShardSpec shard_spec(std::move(shard_shape), std::move(grid), orientation);
+    shard_spec.apply_recommended_alignment(page_config(), data_type(), buffer_type);
+    TensorLayout new_layout(data_type(), page_config(), MemoryConfig(buffer_type, std::move(shard_spec)));
+    return TensorSpec(logical_shape(), std::move(new_layout));
+}
+
+TensorSpec TensorSpec::sharded_across_dims_except(
+    tt::stl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
+    const auto& padded_shape = this->padded_shape();
+    Shape shard_shape = Shape().to_rank(padded_shape.rank());
+    for (auto dim : dims) {
+        shard_shape[dim] = padded_shape[dim];
+    }
+    auto buffer_type = memory_config().buffer_type();
+    auto shard_spec = NdShardSpec(std::move(shard_shape), std::move(grid), orientation);
+    shard_spec.apply_recommended_alignment(page_config(), data_type(), buffer_type);
+    TensorLayout new_layout(data_type(), page_config(), MemoryConfig(buffer_type, std::move(shard_spec)));
+    return TensorSpec(logical_shape(), std::move(new_layout));
+}
+
+TensorSpec TensorSpec::height_sharded(CoreRangeSet grid, ShardOrientation orientation) const {
+    auto num_cores = grid.num_cores();
+    auto buffer_type = memory_config().buffer_type();
+    auto shard_height = div_up(physical_shape().height(), num_cores);
+    NdShardSpec shard_spec(Shape({shard_height, physical_shape().width()}), std::move(grid), orientation);
+    shard_spec.apply_required_alignment(page_config());
+    TensorLayout new_layout(data_type(), page_config(), MemoryConfig(buffer_type, std::move(shard_spec)));
+    return TensorSpec(logical_shape(), std::move(new_layout));
+}
+
+TensorSpec TensorSpec::width_sharded(CoreRangeSet grid, ShardOrientation orientation) const {
+    auto num_cores = grid.num_cores();
+    auto buffer_type = memory_config().buffer_type();
+    auto shard_width = div_up(physical_shape().width(), num_cores);
+    NdShardSpec shard_spec(Shape({physical_shape().height(), shard_width}), std::move(grid), orientation);
+    shard_spec.apply_required_alignment(page_config());
+    TensorLayout new_layout(data_type(), page_config(), MemoryConfig(buffer_type, std::move(shard_spec)));
+    return TensorSpec(logical_shape(), std::move(new_layout));
+}
+
+TensorSpec TensorSpec::block_sharded(CoreRange grid) const {
+    auto grid_size = grid.grid_size();
+    auto shard_height = div_up(physical_shape().height(), grid_size.y);
+    auto shard_width = div_up(physical_shape().width(), grid_size.x);
+    auto buffer_type = memory_config().buffer_type();
+    NdShardSpec shard_spec(Shape({shard_height, shard_width}), std::move(grid), ShardOrientation::ROW_MAJOR);
+    shard_spec.apply_recommended_alignment(page_config(), data_type(), buffer_type);
+    TensorLayout new_layout(data_type(), page_config(), MemoryConfig(buffer_type, std::move(shard_spec)));
+    return TensorSpec(logical_shape(), std::move(new_layout));
 }
 
 void TensorSpec::populate_sharding_specs() {

@@ -54,12 +54,26 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
     }
 }
 
+void NdShardSpec::apply_required_alignment(const PageConfig& page_config) {
+    auto alignment = page_config.get_required_shard_shape_alignment();
+    for (int dim = 1; dim <= alignment.size(); dim++) {
+        shard_shape[-dim] = round_up(shard_shape[-dim], alignment[-dim]);
+    }
+}
+
+void NdShardSpec::apply_recommended_alignment(const PageConfig& page_config, DataType dtype, BufferType buffer_type) {
+    auto alignment = page_config.get_recommended_shard_shape_alignment(dtype, buffer_type);
+    for (int dim = 1; dim <= alignment.size(); dim++) {
+        shard_shape[-dim] = round_up(shard_shape[-dim], alignment[-dim]);
+    }
+}
+
 MemoryConfig::MemoryConfig(
     TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) :
     memory_layout_(memory_layout), buffer_type_(buffer_type), shard_spec_(std::move(shard_spec)) {}
 
-MemoryConfig::MemoryConfig(BufferType buffer_type, NdShardSpec nd_shard_spec) :
-    memory_layout_(TensorMemoryLayout::BLOCK_SHARDED),
+MemoryConfig::MemoryConfig(BufferType buffer_type, std::optional<NdShardSpec> nd_shard_spec) :
+    memory_layout_(nd_shard_spec.has_value() ? TensorMemoryLayout::BLOCK_SHARDED : TensorMemoryLayout::INTERLEAVED),
     buffer_type_(buffer_type),
     nd_shard_spec_(std::move(nd_shard_spec)),
     created_with_nd_shard_spec_(true) {}
