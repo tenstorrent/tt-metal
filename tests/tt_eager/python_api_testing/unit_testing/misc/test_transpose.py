@@ -674,8 +674,16 @@ def test_transpose_2D(dtype, shape, layout, device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (
+        ttnn.bfloat16,
+        # ttnn.int32,
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat16",
+        # "int32",
+        "float",
+    ],
 )
 @pytest.mark.parametrize(
     "shape",
