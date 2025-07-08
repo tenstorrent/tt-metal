@@ -335,9 +335,10 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     // Calculate the number of cores available for computation
     const auto device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
+    const uint32_t total_number_of_cores_physical = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
+    const uint32_t total_number_of_cores_virtual = rounddown_pow2(total_number_of_cores_physical);
     uint32_t number_of_tiles_per_core = get_number_of_tiles_per_core(
-        total_number_of_cores,
+        total_number_of_cores_virtual,
         Wt,
         tensor_args.input_tensor.dtype(),
         output_tensors.at(1).dtype(),
@@ -348,10 +349,10 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     const uint32_t all_core_utilization_count = (Wt + number_of_tiles_per_core - 1) / number_of_tiles_per_core;
 
     TT_FATAL(
-        all_core_utilization_count <= total_number_of_cores,
+        all_core_utilization_count <= total_number_of_cores_virtual,
         "All core utilization count exceeds total number of cores. Utilized cores: {}, Total cores: {}",
         all_core_utilization_count,
-        total_number_of_cores);
+        total_number_of_cores_virtual);
 
     /**
      * Calculates the core range based on the number of work units (all_core_utilization_count) and the total number of
@@ -373,10 +374,24 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
      * objects depending on the configuration.
      */
     CoreRangeSet core_range;
-    if (all_core_utilization_count == total_number_of_cores) {
+    if (all_core_utilization_count == total_number_of_cores_physical) {
         // All cores used
         core_range = CoreRangeSet(
             CoreRange({0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1}));
+    } else if (all_core_utilization_count == total_number_of_cores_virtual) {
+        const uint32_t core_grid_calculated_rows_number =
+            all_core_utilization_count / compute_with_storage_grid_size.x - 1;
+        const uint32_t core_grid_calculated_columns_number =
+            all_core_utilization_count % compute_with_storage_grid_size.x;
+        // All virtual cores used
+        core_range =
+            CoreRangeSet(CoreRange({0, 0}, {compute_with_storage_grid_size.x - 1, core_grid_calculated_rows_number}));
+        if (core_grid_calculated_columns_number != 0) {
+            const CoreRange additional_range(
+                {0, core_grid_calculated_rows_number + 1},
+                {core_grid_calculated_columns_number - 1, core_grid_calculated_rows_number + 1});
+            core_range = core_range.merge(CoreRangeSet(additional_range));
+        }
     } else {
         const uint32_t core_grid_calculated_rows_number = all_core_utilization_count / compute_with_storage_grid_size.x;
         const uint32_t core_grid_calculated_columns_number =
@@ -395,7 +410,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
             if (core_grid_calculated_columns_number != 0) {
                 const CoreRange additional_range(
                     {0, core_grid_calculated_rows_number},
-                    {core_grid_calculated_columns_number, core_grid_calculated_rows_number});
+                    {core_grid_calculated_columns_number - 1, core_grid_calculated_rows_number});
                 core_range = core_range.merge(CoreRangeSet(additional_range));
             }
         }
@@ -573,7 +588,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         Wt,
         Ht,
         number_of_tiles_per_core,
-        total_number_of_cores,
+        total_number_of_cores_virtual,
         semaphore_exchange_readers,
     };
     const std::string writer_kernel_path =
@@ -678,6 +693,13 @@ uint32_t SortProgramFactoryHybrid::get_number_of_tiles_per_core(
     }
 
     return 128;
+}
+
+uint32_t SortProgramFactoryHybrid::rounddown_pow2(uint32_t n) {
+    if (n == 0) {
+        return 0;
+    }
+    return 1 << (31 - std::countl_zero(n));
 }
 
 // Single row - multi core

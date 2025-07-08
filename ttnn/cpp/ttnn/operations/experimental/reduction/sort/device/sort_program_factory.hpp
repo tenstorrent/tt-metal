@@ -60,6 +60,8 @@ struct SortProgramFactoryHybrid {
         const DataType& input_dtype,
         const DataType& index_dtype,
         HybridSortSlicingStrategy slicing_strategy = HybridSortSlicingStrategy::USE_AS_MANY_CORES);
+
+    static uint32_t rounddown_pow2(uint32_t n);
 };
 
 // Single row - multi core
