@@ -76,6 +76,7 @@ struct WorkerToFabricEdmSenderImpl {
         uint32_t edm_worker_location_info_addr;
         uint32_t buffer_size_bytes;
         uint32_t edm_copy_of_wr_counter_addr;
+        volatile uint32_t* writer_send_sem_addr;
 
         if constexpr (my_core_type == ProgrammableCoreType::TENSIX) {
             tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
@@ -91,6 +92,13 @@ struct WorkerToFabricEdmSenderImpl {
             edm_worker_location_info_addr = conn.edm_worker_location_info_addr;
             buffer_size_bytes = conn.buffer_size_bytes;
             edm_copy_of_wr_counter_addr = conn.buffer_index_semaphore_id;
+
+            auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
+            // writer_send_sem_addr =
+            //     reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
+
+            writer_send_sem_addr = reinterpret_cast<volatile uint32_t*>(
+                reinterpret_cast<uintptr_t>(&conn.worker_flow_control_semaphore_id));
         } else {
             // TODO: will be deprecated. currently for ethernet dispatch case
             //       ethernet core need to have same memory mapping as worker
@@ -103,11 +111,10 @@ struct WorkerToFabricEdmSenderImpl {
             edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
             buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
             edm_copy_of_wr_counter_addr = get_arg_val<uint32_t>(arg_idx++);
+            auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
+            writer_send_sem_addr =
+                reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
         }
-        const auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
-
-        auto writer_send_sem_addr =
-            reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(writer_send_sem_id));
 
         // DEAD CODE
         // Workers don't have a local stream ID, so we set to a placeholder (unused) value until the worker and EDM

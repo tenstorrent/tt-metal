@@ -105,7 +105,9 @@ struct fabric_connection_info_t {
     uint32_t edm_worker_location_info_addr;
     uint32_t buffer_size_bytes;
     uint32_t buffer_index_semaphore_id;
-} __attribute__((packed));
+    uint32_t padding[3];
+    uint32_t worker_flow_control_semaphore_id;
+} __attribute__((aligned(4)));
 
 // Fabric connection metadata stored in worker L1
 // 16 for WH, 12 for BH
@@ -117,6 +119,6 @@ struct tensix_fabric_connections_l1_info_t {
     uint8_t padding[12];              // pad to cache line alignment
 } __attribute__((packed));
 
-static_assert(sizeof(tensix_fabric_connections_l1_info_t) == 592, "Struct size mismatch!");
+static_assert(sizeof(tensix_fabric_connections_l1_info_t) == 848, "Struct size mismatch!");
 
 }  // namespace tt::tt_fabric
