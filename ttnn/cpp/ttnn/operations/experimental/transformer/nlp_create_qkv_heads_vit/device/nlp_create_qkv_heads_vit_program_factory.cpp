@@ -17,15 +17,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.padded_shape();
 
-    tt_metal::IDevice* device = a.device();
-
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
     // Dummy
-    tt_metal::Buffer* in1_buffer;
     uint32_t in1_buffer_addr = 0;
 
     ////////////////////////////////////////////////////////////////////////////
@@ -73,7 +70,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool in1_is_dram = false;
@@ -215,7 +211,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
         auto dst_dram_buffer_key = output_tensors.at(1).buffer();
         auto dst_dram_buffer_value = output_tensors.at(2).buffer();
 
-        for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
+        for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {

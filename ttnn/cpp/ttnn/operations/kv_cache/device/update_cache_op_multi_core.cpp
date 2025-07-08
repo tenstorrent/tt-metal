@@ -224,7 +224,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     uint32_t total_batched_heads = 0;
     std::vector<uint32_t> cache_start_ids;
     cache_start_ids.reserve(num_cores);
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; ++i) {
+    for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores.at(i);
         uint32_t num_batched_heads_per_core;
         if (i < g1_numcores) {
@@ -294,7 +294,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
                 UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer);
             }
 
-            for (uint32_t i = 0, num_tiles_read = 0; i < cores.size(); ++i) {
+            for (uint32_t i = 0; i < cores.size(); ++i) {
                 const CoreCoord& core = cores.at(i);
                 uint32_t curr_cache_start_id = cache_start_ids[i] + cache_tile_idx;
                 {

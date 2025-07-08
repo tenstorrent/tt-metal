@@ -189,8 +189,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
             tt_metal::CircularBufferConfig(Wt * scalar_single_tile_size, cos_interim_data_format_spec)
                 .set_page_size(untilized_cos_interm_cb_index, scalar_single_tile_size)
                 .set_page_size(untilized_cos_sync_cb_index, scalar_single_tile_size);
-        auto cb_untilized_cos_interm =
-            tt_metal::CreateCircularBuffer(program, all_cores, cb_untilized_cos_interm_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_untilized_cos_interm_config);
 
         std::map<uint8_t, tt::DataFormat> sin_interim_data_format_spec = {
             {untilized_sin_interm_cb_index, scalar_cb_data_format},
@@ -199,8 +198,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
             tt_metal::CircularBufferConfig(Wt * scalar_single_tile_size, sin_interim_data_format_spec)
                 .set_page_size(untilized_sin_interm_cb_index, scalar_single_tile_size)
                 .set_page_size(untilized_sin_sync_cb_index, scalar_single_tile_size);
-        auto cb_untilized_sin_interm =
-            tt_metal::CreateCircularBuffer(program, all_cores, cb_untilized_sin_interm_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_untilized_sin_interm_config);
         reader_kernel_defines["DECODE_MODE"] = "1";
         writer_kernel_defines["DECODE_MODE"] = "1";
         compute_kernel_defines["DECODE_MODE"] = "1";

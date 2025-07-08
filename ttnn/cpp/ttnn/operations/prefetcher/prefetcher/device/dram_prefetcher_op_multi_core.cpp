@@ -53,7 +53,6 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tensors.begin(), tensors.end(), std::back_inserter(tensor_buffers), [](const auto& t) { return t.buffer(); });
 
     /* Tiles */
-    tt::tt_metal::Tile tensor_addrs_tile = tensor_addrs.tensor_spec().tile();
     std::vector<tt::tt_metal::Tile> tensor_tiles;
     tensor_tiles.reserve(tensors.size());
     std::transform(tensors.begin(), tensors.end(), std::back_inserter(tensor_tiles), [](const auto& t) {
@@ -71,7 +70,6 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     Program program{};
 
     // In validate we make sure that all tensors are on the same device
-    tt::tt_metal::IDevice* device = tensors[0].device();
     uint32_t num_tensors = tensors.size();
     auto sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping()[0];
     uint32_t num_receivers_per_reader = sender_receiver_core_mapping.second.num_cores();
@@ -141,8 +139,6 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     /* tensor addresses cb setup */
     uint32_t tensor_addrs_single_tile_size = sizeof(uint32_t);
-    uint32_t tensor_addrs_cb_num_tiles =
-        tensor_addrs_buffer->shard_spec().shape()[0] * tensor_addrs_buffer->shard_spec().shape()[1];
     uint32_t tensor_addrs_cb_size = num_layers * num_tensors * tensor_addrs_single_tile_size;
 
     uint32_t tensor_addrs_cb_index = tt::CBIndex::c_1;
