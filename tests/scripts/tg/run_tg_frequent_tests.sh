@@ -40,7 +40,7 @@ run_tg_tests() {
   elif [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running unit/distributed run_tg_frequent_tests"
     ## Force IRAM enabled because these tests mixes fabric and non-fabric ccl tests. The IRAM setting must be consistent
-    ## due to the erisc kernel wrapper being affected, and that kernel being persistent through the workload. 
+    ## due to the erisc kernel wrapper being affected, and that kernel being persistent through the workload.
     ## The jit build also has different behaviour for IRAM enabled/disabled so we enable it globally.
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/distributed/test_data_parallel_example_TG.py --timeout=900 ; fail+=$?
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
