@@ -76,7 +76,7 @@ MemoryConfig::MemoryConfig(BufferType buffer_type, std::optional<NdShardSpec> nd
     memory_layout_(nd_shard_spec.has_value() ? TensorMemoryLayout::BLOCK_SHARDED : TensorMemoryLayout::INTERLEAVED),
     buffer_type_(buffer_type),
     nd_shard_spec_(std::move(nd_shard_spec)),
-    created_with_nd_shard_spec_(true) {}
+    created_with_nd_shard_spec_(nd_shard_spec_.has_value()) {}
 
 MemoryConfig::MemoryConfig(
     TensorMemoryLayout memory_layout,
