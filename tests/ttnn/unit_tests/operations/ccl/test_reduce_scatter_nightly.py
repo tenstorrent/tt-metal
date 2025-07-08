@@ -63,7 +63,6 @@ def test_reduce_scatter_t3k_8chip_nightly(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -77,7 +76,6 @@ def test_reduce_scatter_t3k_8chip_nightly(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
     )
@@ -138,7 +136,6 @@ def test_reduce_scatter_t3k_4chip_nightly(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -152,7 +149,6 @@ def test_reduce_scatter_t3k_4chip_nightly(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
     )

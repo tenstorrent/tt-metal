@@ -4,6 +4,7 @@
 
 #include "unary.hpp"
 
+#include "common/unary_op_types.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "device/unary_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
@@ -24,13 +25,13 @@ inline Tensor unary_impl(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
     TT_FATAL(op_chain.size() > 0, "Op chain cannot be empty");
-    DataType output_dtype = (op_chain[0].op_type == UnaryOpType::TYPECAST)
-                                ? static_cast<DataType>(op_chain[0].params[1])
-                                : input_tensor.dtype();
-    bool preserve_fp32_precision = input_tensor.dtype() == DataType::FLOAT32;
+    DataType input_dtype = input_tensor.dtype();
+    DataType output_dtype =
+        (op_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(op_chain[0].params[1]) : input_dtype;
+    bool preserve_fp32_precision = input_dtype == DataType::FLOAT32;
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
-                            input_tensor.dtype() == DataType::UINT32 or input_tensor.dtype() == DataType::INT32;
+                            input_dtype == DataType::UINT32 or input_dtype == DataType::INT32;
     bool bfp8_pack_precise = (op_chain[0].op_type == UnaryOpType::TYPECAST && output_dtype == DataType::BFLOAT8_B);
 
     auto output_memory_config = optional_output_tensor.has_value()
@@ -79,6 +80,7 @@ template struct ExecuteUnary<UnaryOpType::ACOS>;
 template struct ExecuteUnary<UnaryOpType::ASIN>;
 template struct ExecuteUnary<UnaryOpType::ASINH>;
 template struct ExecuteUnary<UnaryOpType::ATAN>;
+template struct ExecuteUnary<UnaryOpType::ATANH>;
 template struct ExecuteUnary<UnaryOpType::COS>;
 template struct ExecuteUnary<UnaryOpType::ACOSH>;
 template struct ExecuteUnary<UnaryOpType::ERFINV>;
@@ -203,9 +205,14 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_NE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
+template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GE>;
+template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LE>;
 
 template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>::invoke<float>(
     QueueId, const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+
+template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>::invoke<int32_t>(
+    QueueId, const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
 
 template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>::invoke<float>(
     QueueId, const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
@@ -309,11 +316,14 @@ Tensor Identity::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::IDENTITY;
-    if (input_tensor.dtype() == DataType::UINT32) {
-        op_type = UnaryOpType::IDENTITY_UINT32;
-    }
+    DataType input_dtype = input_tensor.get_dtype();
 
-    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    if (input_dtype != DataType::UINT8) {
+        return detail::unary_impl(
+            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    } else {
+        TT_THROW("ttnn.identity doesn't support uint8 datatype");
+    }
 }
 
 Tensor Abs::invoke(

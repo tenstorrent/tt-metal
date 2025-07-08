@@ -48,13 +48,12 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
 
     with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
         # 2. Load tt_unet, tt_vae and tt_scheduler
-        tt_model_config = ModelOptimisations(conv_w_dtype=ttnn.bfloat16)
+        tt_model_config = ModelOptimisations()
         tt_unet = TtUNet2DConditionModel(
             ttnn_device,
             pipeline.unet.state_dict(),
             "unet",
             model_config=tt_model_config,
-            transformer_weights_dtype=ttnn.bfloat16,
         )
         tt_vae = (
             TtAutoencoderKL(ttnn_device, pipeline.vae.state_dict(), tt_model_config, batch_size)
@@ -103,6 +102,17 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         )
         for prompt in prompts
     ]
+
+    # Reorder all_embeds to prepare for splitting across devices
+    items_per_core = len(all_embeds) // batch_size  # this will always be a multiple of batch_size because of padding
+
+    if batch_size > 1:  # If batch_size is 1, no need to reorder
+        reordered = []
+        for i in range(batch_size):
+            for j in range(items_per_core):
+                index = i + j * batch_size
+                reordered.append(all_embeds[index])
+        all_embeds = reordered
 
     prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = zip(*all_embeds)
 
@@ -282,12 +292,12 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
             iter,
         )
 
-        logger.info(f"Denoising loop for {batch_size} promts completed in {profiler.get('denoising_loop'):.2f} seconds")
         logger.info(
-            f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.get('vae_decode'):.2f} seconds"
+            f"Denoising loop for {batch_size} promts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
         )
-        profiler.clear()
-
+        logger.info(
+            f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
+        )
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
                 break
@@ -332,7 +342,6 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
 )
 def test_demo(
     mesh_device,
-    use_program_cache,
     is_ci_env,
     prompt,
     num_inference_steps,

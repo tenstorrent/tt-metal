@@ -5,6 +5,7 @@
 #include "scatter_program_factory.hpp"
 
 #include "scatter_device_operation_types.hpp"
+#include "tt-metalium/device.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -22,6 +23,14 @@ uint64_t ceil32(const uint64_t& number) {
 bool is_pow2_min32(const uint64_t& number) { return ((number & (number - 1)) == 0) && number >= 32; }
 }  // namespace
 
+// maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
+// BH available L1 mem size of nearly 1.5 MB...
+// ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
+// tensors)
+// ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
+// ... minimized by ~20% to account for reserved memory
+uint32_t calculate_optimal_chunk_size(IDevice* device) { return ceil32(device->l1_size_per_core() / 4 / 4 * 0.8 - 32); }
+
 ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     using namespace tt::tt_metal;
@@ -31,19 +40,11 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
 
     const auto& input_tensor{tensor_args.input_tensor};
     const auto& input_shape{input_tensor.logical_shape()};
-    const auto& input_rank{input_shape.rank()};
     const auto& index_tensor{tensor_args.index_tensor};
     const auto& index_shape{index_tensor.logical_shape()};
-    const auto& index_rank{index_shape.rank()};
     const auto& src_tensor{tensor_args.src_tensor};
     const auto& src_shape{src_tensor.logical_shape()};
-    const auto& src_rank{src_shape.rank()};
     const auto& output_shape{output_tensor.logical_shape()};
-
-    const tt::DataFormat input_tensor_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    const tt::DataFormat index_tensor_cb_data_format = datatype_to_dataformat_converter(index_tensor.dtype());
-    const tt::DataFormat src_tensor_cb_data_format = datatype_to_dataformat_converter(src_tensor.dtype());
-    const tt::DataFormat output_tensor_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
 
     auto input_buffer = input_tensor.buffer();
     auto index_buffer = index_tensor.buffer();
@@ -55,11 +56,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t src_tensor_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
     const uint32_t output_tensor_is_dram = output_buffer->buffer_type() == BufferType::DRAM;
 
-    const int32_t dim{(args.dim >= 0) ? args.dim : (input_rank + args.dim)};
-
     auto device = input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
 
     const uint32_t& input_stick_size = input_shape[-1];
     const uint32_t& index_stick_size = index_shape[-1];
@@ -71,21 +69,25 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
         [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, work_units);
 
+    // input dtype byte sizes
     const uint32_t& input_datum_size = input_tensor.element_size();
     const uint32_t& index_datum_size = index_tensor.element_size();
     const uint32_t& source_datum_size = src_tensor.element_size();
     const uint32_t& output_datum_size = output_tensor.element_size();
 
+    // input row byte sizes
     const uint32_t& input_stick_size_bytes = input_stick_size * input_datum_size;
     const uint32_t& index_stick_size_bytes = index_stick_size * index_datum_size;
     const uint32_t& source_stick_size_bytes = source_stick_size * source_datum_size;
     const uint32_t& output_stick_size_bytes = output_stick_size * output_datum_size;
 
+    // check if row byte sizes are at least 32 and a power of 2 (for InterleavedAddrGen)
     const uint32_t is_input_stick_size_bytes_pow2_min_32 = is_pow2_min32(input_stick_size_bytes);
     const uint32_t is_index_stick_size_bytes_pow2_min_32 = is_pow2_min32(index_stick_size_bytes);
     const uint32_t is_source_stick_size_bytes_pow2_min_32 = is_pow2_min32(source_stick_size_bytes);
     const uint32_t is_output_stick_size_bytes_pow2_min_32 = is_pow2_min32(output_stick_size_bytes);
 
+    // for InterleavedAddrGen
     const uint32_t input_stick_size_bytes_log2 =
         is_input_stick_size_bytes_pow2_min_32 ? std::log2(input_stick_size_bytes) : 0;
     const uint32_t index_stick_size_bytes_log2 =
@@ -95,9 +97,13 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t output_stick_size_bytes_log2 =
         is_output_stick_size_bytes_pow2_min_32 ? std::log2(output_stick_size_bytes) : 0;
 
-    const uint64_t L1_max_available_memory_bytes = device->l1_size_per_core();
-    constexpr uint64_t L1_reserve_bytes = (1 << 8) * (1 << 10);
-    const uint32_t input_and_output_max_chunk_size = 76800;
+    // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
+    // BH available L1 mem size of nearly 1.5 MB...
+    // ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
+    // tensors)
+    // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
+    // ... minimized by ~20% to account for reserved memory
+    const uint32_t input_and_output_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
     const uint32_t index_and_source_max_chunk_size = input_and_output_max_chunk_size;
     const uint32_t input_and_output_chunk_size = std::min(input_stick_size, input_and_output_max_chunk_size);
     const uint32_t index_and_source_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
@@ -111,10 +117,10 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t source_page_size_bytes = ceil32(source_chunk_size_bytes);
     const uint32_t output_page_size_bytes = ceil32(input_and_output_chunk_size_bytes);
 
-    auto cb_input{create_cb(program, input_tensor.get_dtype(), ScatterCB::INPUT, all_cores, input_page_size_bytes)};
-    auto cb_index{create_cb(program, index_tensor.get_dtype(), ScatterCB::INDEX, all_cores, index_page_size_bytes)};
-    auto cb_src{create_cb(program, src_tensor.get_dtype(), ScatterCB::SRC, all_cores, source_page_size_bytes)};
-    auto cb_dst{create_cb(program, output_tensor.get_dtype(), ScatterCB::DST, all_cores, output_page_size_bytes)};
+    create_cb(program, input_tensor.get_dtype(), ScatterCB::INPUT, all_cores, input_page_size_bytes);
+    create_cb(program, index_tensor.get_dtype(), ScatterCB::INDEX, all_cores, index_page_size_bytes);
+    create_cb(program, src_tensor.get_dtype(), ScatterCB::SRC, all_cores, source_page_size_bytes);
+    create_cb(program, output_tensor.get_dtype(), ScatterCB::DST, all_cores, output_page_size_bytes);
 
     constexpr const char* reader_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/scatter/device/kernels/dataflow/reader_scatter.cpp";

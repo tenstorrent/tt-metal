@@ -45,7 +45,6 @@ def test_mamba_perf_e2e(
     iterations,
     expected_compile_time,
     expected_inference_time,
-    use_program_cache,
     reset_seeds,
     get_tt_cache_path,
     is_ci_env,

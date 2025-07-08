@@ -6,6 +6,7 @@
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
+#include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -450,8 +451,12 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     auto available_cores = sub_device_cores.subtract(packet_worker_cores_grid);
 
-    auto sender_core_grid = detail::rs_heads_fusion::get_worker_cores(
-        available_cores, num_workers_per_link * num_links, input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto sender_core_grid = operation_attributes.use_optimal_ccl_for_llama
+                                ? llama_specific::get_custom_cores(num_workers_per_link * num_links)
+                                : detail::rs_heads_fusion::get_worker_cores(
+                                      available_cores,
+                                      num_workers_per_link * num_links,
+                                      input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     auto all_cores_grid = packet_worker_cores_grid.merge(sender_core_grid);
 
     auto schedule = detail::rs_heads_fusion::distribute_work_evenly(
@@ -799,14 +804,32 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
             writer_runtime_args.push_back(forward_fabric_connection);
             if (forward_fabric_connection) {
+                const auto target_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+                const auto forward_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device->id(), forward_device.value()->id(), link_idx, program, core, writer_runtime_args);
+                    target_device_fabric_node_id,
+                    forward_device_fabric_node_id,
+                    link_idx,
+                    program,
+                    core,
+                    writer_runtime_args);
             }
 
             writer_runtime_args.push_back(backward_fabric_connection);
             if (backward_fabric_connection) {
+                const auto target_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+                const auto backward_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device->id(), backward_device.value()->id(), link_idx, program, core, writer_runtime_args);
+                    target_device_fabric_node_id,
+                    backward_device_fabric_node_id,
+                    link_idx,
+                    program,
+                    core,
+                    writer_runtime_args);
             }
 
             link_idx++;

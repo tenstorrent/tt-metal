@@ -37,9 +37,12 @@ pytest --disable-warnings tests/ttnn/integration_tests/sentence_bert/test_ttnn_s
 ```
 
 ###  Performant Model with Trace+2CQ
-- end-2-end perf is 419 sentences per second
+> **Note:** SentenceBERT uses BERT-base as its backbone model.
+- End-to-end performance without mean-pooling post-processing is **419 sentences per second**
+- With mean-pooling post-processing included, the performance is **233 sentences per second**
+- Work is in progress to implement & optimize TTNN mean-pooling. See the related issue [#24252](https://github.com/tenstorrent/tt-metal/issues/24252).
 
-Use the following command to run the performant Model with Trace+2CQs:
+Use the following command to run the performant Model with Trace+2CQs (without mean-pooling):
 
 ```
 pytest --disable-warnings models/demos/sentence_bert/tests/test_sentence_bert_e2e_performant.py
@@ -51,4 +54,27 @@ Use the following command to run the performant Demo with Trace+2CQs:
 
 ```
 pytest --disable-warnings models/demos/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference
+```
+
+### Performant Interactive Demo with Trace+2CQ
+- This script demonstrates a simple semantic search using a Turkish Sentence-BERT model. It loads a knowledge base from a text file (`knowledge_base.txt`), encodes all entries, and waits for user input. For each query, it returns the most semantically similar entry from the knowledge base using cosine similarity.
+- Run the interactive demo using the command below. For every user input, the top-matching knowledge base entry along with its similarity score will be displayed.
+- Type `exit` to quit the interactive demo.
+- Modify the `knowledge_base.txt` file to customize the knowledge base with your own turkish input sentences.
+
+Use the following command to run the performant interactive Demo with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/sentence_bert/demo/interactive_demo.py::test_interactive_demo_inference
+```
+
+### Performant Dataset evaluation with Trace+2CQ
+
+- dataset source: [STSb Turkish](https://github.com/emrecncelik/sts-benchmark-tr) (Semantic textual similarity dataset for the Turkish language)
+- Adjust the `num_samples` parameter to control the number of dataset samples used during evaluation.
+
+Use the following command to run the performant dataset evaluation with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval
 ```

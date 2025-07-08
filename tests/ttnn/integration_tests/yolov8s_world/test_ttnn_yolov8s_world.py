@@ -125,7 +125,7 @@ def test_C2f(device, input_tensor, use_pretrained_weight, reset_seeds):
     )
 
     c2f_configs = {
-        "model.2": {"input_params": ((1, 1, 0, 64, 64), (1, 1, 0, 64, 96), (3, 1, 1, 32, 32))},
+        "model.2": {"input_params": ((1, 1, 0, 32, 64), (1, 1, 0, 64, 96), (3, 1, 1, 32, 32))},
     }
 
     with torch.inference_mode():
@@ -319,7 +319,7 @@ def test_C2fAttn(device, use_pretrained_weight, reset_seeds):
     )
     parameters["model"][12]["attn"]["bias"] = ttnn.to_device(parameters["model"][12]["attn"]["bias"], device=device)
 
-    c2fAttn_configs = {"input_params": ((1, 1, 0, 256, 768), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))}
+    c2fAttn_configs = {"input_params": ((1, 1, 0, 128, 768), (1, 1, 0, 256, 512), (3, 1, 1, 128, 128))}
 
     with torch.inference_mode():
         c2fAttn = TtC2fAttn(
@@ -600,9 +600,15 @@ def test_WorldDetect(device, use_pretrained_weight, reset_seeds):
         torch_model_output = submodule(x, text)
 
     passing, pcc_1 = assert_with_pcc(ttnn_model_output_y, torch_model_output[0], 0.99)
-    passing, pcc_2 = assert_with_pcc(ttnn_model_output_x[0], torch_model_output[1][0], 0.99)
-    passing, pcc_3 = assert_with_pcc(ttnn_model_output_x[1], torch_model_output[1][1], 0.99)
-    passing, pcc_4 = assert_with_pcc(ttnn_model_output_x[2], torch_model_output[1][2], 0.99)
+    passing, pcc_2 = assert_with_pcc(
+        ttnn_model_output_x[0].reshape(torch_model_output[1][0].shape), torch_model_output[1][0], 0.99
+    )
+    passing, pcc_3 = assert_with_pcc(
+        ttnn_model_output_x[1].reshape(torch_model_output[1][1].shape), torch_model_output[1][1], 0.99
+    )
+    passing, pcc_4 = assert_with_pcc(
+        ttnn_model_output_x[2].reshape(torch_model_output[1][2].shape), torch_model_output[1][2], 0.99
+    )
     logger.info(f"Passing: {passing}, PCC: {pcc_1}")
     logger.info(f"Passing: {passing}, PCC: {pcc_2}")
     logger.info(f"Passing: {passing}, PCC: {pcc_3}")
@@ -673,12 +679,14 @@ def test_WorldModel(device, use_pretrained_weight, reset_seeds):
 
     passing, pcc_1 = assert_with_pcc(ttnn_model_output_y, torch_model_output[0], 0.99)
     passing, pcc_2 = assert_with_pcc(
-        ttnn_model_output_x[0], torch_model_output[1][0], 0.98
-    )  # 0.9818297046520124 for real weights
+        ttnn_model_output_x[0].reshape(torch_model_output[1][0].shape), torch_model_output[1][0], 0.98
+    )
     passing, pcc_3 = assert_with_pcc(
-        ttnn_model_output_x[1], torch_model_output[1][1], 0.97
-    )  # 0.9730835624429178 for real weights
-    passing, pcc_4 = assert_with_pcc(ttnn_model_output_x[2], torch_model_output[1][2], 0.99)
+        ttnn_model_output_x[1].reshape(torch_model_output[1][1].shape), torch_model_output[1][1], 0.97
+    )
+    passing, pcc_4 = assert_with_pcc(
+        ttnn_model_output_x[2].reshape(torch_model_output[1][2].shape), torch_model_output[1][2], 0.98
+    )
     logger.info(f"Passing: {passing}, PCC: {pcc_1}")
     logger.info(f"Passing: {passing}, PCC: {pcc_2}")
     logger.info(f"Passing: {passing}, PCC: {pcc_3}")
@@ -694,6 +702,9 @@ def test_WorldModel(device, use_pretrained_weight, reset_seeds):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @run_for_wormhole_b0()
 def test_YoloModel(device, use_pretrained_weight, reset_seeds):
+    # https://github.com/tenstorrent/tt-metal/issues/23275
+    device.disable_and_clear_program_cache()
+
     x = torch.randn(1, 3, 640, 640)
 
     if use_pretrained_weight:
@@ -713,10 +724,16 @@ def test_YoloModel(device, use_pretrained_weight, reset_seeds):
     torch_model = torch_model.model
     torch_model.eval()
 
-    ttnn_x = x.permute(0, 2, 3, 1)
-    ttnn_x = ttnn.from_torch(
-        ttnn_x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    n, c, h, w = x.shape
+    if c == 3:
+        c = 16
+    input_mem_config = ttnn.create_sharded_memory_config(
+        [n, c, h, w],
+        ttnn.CoreGrid(x=8, y=8),
+        ttnn.ShardStrategy.HEIGHT,
     )
+    ttnn_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_x = ttnn_x.to(device, input_mem_config)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device)
@@ -751,12 +768,14 @@ def test_YoloModel(device, use_pretrained_weight, reset_seeds):
 
     passing, pcc_1 = assert_with_pcc(ttnn_model_output_y, torch_model_output[0], 0.99)
     passing, pcc_2 = assert_with_pcc(
-        ttnn_model_output_x[0], torch_model_output[1][0], 0.98
-    )  # 0.9818297046520124 for real weights
+        ttnn_model_output_x[0].reshape(torch_model_output[1][0].shape), torch_model_output[1][0], 0.98
+    )
     passing, pcc_3 = assert_with_pcc(
-        ttnn_model_output_x[1], torch_model_output[1][1], 0.97
-    )  # 0.9730835624429178 for real weights
-    passing, pcc_4 = assert_with_pcc(ttnn_model_output_x[2], torch_model_output[1][2], 0.99)
+        ttnn_model_output_x[1].reshape(torch_model_output[1][1].shape), torch_model_output[1][1], 0.97
+    )
+    passing, pcc_4 = assert_with_pcc(
+        ttnn_model_output_x[2].reshape(torch_model_output[1][2].shape), torch_model_output[1][2], 0.98
+    )
     logger.info(f"Passing: {passing}, PCC: {pcc_1}")
     logger.info(f"Passing: {passing}, PCC: {pcc_2}")
     logger.info(f"Passing: {passing}, PCC: {pcc_3}")

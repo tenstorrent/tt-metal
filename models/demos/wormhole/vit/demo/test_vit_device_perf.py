@@ -21,7 +21,6 @@ except ModuleNotFoundError:
 @pytest.mark.parametrize("batch_size", [8])
 def test_vit_device_ops(
     device,
-    use_program_cache,
     batch_size,
 ):
     torch.manual_seed(0)

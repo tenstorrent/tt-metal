@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@ tt::tt_metal::operation::ProgramWithCallbacks topk_single_core_interleaved(
     int8_t dim,
     bool largest,
     bool sorted,
+    bool uint16_output,
     const CoreRangeSet& sub_core_grids,
     Tensor& value_tensor,
     Tensor& index_tensor);

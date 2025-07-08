@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "topk_op.hpp"
 #include "topk_program_factory.hpp"
+#include "topk_constants.hpp"
 
 using namespace tt::tt_metal;
 
@@ -47,7 +48,7 @@ static inline bool verify_multi_core_cost(
     return false;
 }
 
-static inline bool verify_single_core_cost(const std::vector<Tensor>& input_tensors, uint32_t k) {
+static inline bool verify_single_core_cost(const std::vector<Tensor>& input_tensors, uint32_t k, bool uint16_output) {
     uint32_t num_cb_unit = 2;
     uint32_t cb_in_units = 2 * num_cb_unit;
     uint32_t Ktiles = tt::div_up(k, tt::constants::TILE_WIDTH);
@@ -58,7 +59,7 @@ static inline bool verify_single_core_cost(const std::vector<Tensor>& input_tens
 
     auto device = input_tensors.at(0).device();
     tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
-    tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
+    tt::DataFormat index_cb_data_format = uint16_output ? tt::DataFormat::UInt16 : tt::DataFormat::UInt32;
 
     uint32_t value_tile_size = tile_size(value_cb_data_format);
     uint32_t index_tile_size = tile_size(index_cb_data_format);
@@ -70,9 +71,8 @@ static inline bool verify_single_core_cost(const std::vector<Tensor>& input_tens
     return memory_cost_local < device->l1_size_per_core();
 }
 
-constexpr uint32_t multi_core_min_width = 8192;
-constexpr uint32_t min_dim_per_core = 64;
 }  // namespace topk_utils
+
 namespace ttnn::operations::reduction {
 
 void TopK::validate_with_output_tensors(
@@ -81,9 +81,10 @@ void TopK::validate_with_output_tensors(
     TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());
 
     TT_FATAL(
-        input_shape[-1] >= topk_utils::min_dim_per_core,
-        "Input shape inner dim {} must be a multiple of 64, pad with +/-infinity if necessary",
-        input_shape[-1]);
+        input_shape[-1] >= topk::constants::min_dim_per_core,
+        "Input shape inner dim {} must be >= {}, pad with +/-infinity if necessary",
+        input_shape[-1],
+        topk::constants::min_dim_per_core);
     TT_FATAL(
         (input_shape[0] * input_shape[1] * input_shape[2]) % 32 == 0,
         "Input height (combined input_shape[0-3]) {} must be a multiple of 32",
@@ -94,11 +95,12 @@ void TopK::validate_with_output_tensors(
 
     bool can_run = false;
 
-    if (input_shape[dim] >= topk_utils::multi_core_min_width) {  // multicore implementation
+    bool uint16_output = (input_shape[this->dim] <= std::numeric_limits<uint16_t>::max());
+    if (input_shape[dim] >= topk::constants::multi_core_min_width) {  // multicore implementation
         can_run = topk_utils::verify_multi_core_cost(
             input_tensors,
             input_shape[this->dim],
-            topk_utils::min_dim_per_core,
+            topk::constants::min_dim_per_core,
             input_shape[this->dim] / 2,
             this->k,
             this->sub_core_grids);
@@ -109,10 +111,10 @@ void TopK::validate_with_output_tensors(
             this->sub_core_grids.ranges().size());
 
         if (!can_run) {  // can we default to new topk implementation on single core
-            can_run = topk_utils::verify_single_core_cost(input_tensors, this->k);
+            can_run = topk_utils::verify_single_core_cost(input_tensors, this->k, uint16_output);
         }
     } else {
-        can_run = topk_utils::verify_single_core_cost(input_tensors, this->k);
+        can_run = topk_utils::verify_single_core_cost(input_tensors, this->k, uint16_output);
     }
     TT_FATAL(can_run, "Not enough cores or cache size available to run topk operation");
 }
@@ -127,11 +129,14 @@ std::vector<TensorSpec> TopK::compute_output_specs(
     const auto& input_tensor = input_tensors.at(0);
     auto output_shape = input_tensors.at(0).logical_shape();
     output_shape[-1] = this->k;
+    ttnn::Shape input_shape = input_tensors.at(0).get_padded_shape();
+    bool uint16_output = (input_shape[this->dim] < 65536);
 
     auto values_spec =
         TensorSpec(output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), output_mem_config));
-    auto index_spec =
-        TensorSpec(output_shape, TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), output_mem_config));
+    DataType index_dtype = uint16_output ? DataType::UINT16 : DataType::UINT32;
+    auto index_spec = TensorSpec(output_shape, TensorLayout(index_dtype, PageConfig(Layout::TILE), output_mem_config));
+
     return {values_spec, index_spec};
 }
 
@@ -154,29 +159,22 @@ operation::ProgramWithCallbacks TopK::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     bool multicore_supported = true;
-    multicore_supported &= (input_tensor.padded_shape()[dim] >= topk_utils::multi_core_min_width);
+    multicore_supported &= (input_tensor.padded_shape()[dim] >= topk::constants::multi_core_min_width);
 
-    auto input_shape = input_tensors.at(0).padded_shape();
-    auto device = input_tensors.at(0).device();
-
-    tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
-    tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
-    uint32_t value_tile_size = tile_size(value_cb_data_format);
-    uint32_t index_tile_size = tile_size(index_cb_data_format);
-
-    // There is a L1 cache issue for multicore implementation (previous version) because footprint depends on input
-    // tensor size. New implementation takes up less L1 cache size because footprint is based on K size, and not input
-    // tensor size, so it can handle larger input tensor sizes.
-    // TODO: implement new topk implementation for multicore
-    multicore_supported &= topk_utils::verify_multi_core_cost(
-        input_tensors,
-        input_shape[this->dim],
-        topk_utils::min_dim_per_core,
-        input_shape[this->dim] / 2,
-        this->k,
-        this->sub_core_grids);
-
-    multicore_supported &= (this->k <= 64);  // old implementation cannot handle k>64
+    ttnn::Shape input_shape = input_tensors.at(0).get_padded_shape();
+    bool uint16_output = (input_shape[this->dim] < 65536);
+    multicore_supported &= uint16_output;    // for now multicore does not support uint32 output, so if uint16 is not
+                                             // supported, we default to single core
+    multicore_supported &= (this->k <= 64);  // multicore implementation only supports k <= 64
+    if (multicore_supported) {               // don't bother with longer check if already false
+        multicore_supported &= topk_utils::verify_multi_core_cost(
+            input_tensors,
+            input_shape[this->dim],
+            topk::constants::min_dim_per_core,
+            input_shape[this->dim] / 2,
+            this->k,
+            this->sub_core_grids);
+    }
 
     if (multicore_supported) {
         return detail::topk_multicore_interleaved(
@@ -196,6 +194,7 @@ operation::ProgramWithCallbacks TopK::create_program(
         this->dim,
         this->largest,
         this->sorted,
+        uint16_output,
         this->sub_core_grids,
         output_tensors.at(0),
         output_tensors.at(1));

@@ -442,7 +442,7 @@ def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device):
     ((1),),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_audio_classification(input_path, ttnn_model, device, num_inputs, use_program_cache):
+def test_demo_for_audio_classification(input_path, ttnn_model, device, num_inputs):
     return run_demo_whisper_for_audio_classification_inference(input_path, ttnn_model, device, num_inputs)
 
 
@@ -451,7 +451,7 @@ def test_demo_for_audio_classification(input_path, ttnn_model, device, num_input
     (ttnn_optimized_functional_whisper,),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_cache, is_ci_env):
+def test_demo_for_audio_classification_dataset(ttnn_model, device, is_ci_env):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
     return run_demo_whisper_for_audio_classification_dataset(ttnn_model, device)
@@ -466,13 +466,16 @@ def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_c
     (2,),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inputs, use_program_cache, is_ci_env):
+def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inputs, is_ci_env):
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path, ttnn_model, device, num_inputs
     )
     if is_ci_env:
         if is_blackhole():
-            expected_perf_metrics = {"prefill_t/s": 7.67, "decode_t/s/u": 91.0}
+            if device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
+                expected_perf_metrics = {"prefill_t/s": 7.67, "decode_t/s/u": 91.0}
+            else:
+                expected_perf_metrics = {"prefill_t/s": 7.67, "decode_t/s/u": 98.0}
         else:  # wormhole_b0
             expected_perf_metrics = {"prefill_t/s": 3.85, "decode_t/s/u": 51.8}
         expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"]  # Only supporting batch 1
@@ -485,7 +488,7 @@ def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inp
     (ttnn_optimized_functional_whisper,),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_conditional_generation_dataset(ttnn_model, device, use_program_cache, is_ci_env):
+def test_demo_for_conditional_generation_dataset(ttnn_model, device, is_ci_env):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
     return run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device)

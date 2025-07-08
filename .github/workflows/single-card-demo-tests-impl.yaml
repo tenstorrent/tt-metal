@@ -42,6 +42,7 @@ jobs:
           { name: "ufld_v2", runner-label: "N150", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "vanilla_unet", runner-label: "N150", performance: false, cmd: run_vanilla_unet_demo, owner_id: U045U3DEKM4}, # Mohamed Bahnas (keerthana-r-mcw)
           { name: "yolov8x", runner-label: "N150", performance: false, cmd: run_yolov8x_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
+          { name: "yolov8s", runner-label: "N150", performance: false, cmd: run_yolov8s_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "vgg_unet", runner-label: "N150", performance: false, cmd: run_vgg_unet_demo, owner_id: U045U3DEKM4}, # Mohamed Bahnas (keerthana-r-mcw)
           { name: "yolov4", runner-label: "N150", performance: false, cmd: run_yolov4_perf, owner_id: U045U3DEKM4}, # Mohamed Bahnas (Sudhanshu Singhal)
           { name: "resnet", runner-label: "N150", performance: true, cmd: run_resnet_stability, owner_id: U0837MYG788}, # Marko Radosavljevic
@@ -59,6 +60,7 @@ jobs:
           { name: "squeezebert", runner-label: "N300", performance: false, cmd: run_squeezebert_func, owner_id: UBHPP2NDP}, #Joseph Chu
           { name: "roberta", runner-label: "N300", performance: false, cmd: run_roberta_func, owner_id: U06F3ER8X9A}, # Stuti Raizada
           { name: "yolov8x", runner-label: "N300", performance: false, cmd: run_yolov8x_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
+          { name: "yolov8s", runner-label: "N300", performance: false, cmd: run_yolov8s_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "yolov9c", runner-label: "N300", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "mobilenetv2", runner-label: "N300", performance: true, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "ufld_v2", runner-label: "N300", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E}, # Dalar Vartanians
@@ -75,6 +77,7 @@ jobs:
           { name: "vgg_unet", runner-label: "N300", performance: false, cmd: run_vgg_unet_demo, owner_id: U045U3DEKM4}, # Mohamed Bahnas (keerthana-r-mcw)
           { name: "yolov4", runner-label: "N300", performance: false, cmd: run_yolov4_perf, owner_id: U045U3DEKM4}, # Mohamed Bahnas (Sudhanshu Singhal)
           { name: "yolov10x", runner-label: "N300", performance: false, cmd: run_yolov10x_demo, owner_id: U056BK5U81E}, # Dalar Vartanians
+          { name: "yolov7", runner-label: "N300", performance: false, cmd: run_yolov7_demo, owner_id: U056BK5U81E}, # Dalar Vartanians
           # Moved to t3k tests until OOM on single card runners resolved
           # { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U03PUAKE719}, # Mark O'Connor
         ]

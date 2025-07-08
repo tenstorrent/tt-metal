@@ -67,7 +67,7 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
     [True],
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_demo(device, source, model_type, res, use_weights_from_ultralytics, use_program_cache):
+def test_demo(device, source, model_type, res, use_weights_from_ultralytics):
     disable_persistent_kernel_cache()
     if use_weights_from_ultralytics:
         torch_model = YOLO("yolov8x.pt")
@@ -101,11 +101,7 @@ def test_demo(device, source, model_type, res, use_weights_from_ultralytics, use
         else:
             ttnn_im = im.clone()
             n, c, h, w = ttnn_im.shape
-            ttnn_im = ttnn_im.permute(0, 2, 3, 1)
-            ttnn_im = ttnn_im.reshape(1, 1, h * w * n, c)
-            ttnn_im = ttnn.from_torch(ttnn_im, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            ttnn_im = ttnn.pad(ttnn_im, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
-            preds = yolov8x_trace_2cq.execute_yolov8x_trace_2cqs_inference(ttnn_im)
+            preds = yolov8x_trace_2cq.run(ttnn_im)
             preds = ttnn.to_torch(preds, dtype=torch.float32)
         results = postprocess(preds, im, im0s, batch, names)[0]
 

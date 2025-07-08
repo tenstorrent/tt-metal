@@ -20,22 +20,13 @@ namespace ttnn::operations::experimental {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
+// validate dimension constraints before sending down to device operation working on the last dimension
 void validate_inputs(
-    const Tensor& input_tensor,
-    const Tensor& index_tensor,
-    const Tensor& source_tensor,
-    const int32_t& dim) {
-    const int32_t normalized_dim{(dim < 0) ? (dim + input_tensor.padded_shape().rank()) : dim};
-
-    const auto& input_dtype{input_tensor.dtype()};
-    const auto& index_dtype{index_tensor.dtype()};
-    const auto& src_dtype{source_tensor.dtype()};
+    const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& source_tensor, const int32_t& dim) {
     const auto& input_shape{input_tensor.logical_shape()};
     const auto& index_shape{index_tensor.logical_shape()};
-    const auto& src_shape{source_tensor.logical_shape()};
-    const uint32_t input_rank{input_shape.rank()};
-    const uint32_t index_rank{index_shape.rank()};
-    const uint32_t src_rank{src_shape.rank()};
+    const int32_t input_rank{input_shape.rank()};
+    const int32_t normalized_dim{(dim < 0) ? (dim + input_rank) : dim};
 
     TT_FATAL(
         dim < static_cast<int32_t>(input_rank) && -static_cast<int32_t>(input_rank) <= dim,
@@ -43,16 +34,19 @@ void validate_inputs(
         dim,
         static_cast<int32_t>(input_rank));
 
-    for (uint32_t probe_dim = 0; probe_dim < input_tensor.logical_shape().rank(); ++probe_dim) {
+    for (uint32_t probe_dim = 0; probe_dim < input_rank; ++probe_dim) {
         if (probe_dim != normalized_dim) {
             TT_FATAL(
                 index_shape[probe_dim] == input_shape[probe_dim],
-                "Index tensor has other dimension {}'s length than input shape's (index dimension: {}, "
+                "Index tensor has dimension {}'s length otyer than input shape's (index dimension: {}, "
                 "input_dimension: "
-                "{}).",
+                "{}). (normalized dim: {}, dim: {}, rank: {})",
                 probe_dim,
                 index_shape[probe_dim],
-                input_shape[probe_dim]);
+                input_shape[probe_dim],
+                normalized_dim,
+                dim,
+                input_rank);
         }
     }
 }
@@ -179,42 +173,6 @@ Tensor pre_scatter_transform_tensor(
 
 Tensor post_scatter_transform_tensor(
     Tensor& output_tensor,
-    const int32_t dim,
-    const bool is_dim_last_idx,
-    const Shape& original_logical_shape,
-    const Layout& original_layout) {
-    const auto orig_rank = original_logical_shape.rank();
-
-    if (orig_rank == 1) {
-        output_tensor = ttnn::reshape(output_tensor, original_logical_shape);
-    } else if (orig_rank < 4) {
-        output_tensor = ttnn::squeeze_from_4D(output_tensor, orig_rank);
-    } else if (orig_rank > 4) {
-        ttnn::SmallVector<uint32_t> result_shape(original_logical_shape.cbegin(), original_logical_shape.cend());
-        output_tensor = ttnn::reshape(output_tensor, original_logical_shape);
-    }
-
-    // transposing a row-major tensor here
-    if (!is_dim_last_idx) {
-        output_tensor = ttnn::transpose(output_tensor, dim, -1, output_tensor.memory_config());
-    }
-
-    TT_FATAL(
-        output_tensor.get_logical_shape() == original_logical_shape,
-        "Output tensor transformation did not create correct output shape! Got: {}, expected: {}",
-        output_tensor.get_logical_shape(),
-        original_logical_shape);
-
-    // if the output tensor's original layout is not row-major, convert the output tensor back
-    if (original_layout != Layout::ROW_MAJOR) {
-        output_tensor = ttnn::to_layout(output_tensor, original_layout);
-    }
-
-    return output_tensor;
-}
-
-Tensor post_scatter_transform_tensor(
-    Tensor& output_tensor,
     const Shape& after_transpose_shape,
     const int32_t dim,
     const bool is_dim_last_idx,
@@ -276,6 +234,10 @@ Tensor ScatterOperation::invoke(
     const bool input_tensor_is_dim_last_idx = (dim == -1 || dim == input_tensor_rank - 1);
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
 
+    // tensors sent to the device operation must be:
+    // - row-major
+    // - transposed to have the last dimension as last axis
+    // - (un)squeezed to 4D
     Shape after_transpose_shape;
     Tensor transformed_input_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
         input_tensor, after_transpose_shape, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);

@@ -99,7 +99,7 @@ tt::tt_metal::operation::ProgramWithCallbacks build_reduce_scatter_async_program
     uint32_t line_size,
     uint32_t line_index,
     ttnn::ccl::Topology topology,
-    std::optional<size_t> num_links_preferred,
+    size_t num_links,
     const GlobalSemaphore& from_remote_sem,
     const GlobalSemaphore& to_remote_sem,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);

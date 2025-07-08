@@ -194,9 +194,10 @@ def create_mesh_device(*args, **kwargs):
         close_mesh_device(mesh_device)
 
 
-# TODO: #22258 - Temporary stubs to accomodate migration of Python-based sharding to C++.
-# Remove once migration is complete.
+# Temporary stubs to accomodate migration of Python-based sharding / concatenation to C++.
+# TODO: #24114 - When migration of concatenation is complete, remove these stubs.
 TensorToMesh = ttnn.CppTensorToMesh
+MeshToTensor = ttnn.CppMeshToTensor
 
 
 # Workaround needed to differentiate mappers created by `ReplicateTensorToMesh`, which use a different file name used for caching.
@@ -208,18 +209,23 @@ class ReplicateTensorToMeshWrapper:
         return self._mapper
 
 
-# Deprecated. Prefer to use `ttnn.replicate_tensor_to_mesh_mapper` directly.
+# Deprecated. Use `ttnn.replicate_tensor_to_mesh_mapper` directly.
 def ReplicateTensorToMesh(mesh_device: MeshDevice):
     mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
     return ReplicateTensorToMeshWrapper(mapper)
 
 
-# Deprecated. Prefer to use `ttnn.shard_tensor_to_mesh_mapper` directly.
+# Deprecated. Use `ttnn.shard_tensor_to_mesh_mapper` directly.
 def ShardTensorToMesh(mesh_device: MeshDevice, dim: int):
     return ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim)
 
 
-# Deprecated. Prefer to create `ttnn.MeshMapperConfig` directly.
+# Deprecated. Use `ttnn.concat_mesh_to_tensor_composer` directly.
+def ConcatMeshToTensor(mesh_device: MeshDevice, dim: int):
+    return ttnn.concat_mesh_to_tensor_composer(mesh_device, dim)
+
+
+# Deprecated. Use `ttnn.create_mesh_mapper` directly.
 def ShardTensor2dMesh(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[Optional[int], Optional[int]]):
     return ttnn.create_mesh_mapper(
         mesh_device,
@@ -233,99 +239,19 @@ def ShardTensor2dMesh(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims
     )
 
 
-class MeshToTensor:
-    """
-    Defines the inverse operation of TensorToMesh. Given a set of per-device
-    ttnn.Tensor objects (aggregated into a single ttnn.Tensor), this class defines
-    the mapping back to one or many torch.Tensor objects.
-
-    You can also "Bring your own MeshToTensor" based on your custom mapping.
-    """
-
-    def compose(self, tensor: ttnn.Tensor):
-        raise NotImplementedError("Subclasses must implement this method")
-
-
-class ConcatMesh2dToTensor(MeshToTensor):
-    """
-    Concatenate tensors from a 2D mesh back into a single tensor.
-
-    This class implements the inverse operation of ShardTensor2dMesh, combining
-    sharded tensors from a 2D device mesh back into a single tensor.
-    """
-
-    def __init__(self, mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[int, int]):
-        """
-        Initialize the ConcatMesh2dToTensor.
-
-        Args:
-            mesh_device: The source device mesh containing the sharded tensors.
-            mesh_shape: The shape of the 2D mesh as (rows, cols).
-            dims: A tuple of two integers specifying the dimensions along which to concatenate the tensors.
-                  The first element (row_dim) indicates the dimension for concatenating tensors from different rows.
-                  The second element (col_dim) indicates the dimension for concatenating tensors from different columns.
-                  Both dimensions must be specified and different from each other.
-                  These dimensions correspond to the tensor dimensions, not the mesh dimensions.
-                  For example, if the original tensor was 4D with shape (batch, channel, height, width),
-                  and it was sharded across height and width, dims might be (-2, -1) or (2, 3).
-
-        Raises:
-            ValueError: If either dimension in 'dims' is None or if both dimensions are the same.
-        """
-        self.mesh_device = mesh_device
-        self.mesh_shape = mesh_shape
-        self.dims = dims
-        if self.dims[0] == self.dims[1]:
-            raise ValueError("Both dimensions in 'dims' must be different")
-
-    def compose(self, tensor: ttnn.Tensor) -> "torch.Tensor":
-        """
-        Compose the sharded tensors back into a single tensor.
-
-        Args:
-            tensor: A ttnn.Tensor object containing the sharded tensors distributed across multiple devices.
-
-        Returns:
-            A single torch.Tensor that combines all the sharded tensors from all devices.
-
-        This method first concatenates the shards along the column dimension within each row,
-        then concatenates the resulting tensors along the row dimension to form the final tensor.
-        """
-        import torch
-
-        device_shards = [
-            ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
-        ]
-
-        rows, cols = self.mesh_shape
-        row_dim, col_dim = self.dims
-
-        # Reshape the list of shards into a 2D list representing the device mesh
-        mesh_shape = [device_shards[i : i + cols] for i in range(0, len(device_shards), cols)]
-
-        # Concatenate along columns first (within each row)
-        row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
-
-        # Then concatenate the resulting tensors along rows
-        return torch.cat(row_concatenated, dim=row_dim)
-
-
-class ConcatMeshToTensor(MeshToTensor):
-    def __init__(self, mesh_device: MeshDevice, dim: int):
-        self.concat_dim = dim
-        self.mesh_device = mesh_device
-
-    def compose(self, tensor: ttnn.Tensor) -> "torch.Tensor":
-        import torch
-
-        device_shards_converted_to_torch = [
-            ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
-        ]
-        return torch.cat(device_shards_converted_to_torch, dim=self.concat_dim)
+# Deprecated. Use `ttnn.create_mesh_composer` directly.
+def ConcatMesh2dToTensor(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[int, int]):
+    return ttnn.create_mesh_composer(
+        mesh_device,
+        ttnn.MeshComposerConfig(
+            [dims[0], dims[1]],
+            ttnn.MeshShape(mesh_shape[0], mesh_shape[1]),
+        ),
+    )
 
 
 @contextlib.contextmanager
-def distribute(default: Union[ttnn.CppTensorToMesh, ReplicateTensorToMeshWrapper, MeshToTensor]):
+def distribute(default: Union[ttnn.CppTensorToMesh, ReplicateTensorToMeshWrapper, ttnn.CppMeshToTensor]):
     """
     Context manager to temporarily modify the behavior of ttnn.from_torch and ttnn.to_torch to use the specified
     mesh_mapper or mesh_composer for tensor distribution and composition to/from MeshDevice.
@@ -350,7 +276,7 @@ def distribute(default: Union[ttnn.CppTensorToMesh, ReplicateTensorToMeshWrapper
     try:
         if isinstance(default, ttnn.CppTensorToMesh) or isinstance(default, ReplicateTensorToMeshWrapper):
             ttnn.from_torch = functools.partial(_original_from_torch, mesh_mapper=default)
-        elif isinstance(default, MeshToTensor):
+        elif isinstance(default, ttnn.CppMeshToTensor):
             ttnn.to_torch = functools.partial(_original_to_torch, mesh_composer=default)
         else:
             raise ValueError("Argument must be an instance of either TensorToMesh or MeshToTensor.")

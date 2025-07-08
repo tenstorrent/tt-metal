@@ -70,7 +70,7 @@ def test_softmax(device, inplace, dtype):
 
 
 @pytest.mark.parametrize("inplace", [True, False])
-def test_softmax_with_program_cache(device, use_program_cache, inplace):
+def test_softmax_with_program_cache(device, inplace):
     torch.manual_seed(0)
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
 

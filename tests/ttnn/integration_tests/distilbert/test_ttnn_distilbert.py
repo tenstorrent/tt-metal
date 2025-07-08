@@ -21,6 +21,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [768])
 def test_distilbert_for_question_answering(device, model_name, batch_size, sequence_size, reset_seeds):
+    # https://github.com/tenstorrent/tt-metal/issues/23275
+    device.disable_and_clear_program_cache()
+
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     HF_model = HF_DistilBertForQuestionAnswering.from_pretrained(model_name)
 

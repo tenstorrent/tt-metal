@@ -30,6 +30,7 @@
 #include "fabric_host_interface.h"
 #include "fabric_types.hpp"
 #include "fmt/base.h"
+#include "fmt/ranges.h"
 #include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -116,7 +117,8 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
 
     if (all_same_board) {
         if (board_type == BoardType::N300) {
-            if (cluster_desc->get_all_chips().size() == 8) {
+            const auto num_chips = cluster_desc->get_all_chips().size();
+            if (num_chips == 8) {
                 cluster_type = ClusterType::T3K;
                 // Basic check to determine if the cluster is a T3K cluster
                 // MMIO chips should have 3 connections to other chips, remote chips should have 2 connections to other
@@ -136,6 +138,20 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
                             cluster_type = ClusterType::N300;
                             break;
                         }
+                    }
+                }
+            } else if (num_chips == 4) {
+                cluster_type = ClusterType::N300_2x2;
+
+                // Expect every chip to have exactly two remote connections
+                for (const auto& [chip_id, connections] : cluster_desc->get_ethernet_connections()) {
+                    std::unordered_set<chip_id_t> remote_chips;
+                    for (const auto& [channel, remote_chip_and_channel] : connections) {
+                        remote_chips.insert(std::get<0>(remote_chip_and_channel));
+                    }
+                    if (remote_chips.size() != 2) {
+                        cluster_type = ClusterType::N300;
+                        break;
                     }
                 }
             } else {
@@ -329,20 +345,12 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 void Cluster::open_driver(const bool &skip_driver_allocs) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
-        std::unordered_set<chip_id_t> chips_set;
+        std::unordered_set<chip_id_t> pcie_visible_devices;
         // generate the cluster desc and pull chip ids from there
         auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-        if (rtoptions_.is_visible_device_specified()) {
-            int desired_logical_id = -1;
-            for (auto& [logical_id, pci_id] : temp_cluster_desc->get_chips_with_mmio()) {
-                if (pci_id == rtoptions_.get_visible_device()) {
-                    desired_logical_id = logical_id;
-                    break;
-                }
-            }
-            TT_FATAL(desired_logical_id != -1, "Visible device not found in cluster descriptor");
-            for (auto& chip_id : temp_cluster_desc->get_chips_grouped_by_closest_mmio().at(desired_logical_id)) {
-                chips_set.emplace(chip_id);
+        if (rtoptions_.is_visible_devices_specified()) {
+            for (auto& visible_device : rtoptions_.get_visible_devices()) {
+                pcie_visible_devices.emplace(visible_device);
             }
         }
         // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
@@ -356,7 +364,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = num_host_mem_ch_per_mmio_device,
             .sdesc_path = get_soc_description_file(this->arch_, this->target_type_),
-            .target_devices = chips_set,
+            .pci_target_devices = pcie_visible_devices,
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
@@ -483,13 +491,18 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
                  get_soc_desc(chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED)) {
                 this->virtual_pcie_cores_[chip_id].insert({core.x, core.y});
             }
-            for (auto dram_channel = 0; dram_channel < this->get_soc_desc(chip_id).get_num_dram_views();
-                 dram_channel++) {
-                auto worker_dram_ep = this->get_soc_desc(chip_id).get_preferred_worker_core_for_dram_view(dram_channel);
-                auto eth_dram_ep = this->get_soc_desc(chip_id).get_preferred_eth_core_for_dram_view(dram_channel);
-                this->virtual_dram_cores_[chip_id].insert({worker_dram_ep.x, worker_dram_ep.y});
-                if (worker_dram_ep != eth_dram_ep) {
-                    this->virtual_dram_cores_[chip_id].insert({eth_dram_ep.x, eth_dram_ep.y});
+
+            for (uint32_t noc = 0; noc < hal_.get_num_nocs(); noc++) {
+                for (auto dram_channel = 0; dram_channel < this->get_soc_desc(chip_id).get_num_dram_views();
+                     dram_channel++) {
+                    auto worker_dram_ep =
+                        this->get_soc_desc(chip_id).get_preferred_worker_core_for_dram_view(dram_channel, noc);
+                    auto eth_dram_ep =
+                        this->get_soc_desc(chip_id).get_preferred_eth_core_for_dram_view(dram_channel, noc);
+                    this->virtual_dram_cores_[chip_id].insert({worker_dram_ep.x, worker_dram_ep.y});
+                    if (worker_dram_ep != eth_dram_ep) {
+                        this->virtual_dram_cores_[chip_id].insert({eth_dram_ep.x, eth_dram_ep.y});
+                    }
                 }
             }
         }
@@ -629,7 +642,7 @@ void Cluster::write_dram_vec(
         dram_view,
         desc_to_use.get_num_dram_views());
 
-    CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
+    CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view, tt_metal::NOC::NOC_0);
     tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(dram_view);
     write_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
@@ -644,7 +657,7 @@ void Cluster::read_dram_vec(
         dram_view,
         desc_to_use.get_num_dram_views());
 
-    CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
+    CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view, tt_metal::NOC::NOC_0);
     tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(dram_view);
     read_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
@@ -1322,10 +1335,14 @@ tt_cxy_pair Cluster::get_eth_core_for_dispatch_core(
 std::tuple<tt_cxy_pair, tt_cxy_pair> Cluster::get_eth_tunnel_core(
     chip_id_t upstream_chip_id, chip_id_t downstream_chip_id, EthRouterMode mode) const {
     for (const auto &[eth_core, router_mode] : this->device_eth_routing_info_.at(downstream_chip_id)) {
-
+        if (router_mode != mode) {
+            // Skip cores that are not in the requested mode. We might not even have info for some cores going outside
+            // of the cluster.
+            continue;
+        }
       // Check for connected chip id since one chip can be bi directional tunneling to multiple chips
         const auto [tunnel_chip_id, tunnel_eth_core] = this->get_connected_ethernet_core(std::make_tuple(downstream_chip_id, eth_core));
-        if (router_mode == mode and tunnel_chip_id == upstream_chip_id) {
+        if (tunnel_chip_id == upstream_chip_id) {
             return std::make_tuple(tt_cxy_pair(tunnel_chip_id, tunnel_eth_core), tt_cxy_pair(downstream_chip_id, eth_core));
         }
     }
