@@ -439,7 +439,7 @@ Result conv2d_L1(
     if (conv_config.enable_kernel_stride_folding) {
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
-        input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4, output_dtype, false);
+        input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4);
         if (conv_config.deallocate_activation) {
             Tensor input_tensor_pre_folded = input_tensor_;
             input_tensor_pre_folded.deallocate(true);
