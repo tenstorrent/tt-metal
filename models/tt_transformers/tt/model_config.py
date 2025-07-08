@@ -1616,7 +1616,7 @@ class ModelArgs:
         self.mm_tokens_per_image = vision_config.get("mm_tokens_per_image", 256)
 
         if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            self.vision_hidden_dim = vision_config.get("head_dim", 64)
+            self.vision_head_dim = vision_config.get("head_dim", 64)
 
         # Optional vision activation layer, defaults to GELU
         act_layer = vision_config.get("act_layer", "gelu").lower()

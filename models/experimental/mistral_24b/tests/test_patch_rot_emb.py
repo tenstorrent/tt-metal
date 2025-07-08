@@ -52,9 +52,16 @@ def test_rot_emb(seq_len, batch_size, use_program_cache, reset_seeds, device):
     dim = tt_model_args.vision_head_dim
     num_patches_per_dim = image_size // patch_size
     num_patches = num_patches_per_dim * num_patches_per_dim
-    position_ids = torch.arange(num_patches, dtype=torch.long)
 
-    x = torch.randn(batch_size, num_patches, dim)
+    print("image_size:", image_size)
+    print("patch_size:", patch_size)
+    print("dim:", dim)
+    print("num_patches_per_dim:", num_patches_per_dim)
+    print("num_patches:", num_patches)
+
+    position_ids = torch.arange(4096, dtype=torch.long)
+
+    x = torch.randn(batch_size, 4096, 1024)
 
     cos, sin = reference_model(x, position_ids)
     tt_model = RotarySetup(

@@ -34,15 +34,13 @@ def test_mistral_vision_tower(mesh_device, use_program_cache, reset_seeds):
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if k.startswith(first_layer_prefix)
     }
 
-    print("partial_state_dict keys:", partial_state_dict.keys())
-
     B, C, H, W = 1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size
     input_tensor = torch.randn((B, C, H, W))
 
     ##### Reference model output (Torch) #####
     reference_model = model_args.reference_vision_model()
     reference_model.load_state_dict(partial_state_dict)
-    reference_output = reference_model(input_tensor, image_sizes=[(H, W)])
+    reference_output = reference_model(input_tensor, image_sizes=[(H, W)])[0]
 
     print("reference_output:", reference_output.shape)
 
@@ -55,10 +53,17 @@ def test_mistral_vision_tower(mesh_device, use_program_cache, reset_seeds):
         configuration=model_args,
     )
 
-    tt_output = vision_model(input_tensor)
+    submodule_partial_state_dict = {}
+    reference_submodule = model_args.reference_vision_rot_emb()
+    reference_submodule.load_state_dict(submodule_partial_state_dict)
+
+    tt_output = vision_model(input_tensor, reference_submodule)[0]
+    reference_output = reference_output.to(torch.bfloat16)
+    print("reference_output:", reference_output)
+    print("tt_output:", tt_output)
     print("tt_output:", tt_output.shape)
     out = ttnn.from_device(tt_output)
-    out = ttnn.to_torch(out)
+    out = ttnn.to_torch(out).squeeze(0)
     print("tt_output:", out.shape)
     passing, pcc_message = comp_pcc(reference_output, out)
 

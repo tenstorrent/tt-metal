@@ -79,6 +79,33 @@ def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
         return None
     else:
         raise ValueError(f"Unexpected RoPE scaling type: {rope_scaling_type}")
+def position_ids_in_meshgrid_tt(tt_patch_embeds_list, max_width, device):
+    position_ids_tt = []
+    for tt_patch in tt_patch_embeds_list:
+        shape = tt_patch.shape
+        height, width = shape[-2], shape[-1]
+        # row_indices = ttnn.arange(0, height, dtype=ttnn.int32, device=device)
+        # col_indices = ttnn.arange(0, width, dtype=ttnn.int32, device=device)
+        # row_grid = ttnn.reshape(row_indices, [height, 1])
+        # col_grid = ttnn.reshape(col_indices, [1, width])
+        # row_scaled = ttnn.multiply(row_grid, max_width)
+
+        # pos_ids = ttnn.add(row_scaled, col_grid)
+        # pos_ids_flat = ttnn.reshape(pos_ids, [H * W])
+        # position_ids_tt.append(pos_ids_flat)
+        mesh = torch.meshgrid(torch.arange(height), torch.arange(width), indexing="ij")
+        h_grid, v_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
+        ids = h_grid * max_width + v_grid
+
+        tt_ids = ttnn.from_torch(
+            ids,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        position_ids_tt.append(tt_ids[:, 0])
+    return ttnn.concat(position_ids_tt, dim=0)
 
 
 def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):

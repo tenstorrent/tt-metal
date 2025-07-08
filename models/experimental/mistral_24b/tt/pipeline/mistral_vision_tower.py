@@ -8,6 +8,12 @@ from models.experimental.mistral_24b.tt.vision_conv2d import TtMistralConv2dPatc
 from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
+from models.tt_transformers.tt.common import position_ids_in_meshgrid_tt
+from models.experimental.mistral_24b.tt.vision_rope import VisionRotarySetup as RotarySetup
+
+from models.utility_functions import comp_allclose, comp_pcc
+from loguru import logger
+
 
 class MistralVisionTower(LightweightModule):
     def __init__(
@@ -25,12 +31,14 @@ class MistralVisionTower(LightweightModule):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.dtype = dtype
+        self.config = configuration
 
         self.image_size = configuration.vision_chunk_size
         self.patch_size = configuration.vision_patch_size
         self.width = configuration.vision_dim
         self.layers = configuration.vision_n_layers
         self.heads = configuration.vision_attn_n_heads
+        self.vision_head_dim = configuration.vision_head_dim
         self.mlp_ratio = configuration.vision_mlp_ratio
         self.act_layer = configuration.vision_act_layer
         self.in_channels = configuration.vision_in_channels
@@ -74,7 +82,34 @@ class MistralVisionTower(LightweightModule):
             TG=configuration.is_galaxy,
         )
 
-    def forward(self, input_tensor):
+        image_size = configuration.vision_image_size
+        patch_size = configuration.vision_patch_size
+        dim = configuration.vision_head_dim
+        num_patches_per_dim = image_size // patch_size
+        num_patches = num_patches_per_dim * num_patches_per_dim
+        self.num_patches = num_patches
+        print("MistralVisionTower RotarySetup initialized with:")
+        print("self.dim:", configuration.head_dim)
+        print("image_size:", image_size)
+        print("patch_size:", patch_size)
+        print("dim:", dim)
+        print("num_patches_per_dim:", num_patches_per_dim)
+        print("num_patches:", num_patches)
+
+        self.patch_positional_embedding = RotarySetup(
+            self.mesh_device,
+            1,
+            dim,
+            image_size,
+            patch_size,
+            num_patches,
+            configuration.vision_rope_theta,
+            scale_factor=None,
+            orig_context_len=num_patches,
+            datatype=dtype,
+        )
+
+    def forward(self, input_tensor, reference_submodule):
         """
         input_tensor shape: (B, C, H, W)
         """
@@ -108,4 +143,35 @@ class MistralVisionTower(LightweightModule):
         mode = "decode"  # if self.max_seq_len <= 32 else "prefill"
         patch_embeds = self.ln_pre(patch_embeds, mode=mode)
 
-        return patch_embeds
+        # # positional embeddings
+        position_ids = position_ids_in_meshgrid_tt(
+            patch_embeds_list,
+            max_width=self.config.vision_image_size // self.config.vision_patch_size,
+            device=self.mesh_device,
+        )
+        import torch
+
+        refpatch_embeds = ttnn.to_torch(patch_embeds)
+        position_ids = ttnn.to_torch(position_ids).to(torch.long)
+
+        ref_output = reference_submodule(refpatch_embeds, position_ids)
+        refcos, refsin = ref_output
+        print("ref cos shape:", refcos)
+        print("ref sin shape:", refsin.shape)
+
+        position_embeddings = self.patch_positional_embedding.get_rot_mats(position_ids)
+        tt_output = position_embeddings[0]
+
+        print("tt_output:", tt_output)
+
+        print("tt_output:", tt_output.shape)
+        out = ttnn.from_device(tt_output)
+        out = ttnn.to_torch(out).squeeze(0)
+        print("tt_output:", out.shape)
+
+        passing, pcc_message = comp_pcc(refcos, out)
+
+        logger.info(comp_allclose(refcos, out))
+        logger.info(f"PCC: {pcc_message}")
+        assert passing, f"PCC below {0.99}. {pcc_message}"
+        return position_embeddings

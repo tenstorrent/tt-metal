@@ -305,7 +305,6 @@ def map_vision_meta_to_hf_keys(loaded_weights):
     # key tensor
 
     # new key tensor
-    print("loaded_weights ", loaded_weights.keys())
     hf_state_dict = {}
     for key, tensor in loaded_weights.items():
         # Handle full model paths with layer numbers
