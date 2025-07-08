@@ -24,6 +24,9 @@ struct ScaledDotProductAttentionDecode {
     const bool paged_attention;
     const std::optional<bool> share_cache;
 
+    const std::optional<bool> use_mla;
+    const std::optional<uint32_t> head_dim_v;
+
     void validate(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;

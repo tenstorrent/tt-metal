@@ -368,13 +368,16 @@ uint32_t write_partial_tiles_to_memory(
 
 template <
     uint32_t DHt,
+    uint32_t vDHt,
     uint32_t barrier_threshold,
     uint32_t mask_tile_bytes,
     uint32_t PNHt,
     bool use_attention_mask,
     uint32_t cb_k_in,
     uint32_t cb_v_in,
-    uint32_t cb_mask_in>
+    uint32_t cb_mask_in,
+    bool reuse_k  // If enabled, read V from K, instead of from DRAM
+    >
 void read_kv_mask_chunks(
     uint32_t k_chunk_start,
     uint32_t k_chunk_end,
@@ -383,6 +386,7 @@ void read_kv_mask_chunks(
     uint32_t mask_start_tile_id,
     uint32_t Sk_chunk_t,
     uint32_t k_chunk_tiles,
+    uint32_t v_chunk_tiles,
     uint32_t mask_chunk_tiles,
     const InterleavedAddrGenFast<true>& k_reader,
     const InterleavedAddrGenFast<true>& v_reader,
@@ -395,6 +399,7 @@ void read_kv_mask_chunks(
         // Read K chunk transposed
         cb_reserve_back(cb_k_in, k_chunk_tiles);
         uint32_t k_write_ptr = get_write_ptr(cb_k_in);
+        uint64_t k_base_read_ptr = get_noc_addr(k_write_ptr);
         barrier_count = 0;
         for (uint32_t col = 0; col < DHt; ++col) {
             uint32_t k_tile_id = k_start_tile_id + col;
@@ -417,24 +422,44 @@ void read_kv_mask_chunks(
                 PSt, Sk_chunk_t, mask_chunk_tiles, mask_start_tile_id, mask_reader);
         }
 
-        // Read V chunk
-        cb_reserve_back(cb_v_in, k_chunk_tiles);
-        uint32_t v_write_ptr = get_write_ptr(cb_v_in);
-        barrier_count = 0;
-        uint32_t v_tile_id = v_start_tile_id;
-        for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-            for (uint32_t col = 0; col < DHt; ++col) {
-                noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
-                if (++barrier_count == barrier_threshold) {
-                    noc_async_read_barrier();
-                    barrier_count = 0;
+        // Read V chunk (tranpose of K)
+        if constexpr (reuse_k) {
+            cb_reserve_back(cb_v_in, v_chunk_tiles);
+            uint32_t v_write_ptr = get_write_ptr(cb_v_in);
+            uint64_t k_read_ptr = k_base_read_ptr;
+            for (uint32_t row = 0; row < Sk_chunk_t; ++row) {       // Row of V
+                k_read_ptr = k_base_read_ptr + row * k_tile_bytes;  // Increment across K's Col
+
+                for (uint32_t col = 0; col < vDHt; ++col) {  // Col of V
+                    noc_async_read(k_read_ptr, v_write_ptr, v_tile_bytes);
+
+                    v_write_ptr += v_tile_bytes;
+                    k_read_ptr += Sk_chunk_t * k_tile_bytes;  // Strid across K's width
                 }
-                v_tile_id++;
-                v_write_ptr += v_tile_bytes;
             }
+
+            noc_async_read_barrier();
+            cb_push_back(cb_v_in, v_chunk_tiles);
+        } else {
+            cb_reserve_back(cb_v_in, v_chunk_tiles);
+            uint32_t v_write_ptr = get_write_ptr(cb_v_in);
+            barrier_count = 0;
+            uint32_t v_tile_id = v_start_tile_id;
+            for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
+                for (uint32_t col = 0; col < vDHt; ++col) {
+                    noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
+                    if (++barrier_count == barrier_threshold) {
+                        noc_async_read_barrier();
+                        barrier_count = 0;
+                    }
+                    v_tile_id++;
+                    v_write_ptr += v_tile_bytes;
+                }
+                v_tile_id += (DHt - vDHt);  // Skip the padding!
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_v_in, v_chunk_tiles);
+            v_start_tile_id += v_chunk_tiles;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_v_in, k_chunk_tiles);
-        v_start_tile_id += k_chunk_tiles;
     }
 }
