@@ -99,8 +99,6 @@ std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::ve
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.padded_shape();  // TODO: Replace with logical_shape()
     shape[this->dim] *= this->ring_size;
-    std::cout << "AllGatherAsync compute_output_specs: input_shape = " << input_tensor.padded_shape()
-              << ", output_shape = " << shape << std::endl;
     return {TensorSpec(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config))};
 }
@@ -401,6 +399,10 @@ Tensor all_gather_async_impl(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_gather_async op is only supported for Fast Dispatch");
     uint32_t num_devices = devices.size();
+    uint32_t ring_size = num_devices;
+    if (cluster_axis.has_value()) {
+        ring_size = (cluster_axis.value() == 0) ? 8 : 4;
+    }
     TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
 
@@ -421,7 +423,7 @@ Tensor all_gather_async_impl(
                    devices,
                    dim,
                    num_links,
-                   num_devices,
+                   ring_size,
                    memory_config.value_or(input_tensor.memory_config()),
                    ccl_topology,
                    multi_device_global_semaphore,
