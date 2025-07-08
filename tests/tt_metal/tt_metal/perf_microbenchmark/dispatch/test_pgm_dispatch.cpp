@@ -40,6 +40,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include "umd/device/types/xy_pair.h"
+#include <tt-metalium/math.hpp>
+#include "tt_metal/impl/dispatch/device_command.hpp"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
@@ -225,6 +227,23 @@ void set_runtime_args(
             tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
         }
     }
+}
+
+uint32_t get_num_kernels(const TestInfo& info) {
+    uint32_t num_kernels = 0;
+    if (info.brisc_enabled) {
+        num_kernels++;
+    }
+    if (info.ncrisc_enabled) {
+        num_kernels++;
+    }
+    if (info.trisc_enabled) {
+        num_kernels += 3;  // 3 compute kernels when enabled
+    }
+    if (info.erisc_enabled) {
+        num_kernels++;
+    }
+    return num_kernels;
 }
 
 bool initialize_program(
@@ -497,9 +516,10 @@ std::pair<std::vector<tt_metal::Program>, std::unordered_map<std::string, uint32
                                          .dispatch_mem_map(dispatch_core_type_to_core_type(dispatch_core_type))
                                          .ringbuffer_size();
     uint32_t target_total_size = (3 * prefetcher_cache_size) / 2;
+    uint32_t num_kernels = get_num_kernels(info);
     uint32_t estimated_program_size =
-        1 << std::bit_width(info.kernel_size * 3);  // Rough estimate for program with 3 kernels
-    uint32_t num_programs = std::max(1u, target_total_size / estimated_program_size);
+        tt::align(info.kernel_size * num_kernels, tt::tt_metal::HostMemDeviceCommand::PROGRAM_PAGE_SIZE);
+    uint32_t num_programs = tt::div_up(target_total_size, estimated_program_size);
 
     log_info(LogTest, "Double buffering test: prefetcher cache size = {} bytes", prefetcher_cache_size);
     log_info(
@@ -661,7 +681,9 @@ static void Max12288Args(benchmark::internal::Benchmark* b) {
 static void Max8192Args(benchmark::internal::Benchmark* b) {
     b->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192);
 }
-static void Range1KTo8KArgs(benchmark::internal::Benchmark* b) { b->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192); }
+static void Range512To12KArgs(benchmark::internal::Benchmark* b) {
+    b->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192)->Arg(12288);
+}
 
 static void KernelCycleArgs(benchmark::internal::Benchmark* b) {
     // Dispatch time for most normal kernels is around 3000-4000 cycles.
@@ -895,7 +917,7 @@ BENCHMARK_CAPTURE(
         .use_trace = true,
         //.use_all_cores = true,
         .test_double_buffering = true})
-    ->Apply(Range1KTo8KArgs)
+    ->Apply(Range512To12KArgs)
     ->UseManualTime();
 
 int main(int argc, char** argv) {
