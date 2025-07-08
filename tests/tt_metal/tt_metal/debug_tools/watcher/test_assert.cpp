@@ -23,7 +23,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/utils.hpp>
-#include "watcher_server.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher asserts.
@@ -155,6 +154,9 @@ static void RunTest(
 
     // Run the kernel, don't expect an issue here.
     log_info(LogTest, "Running args that shouldn't assert...");
+    // TODO: #24887, ND issue with this test - only run once below when issue is fixed
+    fixture->RunProgram(device, program);
+    fixture->RunProgram(device, program);
     fixture->RunProgram(device, program);
     log_info(LogTest, "Args did not assert!");
 
@@ -163,17 +165,8 @@ static void RunTest(
     SetRuntimeArgs(program, assert_kernel, logical_core, unsafe_args);
 
     // Run the kerel, expect an exit due to the assert.
-    try {
-        log_info(LogTest, "Running args that should assert...");
-        fixture->RunProgram(device, program);
-    } catch (std::runtime_error &e) {
-        std::string expected =
-            "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.\n";
-        expected += tt::watcher_get_log_file_name();
-        const std::string error = std::string(e.what());
-        log_info(LogTest, "Caught exception (one is expected in this test)");
-        EXPECT_TRUE(error.find(expected) != std::string::npos);
-    }
+    log_info(LogTest, "Running args that should assert...");
+    fixture->RunProgram(device, program);
 
     // We should be able to find the expected watcher error in the log as well,
     // expected error message depends on the risc we're running on and the assert type.
@@ -226,10 +219,10 @@ static void RunTest(
     log_info(LogTest, "Expected error: {}", expected);
     std::string exception = "";
     do {
-        exception = get_watcher_exception_message();
+        exception = MetalContext::instance().watcher_server()->exception_message();
     } while (exception == "");
     log_info(LogTest, "Reported error: {}", exception);
-    EXPECT_TRUE(expected == get_watcher_exception_message());
+    EXPECT_TRUE(expected == MetalContext::instance().watcher_server()->exception_message());
 }
 }
 
