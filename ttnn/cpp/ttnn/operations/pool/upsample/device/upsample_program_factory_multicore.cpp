@@ -43,6 +43,8 @@ static Tensor create_config_tensor(
     uint16_t nhw_start_core = 0;  // Starting core index for NHW distribution
     const uint32_t input_nsticks_per_core = shard_spec.shape[0];
     const uint32_t output_nsticks_per_core = input_nsticks_per_core * scale_factor_h;
+    uint32_t output_nsticks_per_core_reader =
+        (output_nsticks_per_core + 1) / 2;  // Total number of sticks per core in the output
 
     auto logical_cores = corerange_to_cores(
         shard_spec.grid, shard_spec.num_cores(), shard_spec.orientation == ShardOrientation::ROW_MAJOR);
@@ -65,6 +67,10 @@ static Tensor create_config_tensor(
     std::vector<uint16_t> dst_core_end_idx_map;
     const size_t logical_core_to_stick_map_entry_size = 4;
     bool do_insert = false;
+
+    uint32_t last_ind = 0;
+    uint32_t elems_per_core_reader = 0;
+    uint32_t elem_num = 0;
     // Create map of core and respective offsets in input
     for (uint32_t b = 0; b < batch_size; ++b) {
         for (uint32_t h = 0; h < in_h; ++h) {
@@ -77,9 +83,18 @@ static Tensor create_config_tensor(
                         stick_offset = 0;
                         core_idx++;
                     }
-                    if (stick_offset == 0 || stick_cnt % output_nsticks_per_core == 0 || do_insert) {
-                        if (stick_cnt != 0 && stick_cnt % output_nsticks_per_core == 0) {
+                    if (stick_offset == 0 || stick_cnt % output_nsticks_per_core_reader == 0 || do_insert) {
+                        if (stick_cnt != 0 && stick_cnt % output_nsticks_per_core_reader == 0) {
                             dst_core_end_idx_map.push_back(logical_core_to_stick_map.size());  // didn't -1, < later
+                            if (output_nsticks_per_core > 1) {
+                                output_nsticks_per_core_reader =
+                                    output_nsticks_per_core - output_nsticks_per_core_reader;
+                            }
+                            stick_cnt = 0;
+                            elem_num =
+                                (logical_core_to_stick_map.size() - last_ind) / logical_core_to_stick_map_entry_size;
+                            elems_per_core_reader = elem_num > elems_per_core_reader ? elem_num : elems_per_core_reader;
+                            last_ind = logical_core_to_stick_map.size();
                         }
                         if (do_insert) {
                             do_insert = false;
@@ -108,13 +123,8 @@ static Tensor create_config_tensor(
     }
     dst_core_end_idx_map.push_back(logical_core_to_stick_map.size());
 
-    uint32_t elems_per_core = 0;
-    uint32_t last_ind = 0;
-    for (size_t it = 0; it < dst_core_end_idx_map.size(); it++) {
-        uint32_t elem_num = (dst_core_end_idx_map[it] - last_ind) / 4;
-        elems_per_core = elem_num > elems_per_core ? elem_num : elems_per_core;
-        last_ind = dst_core_end_idx_map[it];
-    }
+    elem_num = (logical_core_to_stick_map.size() - last_ind) / logical_core_to_stick_map_entry_size;
+    elems_per_core_reader = elem_num > elems_per_core_reader ? elem_num : elems_per_core_reader;
 
     /* Each entry in config_vector contains 4 elements:
      * {{core_coords.x, core_coords.y}, stick_offset(in input_cb)}
@@ -127,51 +137,35 @@ static Tensor create_config_tensor(
     std::vector<uint16_t> config_vector;
 
     const uint32_t config_buffer_entry_size = 4;
-    elems_per_core *= config_buffer_entry_size;
+    elems_per_core_reader *= config_buffer_entry_size;
+    const uint32_t elems_per_core =
+        2 * elems_per_core_reader;  // because two readers per tensix core which get equal number of stick intervals
 
     // Based on core calculate physical location of cores
     CoreCoord core_coords;
 
     // In case last input shard is not full, fill the rest of the config vector with placeholder values
-    const auto pad_uneven_shards = [elems_per_core, config_buffer_entry_size](
-                                       auto& config_vector, size_t slice_begin = 0) {
+    const auto pad_uneven_shards = [config_buffer_entry_size](
+                                       auto& config_vector, uint32_t elems_per_core_reader, size_t slice_begin = 0) {
         const uint32_t slice_length = config_vector.size() - slice_begin;
-        const uint32_t remainder = (elems_per_core - (slice_length % elems_per_core)) % elems_per_core;
+        const uint32_t remainder =
+            (elems_per_core_reader - (slice_length % elems_per_core_reader)) % elems_per_core_reader;
         if (remainder != 0) {
-            // uint16_t last4 = config_vector[config_vector.size() - 4];
-            // uint16_t last2 = config_vector[config_vector.size() - 2];
-            // log_info(tt::LogOp,"Config vector size before: {},",config_vector.size());
-            // log_info(tt::LogOp, "Padding for core: {}", remainder/config_buffer_entry_size);
             for (int i = 0; i < remainder / config_buffer_entry_size; i++) {
                 config_vector.push_back(0);  // core
                 config_vector.push_back(1);  // stick offset start
                 config_vector.push_back(0);  // stick offset end
                 config_vector.push_back(0);  // pad
             }
-            // log_info(tt::LogOp,"Config vector size after: {},",config_vector.size());
         }
     };
-
-    for (size_t ind = 0, j = 0; ind < dst_core_end_idx_map.size(); ind++) {
-        const size_t chan_slice_begin = config_vector.size();
-        for (; j < dst_core_end_idx_map[ind]; j += 4) {
-            core_coords = device->worker_core_from_logical_core(
-                CoreCoord(logical_core_to_stick_map[j], logical_core_to_stick_map[j + 1]));
-            // Combine the x and y coordinates of the core into a single 16-bit value.
-            const uint16_t cores = (core_coords.x << 8) + core_coords.y;
-            log_info(
-                tt::LogOp,
-                "Core: {}, stick offset: {}, stick offset end: {}",
-                cores,
-                logical_core_to_stick_map[j + 2],
-                logical_core_to_stick_map[j + 3]);
-        }
-        log_info(tt::LogOp, "\n");
-    }
-
+    uint32_t per_core_start_idx = 0;
     if (is_height_sharded) {
         for (size_t ind = 0, j = 0; ind < dst_core_end_idx_map.size(); ind++) {
             const size_t chan_slice_begin = config_vector.size();
+            if (ind % 2 == 0) {
+                per_core_start_idx = config_vector.size();
+            }
             for (; j < dst_core_end_idx_map[ind]; j += 4) {
                 core_coords = device->worker_core_from_logical_core(
                     CoreCoord(logical_core_to_stick_map[j], logical_core_to_stick_map[j + 1]));
@@ -182,8 +176,9 @@ static Tensor create_config_tensor(
                 config_vector.push_back(logical_core_to_stick_map[j + 3]);
                 config_vector.push_back(0);
             }
-            pad_uneven_shards(config_vector, chan_slice_begin);
+            pad_uneven_shards(config_vector, elems_per_core_reader, chan_slice_begin);
         }
+        pad_uneven_shards(config_vector, elems_per_core, per_core_start_idx);
     } else {
         for (size_t i = ch_start_core; i <= ch_end_core; i++) {
             for (size_t ind = 0, j = 0; ind < dst_core_end_idx_map.size(); ind++) {
@@ -197,24 +192,17 @@ static Tensor create_config_tensor(
                     config_vector.push_back(logical_core_to_stick_map[j + 3]);
                     config_vector.push_back(0);
                 }
-                pad_uneven_shards(config_vector, chan_slice_begin);
+                pad_uneven_shards(config_vector, elems_per_core_reader, chan_slice_begin);
             }
+            pad_uneven_shards(config_vector, elems_per_core, per_core_start_idx);
         }
     }
-
     TT_FATAL(
         config_vector.size() % elems_per_core == 0,
         "Config vector size {} should be multiple of {}",
         config_vector.size(),
         elems_per_core);
 
-    log_info(
-        tt::LogOp,
-        "Config vector size: {}, elems_per_core: {}, output sticks per core: {}, dst_core vector size: {}",
-        config_vector.size(),
-        elems_per_core / 4,
-        output_nsticks_per_core,
-        dst_core_end_idx_map.size());
     ttnn::Shape config_shape({tt::div_up(config_vector.size(), elems_per_core), elems_per_core});
     auto config_buffer = HostBuffer(std::move(config_vector));
     return Tensor(std::move(config_buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
