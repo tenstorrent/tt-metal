@@ -36,7 +36,6 @@ jobs:
     env:
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
       PYTHONPATH: ${{ github.workspace }}
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
