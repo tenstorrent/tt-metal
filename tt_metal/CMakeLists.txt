@@ -157,10 +157,19 @@ target_sources(
             fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
             fabric/hw/inc/fabric_routing_mode.h
+            fabric/hw/inc/tt_fabric_utils.h
             fabric/hw/inc/noc_addr.h
             fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp
             fabric/hw/inc/edm_fabric/named_types.hpp
             fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp
+            fabric/hw/inc/edm_fabric/edm_handshake.hpp
+            fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp
+            fabric/hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp
+            fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
+            fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
+            fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp
+            fabric/hw/inc/edm_fabric/1d_fabric_transaction_id_tracker.hpp
+            fabric/hw/inc/edm_fabric/edm_fabric_tmp_utils.hpp
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
             impl/dispatch/kernels/cq_relay.hpp

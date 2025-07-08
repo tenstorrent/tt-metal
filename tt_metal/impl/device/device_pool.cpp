@@ -259,7 +259,7 @@ void DevicePool::initialize(
     bool skip = !is_galaxy;
 
     // Must open all devices in cluster to use fabric
-    if (_inst->using_fast_dispatch) {
+    if (_inst->using_fast_dispatch && tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
         device_ids_to_open.clear();
         for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
             device_ids_to_open.push_back(id);
