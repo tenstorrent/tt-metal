@@ -107,10 +107,10 @@ inline Tensor binary_impl(
         output_tensor = ttnn::lt_unary(queue_id, lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::NE) {
         output_tensor = ttnn::ne_unary(queue_id, lhs, rhs, memory_config, output);
-    } else if (binary_op_type == BinaryOpType::GTE) {
-        output_tensor = ttnn::gez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
-    } else if (binary_op_type == BinaryOpType::LTE) {
-        output_tensor = ttnn::lez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
+    } else if (binary_op_type == BinaryOpType::GE) {
+        output_tensor = ttnn::ge_unary(queue_id, lhs, rhs, memory_config, output);
+    } else if (binary_op_type == BinaryOpType::LE) {
+        output_tensor = ttnn::le_unary(queue_id, lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::EQ) {
         output_tensor = ttnn::eq_unary(queue_id, lhs, rhs, memory_config, output);
     } else {
@@ -130,10 +130,10 @@ inline Tensor binary_impl(
     const ttnn::Tensor& rhs,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt) {
-    if (binary_op_type == BinaryOpType::GTE) {
+    if (binary_op_type == BinaryOpType::GE) {
         return ttnn::gez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
     }
-    if (binary_op_type == BinaryOpType::LTE) {
+    if (binary_op_type == BinaryOpType::LE) {
         return ttnn::lez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
     }
     if (binary_op_type == BinaryOpType::EQ) {
@@ -762,15 +762,15 @@ template struct BinaryOperation<BinaryOpType::RIGHT_SHIFT>;
 
 template struct RelationalBinary<BinaryOpType::EQ>;
 template struct RelationalBinary<BinaryOpType::NE>;
-template struct RelationalBinary<BinaryOpType::GTE>;
+template struct RelationalBinary<BinaryOpType::GE>;
 template struct RelationalBinary<BinaryOpType::GT>;
-template struct RelationalBinary<BinaryOpType::LTE>;
+template struct RelationalBinary<BinaryOpType::LE>;
 template struct RelationalBinary<BinaryOpType::LT>;
 
 template struct InplaceRelationalBinary<BinaryOpType::GT>;
 template struct InplaceRelationalBinary<BinaryOpType::LT>;
-template struct InplaceRelationalBinary<BinaryOpType::GTE>;
-template struct InplaceRelationalBinary<BinaryOpType::LTE>;
+template struct InplaceRelationalBinary<BinaryOpType::GE>;
+template struct InplaceRelationalBinary<BinaryOpType::LE>;
 template struct InplaceRelationalBinary<BinaryOpType::EQ>;
 template struct InplaceRelationalBinary<BinaryOpType::NE>;
 
