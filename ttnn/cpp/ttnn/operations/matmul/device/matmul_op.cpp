@@ -2242,7 +2242,10 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
 
                     TT_FATAL(
                         K % per_core_K == 0,
-                        "in DRAM sharded Matmul we don't have support for un-even sharding currently.");
+                        "in DRAM sharded Matmul we don't have support for un-even sharding currently. K: {}, "
+                        "per_core_K: {}.",
+                        K,
+                        per_core_K);
 
                     TT_FATAL(
                         per_core_N % tile_width_ratio == 0,
