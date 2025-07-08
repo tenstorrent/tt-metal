@@ -318,7 +318,6 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
         num_cores = std::min(num_cores, num_dram_channels);
     }
 
-    // use aggregate bw instead
     printf("FINAL num cores: %d\n", num_cores);
     bool input_is_local = input_is_sharded && num_cores == input_num_cores;
     bool output_is_local = output_is_sharded && num_cores == output_num_cores;
@@ -342,6 +341,215 @@ int common_tm_bw_model(const Tensor& input_tensor, const Tensor& output_tensor, 
     int ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
     return ideal_dev_clock_cycles;
 }
+
+uint32_t get_cycles_for_transaction_size_2(
+    uint32_t transaction_size, uint32_t num_transactions, int index, bool is_read) {
+    std::map<uint32_t, std::array<float, 2>> one_to_one_read = {
+        {32, {294, 366}},
+        {64, {295, 366}},
+        {128, {302, 363}},
+        {256, {302, 363}},
+        {512, {308, 370}},
+        {1024, {326, 376}},
+        {2048, {358, 395}},
+        {4096, {431, 425}},
+        {8192, {555, 490}},
+        {16384, {821, 625}},
+        {32768, {1358, 883}},
+        {65536, {2402, 1414}}};
+
+    std::map<uint32_t, std::array<float, 2>> one_to_one_write = {
+        {32, {290, 368}},
+        {64, {290, 368}},
+        {128, {290, 367}},
+        {256, {298, 368}},
+        {512, {307, 374}},
+        {1024, {322, 385}},
+        {2048, {364, 402}},
+        {4096, {434, 432}},
+        {8192, {570, 495}},
+        {16384, {864, 633}},
+        {32768, {1433, 895}},
+        {65536, {2577, 1432}}};
+
+    auto transaction_type = is_read ? one_to_one_read : one_to_one_write;
+
+    printf("transaction size: %u\n", transaction_size);
+    transaction_size = index == 0 ? std::max(transaction_size, 32u) : std::max(transaction_size, 64u);
+    auto transaction_cycles = interpolate_transaction_bw(transaction_size, transaction_type, index);
+
+    printf("num transactions: %u\n", num_transactions);
+    uint32_t cycles = num_transactions * transaction_cycles;
+
+    return cycles;
+}
+
+// aggregate bw for dram and l1 interleaved (bandwidth bound)
+// sharded l1 (per core modelling)
+int common_tm_bw_model2(const Tensor& input_tensor, const Tensor& output_tensor, bool output_only) {
+    std::string mode = "effective";
+    std::map<std::string, uint32_t> dram_read_aggr_bw = {// using noc0
+                                                         {"ideal", 265},
+                                                         {"effective", 190}};
+
+    std::map<std::string, uint32_t> dram_write_aggr_bw = {// using noc1
+                                                          {"ideal", 250},
+                                                          {"effective", 130}};
+
+    std::map<std::string, uint32_t> dram_l1_latency = {{"ideal", 243}, {"effective", 373}};
+
+    std::map<std::string, uint32_t> l1_l1_latency = {{"ideal", 170}, {"effective", 260}};
+
+    printf("In common tm bw model\n");
+    if (input_tensor.storage_type() != StorageType::DEVICE) {
+        log_warning(tt::LogOp, "Input tensor not on DEVICE?!");
+    }
+    const auto& input_shape = input_tensor.padded_shape();
+    if (input_shape.rank() == 4) {
+        printf("input shape: %u %u %u %u\n", input_shape[0], input_shape[1], input_shape[2], input_shape[3]);
+        printf("input volume: %lu\n", input_shape.volume());
+    }
+
+    auto element_size_bytes = input_tensor.element_size();
+    printf("element size bytes: %u\n", element_size_bytes);
+
+    bool input_is_sharded = input_tensor.memory_config().is_sharded();
+    printf("is sharded: %s\n", input_is_sharded ? "true" : "false");
+
+    bool input_is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    printf("is dram: %s\n", input_is_dram ? "true" : "false");
+
+    bool input_is_tiled = input_tensor.layout() == Layout::TILE;
+    printf("is tiled: %s\n", input_is_tiled ? "true" : "false");
+
+    uint32_t input_size_bytes = input_shape.volume() * element_size_bytes;
+    printf("input_tensor.physical_volume(): %lu\n", input_tensor.physical_volume());
+    printf("input shape volume: %lu\n", input_shape.volume());
+    printf("input size bytes: %u\n", input_size_bytes);
+
+    auto arch = input_tensor.device()->arch();
+    int num_cores = (arch == tt::ARCH::WORMHOLE_B0) ? 64 : 108;
+    int index = (arch == tt::ARCH::WORMHOLE_B0) ? 0 : 1;
+
+    auto input_num_cores = num_cores;
+    auto output_num_cores = num_cores;
+
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    uint32_t single_tile_size = tile_width * tile_height * element_size_bytes;
+    printf("single tile size: %u\n", single_tile_size);
+    uint32_t input_transaction_size = input_is_tiled ? single_tile_size : input_shape[-1] * element_size_bytes;
+    if (input_is_sharded) {
+        input_num_cores = input_tensor.memory_config().shard_spec().value().grid.num_cores();
+        printf("input num cores: %u\n", input_num_cores);
+        const auto& input_shard_shape = input_tensor.memory_config().shard_spec().value().shape;
+        printf("input shard shape: %u %u\n", input_shard_shape[0], input_shard_shape[1]);
+        input_transaction_size = input_is_tiled ? single_tile_size : input_shard_shape[1] * element_size_bytes;
+        printf(
+            "input transaction size: %u because input_shard_shape[-1] %u and element_size_bytes %u \n",
+            input_transaction_size,
+            input_shard_shape[1],
+            element_size_bytes);
+    }
+    printf("input transaction size: %u\n", input_transaction_size);
+    uint32_t num_read_transactions = std::ceil((float)input_size_bytes / (float)input_transaction_size);
+    printf("num read transactions: %u\n", num_read_transactions);
+
+    if (output_tensor.storage_type() != StorageType::DEVICE) {
+        log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
+    }
+    bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    printf("out is DRAM: %s\n", output_is_dram ? "true" : "false");
+
+    bool output_is_tiled = output_tensor.layout() == Layout::TILE;
+    printf("out is tiled: %s\n", output_is_tiled ? "true" : "false");
+
+    bool output_is_sharded = output_tensor.memory_config().is_sharded();
+    printf("out is sharded: %s\n", output_is_sharded ? "true" : "false");
+
+    const auto& output_shape = output_tensor.padded_shape();
+    uint32_t output_size_bytes = output_shape.volume() * element_size_bytes;
+
+    if (output_shape.rank() == 4) {
+        printf("output shape: %u %u %u %u\n", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);
+        printf("output volume: %lu\n", output_shape.volume());
+    }
+
+    printf("output size bytes: %u\n", output_size_bytes);
+    uint32_t output_transaction_size = output_is_tiled ? single_tile_size : output_shape[-1] * element_size_bytes;
+    printf("output transaction size: %u\n", output_transaction_size);
+    if (output_is_sharded) {
+        output_num_cores = output_tensor.memory_config().shard_spec().value().grid.num_cores();
+        printf("output num cores: %u\n", output_num_cores);
+        const auto& output_shard_shape = output_tensor.memory_config().shard_spec().value().shape;
+        printf("output shard shape: %u %u\n", output_shard_shape[0], output_shard_shape[1]);
+        output_transaction_size = output_is_tiled ? single_tile_size : output_shard_shape[1] * element_size_bytes;
+    }
+
+    uint32_t num_write_transactions = std::ceil((float)output_size_bytes / (float)output_transaction_size);
+    printf("num write transactions: %u\n", num_write_transactions);
+
+    // can model performance per core when when cores are processing local data => no noc congestion
+    if (input_is_sharded && output_is_sharded && !input_is_dram && !output_is_dram &&
+        input_num_cores == output_num_cores) {
+        num_cores = input_num_cores;
+        printf("FINAL num cores: %d\n", num_cores);
+
+        num_read_transactions = std::ceil((float)num_read_transactions / (float)num_cores);
+        num_write_transactions = std::ceil((float)num_write_transactions / (float)num_cores);
+        printf("num_read_transactions after %u\n", num_read_transactions);
+        printf("num_write_transactions after %u\n", num_write_transactions);
+        auto total_read_cycles = get_cycles_for_transaction_size(
+            input_transaction_size, input_is_dram, true, num_read_transactions, num_cores, index, true);
+
+        printf("total read cycles: %u\n", total_read_cycles);
+        uint32_t total_write_cycles = get_cycles_for_transaction_size(
+            output_transaction_size, output_is_dram, true, num_write_transactions, num_cores, index, false);
+
+        printf("total write cycles: %u\n", total_write_cycles);
+
+        // Use max(read, write) to account for overlap
+        int ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
+        return ideal_dev_clock_cycles;
+    }
+    float device_frequency_hz = (arch == tt::ARCH::WORMHOLE_B0) ? 1e9 : 1.2e9;
+    uint32_t total_read_cycles = input_is_dram ? dram_l1_latency[mode] : l1_l1_latency[mode];
+    if (input_is_dram) {
+        auto dram_bw = dram_read_aggr_bw[mode];
+        printf("input is dram, using aggr bw: %u\n", dram_bw);
+        total_read_cycles += std::ceil((float)input_size_bytes * device_frequency_hz / (float)(dram_bw * 1e9));
+        printf("total read cycles: %u\n", total_read_cycles);
+    } else {
+        // L1: Use NoC bisection bandwidth
+        float noc_bisection_cores = std::sqrt(num_cores);
+        if (input_is_sharded) {
+            noc_bisection_cores = std::sqrt(input_num_cores);
+        }
+        num_read_transactions = std::ceil((float)num_read_transactions / noc_bisection_cores);
+        total_read_cycles +=
+            get_cycles_for_transaction_size_2(input_transaction_size, num_read_transactions, index, true);
+    }
+    uint32_t total_write_cycles = output_is_dram ? dram_l1_latency[mode] : l1_l1_latency[mode];
+    if (output_is_dram) {
+        auto dram_bdw = dram_write_aggr_bw[mode];
+        printf("output is dram, using aggr bw: %u\n", dram_bdw);
+        total_write_cycles += std::ceil((float)output_size_bytes * device_frequency_hz / (float)(dram_bdw * 1e9));
+        printf("total write cycles: %u\n", total_write_cycles);
+    } else {
+        // L1: Use NoC bisection bandwidth
+        float bisection_cores = std::sqrt(num_cores);
+        if (output_is_sharded) {
+            bisection_cores = std::sqrt(output_num_cores);
+        }
+        num_write_transactions = std::ceil((float)num_write_transactions / bisection_cores);
+        total_write_cycles +=
+            get_cycles_for_transaction_size_2(output_transaction_size, num_write_transactions, index, false);
+    }
+    int ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
+    return ideal_dev_clock_cycles;
+}
+
 uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,
     const uint32_t input_single_tile_size,
