@@ -781,13 +781,12 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             auto num_full_size_channels = num_workers_per_direction;
             auto num_header_only_channels = 0;
             uint32_t payload_size_bytes = tiles_to_write_per_packet * op_config.get_page_size();
-            uint32_t num_buffers_full_size_channels = num_full_size_channels * 8;
+            uint32_t num_buffers_full_size_channels = 1;
             size_t buffer_size_bytes_full_size_channel =
                 tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
             const uint32_t l1_unreserved_base_address =
                 sender_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
             const size_t mux_base_l1_address = l1_unreserved_base_address;
-            uint32_t num_full_size_channel_iters = 1;
             auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
                 num_full_size_channels,
                 num_header_only_channels,
@@ -795,9 +794,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 0,
                 buffer_size_bytes_full_size_channel,
                 mux_base_l1_address);
-            if (num_full_size_channel_iters > 1) {
-                mux_kernel_config.set_num_full_size_channel_iters(num_full_size_channel_iters);
-            }
 
             const bool mux_connection_valid =
                 (dir && forward_device.has_value()) || (!dir && backward_device.has_value());
