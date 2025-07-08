@@ -4,7 +4,7 @@
 
 
 import ttnn
-from models.demos.yolov8x.tests.yolov8x_test_infra import create_test_infra
+from models.demos.yolov8x.runner.performant_runner_infra import YOLOv8xPerformanceRunnerInfra
 
 try:
     from tracy import signpost
@@ -19,7 +19,7 @@ def run_yolov8x_inference(
     device,
     device_batch_size,
 ):
-    test_infra = create_test_infra(
+    test_infra = YOLOv8xPerformanceRunnerInfra(
         device=device,
         batch_size=device_batch_size,
     )
@@ -52,7 +52,7 @@ def run_yolov8x_trace_inference(
     device,
     device_batch_size,
 ):
-    test_infra = create_test_infra(
+    test_infra = YOLOv8xPerformanceRunnerInfra(
         device=device,
         batch_size=device_batch_size,
     )
@@ -98,7 +98,7 @@ def run_yolov8x_trace_2cqs_inference(
     device,
     device_batch_size,
 ):
-    test_infra = create_test_infra(
+    test_infra = YOLOv8xPerformanceRunnerInfra(
         device,
         device_batch_size,
     )
