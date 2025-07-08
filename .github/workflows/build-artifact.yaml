@@ -368,7 +368,6 @@ jobs:
         env:
           CIBW_BUILD: "cp${{ fromJSON('{\"3.10\":\"310\",\"3.12\":\"312\"}')[matrix.python-version] }}-manylinux_x86_64*"
           CIBW_SKIP: "*-musllinux_*"
-          CIBW_BUILD_VERBOSITY: 2
           CIBW_BUILD_FRONTEND: build
           CIBW_ENVIRONMENT: >-
             CCACHE_REMOTE_ONLY=true
