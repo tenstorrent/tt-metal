@@ -176,7 +176,11 @@ static Tensor create_config_tensor(
                 config_vector.push_back(logical_core_to_stick_map[j + 3]);
                 config_vector.push_back(0);
             }
-            pad_uneven_shards(config_vector, elems_per_core_reader, chan_slice_begin);
+            if (output_nsticks_per_core > 1) {
+                pad_uneven_shards(config_vector, elems_per_core_reader, chan_slice_begin);
+            } else {
+                pad_uneven_shards(config_vector, elems_per_core, chan_slice_begin);
+            }
         }
         pad_uneven_shards(config_vector, elems_per_core, per_core_start_idx);
     } else {
@@ -192,7 +196,11 @@ static Tensor create_config_tensor(
                     config_vector.push_back(logical_core_to_stick_map[j + 3]);
                     config_vector.push_back(0);
                 }
-                pad_uneven_shards(config_vector, elems_per_core_reader, chan_slice_begin);
+                if (output_nsticks_per_core > 1) {
+                    pad_uneven_shards(config_vector, elems_per_core_reader, chan_slice_begin);
+                } else {
+                    pad_uneven_shards(config_vector, elems_per_core, chan_slice_begin);
+                }
             }
             pad_uneven_shards(config_vector, elems_per_core, per_core_start_idx);
         }

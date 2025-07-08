@@ -140,7 +140,7 @@ def upsample_multicore_common(
     if core_range != None:
         shard_grid = ttnn.CoreRangeSet(
             {
-                ttnn.CoreRange(ttnn.CoreCoord(core[0][0], core[0][1]), ttnn.CoreCoord(core[1][0], core[1][1]))
+                ttnn.CoreRange(ttnn.CoreCoord(core[0][1], core[0][0]), ttnn.CoreCoord(core[1][1], core[1][0]))
                 for core in core_range
             }
         )
