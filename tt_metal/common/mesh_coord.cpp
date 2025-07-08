@@ -123,8 +123,8 @@ std::ostream& operator<<(std::ostream& os, const MeshShape& shape) {
     return os;
 }
 
-bool is_line_topology(const MeshShape& shape) {
-    return std::count_if(shape.cbegin(), shape.cend(), [](size_t dim) { return dim != 1; }) <= 1;
+bool MeshShape::is_line_topology() const {
+    return std::count_if(cbegin(), cend(), [](size_t dim) { return dim != 1; }) <= 1;
 }
 
 MeshCoordinate::MeshCoordinate(uint32_t c) : value_({c}) {}
@@ -142,24 +142,31 @@ tt::stl::Span<const uint32_t> MeshCoordinate::coords() const { return value_; }
 uint32_t MeshCoordinate::operator[](int32_t dim) const { return value_[normalize_index(dim, dims())]; }
 uint32_t& MeshCoordinate::operator[](int32_t dim) { return value_[normalize_index(dim, dims())]; }
 
-std::optional<MeshCoordinate> get_neighbor(
-    const MeshShape& shape, const MeshCoordinate& coord, int32_t offset, int32_t dim, BoundaryMode mode) {
-    TT_FATAL(
-        shape.dims() == coord.dims(),
-        "Shape and coordinate dimensions do not match: {} != {}",
-        shape.dims(),
-        coord.dims());
-    dim = normalize_index(dim, shape.dims());
+size_t MeshCoordinate::to_linear_index(const MeshShape& shape) const {
+    TT_FATAL(shape.dims() == dims(), "Shape and coordinate dimensions do not match: {} != {}", shape.dims(), dims());
 
-    for (size_t i = 0; i < coord.dims(); ++i) {
-        TT_FATAL(coord[i] < shape[i], "Coordinate {} is out of bounds for shape {}", coord, shape);
+    size_t linear_index = 0;
+    for (size_t dim = 0; dim < dims(); ++dim) {
+        TT_FATAL(value_[dim] < shape[dim], "Coordinate {} is out of bounds for shape {}", *this, shape);
+        linear_index += value_[dim] * shape.get_stride(dim);
+    }
+    return linear_index;
+}
+
+std::optional<MeshCoordinate> MeshCoordinate::get_neighbor(
+    const MeshShape& shape, int32_t offset, int32_t dim, BoundaryMode mode) const {
+    TT_FATAL(shape.dims() == dims(), "Shape and coordinate dimensions do not match: {} != {}", shape.dims(), dims());
+    for (size_t i = 0; i < dims(); ++i) {
+        TT_FATAL(value_[i] < shape[i], "Coordinate {} is out of bounds for shape {}", *this, shape);
     }
 
+    dim = normalize_index(dim, shape.dims());
+
     const auto boundary = static_cast<int32_t>(shape[dim]);
-    const int32_t current_pos = static_cast<int32_t>(coord[dim]);
+    const int32_t current_pos = static_cast<int32_t>(value_[dim]);
     const int32_t new_pos = current_pos + offset;
 
-    MeshCoordinate result = coord;
+    MeshCoordinate result = *this;
 
     switch (mode) {
         case BoundaryMode::WRAP: result[dim] = ((new_pos % boundary) + boundary) % boundary; break;
@@ -321,21 +328,6 @@ bool operator!=(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs) 
 std::ostream& operator<<(std::ostream& os, const MeshCoordinateRange& range) {
     os << "MeshCoordinateRange(start=" << range.start_coord() << ", end=" << range.end_coord() << ")";
     return os;
-}
-
-size_t to_linear_index(const MeshShape& shape, const MeshCoordinate& coord) {
-    TT_FATAL(
-        shape.dims() == coord.dims(),
-        "Shape and coordinate dimensions do not match: {} != {}",
-        shape.dims(),
-        coord.dims());
-
-    size_t linear_index = 0;
-    for (size_t dim = 0; dim < coord.dims(); ++dim) {
-        TT_FATAL(coord[dim] < shape[dim], "Coordinate {} is out of bounds for shape {}", coord, shape);
-        linear_index += coord[dim] * shape.get_stride(dim);
-    }
-    return linear_index;
 }
 
 MeshCoordinateRangeSet::MeshCoordinateRangeSet(const MeshCoordinateRange& range) { ranges_.push_back(range); }
