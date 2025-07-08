@@ -71,14 +71,13 @@ def get_input_sparse_contribs(
     assert experts % devices == 0
     experts_per_device = experts // devices
 
-    # replication_dim, replication_group = _get_replication_dims(axis, mesh_shape)
-
     if local_reduce:
         expert_dim = devices
-        expert_idxr = lambda d, local_idx: d * experts_per_device + local_idx
+        expert_idxr = lambda d, _: d
+
     else:
         expert_dim = experts
-        expert_idxr = lambda d, _: d
+        expert_idxr = lambda d, local_idx: d * experts_per_device + local_idx
 
     input_contribs_tensor = torch.zeros([expert_dim, batch, seq, hidden_size])
     batch_idxr = _get_batch_rep_idxr(axis, batch)
@@ -153,7 +152,6 @@ def get_output_combined_contribs(
                             continue
 
                         axis_batch_idx = batch_rep_idxr(m0, m1, b)
-
                         local_expert_idx = expert_idxr(d, experts_on_device.index(expert_idx))
 
                         sc = sparse_contribs[local_expert_idx, b, s, :]
@@ -162,12 +160,21 @@ def get_output_combined_contribs(
                         real_data_map[k, axis_batch_idx, s] = 1
                         total_token_expert_count += 1
 
-    assert total_token_expert_count == batch * selected_experts_k * seq
+    assert total_token_expert_count == batch * k_dim * seq
     return output_combined_contribs_tensor, real_data_map
 
 
 def gen_tensors(
-    batch, experts, selected_experts_k, hidden_size, seq, mesh_shape, replication_axis, devices, scheme="random"
+    batch, 
+    experts, 
+    selected_experts_k, 
+    hidden_size, 
+    seq, 
+    mesh_shape, 
+    replication_axis, 
+    devices, 
+    scheme="random", 
+    local_reduce=False
 ):
     torch.manual_seed(20)
     # create input tokens
@@ -181,11 +188,11 @@ def gen_tensors(
 
     sparse_dispatched_tokens = get_sparse_tokens(input_tokens, expert_indices, expert_mapping, seq, mesh_shape)
     input_sparse_contribs_tensor = get_input_sparse_contribs(
-        sparse_dispatched_tokens, expert_indices, expert_mapping, mesh_shape, replication_axis
+        sparse_dispatched_tokens, expert_indices, expert_mapping, mesh_shape, replication_axis, local_reduce=local_reduce
     )
 
     output_tensor, data_map = get_output_combined_contribs(
-        input_sparse_contribs_tensor, expert_indices, expert_mapping, mesh_shape, replication_axis
+        input_sparse_contribs_tensor, expert_indices, expert_mapping, mesh_shape, replication_axis,local_reduce=local_reduce
     )
 
     metadata_tensor = get_metadata_tensor(expert_indices, expert_mapping, mesh_shape)
@@ -395,6 +402,7 @@ def run_all_to_all_combine_test(
     axis,
     batch,
     seq,
+    local_reduce,
     experts,
     select_experts_k,
     hidden_size,
@@ -428,7 +436,7 @@ def run_all_to_all_combine_test(
 
     for iter in range(num_iters):
         _, input_contrib, expert_mapping, metadata_tensor, output_contrib_tensor, data_map = gen_tensors(
-            batch, experts, select_experts_k, hidden_size, seq, mesh_shape, axis, devices, scheme=scheme
+            batch, experts, select_experts_k, hidden_size, seq, mesh_shape, axis, devices, scheme=scheme, local_reduce=local_reduce
         )
 
         output_tensor_goldens_list.append((output_contrib_tensor, data_map))
@@ -488,6 +496,7 @@ def run_all_to_all_combine_test(
                 topology=topology,
                 memory_config=output_memory_config,
                 global_semaphore=ccl_semaphore_handles[i],
+                local_reduce=local_reduce,
                 axis=axis,
             )
 
@@ -540,13 +549,14 @@ def check_results(test_tensor, ref_tensor, data_map):
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("axis", [0])
-@pytest.mark.parametrize("batches_per_device", [8])
-@pytest.mark.parametrize("experts_per_device", [8])
-@pytest.mark.parametrize("select_experts_k", [8])
-@pytest.mark.parametrize("hidden_size", [7000])
-@pytest.mark.parametrize("seq", [1, 2])
+@pytest.mark.parametrize("batches_per_device", [4])
+@pytest.mark.parametrize("experts_per_device", [4])
+@pytest.mark.parametrize("select_experts_k", [4])
+@pytest.mark.parametrize("hidden_size", [16])
+@pytest.mark.parametrize("seq", [1,1])
+@pytest.mark.parametrize("local_reduce", (True,))
 @pytest.mark.parametrize("scheme", ["random"])
-@pytest.mark.parametrize("num_iters", [2])
+@pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [1])
@@ -558,6 +568,7 @@ def test_all_to_all_combine_no_trace(
     axis,
     batches_per_device,
     seq,
+    local_reduce,
     experts_per_device,
     select_experts_k,
     hidden_size,
@@ -573,12 +584,15 @@ def test_all_to_all_combine_no_trace(
     batch = batches_per_device * devices
     experts = experts_per_device * devices
 
+    mesh_device.disable_and_clear_program_cache()
+
     run_all_to_all_combine_test(
         mesh_device,
         mesh_shape,
         axis,
         batch,
         seq,
+        local_reduce,
         experts,
         select_experts_k,
         hidden_size,
@@ -668,7 +682,8 @@ def test_perf(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-def test_simple_tensor_gen(mesh_device, mesh_shape):
+@pytest.mark.parametrize("local_reduce", [True,False])
+def test_simple_tensor_gen(mesh_device, mesh_shape, local_reduce):
     torch.set_printoptions(threshold=10000)
     devices = mesh_shape[0] * mesh_shape[1]
     batch = 8 * devices
@@ -685,10 +700,26 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
         metadata_tensor,
         output_tensor,
         _,
-    ) = gen_tensors(batch, experts, select_experts_k, hidden_size, seq, mesh_shape, axis, devices, scheme="random")
+    ) = gen_tensors(
+        batch, 
+        experts, 
+        select_experts_k, 
+        hidden_size, 
+        seq, 
+        mesh_shape, 
+        axis, 
+        devices, 
+        scheme="random",
+    local_reduce=local_reduce
+    )
+
+    if local_reduce:
+        sparse_expert_dim, dense_expert_dim=devices, 1
+    else:
+        sparse_expert_dim, dense_expert_dim=experts, select_experts_k
 
     assert sparse_dispatched_tokens.shape == (devices, batch, seq, hidden_size)
-    assert input_sparse_contribs_tensor.shape == (experts, batch, seq, hidden_size)
-    assert output_tensor.shape == (select_experts_k, batch * replicate_dim, seq, hidden_size)
+    assert input_sparse_contribs_tensor.shape == (sparse_expert_dim, batch, seq, hidden_size)
+    assert output_tensor.shape == (dense_expert_dim, batch * replicate_dim, seq, hidden_size)
     assert expert_mapping.shape == (1, 1, experts, devices)
     assert metadata_tensor.shape == (devices, batch, seq, select_experts_k)

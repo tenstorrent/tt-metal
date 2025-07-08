@@ -36,8 +36,14 @@ inline uint32_t get_device_idx_from_batch_idx(const uint32_t b) {
 }
 
 // output per device is [K, B/replicate_group, 1, H]
-template <uint32_t BatchSize, uint32_t SeqSize, uint32_t MeshCols, uint32_t MeshRows, ReplicateGroup Axis>
-inline uint32_t get_output_page_idx(const uint32_t b, const uint32_t s, const uint32_t k) {
+template <
+    uint32_t BatchSize,
+    uint32_t SeqSize,
+    uint32_t MeshCols,
+    uint32_t MeshRows,
+    ReplicateGroup Axis,
+    bool LocallyReduced
+> inline uint32_t get_output_page_idx(const uint32_t b, const uint32_t s, const uint32_t k) {
     uint32_t batch_devices;
     if constexpr (Axis == ReplicateGroup::NONE) {
         batch_devices = MeshCols * MeshRows;
@@ -49,7 +55,13 @@ inline uint32_t get_output_page_idx(const uint32_t b, const uint32_t s, const ui
 
     const uint32_t batch_per_device = BatchSize / batch_devices;
     const uint32_t bidx= b % batch_per_device;
-    return k * batch_per_device *SeqSize + bidx*SeqSize+s;
+    
+    if constexpr (LocallyReduced){
+        return bidx*SeqSize+s;
+    }
+    else{
+        return k * batch_per_device *SeqSize + bidx*SeqSize+s;
+    }
 }
 }  // namespace detail
 
@@ -70,6 +82,8 @@ void kernel_main() {
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(13);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(14);  // ew_dim
     constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(15);
+    constexpr uint32_t locally_reduced = get_compile_time_arg_val(16);
+
 
 #ifdef REPLICATE_GROUP_AXIS
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
@@ -122,7 +136,7 @@ void kernel_main() {
 
                 // figure out output page index, noc address.
                 const uint32_t output_page_idx =
-                    detail::get_output_page_idx<batch_size, seq_size, mesh_cols, mesh_rows, replicate_axis>(b,s,k);
+                    detail::get_output_page_idx<batch_size, seq_size, mesh_cols, mesh_rows, replicate_axis, locally_reduced>(b,s,k);
                 const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
 
                 // figure out which device to send data to and routing
@@ -146,6 +160,10 @@ void kernel_main() {
                         packet_headers[0]);
                 }
                 cb_pop_front(data_cb_id,1);
+                
+                if constexpr (locally_reduced){
+                    break;
+                }
             }
         }
         cb_pop_front(metadata_cb_id, 1);
