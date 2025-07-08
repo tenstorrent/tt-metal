@@ -46,11 +46,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const auto& src_shape{src_tensor.logical_shape()};
     const auto& output_shape{output_tensor.logical_shape()};
 
-    const tt::DataFormat input_tensor_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    const tt::DataFormat index_tensor_cb_data_format = datatype_to_dataformat_converter(index_tensor.dtype());
-    const tt::DataFormat src_tensor_cb_data_format = datatype_to_dataformat_converter(src_tensor.dtype());
-    const tt::DataFormat output_tensor_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
-
     auto input_buffer = input_tensor.buffer();
     auto index_buffer = index_tensor.buffer();
     auto src_buffer = src_tensor.buffer();

@@ -21,8 +21,6 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_unit_size = input.element_size();
 
-    tt::tt_metal::IDevice* device = input.device();
-
     CoreRangeSet all_cores = CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0})});
     uint32_t num_cores = 1;  // single-core
 
