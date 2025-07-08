@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,6 +20,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     const int8_t dim,
     const bool largest,
     const bool sorted,
+    const bool uint16_output,
     const CoreRangeSet& sub_core_grids,
     Tensor& value_tensor,
     Tensor& index_tensor) {
@@ -128,7 +129,8 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
             .set_page_size(output_ind_cb_index, index_tile_size);
     auto cb_output_ind_tensor = tt::tt_metal::CreateCircularBuffer(program, core, output_ind_cb_config);
 
-    std::vector<uint32_t> reader_compile_time_args = {input_cb_index, index_cb_index, (uint32_t)input_is_dram, Ht, Wt};
+    std::vector<uint32_t> reader_compile_time_args = {
+        input_cb_index, index_cb_index, (uint32_t)input_is_dram, Ht, Wt, (uint32_t)uint16_output};
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp",
@@ -184,7 +186,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp",
         core,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_args});
+        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = !uint16_output, .compile_args = compute_args});
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, binary_writer_kernel_id, core](
                                               const void* operation,
@@ -261,7 +263,6 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
  */
 operation::ProgramWithCallbacks topk_multicore_interleaved(
     const Tensor& input_tensor,
-    const std::optional<Tensor>& input_indices_tensor,
     const uint32_t k,
     const int8_t dim,
     const bool largest,
@@ -286,14 +287,10 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     auto input_buffer = input_tensor.buffer();
     auto values_buffer = value_tensor.buffer();
     auto index_buffer = index_tensor.buffer();
-    auto input_indices_buffer = input_indices_tensor.has_value() ? input_indices_tensor->buffer() : nullptr;
 
     bool input_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool values_is_dram = values_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool index_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool input_indices_is_dram = input_indices_tensor.has_value()
-                                     ? input_indices_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                     : false;
 
     uint32_t num_input_tiles = input_tensor.physical_volume() / TILE_HW;
     uint32_t num_value_tiles = value_tensor.physical_volume() / TILE_HW;
@@ -414,20 +411,13 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         input_cb_index,
         index_cb_index,
         (uint32_t)input_is_dram,
-        (uint32_t)input_indices_is_dram,
         Ht,
         Wt_local,
         input_shape[-1] / TILE_WIDTH,  // Wt
     };
-    std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_local_topk.cpp";
-    if (input_indices_tensor.has_value()) {
-        reader_kernel_path =
-            "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_read_index_local_topk.cpp";
-    }
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        reader_kernel_path,
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_local_topk.cpp",
         local_cores_range_set,
         tt::tt_metal::ReaderDataMovementConfig(reader_local_compile_time_args));
 
@@ -524,28 +514,15 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     int core_w = 0;
     bool ascending = !largest;
     for (auto core : local_cores) {
-        if (input_indices_tensor.has_value()) {
-            SetRuntimeArgs(
-                program,
-                unary_reader_kernel_id,
-                core,
-                {
-                    input_buffer->address(),
-                    input_indices_buffer->address(),
-                    0,  // no height parallelism for now
-                    core_w * Wt_local,
-                });
-        } else {
-            SetRuntimeArgs(
-                program,
-                unary_reader_kernel_id,
-                core,
-                {
-                    input_buffer->address(),
-                    0,  // no height parallelism for now
-                    core_w * Wt_local,
-                });
-        }
+        SetRuntimeArgs(
+            program,
+            unary_reader_kernel_id,
+            core,
+            {
+                input_buffer->address(),
+                0,  // no height parallelism for now
+                core_w * Wt_local,
+            });
 
         SetRuntimeArgs(
             program,
@@ -579,20 +556,15 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
             const void* operation,
             const Program& program,
             const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
             auto input_buffer = input_tensors.at(0).buffer();
             auto values_buffer = output_tensors.at(0).buffer();
             auto index_buffer = output_tensors.at(1).buffer();
-            auto input_indices_buffer =
-                optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer() : nullptr;
 
             for (auto core : local_cores) {
                 auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
                 reader_runtime_args[0] = input_buffer->address();
-                if (optional_input_tensors.at(0).has_value()) {
-                    reader_runtime_args[1] = input_indices_buffer->address();
-                }
             }
 
             auto& writer_runtime_args = GetRuntimeArgs(program, binary_writer_final_kernel_id, final_core);
