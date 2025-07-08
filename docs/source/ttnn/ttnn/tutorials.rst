@@ -3,7 +3,7 @@
 Tutorials
 #########
 
-This section provides a collection of Python tutorials designed to help you get started with **TT-NN** for tasks such as tensor operations, model conversion, and profiling.
+This section provides a collection of Python tutorials designed to help you get started with **TT-NN** for tasks such as tensor operations, model conversion, and inference.
 
 To run these tutorials smoothly, we recommend using a Python virtual environment with the necessary dependencies installed. You can set this up in one of two ways:
 
