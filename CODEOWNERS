@@ -2,7 +2,7 @@
 # precedence.
 
 # Top-level files
-/* @amahmudTT @nvelickovicTT @rtawfik01 @ttmtrajkovic
+/* @amahmudTT @nvelickovicTT @rdjogoTT @rtawfik01
 
 # CI/CD
 .github/ @fvranicTT @nvelickovicTT
@@ -11,7 +11,7 @@
 tests/ @fvranicTT @ldjurovicTT @nvelickovicTT @skotaracTT @skrsmanovicTT @sstanisicTT
 
 # Blackhole
-tt_llk_blackhole/ @amahmudTT @nvelickovicTT @rdjogoTT @rtawfik01 @ttmtrajkovic
+tt_llk_blackhole/ @amahmudTT @nvelickovicTT @rdjogoTT @rtawfik01
 
 # Wormhole
-tt_llk_wormhole_b0/ @amahmudTT @nvelickovicTT @rdjogoTT @rtawfik01 @ttmtrajkovic
+tt_llk_wormhole_b0/ @amahmudTT @nvelickovicTT @rdjogoTT @rtawfik01
