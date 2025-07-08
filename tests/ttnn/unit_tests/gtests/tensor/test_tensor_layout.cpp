@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <umd/device/types/arch.h>
 #include <boost/move/utility_core.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <initializer_list>
 #include <memory>
@@ -11,6 +13,8 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "common_tensor_test_utils.hpp"
+#include "core_coord.hpp"
+#include "ttnn_test_fixtures.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
 #include "ttnn/operations/functions.hpp"
@@ -26,6 +30,7 @@ using namespace ttnn;
 
 namespace {
 const MemoryConfig DefaultMemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt};
+const MemoryConfig L1MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1, std::nullopt};
 
 struct Inputs {
     Shape shape;
@@ -265,4 +270,104 @@ INSTANTIATE_TEST_SUITE_P(
         LegacyPaddingRoundtripTestParams{
             .shape = Shape{5, 4, 3, 16, 16},
             .padded_shape = Shape{5, 4, 3, 16, 16},
+        }));
+
+struct ConsumedMemoryBytesPerBankTestParams {
+    Shape shape;
+    TensorLayout tensor_layout;
+    size_t expected_consumed_memory_bytes_per_bank = 0;
+};
+
+class ConsumedMemoryBytesPerBankTests : public ttnn::TTNNFixtureWithDevice,
+                                        public ::testing::WithParamInterface<ConsumedMemoryBytesPerBankTestParams> {};
+
+TEST_P(ConsumedMemoryBytesPerBankTests, TestConsumedMemoryBytesPerBank) {
+    if (device_->arch() != tt::ARCH::WORMHOLE_B0 || device_->compute_with_storage_grid_size() != CoreCoord{8, 8} ||
+        device_->num_dram_channels() != 12) {
+        GTEST_SKIP() << "This test is only supported on Wormhole N150";
+    }
+
+    const auto& params = GetParam();
+    EXPECT_EQ(
+        params.tensor_layout.compute_consumed_memory_bytes_per_bank(params.shape, *device_),
+        params.expected_consumed_memory_bytes_per_bank);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorLayoutTests,
+    ConsumedMemoryBytesPerBankTests,
+    ::testing::Values(
+        ConsumedMemoryBytesPerBankTestParams{
+            .shape = Shape{1, 1},
+            .tensor_layout = TensorLayout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), DefaultMemoryConfig),
+            .expected_consumed_memory_bytes_per_bank = 32,
+        },
+        ConsumedMemoryBytesPerBankTestParams{
+            .shape = Shape{12, 1},
+            .tensor_layout = TensorLayout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), DefaultMemoryConfig),
+            .expected_consumed_memory_bytes_per_bank = 32,
+        },
+        ConsumedMemoryBytesPerBankTestParams{
+            .shape = Shape{12, 32},
+            .tensor_layout = TensorLayout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), DefaultMemoryConfig),
+            .expected_consumed_memory_bytes_per_bank = 32,
+        },
+        ConsumedMemoryBytesPerBankTestParams{
+            .shape = Shape{13, 32},
+            .tensor_layout = TensorLayout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), DefaultMemoryConfig),
+            .expected_consumed_memory_bytes_per_bank = 64,
+        },
+        ConsumedMemoryBytesPerBankTestParams{
+            .shape = Shape{13, 33},
+            .tensor_layout = TensorLayout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), DefaultMemoryConfig),
+            .expected_consumed_memory_bytes_per_bank = 128,
+        },
+        ConsumedMemoryBytesPerBankTestParams{
+            .shape = Shape{1, 1},
+            .tensor_layout = TensorLayout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), L1MemoryConfig),
+            .expected_consumed_memory_bytes_per_bank = 16,
+        },
+        ConsumedMemoryBytesPerBankTestParams{
+            .shape = Shape{64, 1},
+            .tensor_layout = TensorLayout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), L1MemoryConfig),
+            .expected_consumed_memory_bytes_per_bank = 16,
+        },
+        ConsumedMemoryBytesPerBankTestParams{
+            .shape = Shape{64, 16},
+            .tensor_layout = TensorLayout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), L1MemoryConfig),
+            .expected_consumed_memory_bytes_per_bank = 16,
+        },
+        ConsumedMemoryBytesPerBankTestParams{
+            .shape = Shape{65, 16},
+            .tensor_layout = TensorLayout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), L1MemoryConfig),
+            .expected_consumed_memory_bytes_per_bank = 32,
+        },
+        ConsumedMemoryBytesPerBankTestParams{
+            .shape = Shape{65, 17},
+            .tensor_layout = TensorLayout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), L1MemoryConfig),
+            .expected_consumed_memory_bytes_per_bank = 64,
+        },
+        ConsumedMemoryBytesPerBankTestParams{
+            .shape = Shape{7 * 32, 7 * 32},
+            .tensor_layout = TensorLayout(
+                DataType::UINT8,
+                PageConfig(Layout::TILE),
+                MemoryConfig(
+                    TensorMemoryLayout::HEIGHT_SHARDED,
+                    BufferType::DRAM,
+                    ShardSpec(CoreRangeSet(CoreRange{CoreCoord{0, 0}, CoreCoord{12, 0}}), Shape2D{32, 7 * 32}))),
+            .expected_consumed_memory_bytes_per_bank = 32 * 7 * 32,
+        },
+        ConsumedMemoryBytesPerBankTestParams{
+            .shape = Shape{125 * 32, 125 * 32},
+            .tensor_layout = TensorLayout(
+                DataType::UINT8,
+                PageConfig(Layout::TILE),
+                MemoryConfig(
+                    BufferType::L1,
+                    NdShardSpec{
+                        .shard_shape = Shape{2 * 32, 2 * 32},
+                        .grid = CoreRangeSet(CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}),
+                    })),
+            .expected_consumed_memory_bytes_per_bank = 63 * 2 * 32 * 2 * 32,
         }));
