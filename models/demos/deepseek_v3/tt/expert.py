@@ -8,14 +8,8 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import (
-    FromWeightConfig,
-    LinearConfig,
-    ModelDecodeConfig,
-    ModelPrefillConfig,
-    MulConfig,
-    WeightConfig,
-)
+from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MulConfig
+from models.demos.deepseek_v3.utils.run_config import ModelDecodeConfig, ModelPrefillConfig, WeightConfig
 
 
 class Expert(AbstractModule):
@@ -44,7 +38,6 @@ class Expert(AbstractModule):
         """
 
         # Get the weights of exerpt from the state dict
-        # breakpoint()
         torch_weight_w1 = state_dict["gate_proj.weight"]
         torch_weight_w2 = state_dict["down_proj.weight"]
         torch_weight_w3 = state_dict["up_proj.weight"]
@@ -83,7 +76,7 @@ class Expert(AbstractModule):
             torch_weight_w1,
             "w1",
             "input_tensor_b",
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat4_b,
             mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -93,7 +86,7 @@ class Expert(AbstractModule):
             torch_weight_w2,
             "w2",
             "input_tensor_b",
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat4_b,
             mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -103,7 +96,7 @@ class Expert(AbstractModule):
             torch_weight_w3,
             "w3",
             "input_tensor_b",
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat4_b,
             mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -126,15 +119,15 @@ class Expert(AbstractModule):
         config = {"mode": "decode"}
         # Expert configuration for decode mode
         config["w1"] = LinearConfig(
-            memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=None, input_tensor_b=FromWeightConfig()
+            memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=None, input_tensor_b=FromWeightConfig(mesh_device)
         )
 
         config["w2"] = LinearConfig(
-            memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=None, input_tensor_b=FromWeightConfig()
+            memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=None, input_tensor_b=FromWeightConfig(mesh_device)
         )
 
         config["w3"] = LinearConfig(
-            memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=None, input_tensor_b=FromWeightConfig()
+            memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=None, input_tensor_b=FromWeightConfig(mesh_device)
         )
 
         config["mul"] = MulConfig(
@@ -173,7 +166,7 @@ class Expert(AbstractModule):
         self.mesh_device = mesh_device
 
     @classmethod
-    def forward(cls, x, cfg, mesh_device):
+    def forward(cls, x, cfg):
         """
         Forward pass for the Expert layer.
 
@@ -185,14 +178,14 @@ class Expert(AbstractModule):
         """
 
         if cfg["mode"] == "decode":
-            return cls.forward_decode(x, cfg, mesh_device)
+            return cls.forward_decode(x, cfg)
         elif cfg["mode"] == "prefill":
-            return cls.forward_prefill(x, cfg, mesh_device)
+            return cls.forward_prefill(x, cfg)
         else:
             raise ValueError(f"Invalid mode: {cfg['mode']}. Expected 'decode' or 'prefill'.")
 
     @classmethod
-    def forward_decode(cls, x, cfg, mesh_device):
+    def forward_decode(cls, x, cfg):
         w1_out = ttnn.linear(x, **cfg["w1"])
         w3_out = ttnn.linear(x, **cfg["w3"])
         ttnn.deallocate(x)
@@ -208,7 +201,7 @@ class Expert(AbstractModule):
         return output
 
     @classmethod
-    def forward_prefill(cls, x, cfg, mesh_device):
+    def forward_prefill(cls, x, cfg):
         w1_out = ttnn.linear(x, **cfg["w1"])
         w3_out = ttnn.linear(x, **cfg["w3"])
         ttnn.deallocate(x)
