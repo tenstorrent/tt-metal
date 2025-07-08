@@ -28,8 +28,6 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
 
     uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
 
-    tt::tt_metal::IDevice* device = input_tensor.device();
-
     CoreCoord compute_with_storage_grid_size = {1, 1};
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =

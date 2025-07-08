@@ -28,8 +28,6 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
 
     const auto& input_shape = input_tensor.padded_shape();
 
-    tt_metal::IDevice* device = input_tensor.device();
-
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
@@ -95,7 +93,6 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    bool tile_dtype_is_bfloat16 = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool in1_is_dram = false;
     if (read_from_input_tensor_kv) {
@@ -234,7 +231,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
         num_blocks_written += num_blocks_per_core;
     }
 
-    auto override_runtime_arguments_callback =
+    [[maybe_unused]] auto override_runtime_arguments_callback =
         [reader_kernel_id,
          writer_kernel_id,
          num_cores,
@@ -256,7 +253,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
             auto dst_buffer_key = output_tensors.at(1).buffer();
             auto dst_buffer_value = output_tensors.at(2).buffer();
 
-            for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
+            for (uint32_t i = 0; i < num_cores; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
                 {
@@ -297,7 +294,7 @@ void NlpCreateHeadsDeviceOperation::Interleaved::override_runtime_arguments(
     auto dst_buffer_key = std::get<1>(tensor_return_value).buffer();
     auto dst_buffer_value = std::get<2>(tensor_return_value).buffer();
 
-    for (uint32_t i = 0, num_blocks_written = 0; i < cached_program.shared_variables.num_cores; i++) {
+    for (uint32_t i = 0; i < cached_program.shared_variables.num_cores; i++) {
         CoreCoord core = {
             i / cached_program.shared_variables.num_cores_y, i % cached_program.shared_variables.num_cores_y};
 
@@ -622,8 +619,6 @@ void NlpCreateHeadsDeviceOperation::Sharded::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto src_buffer = tensor_args.input_tensor_q.buffer();
-
     auto dst_buffer_query = std::get<0>(tensor_return_value).buffer();
     auto dst_buffer_key = std::get<1>(tensor_return_value).buffer();
     auto dst_buffer_value = std::get<2>(tensor_return_value).buffer();

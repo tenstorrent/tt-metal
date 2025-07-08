@@ -156,7 +156,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
 
         auto dst_dram_buffer_query = output_tensors.at(0).buffer();
 
-        for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
+        for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {

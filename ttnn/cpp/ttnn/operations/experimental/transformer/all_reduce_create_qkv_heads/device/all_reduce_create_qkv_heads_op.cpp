@@ -251,9 +251,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
     }
 
     auto input_tensor_shape = input_tensor.padded_shape();
-    auto input_tensor_buffer_layout = input_tensor.buffer()->buffer_layout();
-    auto input_tensor_page_layout = input_tensor.layout();
-
     auto input_tensor_memory_config = input_tensor.memory_config();
     auto output_tensor_memory_config = output_tensors[0].memory_config();
     uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();

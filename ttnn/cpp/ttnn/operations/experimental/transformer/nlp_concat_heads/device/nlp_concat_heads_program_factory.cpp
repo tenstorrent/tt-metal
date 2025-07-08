@@ -17,8 +17,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
     const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.padded_shape();
 
-    tt_metal::IDevice* device = a.device();
-
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
