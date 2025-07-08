@@ -41,7 +41,7 @@ namespace tt::tt_metal {
 // Ideally would work by cachelines, but the min size is less than that
 // Benchmarked to be approximately 1.4x - 1.8x faster than std::memcpy
 // TODO: Revisit this w/ regard to possibly eliminating min sizes and orphan writes at the end
-// TODO: ditto alignment isues
+// TODO: ditto alignment issues
 #if defined(__x86_64__) || defined(__i386__)
 template <bool debug_sync = false>
 void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n) {
