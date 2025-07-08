@@ -1278,7 +1278,7 @@ std::tuple<uint64_t, CoreCoord> Cluster::get_connected_ethernet_core_to_remote_m
         "Logical eth core {} is not an active eth core on chip {}.",
         std::get<1>(eth_core).str(),
         std::get<0>(eth_core));
-    const auto& ethernet_connections_to_remote_cluster = this->get_ethernet_connections_to_remote_mmio_devices();
+    const auto& ethernet_connections_to_remote_cluster = this->get_ethernet_connections_to_remote_devices();
     const auto& local_chip_id = std::get<0>(eth_core);
     const auto& local_eth_core = std::get<1>(eth_core);
     TT_FATAL(
