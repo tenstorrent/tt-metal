@@ -18,6 +18,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -39,11 +40,11 @@ template <typename T>
 Tensor arange_impl(
     const int64_t start,
     const int64_t stop,
-
     const int64_t step,
     const Layout layout = Layout::ROW_MAJOR,
     std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-    const MemoryConfig& output_mem_config = MemoryConfig{}) {
+    const MemoryConfig& output_mem_config = ttnn::DRAM_MEMORY_CONFIG) {
+    using namespace tt::tt_metal;
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
 
     TT_FATAL(step != 0, "Step must be nonzero");
@@ -63,16 +64,10 @@ Tensor arange_impl(
         }
     }
 
-    auto output = Tensor(
-                      tt::tt_metal::HostBuffer(std::move(owned_buffer)),
-                      ttnn::Shape{static_cast<uint32_t>(size)},
-                      data_type,
-                      Layout::ROW_MAJOR)
-                      .to_layout(layout);
-    if (device.has_value()) {
-        return output.to_device(&device->get(), output_mem_config);
-    }
-    return output;
+    TensorSpec spec{
+        ttnn::Shape{static_cast<uint32_t>(size)}, TensorLayout{data_type, PageConfig{layout}, output_mem_config}};
+
+    return Tensor::from_vector(std::move(owned_buffer), spec, device.has_value() ? std::addressof(device->get()) : nullptr);
 }
 
 template <typename T>
@@ -373,8 +368,9 @@ struct Arange {
         const int64_t stop,
         const DataType dtype = DataType::BFLOAT16,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
-        return Arange::invoke(0, stop, 1, dtype, device, memory_config);
+        const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
+        const Layout layout = Layout::ROW_MAJOR) {
+        return Arange::invoke(0, stop, 1, dtype, device, memory_config, layout);
     }
 
     static Tensor invoke(
@@ -383,9 +379,10 @@ struct Arange {
         const int64_t step = 1,
         const DataType dtype = ttnn::DataType::BFLOAT16,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
+        const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
+        const Layout layout = Layout::ROW_MAJOR) {
         auto concrete_arange = [&]<typename BufferType>() {
-            return detail::arange_impl<BufferType>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
+            return detail::arange_impl<BufferType>(start, stop, step, layout, device, memory_config);
         };
 
         switch (dtype) {
