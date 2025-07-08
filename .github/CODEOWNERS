@@ -1,6 +1,8 @@
 # Order is important; the last matching pattern takes the most
 # precedence.
 
+* @blozano-tt
+
 # Top-level files
 /* @tenstorrent/metalium-developers-infra
 METALIUM_GUIDE.md @davorchap
