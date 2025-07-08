@@ -6,16 +6,6 @@
 loguru==0.6.0
 numpy>=1.24.4,<2
 
-# Jupyter server
-notebook==7.4.4
-
-# Pytest
-pytest==7.2.2
-pytest-timeout==2.2.0
-pytest-split==0.8.2
-pytest-xdist==3.6.1
-pytest-benchmark==4.0.0
-
 # Torch packages
 torch==2.2.1.0+cpu ; platform_machine == 'x86_64'
 torch==2.2.1.0 ; platform_machine == 'aarch64'
