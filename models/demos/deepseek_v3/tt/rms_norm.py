@@ -124,13 +124,12 @@ class RMSNorm(AbstractModule):
         return config
 
     @staticmethod
-    def _rmsnorm_forward(x, cfg, mesh_device):
+    def _rmsnorm_forward(x, cfg):
         """Forward pass of the embedding.
 
         Args:
             x: Input tensor (token indices)
             cfg: RunConfig containing weights and op configurations
-            mesh_device: TTNN mesh device for multi-device operations
 
         Returns:
             Output tensor after embedding lookup
@@ -174,7 +173,6 @@ class RMSNorm(AbstractModule):
     @staticmethod
     def _distributed_rmsnorm(
         inp,
-        mesh_device,
         epsilon,
         weight,
         compute_kernel_config,
@@ -211,9 +209,9 @@ class RMSNorm(AbstractModule):
         return tt_out
 
     @classmethod
-    def forward_decode(cls, x, cfg, mesh_device):
-        return RMSNorm._rmsnorm_forward(x, cfg, mesh_device)
+    def forward_decode(cls, x, cfg):
+        return RMSNorm._rmsnorm_forward(x, cfg)
 
     @classmethod
-    def forward_prefill(cls, x, cfg, mesh_device):
-        return RMSNorm._rmsnorm_forward(x, cfg, mesh_device)
+    def forward_prefill(cls, x, cfg):
+        return RMSNorm._rmsnorm_forward(x, cfg)
