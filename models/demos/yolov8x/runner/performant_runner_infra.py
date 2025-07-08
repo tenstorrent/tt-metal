@@ -26,7 +26,7 @@ def load_ttnn_model(device, torch_model):
     return ttnn_model
 
 
-class Yolov8TestInfra:
+class YOLOv8xPerformanceRunnerInfra:
     def __init__(
         self,
         device,
@@ -103,13 +103,3 @@ class Yolov8TestInfra:
 
     def dealloc_output(self):
         ttnn.deallocate(self.output_tensor)
-
-
-def create_test_infra(
-    device,
-    batch_size,
-):
-    return Yolov8TestInfra(
-        device,
-        batch_size,
-    )
