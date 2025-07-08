@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-FileCopyrightText: Copyright 2020 The HuggingFace Team. All rights reserved.
 # SPDX-FileCopyrightText: Copyright 2018 Mesh TensorFlow authors, T5 Authors and HuggingFace Inc. team.
 
