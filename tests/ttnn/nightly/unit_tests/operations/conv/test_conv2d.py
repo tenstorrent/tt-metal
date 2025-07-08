@@ -314,7 +314,7 @@ def run_conv(
 
     torch.set_printoptions(precision=3, sci_mode=False)
     if fast_compare:
-        if fp32_accum:
+        if fp32_accum and output_dtype != ttnn.bfloat8_b and input_dtype != ttnn.bfloat8_b:
             threshold = 3e-1 + 5e-3 * math.log(input_channels * filter_height * filter_width, 2)
         else:
             threshold = 3e-1 + 1e-1 * math.log(input_channels * filter_height * filter_width, 2)

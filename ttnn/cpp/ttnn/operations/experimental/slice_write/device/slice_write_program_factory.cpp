@@ -14,6 +14,8 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "ttnn/operations/experimental/padded_slice/device/padded_slice_program_factory.hpp"
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -200,15 +202,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    uint32_t num_cores_channels = 1;
-    auto total_cores = shard_spec.grid;
-    if (is_block_sharded) {
-        if (rm_orientation) {
-            num_cores_channels = total_cores.bounding_box().grid_size().x;
-        } else {
-            num_cores_channels = total_cores.bounding_box().grid_size().y;
-        }
-    }
+    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input_tensor);
 
     uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
     TT_FATAL(
@@ -529,17 +523,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    uint32_t num_cores_channels = 1;
-    auto total_cores = shard_spec.grid;
-    if (is_block_sharded) {
-        if (rm_orientation) {
-            num_cores_channels = total_cores.bounding_box().grid_size().x;
-        } else {
-            num_cores_channels = total_cores.bounding_box().grid_size().y;
-        }
-    } else if (is_width_sharded) {
-        num_cores_channels = input_cores.num_cores();
-    }
+    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input_tensor);
 
     uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
     TT_FATAL(
@@ -767,16 +751,7 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
     uint32_t num_tiles_height_per_core = shard_spec.shape[0] / TILE_HEIGHT;
     uint32_t num_tiles_channel_per_core = shard_spec.shape[1] / TILE_HEIGHT;
 
-    uint32_t num_cores_channels = 1;
-    if (is_block_sharded) {
-        if (rm_orientation) {
-            num_cores_channels = input_cores.bounding_box().grid_size().x;
-        } else {
-            num_cores_channels = input_cores.bounding_box().grid_size().y;
-        }
-    } else if (is_width_sharded) {
-        num_cores_channels = input_cores.num_cores();
-    }
+    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input);
 
     TT_FATAL(
         num_tiles_channel_per_core * TILE_WIDTH * num_cores_channels == output_padded_shape[-1],
