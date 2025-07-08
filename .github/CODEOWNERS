@@ -263,8 +263,9 @@ models/demos/yolov9c @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/demos/yolov8x @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/demos/yolov8s @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/stable_diffusion_35_large/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn
-models/experimental/swin_s @arginugaTT @tenstorrent/cse-developer-ttnn
-models/demos/yolov7 @ssinghalTT @tenstorrent/cse-developer-ttnn
+models/experimental/flux/ @jonathansuTT @cglagovichT @tenstorrent/cse-developer-ttnn
+models/experimental/swin_s @tenstorrent/cse-developer-ttnn
+models/demos/yolov7 @tenstorrent/cse-developer-ttnn
 models/experimental/classification_eval @tenstorrent/cse-developer-ttnn
 models/experimental/yolov11 @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/segmentation_evaluation @tenstorrent/cse-developer-ttnn
