@@ -81,7 +81,7 @@ jobs:
         id: select-wheels
         run: |
           VERSION="${{ inputs.version || '22.04' }}"
-          
+
           if [[ "$VERSION" == "22.04" ]]; then
             echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name-310 }}" >> $GITHUB_OUTPUT
             echo "wheel-artifact-name-profiler=${{ needs.build-artifact-profiler.outputs.wheel-artifact-name-310 }}" >> $GITHUB_OUTPUT

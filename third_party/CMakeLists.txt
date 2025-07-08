@@ -152,13 +152,13 @@ CPMAddPackage(
 ############################################################################################################################
 
 CPMAddPackage(
-    NAME pybind11 
-    GITHUB_REPOSITORY pybind/pybind11 
-    GIT_TAG v2.13.6 
-    OPTIONS 
+    NAME pybind11
+    GITHUB_REPOSITORY pybind/pybind11
+    GIT_TAG v2.13.6
+    OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "PYBIND11_INSTALL ON"
-    )
+)
 
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json
