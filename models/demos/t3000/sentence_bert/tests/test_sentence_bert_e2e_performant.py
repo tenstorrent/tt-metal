@@ -17,7 +17,6 @@ from scipy.stats import pearsonr, spearmanr
 from tqdm import tqdm
 
 import ttnn
-from models.demos.sentence_bert.demo.demo import mean_pooling
 from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
 from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
 from models.utility_functions import run_for_wormhole_b0
@@ -79,7 +78,7 @@ def load_sts_tr(split="test"):
 )
 @pytest.mark.parametrize(
     "model_name, sequence_length,device_batch_size,num_samples",
-    [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, 4)],
+    [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, 10)],
 )
 def test_sentence_bert_eval_data_parallel(
     mesh_device, model_name, sequence_length, device_batch_size, num_samples, start=0, end=7
@@ -108,32 +107,34 @@ def test_sentence_bert_eval_data_parallel(
             return_tensors="pt",
         )
         input_ids = encoded_input["input_ids"]
-        # print(f"input_ids.shape: {input_ids.shape}")
         attention_mask = encoded_input["attention_mask"]
-        # print(f"attention_mask.shape: {attention_mask.shape}")
         extended_mask = custom_extended_mask(attention_mask, dtype=torch.bfloat16)
         token_type_ids = encoded_input["token_type_ids"]
-        # print(f"token_type_ids.shape: {token_type_ids.shape}")
         position_ids = torch.arange(0, input_ids.shape[-1], dtype=torch.int64).unsqueeze(dim=0)
-        reference_out = reference_module(
-            input_ids, attention_mask=extended_mask, token_type_ids=token_type_ids, position_ids=position_ids
-        )
+        reference_sentence_embeddings = reference_module(
+            input_ids,
+            extended_attention_mask=extended_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+        ).post_processed_output
         if ttnn_module is None:
             ttnn_module = SentenceBERTPerformantRunner(
                 device=mesh_device,
                 device_batch_size=device_batch_size,
                 input_ids=input_ids,
                 extended_mask=extended_mask,
+                attention_mask=attention_mask,
                 token_type_ids=token_type_ids,
                 position_ids=position_ids,
             )
             ttnn_module._capture_sentencebert_trace_2cqs()
         t0 = time.time()
         ttnn_out = ttnn_module._execute_sentencebert_trace_2cqs_inference()
-        ttnn_out = ttnn.to_torch(ttnn_out, mesh_composer=ttnn_module.runner_infra.output_mesh_composer).squeeze(dim=1)
-        ttnn_sentence_embeddings = mean_pooling(ttnn_out, attention_mask)
         t1 = time.time()
-        reference_sentence_embeddings = mean_pooling(reference_out[0], attention_mask)
+        ttnn_sentence_embeddings = ttnn.to_torch(
+            ttnn_out, mesh_composer=ttnn_module.runner_infra.output_mesh_composer, dtype=torch.float32
+        ).squeeze(dim=1)
         inference_times.append(t1 - t0)
         sim1 = F.cosine_similarity(reference_sentence_embeddings[:1], reference_sentence_embeddings[-1:]).item()
         sim2 = F.cosine_similarity(ttnn_sentence_embeddings[:1], ttnn_sentence_embeddings[-1:]).item()
