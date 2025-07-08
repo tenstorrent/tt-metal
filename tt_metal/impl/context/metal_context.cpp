@@ -664,12 +664,9 @@ void MetalContext::generate_device_bank_to_noc_tables(chip_id_t device_id) {
     const auto allocator = L1BankingAllocator(config);
     const auto& soc_d = cluster_->get_soc_desc(device_id);
     const size_t num_dram_banks = allocator.get_num_banks(BufferType::DRAM);
-    std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
     dram_bank_offset_map_[device_id].clear();
     dram_bank_offset_map_[device_id].resize(num_dram_banks);
     for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        dram_noc_coord_per_bank[bank_id] =
-            soc_d.get_preferred_worker_core_for_dram_view(allocator.get_dram_channel_from_bank_id(bank_id));
         dram_bank_offset_map_[device_id][bank_id] = allocator.get_bank_offset(BufferType::DRAM, bank_id);
     }
     const size_t num_l1_banks = allocator.get_num_banks(BufferType::L1);
@@ -683,18 +680,20 @@ void MetalContext::generate_device_bank_to_noc_tables(chip_id_t device_id) {
     }
 
     dram_bank_to_noc_xy_[device_id].clear();
-    dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * dram_noc_coord_per_bank.size());
+    dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * num_dram_banks);
     bool dram_is_virtualized =
         hal_->get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal_->get_virtualized_core_types().end();
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
-        for (unsigned int bank_id = 0; bank_id < dram_noc_coord_per_bank.size(); bank_id++) {
+        for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
             uint16_t noc_x, noc_y;
+            CoreCoord dram_noc_coord =
+                soc_d.get_preferred_worker_core_for_dram_view(allocator.get_dram_channel_from_bank_id(bank_id), noc);
             if (dram_is_virtualized) {
-                noc_x = dram_noc_coord_per_bank[bank_id].x;
-                noc_y = dram_noc_coord_per_bank[bank_id].y;
+                noc_x = dram_noc_coord.x;
+                noc_y = dram_noc_coord.y;
             } else {
-                noc_x = hal_->noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
-                noc_y = hal_->noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
+                noc_x = hal_->noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord.x);
+                noc_y = hal_->noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord.y);
             }
             uint16_t xy = ((noc_y << hal_->get_noc_addr_node_id_bits()) | noc_x) << hal_->get_noc_coord_reg_offset();
             dram_bank_to_noc_xy_[device_id].push_back(xy);
@@ -915,14 +914,16 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     std::unordered_set<tt::umd::CoreCoord> dram_cores;
     auto num_dram_channels = cluster_->get_soc_desc(device_id).get_num_dram_views();
     for (uint32_t dram_channel = 0; dram_channel < num_dram_channels; dram_channel++) {
-        auto worker_dram_ep = soc_d.get_preferred_worker_core_for_dram_view(dram_channel);
-        auto eth_dram_ep = soc_d.get_preferred_eth_core_for_dram_view(dram_channel);
-        auto physical_worker_dram_ep =
-            soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
-        auto physical_eth_dram_ep =
-            soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
-        dram_cores.insert(physical_worker_dram_ep);
-        dram_cores.insert(physical_eth_dram_ep);
+        for (uint32_t noc = 0; noc < hal_->get_num_nocs(); noc++) {
+            auto worker_dram_ep = soc_d.get_preferred_worker_core_for_dram_view(dram_channel, noc);
+            auto eth_dram_ep = soc_d.get_preferred_eth_core_for_dram_view(dram_channel, noc);
+            auto physical_worker_dram_ep =
+                soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+            auto physical_eth_dram_ep =
+                soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+            dram_cores.insert(physical_worker_dram_ep);
+            dram_cores.insert(physical_eth_dram_ep);
+        }
     }
 
     const std::vector<tt::umd::CoreCoord>& eth_cores =
