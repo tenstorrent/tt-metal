@@ -97,7 +97,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::vector<uint32_t>& compile_args,
-    std::map<string, string> defines) {
+    std::map<std::string, std::string> defines) {
     return tt_metal::CreateKernel(
         program,
         file_name,
@@ -114,7 +114,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::vector<uint32_t>& compile_args,
-    std::map<string, string> defines) {
+    std::map<std::string, std::string> defines) {
     return tt_metal::CreateKernel(
         program,
         file_name,

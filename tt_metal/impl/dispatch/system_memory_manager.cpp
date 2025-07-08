@@ -15,7 +15,6 @@
 #include "assert.hpp"
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "memcpy.hpp"
 #include "command_queue_common.hpp"
@@ -26,7 +25,6 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
-#include "utils.hpp"
 
 enum class CoreType;
 
@@ -67,7 +65,7 @@ SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs
     // TODO(abhullar): Remove env var and expose sizing at the API level
     char* cq_size_override_env = std::getenv("TT_METAL_CQ_SIZE_OVERRIDE");
     if (cq_size_override_env != nullptr) {
-        uint32_t cq_size_override = std::stoi(string(cq_size_override_env));
+        uint32_t cq_size_override = std::stoi(std::string(cq_size_override_env));
         this->cq_size = cq_size_override;
     } else {
         this->cq_size =

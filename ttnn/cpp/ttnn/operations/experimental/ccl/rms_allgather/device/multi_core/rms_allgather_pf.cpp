@@ -400,8 +400,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     auto stats_filled_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     // reader defines
-    std::map<string, string> reader_mcast_sender_defines;
-    std::map<string, string> reader_mcast_receiver_defines;
+    std::map<std::string, std::string> reader_mcast_sender_defines;
+    std::map<std::string, std::string> reader_mcast_receiver_defines;
     if (gamma.has_value()) {
         reader_mcast_sender_defines["FUSE_GAMMA"] = "1";
         reader_mcast_receiver_defines["FUSE_GAMMA"] = "1";
@@ -409,7 +409,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     // compute defines
     // reader defines
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (b.has_value()) {
         compute_defines["FUSE_PRE_ADD"] = "1";
     }
@@ -754,7 +754,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     std::string reciever_reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_receiver_reader.cpp";
 
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     if (skip_write_back) {
         writer_defines["SKIP_WRITE_BACK"] = "1";
     }

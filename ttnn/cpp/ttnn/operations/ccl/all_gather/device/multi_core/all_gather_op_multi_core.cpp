@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include <algorithm>
+#include <string>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -359,7 +360,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     bool rm = input_tensor.layout() == Layout::ROW_MAJOR;
     tt::DataFormat df = datatype_to_dataformat_converter(input_tensor.dtype());
 
-    std::map<string, string> worker_defines;
+    std::map<std::string, std::string> worker_defines;
     if (rm) {
         worker_defines["ROW_MAJOR_LAYOUT"] = "1";
     } else {

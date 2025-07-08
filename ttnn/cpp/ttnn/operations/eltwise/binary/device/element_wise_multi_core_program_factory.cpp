@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
+#include <string>
 
 #include "binary_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/device/eltwise_multi_core_program_factory_common.hpp"
@@ -99,7 +99,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
-    std::map<string, string> eltwise_defines = utils::get_defines(
+    std::map<std::string, std::string> eltwise_defines = utils::get_defines(
         op_type, a.dtype(), output.dtype(), fused_activations, operation_attributes.input_tensor_a_activation);
 
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
@@ -137,14 +137,14 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
 
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     if (src0_sharded) {
         reader_defines["IN0_SHARDED"] = "1";
     }
     if (src1_sharded) {
         reader_defines["IN1_SHARDED"] = "1";
     }
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     if (out_sharded) {
         writer_defines["OUT_SHARDED"] = "1";
     }

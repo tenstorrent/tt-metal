@@ -33,7 +33,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 
 namespace tt {
@@ -115,10 +114,8 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, IDevice* device, CoreCoord
 
         vector<uint32_t> compute_kernel_args = { };
 
-        std::map<string, string> binary_defines = {
-            { "ELTWISE_OP", "add_tiles" },
-            { "ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD" }
-        };
+        std::map<std::string, std::string> binary_defines = {
+            {"ELTWISE_OP", "add_tiles"}, {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"}};
         auto eltwise_binary_kernel = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/compute/eltwise_binary.cpp",

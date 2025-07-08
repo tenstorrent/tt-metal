@@ -15,7 +15,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -177,7 +176,7 @@ int main(int argc, char **argv) {
                 rx_disable_header_check, // 18: disable_header_check
             };
 
-        std::map<string, string> common_defines = {
+        std::map<std::string, std::string> common_defines = {
             {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
         };
 

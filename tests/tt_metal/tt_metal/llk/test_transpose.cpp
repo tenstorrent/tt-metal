@@ -15,7 +15,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -161,7 +160,7 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
 
     vector<uint32_t> compute_kernel_args = {uint(Ht * Wt * NC)};
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
 
     if (test_config.short_init) {
         defines["SHORT_INIT"] = "1";
