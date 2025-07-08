@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/tensor_spec.hpp"
-#include <utility>
 #include "ttnn/tensor/types.hpp"
 
 namespace tt::tt_metal {
@@ -149,11 +148,8 @@ TensorSpec TensorSpec::sharded_across_dims(
     for (auto dim : dims) {
         shard_shape[dim] = 1;
     }
-    auto buffer_type = memory_config().buffer_type();
     NdShardSpec shard_spec(std::move(shard_shape), std::move(grid), orientation);
-    shard_spec.apply_recommended_alignment(page_config(), data_type(), buffer_type);
-    TensorLayout new_layout(data_type(), page_config(), MemoryConfig(buffer_type, std::move(shard_spec)));
-    return TensorSpec(logical_shape(), std::move(new_layout));
+    return sharded(std::move(shard_spec), ShardAlignment::Recommended);
 }
 
 TensorSpec TensorSpec::sharded_across_dims_except(
@@ -163,41 +159,40 @@ TensorSpec TensorSpec::sharded_across_dims_except(
     for (auto dim : dims) {
         shard_shape[dim] = padded_shape[dim];
     }
-    auto buffer_type = memory_config().buffer_type();
     auto shard_spec = NdShardSpec(std::move(shard_shape), std::move(grid), orientation);
-    shard_spec.apply_recommended_alignment(page_config(), data_type(), buffer_type);
-    TensorLayout new_layout(data_type(), page_config(), MemoryConfig(buffer_type, std::move(shard_spec)));
-    return TensorSpec(logical_shape(), std::move(new_layout));
+    return sharded(std::move(shard_spec), ShardAlignment::Recommended);
 }
 
 TensorSpec TensorSpec::height_sharded(CoreRangeSet grid, ShardOrientation orientation) const {
     auto num_cores = grid.num_cores();
-    auto buffer_type = memory_config().buffer_type();
     auto shard_height = div_up(physical_shape().height(), num_cores);
     NdShardSpec shard_spec(Shape({shard_height, physical_shape().width()}), std::move(grid), orientation);
-    shard_spec.apply_required_alignment(page_config());
-    TensorLayout new_layout(data_type(), page_config(), MemoryConfig(buffer_type, std::move(shard_spec)));
-    return TensorSpec(logical_shape(), std::move(new_layout));
+    return sharded(std::move(shard_spec), ShardAlignment::Required);
 }
 
 TensorSpec TensorSpec::width_sharded(CoreRangeSet grid, ShardOrientation orientation) const {
     auto num_cores = grid.num_cores();
-    auto buffer_type = memory_config().buffer_type();
     auto shard_width = div_up(physical_shape().width(), num_cores);
     NdShardSpec shard_spec(Shape({physical_shape().height(), shard_width}), std::move(grid), orientation);
-    shard_spec.apply_required_alignment(page_config());
-    TensorLayout new_layout(data_type(), page_config(), MemoryConfig(buffer_type, std::move(shard_spec)));
-    return TensorSpec(logical_shape(), std::move(new_layout));
+    return sharded(std::move(shard_spec), ShardAlignment::Required);
 }
 
 TensorSpec TensorSpec::block_sharded(CoreRange grid) const {
     auto grid_size = grid.grid_size();
     auto shard_height = div_up(physical_shape().height(), grid_size.y);
     auto shard_width = div_up(physical_shape().width(), grid_size.x);
-    auto buffer_type = memory_config().buffer_type();
     NdShardSpec shard_spec(Shape({shard_height, shard_width}), std::move(grid), ShardOrientation::ROW_MAJOR);
-    shard_spec.apply_recommended_alignment(page_config(), data_type(), buffer_type);
-    TensorLayout new_layout(data_type(), page_config(), MemoryConfig(buffer_type, std::move(shard_spec)));
+    return sharded(std::move(shard_spec), ShardAlignment::Recommended);
+}
+
+TensorSpec TensorSpec::sharded(NdShardSpec nd_shard_spec, ShardAlignment shard_alignment) const {
+    if (shard_alignment == ShardAlignment::Required) {
+        nd_shard_spec.apply_required_alignment(page_config());
+    } else if (shard_alignment == ShardAlignment::Recommended) {
+        nd_shard_spec.apply_recommended_alignment(page_config(), data_type(), memory_config().buffer_type());
+    }
+    TensorLayout new_layout(
+        data_type(), page_config(), MemoryConfig(memory_config().buffer_type(), std::move(nd_shard_spec)));
     return TensorSpec(logical_shape(), std::move(new_layout));
 }
 

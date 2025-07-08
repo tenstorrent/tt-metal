@@ -43,6 +43,13 @@ public:
     TensorSpec width_sharded(CoreRangeSet grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
     TensorSpec block_sharded(CoreRange grid) const;
 
+    enum class ShardAlignment {
+        None,
+        Required,
+        Recommended,
+    };
+    TensorSpec sharded(NdShardSpec nd_shard_spec, ShardAlignment shard_alignment) const;
+
     Strides compute_strides() const { return tensor_layout_.compute_strides(logical_shape_); }
     BufferShardingArgs compute_buffer_sharding_args() const {
         return tensor_layout_.compute_buffer_sharding_args(logical_shape_);

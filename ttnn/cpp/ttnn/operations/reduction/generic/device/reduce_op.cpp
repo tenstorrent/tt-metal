@@ -7,11 +7,8 @@
 #include <limits>
 #include <optional>
 
-#include "tt-metalium/buffer_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/tensor/types.hpp"
 
 using namespace tt::constants;
 
@@ -68,24 +65,19 @@ std::vector<ttnn::TensorSpec> Reduce::compute_output_specs(const std::vector<Ten
         TensorLayout(output_dtype, PageConfig(Layout::TILE), MemoryConfig(output_mem_config.buffer_type())));
 
     if (input_tensor.nd_shard_spec().has_value()) {
-        auto nd_shard_spec = *input_tensor.nd_shard_spec();
-
         if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+            const auto& nd_shard_spec = *input_tensor.nd_shard_spec();
             return {tensor_spec.width_sharded(nd_shard_spec.grid, nd_shard_spec.orientation)};
         }
 
+        auto nd_shard_spec = *input_tensor.nd_shard_spec();
         if (dim == ReduceOpDim::W || dim == ReduceOpDim::HW) {
             nd_shard_spec.shard_shape[-1] = 1;
         }
         if ((dim == ReduceOpDim::H || dim == ReduceOpDim::HW) && nd_shard_spec.shard_shape.rank() > 1) {
             nd_shard_spec.shard_shape[-2] = div_up(nd_shard_spec.shard_shape[-2], input_tensor.logical_shape()[-2]);
         }
-        auto page_config = PageConfig(Layout::TILE);
-        nd_shard_spec.apply_required_alignment(page_config);
-        tensor_spec = TensorSpec(
-            output_shape,
-            TensorLayout(
-                output_dtype, page_config, MemoryConfig(output_mem_config.buffer_type(), std::move(nd_shard_spec))));
+        return {tensor_spec.sharded(std::move(nd_shard_spec), TensorSpec::ShardAlignment::Required)};
     }
 
     return {tensor_spec};
