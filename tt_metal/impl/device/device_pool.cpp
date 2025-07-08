@@ -450,7 +450,7 @@ void DevicePool::initialize_active_devices() const {
         }
     }
 
-    // Compile command queue programs
+    // Create command queue programs
     for (auto dev : active_devices) {
         // For Galaxy init, we only need to loop over mmio devices
         const auto& mmio_device_id =

@@ -170,7 +170,9 @@ public:
     // Remove and return a program from the compile group
     std::unique_ptr<Program> remove_program(IDevice* device) {
         TT_FATAL(program_device_map_.contains(device), "Program not found in the compile group.");
-        return std::move(program_device_map_[device]);
+        std::unique_ptr<Program> program = std::move(program_device_map_[device]);
+        program_device_map_.erase(device);
+        return program;
     }
 
     void clear() { program_device_map_.clear(); }

@@ -52,7 +52,7 @@ void create_cq_program(tt::tt_metal::IDevice* device);
 // Compile all command queue programs created by create_and_compile_cq_program()
 void compile_cq_programs();
 
-// Transfers ownership of a compiled command queue program to the caller
+// Get the compiled command queue program for a given device
 std::unique_ptr<tt::tt_metal::Program> get_compiled_cq_program(tt::tt_metal::IDevice* device);
 
 // Perform additional configuration (writing to specific L1 addresses, etc.) for FD kernels on this device.
