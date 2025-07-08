@@ -61,7 +61,7 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(
             .set_page_size(output_cb_index_1, dst_rounded_page_size);
     auto cb_dst1 = tt::tt_metal::CreateCircularBuffer(program, core, cb_dst1_config);
 
-    std::map<string, string> defines;
+    std::map<std::string, std::string> defines;
     defines["NUM_BYTES"] = std::to_string(input.element_size());
 
     // Create Kernel

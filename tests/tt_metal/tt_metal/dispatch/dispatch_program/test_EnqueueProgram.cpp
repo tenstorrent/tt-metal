@@ -188,7 +188,10 @@ std::vector<CBHandle> initialize_dummy_circular_buffers(
     return cb_handles;
 }
 
-bool cb_config_successful(std::shared_ptr<distributed::MeshDevice> mesh_device, distributed::MeshWorkload& workload, const DummyProgramMultiCBConfig& program_config) {
+bool cb_config_successful(
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    distributed::MeshWorkload& workload,
+    const DummyProgramMultiCBConfig& program_config) {
     bool pass = true;
 
     // Need to use old APIs to read since we cannot allocate a buffer in the reserved space we're trying
@@ -225,7 +228,6 @@ bool cb_config_successful(std::shared_ptr<distributed::MeshDevice> mesh_device, 
     return pass;
 }
 
-
 void test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoord& eth_core_coord) {
     Program program;
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
@@ -233,7 +235,7 @@ void test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
     constexpr uint32_t num_runtime_args0 = 9;
     uint32_t rta_base0 = MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
-    std::map<string, string> dummy_defines0 = {
+    std::map<std::string, std::string> dummy_defines0 = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args0)},
         {"RESULTS_ADDR", std::to_string(rta_base0)}};
@@ -261,7 +263,10 @@ void test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
     ASSERT_EQ(dummy_kernel0_args, dummy_kernel0_args_readback);
 }
 
-bool test_dummy_EnqueueProgram_with_cbs(std::shared_ptr<distributed::MeshDevice> mesh_device, distributed::MeshCommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
+bool test_dummy_EnqueueProgram_with_cbs(
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    distributed::MeshCommandQueue& cq,
+    const DummyProgramMultiCBConfig& program_config) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -279,7 +284,9 @@ bool test_dummy_EnqueueProgram_with_cbs(std::shared_ptr<distributed::MeshDevice>
 }
 
 bool test_dummy_EnqueueProgram_with_cbs_update_size(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, distributed::MeshCommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    distributed::MeshCommandQueue& cq,
+    const DummyProgramMultiCBConfig& program_config) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -389,15 +396,15 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
     uint32_t rta_base_dm0 = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     uint32_t rta_base_dm1 = rta_base_dm0 + num_runtime_args_dm0 * sizeof(uint32_t);
     uint32_t rta_base_compute = rta_base_dm1 + num_runtime_args_dm1 * sizeof(uint32_t);
-    std::map<string, string> dm_defines0 = {
+    std::map<std::string, std::string> dm_defines0 = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_dm0)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm0)}};
-    std::map<string, string> dm_defines1 = {
+    std::map<std::string, std::string> dm_defines1 = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_dm1)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm1)}};
-    std::map<string, string> compute_defines = {
+    std::map<std::string, std::string> compute_defines = {
         {"COMPUTE", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_compute)},
         {"RESULTS_ADDR", std::to_string(rta_base_compute)}};
@@ -501,17 +508,17 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     uint32_t rta_base_dm1 = rta_base_dm0 + 2048 * sizeof(uint32_t);
     uint32_t rta_base_compute = rta_base_dm1 + 4096 * sizeof(uint32_t);
     // Copy max # runtime args in the kernel for simplicity
-    std::map<string, string> dm_defines0 = {
+    std::map<std::string, std::string> dm_defines0 = {
         {"COMMON_RUNTIME_ARGS", "1"},
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(256)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm0)}};
-    std::map<string, string> dm_defines1 = {
+    std::map<std::string, std::string> dm_defines1 = {
         {"COMMON_RUNTIME_ARGS", "1"},
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(256)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm1)}};
-    std::map<string, string> compute_defines = {
+    std::map<std::string, std::string> compute_defines = {
         {"COMMON_RUNTIME_ARGS", "1"},
         {"COMPUTE", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(256)},
@@ -1092,7 +1099,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestSingleCbConfigCorrectlySentSingleC
     DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config}};
 
     for (const auto& device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
+        EXPECT_TRUE(
+            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
     }
 }
 
@@ -1109,7 +1117,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbSeqConfigCorrectlySentSingl
         .cr_set = cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
 
     for (const auto& device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
+        EXPECT_TRUE(
+            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
     }
 }
 
@@ -1126,7 +1135,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestMultiCbRandomConfigCorrectlySentSi
         .cr_set = cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
 
     for (const auto& device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
+        EXPECT_TRUE(
+            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
     }
 }
 
@@ -1378,7 +1388,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentMultiCore
 
         DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = cb_config_vector};
 
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
+        EXPECT_TRUE(
+            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
     }
 }
 
@@ -1443,7 +1454,8 @@ TEST_F(UnitMeshCommandQueueFixture, TensixTestAllCbConfigsCorrectlySentMultipleC
 
         DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
 
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
+        EXPECT_TRUE(
+            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
     }
 }
 
@@ -1766,8 +1778,8 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
         programs.push_back(Program());
         Program& program = programs.back();
 
-        std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
-        std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
+        std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
+        std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
 
         // brisc
         uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
@@ -2039,8 +2051,8 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
         programs.push_back(Program());
         Program& program = programs.back();
 
-        std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
-        std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
+        std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
+        std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
 
         // brisc
         uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;

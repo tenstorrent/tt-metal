@@ -170,7 +170,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     uint32_t untilized_sin_sync_cb_index = CBIndex::c_6;
     uint32_t retilized_cos_cb_index = CBIndex::c_29;
     uint32_t retilized_sin_cb_index = CBIndex::c_30;
-    std::map<string, string> reader_kernel_defines, writer_kernel_defines, compute_kernel_defines;
+    std::map<std::string, std::string> reader_kernel_defines, writer_kernel_defines, compute_kernel_defines;
     if (token_idx.has_value()) {
         tt_metal::CircularBufferConfig cb_cos2_config =
             tt_metal::CircularBufferConfig(Wt * cos_single_tile_size, {{retilized_cos_cb_index, cos_cb_data_format}})

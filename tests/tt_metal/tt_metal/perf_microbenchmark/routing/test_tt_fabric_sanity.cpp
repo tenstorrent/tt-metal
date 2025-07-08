@@ -21,10 +21,8 @@
 #include <optional>
 #include <queue>
 #include <random>
-#include <set>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -565,7 +563,7 @@ struct test_device_t {
         master_router_idx = 0;
     }
 
-    void create_router_kernels(std::vector<uint32_t>& compile_args, std::map<string, string>& defines) {
+    void create_router_kernels(std::vector<uint32_t>& compile_args, std::map<std::string, std::string>& defines) {
         uint32_t num_routers = router_logical_cores.size();
         std::vector<uint32_t> zero_buf(1, 0);
 
@@ -899,7 +897,7 @@ struct test_traffic_t {
     void create_kernels(
         std::vector<uint32_t>& tx_compile_args,
         std::vector<uint32_t>& rx_compile_args,
-        std::map<string, string>& defines,
+        std::map<std::string, std::string>& defines,
         uint32_t fabric_command,
         uint32_t test_results_address_) {
         CoreCoord tx_core, rx_core;
@@ -1536,7 +1534,7 @@ int main(int argc, char **argv) {
     bool pass = true;
     uint32_t num_available_devices, num_allocated_devices = 0;
 
-    std::map<string, string> defines;
+    std::map<std::string, std::string> defines;
     uint16_t routing_mode;
     if (!push_mode) {
         defines["FVC_MODE_PULL"] = "";

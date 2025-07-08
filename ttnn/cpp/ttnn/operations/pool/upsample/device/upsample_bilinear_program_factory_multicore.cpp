@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
+#include <string>
 
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
@@ -251,7 +251,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         input_block_size_bytes,
     };
 
-    string writer_kernel_fname, reader_kernel_fname, compute_kernel_fname;
+    std::string writer_kernel_fname, reader_kernel_fname, compute_kernel_fname;
 
     reader_kernel_fname = std::string(
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_bilinear_multi_core_sharded.cpp");

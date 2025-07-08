@@ -64,7 +64,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         });
 
     // Create kernels
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     switch (dtype) {
         case DataType::BFLOAT16: reader_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
         case DataType::INT32: reader_defines["OUTPUT_DTYPE_INT32"] = "1"; break;

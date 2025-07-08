@@ -11,11 +11,8 @@
 #include <array>
 #include <cstdlib>
 #include <map>
-#include <memory>
-#include <optional>
 #include <ostream>
 #include <string>
-#include <string_view>
 #include <utility>
 
 #include "assert.hpp"
@@ -23,7 +20,6 @@
 #include "tt-metalium/program.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include "impl/context/metal_context.hpp"
-#include "utils.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -177,7 +173,7 @@ void DataCollector::RecordProgramRun(uint64_t program_id) {
     program_id_to_call_count[program_id]++;
 }
 
-string DispatchClassToString(enum dispatch_core_processor_classes proc_class, CoreType core_type) {
+std::string DispatchClassToString(enum dispatch_core_processor_classes proc_class, CoreType core_type) {
     switch (core_type) {
         case CoreType::WORKER:
             switch (proc_class) {

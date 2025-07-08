@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <chrono>
 #include <errno.h>
 #include <fmt/base.h>
 #include <stdint.h>
@@ -11,16 +10,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
-#include <compare>
 #include <cstring>
 #include <exception>
 #include <filesystem>
 #include <map>
-#include <memory>
 #include <string>
 #include <unordered_map>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -49,13 +44,14 @@ struct KernelCacheStatus {
     std::unordered_map<std::string, bool> kernel_name_to_cache_hit;
 };
 
-void ClearKernelCache (const string& kernel_root_path) {
+void ClearKernelCache(const std::string& kernel_root_path) {
     std::filesystem::remove_all(kernel_root_path);
     detail::HashLookup::inst().clear();
 }
 
 // This assumes binaries are written to specific location: kernel_compile_outpath / kernel_name / hash
-std::unordered_map<std::string, std::string> get_last_program_binary_path(const Program& program, const string& kernel_root_path) {
+std::unordered_map<std::string, std::string> get_last_program_binary_path(
+    const Program& program, const std::string& kernel_root_path) {
     std::unordered_map<std::string, std::string> kernel_name_to_last_compiled_dir;
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = detail::GetKernel(program, kernel_id);
@@ -175,7 +171,7 @@ Program create_program(IDevice* device, const ProgramAttributes& program_attribu
 }
 
 void assert_kernel_binary_path_exists(
-    const Program& program, const string& kernel_root_path, const KernelCacheStatus &kernel_cache_status) {
+    const Program& program, const std::string& kernel_root_path, const KernelCacheStatus& kernel_cache_status) {
     auto kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = detail::GetKernel(program, kernel_id);

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <string>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -15,7 +17,7 @@ enum class UpSampleParallelizationStrategy { MULTI_CORE, SINGLE_CORE };
 struct UpSample {
     const int scale_factor_h_;
     const int scale_factor_w_;
-    const string mode_;
+    const std::string mode_;
     const tt::tt_metal::MemoryConfig output_mem_config_;
     const DeviceComputeKernelConfig compute_kernel_config_;
 

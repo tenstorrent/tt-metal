@@ -376,7 +376,7 @@ inline bool DeviceData::validate_one_core(
         return false;
     }
 
-    string core_string;
+    std::string core_string;
     if (core_type == CoreType::WORKER) {
         core_string = "L1";
     } else if (core_type == CoreType::DRAM) {
@@ -532,7 +532,7 @@ void DeviceData::overflow_check(IDevice* device) {
 template <bool is_dram_variant, bool is_host_variant>
 void configure_kernel_variant(
     Program& program,
-    string path,
+    std::string path,
     const std::map<std::string, std::string>& defines_in,
     std::vector<uint32_t> compile_args,
     CoreCoord my_core,
@@ -547,7 +547,7 @@ void configure_kernel_variant(
     auto upstream_virtual_noc_coords = device->virtual_noc0_coordinate(upstream_noc_index, phys_upstream_core);
     auto downstream_virtual_noc_coords = device->virtual_noc0_coordinate(downstream_noc_index, phys_downstream_core);
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"DISPATCH_KERNEL", "1"},
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
         {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},

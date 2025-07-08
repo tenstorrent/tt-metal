@@ -57,7 +57,7 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
         H,
     };
 
-    std::map<string, string> kernel_defines;
+    std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/plusone/device/kernels/reader_plusone_interleaved.cpp",

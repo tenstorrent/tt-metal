@@ -147,7 +147,7 @@ DatacopyParams setup_datacopy(
         datacopy_rt_args.push_back(static_cast<uint32_t>(coord.y));
     }
 
-    std::map<string, string> kernel_defines = {{"TILED_LAYOUT", "1"}, {"INTERLEAVED_MEM_LAYOUT", "1"}};
+    std::map<std::string, std::string> kernel_defines = {{"TILED_LAYOUT", "1"}, {"INTERLEAVED_MEM_LAYOUT", "1"}};
 
     // Create the kernel
     tt::tt_metal::KernelHandle datacopy_kernel_id = tt::tt_metal::CreateKernel(

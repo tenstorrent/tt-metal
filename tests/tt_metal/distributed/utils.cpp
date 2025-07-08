@@ -119,7 +119,7 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
-        std::map<string, string> binary_defines = {
+        std::map<std::string, std::string> binary_defines = {
             {"ELTWISE_OP", op_id_to_op_define[eltwise_op]}, {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op]}};
         auto eltwise_binary_kernel = tt_metal::CreateKernel(
             program,
@@ -172,9 +172,9 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
 
     std::vector<std::shared_ptr<Program>> programs;
 
-    std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
-    std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
-    std::map<string, string> erisc_defines = {{"ERISC", "1"}};
+    std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
+    std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
+    std::map<std::string, std::string> erisc_defines = {{"ERISC", "1"}};
 
     for (uint32_t i = 0; i < num_programs; i++) {
         Program& program = *programs.emplace_back(std::make_shared<Program>());
