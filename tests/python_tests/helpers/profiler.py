@@ -12,6 +12,7 @@ from typing import Optional
 
 from ttexalens.tt_exalens_lib import read_words_from_device
 
+from helpers.chip_architecture import get_chip_architecture
 from helpers.test_config import ProfilerBuild, generate_make_command
 from helpers.utils import run_shell_command
 
@@ -178,11 +179,13 @@ class Profiler:
 
     @staticmethod
     def _get_meta(testname: str) -> dict[id, ProfilerFullMarker]:
-        root = os.environ.get("LLK_HOME")
-        if not root:
+        CHIP_ARCH = get_chip_architecture()
+        LLK_HOME = os.environ.get("LLK_HOME")
+        if not LLK_HOME:
             raise AssertionError("Environment variable LLK_HOME is not set")
 
-        profiler = Path(root) / "tests" / "build" / "tests" / testname / "profiler"
+        BUILD_DIR = Path(LLK_HOME) / "tests" / "build" / CHIP_ARCH.value
+        profiler = BUILD_DIR / "tests" / testname / "profiler"
 
         files = [
             profiler / "unpack.meta.bin",

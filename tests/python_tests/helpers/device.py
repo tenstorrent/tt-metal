@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+import os
 import time
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from ttexalens.tt_exalens_lib import (
     write_to_device,
     write_words_to_device,
 )
+
+from helpers.chip_architecture import get_chip_architecture
 
 from .format_arg_mapping import (
     DestAccumulation,
@@ -85,7 +88,9 @@ def perform_tensix_soft_reset(core_loc="0,0"):
 
 
 def run_elf_files(testname, core_loc="0,0"):
-    build_dir = Path("../build")
+    CHIP_ARCH = get_chip_architecture()
+    LLK_HOME = os.environ.get("LLK_HOME")
+    BUILD_DIR = Path(LLK_HOME) / "tests" / "build" / CHIP_ARCH.value
 
     # Perform soft reset
     perform_tensix_soft_reset(core_loc)
@@ -93,7 +98,7 @@ def run_elf_files(testname, core_loc="0,0"):
     # Load TRISC ELF files
     trisc_names = ["unpack", "math", "pack"]
     for i, trisc_name in enumerate(trisc_names):
-        elf_path = build_dir / "tests" / testname / "elf" / f"{trisc_name}.elf"
+        elf_path = BUILD_DIR / "tests" / testname / "elf" / f"{trisc_name}.elf"
         load_elf(
             elf_file=str(elf_path.absolute()),
             core_loc=core_loc,
@@ -105,7 +110,7 @@ def run_elf_files(testname, core_loc="0,0"):
     write_words_to_device(core_loc, TRISC_PROFILER_BARRIE_ADDRESS, [0, 0, 0])
 
     # Run BRISC
-    brisc_elf_path = build_dir / "shared" / "brisc.elf"
+    brisc_elf_path = BUILD_DIR / "shared" / "elf" / "brisc.elf"
     run_elf(str(brisc_elf_path.absolute()), core_loc, risc_name="brisc")
 
 

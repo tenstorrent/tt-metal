@@ -3,7 +3,6 @@
 
 import logging
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -82,34 +81,14 @@ def reset_mailboxes():
 def download_headers():
     CHIP_ARCH = set_chip_architecture()
     if CHIP_ARCH not in [ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE]:
-        sys.exit(f"Unsupported CHIP_ARCH detected: {CHIP_ARCH}")
+        sys.exit(f"Unsupported CHIP_ARCH detected: {CHIP_ARCH.value}")
 
     LLK_HOME = os.environ.get("LLK_HOME")
-    HEADER_DIR = os.path.join(LLK_HOME, "tests", "hw_specific", "inc")
-    BUILD_DIR = os.path.join(LLK_HOME, "tests", "build")
-    ARCH_FILE = os.path.join(HEADER_DIR, ".architecture")
-
-    # Check if architecture has changed
-    if os.path.exists(ARCH_FILE):
-        with open(ARCH_FILE, "r") as f:
-            stored_arch = f.read().strip()
-        if stored_arch == CHIP_ARCH.value:
-            print(
-                "Headers already downloaded for current architecture. Skipping download."
-            )
-            return
-        else:
-            print(
-                f"Architecture changed from {stored_arch} to {CHIP_ARCH.value}. Clearing headers and build directory."
-            )
-            if os.path.exists(HEADER_DIR):
-                shutil.rmtree(HEADER_DIR, ignore_errors=True)
-            if os.path.exists(BUILD_DIR):
-                shutil.rmtree(BUILD_DIR, ignore_errors=True)
-    else:
-        print(
-            f"No architecture file found. Will download headers for {CHIP_ARCH.value}."
-        )
+    HEADER_DIR = os.path.join(LLK_HOME, "tests", "hw_specific", CHIP_ARCH.value, "inc")
+    STAMP_FILE = os.path.join(HEADER_DIR, ".headers_downloaded")
+    if os.path.exists(STAMP_FILE):
+        print("Headers already downloaded. Skipping download.")
+        return
 
     BASE_URL = f"https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/{CHIP_ARCH.value}"
     WORMHOLE_SPECIFIC_URL = f"https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/{CHIP_ARCH.value}/wormhole_b0_defines"
@@ -172,9 +151,9 @@ def download_headers():
                 print(f"Failed to download {header} after retries from primary URL")
                 sys.exit(1)
 
-    # Save the current architecture to track changes
-    with open(ARCH_FILE, "w") as f:
-        f.write(CHIP_ARCH.value)
+    # Create the stamp file to indicate headers are downloaded
+    with open(STAMP_FILE, "w") as f:
+        f.write("Headers downloaded.\n")
 
 
 def pytest_configure(config):
