@@ -177,6 +177,24 @@ FORCE_INLINE
 void sync_packer_unpacker(uint32_t packer_unpacker_sync_cb_index) {
     constexpr uint32_t ONE_TILE = 1;
 
+    // This double sequence forces both the packer and the unpacker to wait for the other.
+    // If we had a single sequence:
+    //
+    // If packer_unpacker_sync_cb_index is empty
+    // - if packer is first, then it will push a tile and continue (it does not wait for the unpacker)
+    // - if unpacker is first, then it will wait for packer
+    //
+    // If packer_unpacker_sync_cb_index is full
+    // - if packer is first, then it will wait for unpacker
+    // - if unpacker is first, then it will pop a tile and continue (it does not wait for the packer)
+    //
+    // By having a double sequence, we ensure that both the packer and the unpacker will wait for the other.
+    // Indeed:
+    // - if packer is first and CB is empty, then it will push a tile and continue until second sequence where it
+    // will wait because CB will be full (it will wait for unpacker to pop tile).
+    // - if unpacker is first and CB is full, then it will pop a tile and continue until second sequence where it
+    // will wait because CB will be empty (it will wait for packer to push tile).
+
     cb_reserve_back(packer_unpacker_sync_cb_index, ONE_TILE);
     cb_push_back(packer_unpacker_sync_cb_index, ONE_TILE);
 
