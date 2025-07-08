@@ -64,7 +64,7 @@ static inline void memcpy_to_device(void* __restrict dst, const void* __restrict
             num_lines = n / inner_blk_size;  // Recalculate after alignment adjustment
         }
 
-        // Main bulk processing loop: process 32-byte chunks
+        // Main bulk processing loop: Each iteration processes a 256 byte block. Blocks are processed 32 bytes at a time.
         for (size_t i = 0; i < num_lines; ++i) {
             LOAD_STREAM_32;
             LOAD_STREAM_32;
