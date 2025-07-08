@@ -5,13 +5,14 @@
 
 import torch
 from loguru import logger
+from ultralytics import YOLO
+
 import ttnn
-from models.experimental.yolov11.tt.model_preprocessing import create_yolov11_model_parameters
-from models.experimental.yolov11.reference import yolov11
-from models.experimental.yolov11.tt import ttnn_yolov11
+from models.demos.yolov11.reference import yolov11
+from models.demos.yolov11.tt import ttnn_yolov11
+from models.demos.yolov11.tt.model_preprocessing import create_yolov11_model_parameters
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from ultralytics import YOLO
 
 
 def load_torch_model(use_weights_from_ultralytics=True, weights="yolo11n.pt"):

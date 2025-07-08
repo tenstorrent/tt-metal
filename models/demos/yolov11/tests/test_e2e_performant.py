@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
+
 import pytest
 from loguru import logger
+
 import ttnn
-from models.experimental.yolov11.runner.performant_runner import YOLOv11PerformantRunner
+from models.demos.yolov11.runner.performant_runner import YOLOv11PerformantRunner
 from models.utility_functions import run_for_wormhole_b0
 
 
