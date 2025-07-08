@@ -202,7 +202,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.select-wheels.outputs.wheel-artifact-name }}
   tt-train-cpp-unit-tests:
-    needs: [build-artifact, select-wheels]
+    needs: build-artifact
     secrets: inherit
     strategy:
       fail-fast: false
@@ -217,7 +217,6 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.select-wheels.outputs.wheel-artifact-name }}
   run-profiler-regression:
     needs: [build-artifact-profiler, select-wheels]
     strategy:
