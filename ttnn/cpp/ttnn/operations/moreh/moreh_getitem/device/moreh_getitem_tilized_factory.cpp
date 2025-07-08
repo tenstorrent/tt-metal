@@ -146,12 +146,12 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         auto rounded_output_page_size = round_up_to_mul32(output_unit_size);
         auto cb_out0_config = CircularBufferConfig(rounded_output_page_size, {{out_cb0_index, output_cb_data_format}})
                                   .set_page_size(out_cb0_index, rounded_output_page_size);
-        auto cb_out0 = CreateCircularBuffer(program, all_cores, cb_out0_config);
+        CreateCircularBuffer(program, all_cores, cb_out0_config);
 
         auto out_cb1_index = CBIndex::c_17;
         auto cb_out1_config = CircularBufferConfig(rounded_output_page_size, {{out_cb1_index, output_cb_data_format}})
                                   .set_page_size(out_cb1_index, rounded_output_page_size);
-        auto cb_out1 = CreateCircularBuffer(program, all_cores, cb_out1_config);
+        CreateCircularBuffer(program, all_cores, cb_out1_config);
 
         // create read/wrtie kernel
         auto src_is_dram = is_dram(input);
@@ -372,7 +372,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             auto index_page_size = 1024 * 4;
             auto cb_index_config = CircularBufferConfig(index_page_size, {{src1_cb_index, index_cb_data_format}})
                                        .set_page_size(src1_cb_index, index_page_size);
-            auto cb_src1 = CreateCircularBuffer(program, all_cores, cb_index_config);
+            CreateCircularBuffer(program, all_cores, cb_index_config);
         }
 
         auto out_cb_index = CBIndex::c_16;
@@ -450,7 +450,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         uint32_t g1_numcores = core_group_1.num_cores();
 
         uint32_t start_id = 0;
-        for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
+        for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
             uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
