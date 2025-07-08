@@ -32,8 +32,11 @@ public:
     SystemMesh(SystemMesh&&) = delete;
     SystemMesh& operator=(SystemMesh&&) = delete;
 
-    // Returns the shape of the system mesh
+    // Returns the shape of the system mesh; this is the global mesh shape in distributed context
     const MeshShape& get_shape() const;
+
+    // Returns the shape of the local mesh
+    const MeshShape& local_shape() const;
 
     // Returns the physical device ID for a given logical coordinate
     int get_physical_device_id(const MeshCoordinate& coord) const;

@@ -6,11 +6,53 @@
 
 #include <vector>
 
+#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal::distributed {
 
 using chip_id_t = int;
+
+// Configuration for distributed mesh operations across multiple hosts
+// Each host manages a subset of the global mesh, defined by local_shape_ and local_offset_
+struct DistributedMeshConfig {
+    MeshShape global_shape_;    // Total shape of the distributed mesh across all hosts
+    MeshShape local_shape_;     // Shape of the mesh portion managed by this host
+    MeshCoordinate local_offset_; // Offset of this host's portion within the global mesh
+
+    DistributedMeshConfig(
+        const MeshShape& global_shape,
+        const MeshShape& local_shape,
+        const MeshCoordinate& local_offset) :
+        global_shape_(global_shape),
+        local_shape_(local_shape),
+        local_offset_(local_offset) {
+        validate_config();
+    }
+
+    // Check if a global coordinate is managed by this host
+    bool is_local_coordinate(const MeshCoordinate& global_coord) const {
+        // Check if the coordinate falls within this host's local mesh bounds
+        for (size_t dim = 0; dim < global_coord.dims(); ++dim) {
+            if (global_coord[dim] < local_offset_[dim] || 
+                global_coord[dim] >= local_offset_[dim] + local_shape_[dim]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+private:
+    void validate_config() const {
+        // Validate that local mesh fits within global mesh
+        TT_FATAL(local_offset_.dims() == global_shape_.dims() && local_offset_.dims() == local_shape_.dims(),
+                 "Dimension mismatch between global shape, local shape, and offset");
+        for (size_t dim = 0; dim < local_offset_.dims(); ++dim) {
+            TT_FATAL(local_offset_[dim] + local_shape_[dim] <= global_shape_[dim],
+                     "Local mesh extends beyond global mesh boundaries at dimension {}", dim);
+        }
+    }
+};
 
 // Specifies the configuration of a MeshDevice.
 class MeshDeviceConfig {

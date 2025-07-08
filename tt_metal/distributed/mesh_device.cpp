@@ -35,8 +35,12 @@
 #include <tt_stl/strong_type.hpp>
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
+#include "tt_metal/api/tt-metalium/control_plane.hpp"
+#include "tt_metal/api/tt-metalium/fabric_types.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/sd_mesh_command_queue.hpp"
+#include "tt_metal/distributed/coordinate_translator.hpp"
+#include "tt_metal/distributed/distributed_mesh_config_factory.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 
@@ -49,6 +53,7 @@
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.h>
+#include "impl/context/metal_context.hpp"
 
 enum class CoreType;
 namespace tt {
@@ -110,6 +115,7 @@ decltype(auto) validate_and_get_reference_value(
     }
     return reference_value;
 }
+
 
 }  // namespace
 
@@ -193,9 +199,11 @@ uint32_t MeshDevice::dram_size_per_channel() const {
 IDevice* MeshDevice::reference_device() const { return this->get_devices().at(0); }
 
 MeshDevice::MeshDevice(
+    const DistributedMeshConfig& distributed_mesh_config,
     std::shared_ptr<ScopedDevices> mesh_handle,
     std::unique_ptr<MeshDeviceView> mesh_device_view,
     std::shared_ptr<MeshDevice> parent_mesh) :
+    distributed_mesh_config_(distributed_mesh_config),
     scoped_devices_(std::move(mesh_handle)),
     view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
@@ -214,12 +222,19 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
+
+    auto distributed_mesh_config = DistributedMeshConfigFactory::create_from_control_plane(config);
     auto scoped_devices = std::make_shared<ScopedDevices>(
         l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config, config);
     auto root_devices = scoped_devices->root_devices();
-    MeshContainer<IDevice*> devices(config.mesh_shape(), root_devices);
+    log_debug(LogDistributed, "[MeshDevice::create] LOCAL Mesh shape: {}", distributed_mesh_config.local_shape_);
+
+    MeshContainer<IDevice*> devices(distributed_mesh_config.local_shape_, root_devices);
     auto mesh_device = std::make_shared<MeshDevice>(
-        std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
+        distributed_mesh_config,
+        std::move(scoped_devices),
+        std::make_unique<MeshDeviceView>(devices),
+        std::shared_ptr<MeshDevice>());
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
     // TODO #20966: Remove these calls
@@ -247,8 +262,10 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     auto scoped_devices = std::make_shared<ScopedDevices>(
         device_ids, l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config);
     MeshContainer<IDevice*> devices(MeshShape(1, device_ids.size()), scoped_devices->root_devices());
+
+    auto distributed_mesh_config = DistributedMeshConfigFactory::create_from_control_plane(MeshDeviceConfig(MeshShape(1, device_ids.size())));
     auto mesh_device = std::make_shared<MeshDevice>(
-        std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
+        distributed_mesh_config, std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
 
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
     TT_FATAL(
@@ -325,9 +342,11 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
 
     MeshContainer<IDevice*> submesh_devices_container(
         submesh_shape, view_->get_devices(MeshCoordinateRange{offset_coord, end_coordinate}));
+    
+    auto distributed_mesh_config = DistributedMeshConfigFactory::create_from_control_plane(MeshDeviceConfig(submesh_shape));
 
     auto submesh = std::make_shared<MeshDevice>(
-        scoped_devices_, std::make_unique<MeshDeviceView>(submesh_devices_container), shared_from_this());
+        distributed_mesh_config, scoped_devices_, std::make_unique<MeshDeviceView>(submesh_devices_container), shared_from_this());
     const auto& allocator_config = reference_device()->allocator()->get_config();
     submesh->initialize(
         num_hw_cqs(),
@@ -394,11 +413,17 @@ IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
     return get_device(MeshCoordinate{row_idx, col_idx});
 }
 
-IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return view_->get_device(coord); }
+IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const {
+    CoordinateTranslator translator(this->local_shape(), this->local_offset());
+    MeshCoordinate local_coord = translator.translate_or_fatal(coord);
+    return view_->get_device(local_coord);
+}
 
 tt_fabric::FabricNodeId MeshDevice::get_device_fabric_node_id(const MeshCoordinate& coord) const {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    return control_plane.get_fabric_node_id_from_physical_chip_id(view_->get_device(coord)->id());
+    CoordinateTranslator translator(this->local_shape(), this->local_offset());
+    MeshCoordinate local_coord = translator.translate_or_fatal(coord);
+    return control_plane.get_fabric_node_id_from_physical_chip_id(view_->get_device(local_coord)->id());
 }
 
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
@@ -414,7 +439,9 @@ DeviceIds MeshDevice::get_device_ids() const {
     return device_ids;
 }
 
-size_t MeshDevice::num_devices() const { return view_->num_devices(); }
+size_t MeshDevice::num_devices() const {
+    return this->shape().mesh_size();
+}
 
 CoreCoord MeshDevice::compute_with_storage_grid_size() const {
     return validate_and_get_reference_value(
@@ -425,11 +452,17 @@ tt::ARCH MeshDevice::arch() const {
     return validate_and_get_reference_value(this->get_devices(), [](const auto* device) { return device->arch(); });
 }
 
-size_t MeshDevice::num_rows() const { return view_->num_rows(); }
+size_t MeshDevice::num_rows() const {
+    return this->shape()[0];
+}
 
-size_t MeshDevice::num_cols() const { return view_->num_cols(); }
+size_t MeshDevice::num_cols() const {
+    return this->shape()[1];
+}
 
-const MeshShape& MeshDevice::shape() const { return view_->shape(); }
+const MeshShape& MeshDevice::shape() const {
+    return distributed_mesh_config_.global_shape_;
+}
 
 std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_shape) const {
     // MeshDeviceView requires devices to be provided as a 1D array in row-major order for the target mesh shape.
@@ -934,5 +967,18 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
 }
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
+
+MeshCoordinate MeshDevice::local_offset() const {
+    return distributed_mesh_config_.local_offset_;
+}
+
+MeshShape MeshDevice::local_shape() const {
+    return distributed_mesh_config_.local_shape_;
+}
+
+bool MeshDevice::is_local_coordinate(const MeshCoordinate& coord) const {
+    CoordinateTranslator translator(this->local_shape(), this->local_offset());
+    return translator.is_local_coordinate(coord);
+}
 
 }  // namespace tt::tt_metal::distributed

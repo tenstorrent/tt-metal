@@ -7,9 +7,11 @@
 #include <system_mesh.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <algorithm>
 #include <cstddef>
+#include <unordered_set>
 
 #include "assert.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -19,45 +21,67 @@
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 #include "tt_metal/distributed/coordinate_translation.hpp"
+#include "tt_metal/distributed/coordinate_translator.hpp"
+
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/control_plane.hpp>
 
 namespace tt::tt_metal::distributed {
 
 class SystemMesh::Impl {
 private:
     MeshContainer<PhysicalMeshCoordinate> physical_coordinates_;
+    MeshShape global_shape_;
+    MeshCoordinate local_offset_;
 
 public:
     Impl();
 
     const MeshShape& get_shape() const;
+    const MeshShape& local_shape() const;
     MeshCoordinate get_global_device_coordinate(int physical_device_id) const;
     std::vector<chip_id_t> get_mapped_physical_device_ids(
         const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
     chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;
     uint32_t get_physical_mesh_id(const MeshCoordinate& coord) const;
+    bool is_local_coordinate(const MeshCoordinate& coord) const;
 };
 
 // Implementation of public methods
-SystemMesh::Impl::Impl() : physical_coordinates_(get_system_mesh_coordinate_translation_map()) {
-    for (const auto& [logical_coordinate, physical_mesh_coordinate] : physical_coordinates_) {
-        log_debug(
-            LogMetal,
-            "Logical Coordinate: ({}, {}), Physical Mesh Coordinate: (Mesh ID {}, Chip ID {})",
-            logical_coordinate[0],
-            logical_coordinate[1],
-            physical_mesh_coordinate.mesh_id(),
-            physical_mesh_coordinate.chip_id());
-    }
+SystemMesh::Impl::Impl() 
+    : physical_coordinates_(get_system_mesh_coordinate_translation_map()),
+      global_shape_(tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_mesh_shape(tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0], tt::tt_fabric::MeshScope::GLOBAL)),
+      local_offset_(tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_offset()) {
 }
 
-const MeshShape& SystemMesh::Impl::get_shape() const { return physical_coordinates_.shape(); }
+bool SystemMesh::Impl::is_local_coordinate(const MeshCoordinate& coord) const {
+    CoordinateTranslator translator(physical_coordinates_.shape(), local_offset_);
+    return translator.is_local_coordinate(coord);
+}
+
+const MeshShape& SystemMesh::Impl::get_shape() const { return global_shape_; }
+
+const MeshShape& SystemMesh::Impl::local_shape() const { return physical_coordinates_.shape(); }
 
 chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) const {
-    return physical_coordinates_.at(coord).chip_id();
+    CoordinateTranslator translator(physical_coordinates_.shape(), local_offset_);
+    auto local_coord = translator.global_to_local(coord);
+    if (local_coord.has_value()) {
+        auto physical_device_id = physical_coordinates_.at(*local_coord).chip_id();
+        log_debug(LogDistributed, "Translating global coordinate: {} to local coordinate: {}, physical device ID: {}", 
+                  coord, *local_coord, physical_device_id);
+        return physical_device_id;
+    }
+    TT_FATAL(false, "Coordinate {} is not in the local mesh", coord);
 }
 
 uint32_t SystemMesh::Impl::get_physical_mesh_id(const MeshCoordinate& coord) const {
-    return *physical_coordinates_.at(coord).mesh_id();
+    CoordinateTranslator translator(physical_coordinates_.shape(), local_offset_);
+    auto local_coord = translator.global_to_local(coord);
+    if (local_coord.has_value()) {
+        return *physical_coordinates_.at(*local_coord).mesh_id();
+    }
+    return 0;
 }
 
 MeshCoordinate SystemMesh::Impl::get_global_device_coordinate(int physical_device_id) const {
@@ -195,6 +219,8 @@ uint32_t SystemMesh::get_physical_mesh_id(const MeshCoordinate& coord) const {
 }
 
 const MeshShape& SystemMesh::get_shape() const { return pimpl_->get_shape(); }
+
+const MeshShape& SystemMesh::local_shape() const { return pimpl_->local_shape(); }
 
 MeshCoordinate SystemMesh::get_global_device_coordinate(int physical_device_id) const {
     return pimpl_->get_global_device_coordinate(physical_device_id);
