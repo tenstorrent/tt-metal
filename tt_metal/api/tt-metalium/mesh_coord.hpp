@@ -40,6 +40,9 @@ public:
     // Returns the total number of elements in the mesh.
     size_t mesh_size() const;
 
+    // Returns true if the mesh shape is in a line topology: at most 1 dimension can be non-unit.
+    bool is_line_topology() const;
+
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");
     auto attribute_values() const { return std::forward_as_tuple(value_); }
@@ -56,9 +59,6 @@ private:
     void compute_strides();
     tt::stl::SmallVector<size_t> strides_;
 };
-
-// Returns true if the mesh shape is in a line topology: at most 1 dimension can be non-unit.
-bool is_line_topology(const MeshShape& shape);
 
 class MeshCoordinate {
 public:
@@ -80,8 +80,22 @@ public:
     // Returns the coordinate values as a span.
     tt::stl::Span<const uint32_t> coords() const;
 
-    // Returns the coordinate value at the given index.
-    uint32_t operator[](size_t dim) const;
+    // Provides access to the coordinate value at the given index.
+    // Supports negative indexing.
+    uint32_t operator[](int32_t dim) const;
+    uint32_t& operator[](int32_t dim);
+
+    // Converts a MeshCoordinate to a linear index.
+    // Throws if `coord` is out of bounds of `shape`.
+    size_t to_linear_index(const MeshShape& shape) const;
+
+    // Returns a neighbor along the given dimension.
+    // `BoundaryMode` specifies how to handle coordinates that are out of bounds.
+    // Negative offsets and dim are allowed, and the input coordinate must be within bounds.
+    enum class BoundaryMode { WRAP, CLAMP, NONE };
+
+    std::optional<MeshCoordinate> get_neighbor(
+        const MeshShape& shape, int32_t offset, int32_t dim, BoundaryMode mode = BoundaryMode::WRAP) const;
 
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");
@@ -101,10 +115,6 @@ bool operator<=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 bool operator>=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 
 std::ostream& operator<<(std::ostream& os, const MeshCoordinate& shape);
-
-// Converts a MeshCoordinate to a linear index.
-// Throws if `coord` is out of bounds of `shape`.
-size_t to_linear_index(const MeshShape& shape, const MeshCoordinate& coord);
 
 // Represents a range of MeshCoordinates. Requires that mesh coordinates have the same dimensionality.
 class MeshCoordinateRange {
@@ -144,6 +154,7 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("start", "end");
     auto attribute_values() const { return std::forward_as_tuple(start_, end_); }
 
+    // Iterator over the range, provides access to coordinates in row-major order.
     class Iterator {
     public:
         Iterator& operator++();
@@ -387,12 +398,12 @@ const MeshCoordinateRange& MeshContainer<T>::coord_range() const {
 
 template <typename T>
 T& MeshContainer<T>::at(const MeshCoordinate& coord) {
-    return values_.at(to_linear_index(shape_, coord));
+    return values_.at(coord.to_linear_index(shape_));
 }
 
 template <typename T>
 const T& MeshContainer<T>::at(const MeshCoordinate& coord) const {
-    return values_.at(to_linear_index(shape_, coord));
+    return values_.at(coord.to_linear_index(shape_));
 }
 
 template <typename T>
