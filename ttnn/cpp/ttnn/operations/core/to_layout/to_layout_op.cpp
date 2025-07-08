@@ -44,6 +44,8 @@ Tensor to_layout_impl(
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
+    printf("HIT TO_LAYOUT_IMPL\n");
+
     if (tensor_arg.layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.dtype()) {
             log_warning(
@@ -59,6 +61,9 @@ Tensor to_layout_impl(
                 "So, "
                 "the memory_config won't be changed!");
         }
+
+        printf("EARLY RETURN\n");
+
         return tensor_arg;
     }
 
@@ -95,14 +100,17 @@ Tensor to_layout_impl(
     }
 
     if (tt::tt_metal::is_device_tensor(tensor_arg)) {
+        printf("DEVICE TENSOR PATH\n");
         bool use_multicore_untilize = true;
         bool use_multicore_tilize = true;
 
         if (not requires_padding_change(tensor, layout)) {
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {
+                printf("ROW MAJOR LAYOUT NO PADDING CHANGE\n");
                 TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
                 return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize);
             } else if (layout == ttnn::TILE_LAYOUT) {
+                printf("TILE LAYOUT NO PADDING CHANGE\n");
                 if (tensor.is_sharded()) {
                     const auto tensor_tile = tensor.tensor_spec().tile();
                     uint32_t tile_height = tensor_tile.get_height();
@@ -119,6 +127,7 @@ Tensor to_layout_impl(
                 throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
             }
         } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
+            printf("ROW MAJOR LAYOUT WITH PADDING CHANGE\n");
             TT_FATAL(
                 !dtype.has_value() || dtype.value() == tensor_arg.dtype(),
                 "dtype cannot be different from tensor dtype when converting to ROW_MAJOR_LAYOUT on device!");
@@ -139,6 +148,7 @@ Tensor to_layout_impl(
             return ttnn::reshape(tensor, ttnn::Shape{output_shape});
 
         } else if (layout == ttnn::TILE_LAYOUT) {
+            printf("TILE LAYOUT WITH PADDING CHANGE\n");
             if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
                 // workaround by applying padding and then tilizing
@@ -174,6 +184,7 @@ Tensor to_layout_impl(
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
         }
     } else {
+        printf("HOST TENSOR PATH\n");
         TT_ASSERT(!dtype.has_value(), "dtype cannot be specified when converting layout on host!");
         if (!requires_padding_change(tensor, layout)) {
             return tensor.to_layout(layout);

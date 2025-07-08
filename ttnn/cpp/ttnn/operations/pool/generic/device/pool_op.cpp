@@ -134,8 +134,8 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
             output_shape,
             padded_output_shape));  // THIS BREAKS FOR NOW, BUT SHOULD BE MADE TO WORK
                                     // tt::tt_metal::TensorLayout::fromPaddedShape(
-    //     output_dtype, tt::tt_metal::PageConfig(input.layout()), mem_config, output_shape, padded_output_shape); //
-    //     THIS WORKS FOR NOW
+    // output_dtype, tt::tt_metal::PageConfig(input.layout()), mem_config, output_shape, padded_output_shape)); //
+    // //THIS WORKS FOR NOW
 }
 
 Pool2D::tensor_return_value_t Pool2D::create_output_tensors(

@@ -170,13 +170,13 @@ def run_max_pool(
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     ## construct the tensor in NCHW shape
-    act = randomize_torch_tensor(torch_tensor_map, act_shape)
-    # act = torch.zeros(act_shape, dtype=torch.bfloat16)
-    # for n in range(act_shape[0]):
-    #     for c in range(act_shape[1]):
-    #         for h in range(act_shape[2]):
-    #             for w in range(act_shape[3]):
-    #                 act[n, c, h, w] = h * in_w + w
+    # act = randomize_torch_tensor(torch_tensor_map, act_shape)
+    act = torch.zeros(act_shape, dtype=torch.bfloat16)
+    for n in range(act_shape[0]):
+        for c in range(act_shape[1]):
+            for h in range(act_shape[2]):
+                for w in range(act_shape[3]):
+                    act[n, c, h, w] = h * in_w + w
     # torch.save(act, "act.pt")
     # act = torch.load("act.pt")
 
@@ -235,6 +235,14 @@ def run_max_pool(
         ceil_mode=ceil_mode,
     )
 
+    print("to layout")
+
+    # this explicit conversion isn't necessary, but we'll do it here to be clear
+    if dtype == ttnn.bfloat8_b:
+        output = ttnn.to_layout(output, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    print("to cpu")
+
     output_host = output.cpu()
     output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
     output_pytorch = output_pytorch_padded[:, :, :, :in_c]
@@ -254,6 +262,11 @@ def run_max_pool(
     output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
 
     output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
+
+    print("ttnn untilized result:")
+    print(output_pytorch[0][0])
+    print("pytorch result:")
+    print(golden_pytorch[0][0])
 
     pcc_thresh = 1.0
     if dtype == ttnn.bfloat8_b:
@@ -336,7 +349,7 @@ def run_max_pool(
             # # partial grid tests
             # [1, 32, 10, 10],  # BH
             # [1, 32, 6, 6],  # WH
-            [1, 32, 8, 8],
+            [1, 64, 8, 8],
         )
     ),
 )
@@ -371,7 +384,7 @@ def run_max_pool(
 @pytest.mark.parametrize(
     "dtype",
     [
-        ttnn.bfloat16,
+        # ttnn.bfloat16,
         ttnn.bfloat8_b,
     ],
 )
