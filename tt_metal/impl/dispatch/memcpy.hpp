@@ -15,21 +15,21 @@
 #include <emmintrin.h>
 #endif
 
-#define LOAD_STREAM_32                                                                 \
+#define LOAD_STREAM_32()                                                               \
     do {                                                                               \
         _mm256_stream_si256((__m256i*)dst8, _mm256_loadu_si256((const __m256i*)src8)); \
         src8 += sizeof(__m256i);                                                       \
         dst8 += sizeof(__m256i);                                                       \
     } while (0)
 
-#define LOAD_STREAM_16                                                           \
+#define LOAD_STREAM_16()                                                         \
     do {                                                                         \
         _mm_stream_si128((__m128i*)dst8, _mm_loadu_si128((const __m128i*)src8)); \
         src8 += sizeof(__m128i);                                                 \
         dst8 += sizeof(__m128i);                                                 \
     } while (0)
 
-#define LOAD_STREAM_4                                     \
+#define LOAD_STREAM_4()                                   \
     do {                                                  \
         _mm_stream_si32((int32_t*)dst8, *(int32_t*)src8); \
         src8 += sizeof(int32_t);                          \
@@ -65,21 +65,21 @@ static inline void memcpy_to_device(void* __restrict dst, const void* __restrict
         // This ensures subsequent 32-byte operations are properly aligned
         // WARNING: This does not cover the case where dst is not 16-byte aligned
         if ((uintptr_t)dst8 % sizeof(__m256i) != 0) {
-            LOAD_STREAM_16;
+            LOAD_STREAM_16();
             n -= sizeof(__m128i);
             num_lines = n / inner_blk_size;  // Recalculate after alignment adjustment
         }
 
         // Main bulk processing loop: Each iteration processes a 256 byte block. Blocks are processed 32 bytes at a time.
         for (size_t i = 0; i < num_lines; ++i) {
-            LOAD_STREAM_32;
-            LOAD_STREAM_32;
-            LOAD_STREAM_32;
-            LOAD_STREAM_32;
-            LOAD_STREAM_32;
-            LOAD_STREAM_32;
-            LOAD_STREAM_32;
-            LOAD_STREAM_32;
+            LOAD_STREAM_32();
+            LOAD_STREAM_32();
+            LOAD_STREAM_32();
+            LOAD_STREAM_32();
+            LOAD_STREAM_32();
+            LOAD_STREAM_32();
+            LOAD_STREAM_32();
+            LOAD_STREAM_32();
             n -= inner_blk_size;
         }
     }
@@ -92,14 +92,14 @@ static inline void memcpy_to_device(void* __restrict dst, const void* __restrict
             // Handle alignment for 32-byte operations if needed
             // WARNING: This does not cover the case where dst is not 16-byte aligned
             if ((uintptr_t)dst8 % sizeof(__m256i) != 0) {
-                LOAD_STREAM_16;
+                LOAD_STREAM_16();
                 n -= sizeof(__m128i);
                 num_lines = n / sizeof(__m256i);  // Recalculate after alignment adjustment
             }
 
             // Process individual 32-byte blocks
             for (size_t i = 0; i < num_lines; ++i) {
-                LOAD_STREAM_32;
+                LOAD_STREAM_32();
             }
             n -= num_lines * sizeof(__m256i);
         }
@@ -108,7 +108,7 @@ static inline void memcpy_to_device(void* __restrict dst, const void* __restrict
         num_lines = n / sizeof(__m128i);  // Number of 16-byte blocks to process
         if (num_lines > 0) {
             for (size_t i = 0; i < num_lines; ++i) {
-                LOAD_STREAM_16;
+                LOAD_STREAM_16();
             }
             n -= num_lines * sizeof(__m128i);
         }
@@ -117,7 +117,7 @@ static inline void memcpy_to_device(void* __restrict dst, const void* __restrict
         num_lines = n / sizeof(int32_t);  // Number of 4-byte blocks to process
         if (num_lines > 0) {
             for (size_t i = 0; i < num_lines; ++i) {
-                LOAD_STREAM_4;
+                LOAD_STREAM_4();
             }
             n -= num_lines * sizeof(int32_t);
         }
