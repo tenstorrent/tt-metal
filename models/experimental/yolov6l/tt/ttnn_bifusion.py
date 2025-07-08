@@ -49,9 +49,19 @@ class TtBiFusion:
         conv1 = self.cv1(x[1])
         conv2 = self.cv2(x[2])
         downsample = self.downsample(conv2)
-        conv_t = ttnn.sharded_to_interleaved(conv_t, ttnn.L1_MEMORY_CONFIG)
-        conv1 = ttnn.sharded_to_interleaved(conv1, ttnn.L1_MEMORY_CONFIG)
-        downsample = ttnn.sharded_to_interleaved(downsample, ttnn.L1_MEMORY_CONFIG)
-        output = ttnn.concat([conv_t, conv1, downsample], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if conv_t.memory_config() != conv1.memory_config():
+            conv1 = ttnn.to_memory_config(conv1, conv_t.memory_config())
+        if conv_t.memory_config() != downsample.memory_config():
+            downsample = ttnn.to_memory_config(downsample, conv_t.memory_config())
+        output_sharded_memory_config = ttnn.create_sharded_memory_config(
+            [
+                conv_t.memory_config().shard_spec.shape[0],
+                3 * conv_t.memory_config().shard_spec.shape[1],
+            ],
+            core_grid=conv_t.memory_config().shard_spec.grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        output = ttnn.concat([conv_t, conv1, downsample], dim=-1, memory_config=output_sharded_memory_config)
         output, out_h, out_w = self.cv3(output)
         return output, out_h, out_w
