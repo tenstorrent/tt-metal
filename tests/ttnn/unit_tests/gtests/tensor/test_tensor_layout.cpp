@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <umd/device/types/arch.h>
 #include <boost/move/utility_core.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <initializer_list>
 #include <memory>
@@ -13,7 +11,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "common_tensor_test_utils.hpp"
-#include "core_coord.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
