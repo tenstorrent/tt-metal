@@ -14,6 +14,7 @@ from typing import Dict, List, Optional
 
 import click
 import yaml
+from loguru import logger
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 TT_RUN_PREFIX = "[tt-run]"
@@ -91,7 +92,7 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         "TT_METAL_CACHE": os.environ.get(
             "TT_METAL_CACHE",
             DEFAULT_CACHE_DIR_PATTERN.format(home=str(Path.home()), hostname=os.uname().nodename, rank=binding.rank),
-        ), # Need to explicitly configure this because kernel cache is not multi-process safe (#21089)
+        ),  # Need to explicitly configure this because kernel cache is not multi-process safe (#21089)
         "TT_MESH_ID": str(binding.mesh_id),
         "TT_HOST_RANK": str(binding.host_rank_id),
         "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
@@ -147,7 +148,7 @@ def build_mpi_command(config: TTRunConfig, program: List[str], mpi_args: Optiona
 def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     """Pretty print a command for readability."""
     if len(cmd) > PRETTY_PRINT_THRESHOLD:
-        click.echo(f"{prefix} Command:")
+        logger.info(f"{prefix} Command:")
         parts = []
         current_part = ["mpirun"]
 
@@ -161,9 +162,9 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
         if current_part:
             parts.append(" ".join(current_part))
 
-        click.echo(" \\\n    ".join(parts))
+        logger.info(" \\\n    ".join(parts))
     else:
-        click.echo(f"{prefix} Command: " + " ".join(cmd))
+        logger.info(f"{prefix} Command: " + " ".join(cmd))
 
 
 @click.command(
@@ -273,7 +274,7 @@ def main(ctx: click.Context, rank_binding: Path, dry_run: bool, verbose: bool, m
         sys.exit(result.returncode)
     except KeyboardInterrupt:
         # Handle Ctrl+C gracefully with proper exit code (128 + SIGINT)
-        click.echo(f"\n{TT_RUN_PREFIX} Interrupted", err=True)
+        logger.error(f"{TT_RUN_PREFIX} Interrupted")
         sys.exit(INTERRUPTED_EXIT_CODE)
     except OSError as e:
         raise click.ClickException(f"Error launching mpirun: {e}")
