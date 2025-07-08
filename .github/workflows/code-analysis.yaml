@@ -446,7 +446,7 @@ jobs:
                       --repo "${{ github.repository }}"
 
                     # Rerun the failed workflow
-                    if gh run rerun "$run_id" --failed-jobs --repo "${{ github.repository }}"; then
+                    if gh run rerun "$run_id" --failed --repo "${{ github.repository }}"; then
                       echo "✅ Successfully triggered retry for $WORKFLOW_DISPLAY_NAME"
 
                       # Wait for the new run to appear and add it to monitoring
