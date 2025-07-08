@@ -161,8 +161,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     remote_cb_config.remote_index(remote_cb_index)
         .set_page_size(L1_ALIGNMENT)  // set to 16B so that the infra won't update write pointers to wrong location
         .set_data_format(max_tile_size_df);
-    auto remote_cb =
-        tt::tt_metal::experimental::CreateCircularBuffer(program, reader_core_range, remote_cb_config, global_cb);
+    tt::tt_metal::experimental::CreateCircularBuffer(program, reader_core_range, remote_cb_config, global_cb);
 
     /* Compile time args */
 
