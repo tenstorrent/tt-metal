@@ -3612,11 +3612,24 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("input_channels", [3, 320])
-@pytest.mark.parametrize("output_channels", [32])
-@pytest.mark.parametrize("input_height,input_width", [(224, 224), (512, 672)])
-@pytest.mark.parametrize("kernel_height,kernel_width", [(16, 16), (32, 32)])
-@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "input_channels, output_channels, input_height, input_width, kernel_height, kernel_width, stride_height, stride_width",
+    [
+        (3, 32, 224, 224, 16, 16, 16, 16),
+        (3, 32, 224, 224, 32, 32, 32, 32),
+        (3, 32, 224, 224, 16, 16, 2, 2),
+        (3, 32, 224, 224, 7, 7, 2, 2),
+        (3, 32, 224, 224, 6, 6, 2, 2),
+        (3, 32, 1280, 1280, 6, 6, 2, 2),
+        (3, 32, 512, 672, 16, 16, 16, 16),
+        (3, 32, 512, 672, 32, 32, 32, 32),
+        (320, 32, 224, 224, 16, 16, 16, 16),
+        (320, 32, 224, 224, 32, 32, 32, 32),
+        (320, 32, 512, 672, 16, 16, 16, 16),
+        (320, 32, 512, 672, 32, 32, 32, 32),
+    ]
+)
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("has_bias", [True, False])
 def test_conv2d_with_fold(
     device,
@@ -3628,6 +3641,8 @@ def test_conv2d_with_fold(
     input_width,
     kernel_height,
     kernel_width,
+    stride_height,
+    stride_width,
     input_layout,
     has_bias,
 ):
@@ -3645,8 +3660,8 @@ def test_conv2d_with_fold(
         input_width=input_width,
         filter_height=kernel_height,
         filter_width=kernel_width,
-        stride_h=kernel_height,
-        stride_w=kernel_width,
+        stride_h=stride_height,
+        stride_w=stride_width,
         padding=(0, 0),
         config_override=None,
         input_layout=input_layout,
