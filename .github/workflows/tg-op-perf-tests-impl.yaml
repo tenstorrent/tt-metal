@@ -26,7 +26,7 @@ jobs:
           {
             name: "TG Op Perf Unit Tests",
             arch: wormhole_b0,
-            cmd: 'pytest -n auto -k TG tests/ttnn/multidevice_perf_tests/',
+            cmd: 'pytest -k TG tests/ttnn/multidevice_perf_tests/',
             timeout: 5,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
