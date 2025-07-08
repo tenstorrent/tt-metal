@@ -210,7 +210,7 @@ static void watcher_loop(std::chrono::microseconds sleep_duration) {
             fprintf(logfile, "-----\n");
             fprintf(logfile, "Dump #%d at %.3lfs\n", watcher::dump_count.load(), watcher::get_elapsed_secs());
 
-            if (devices.size() == 0) {
+            if (devices.empty()) {
                 fprintf(logfile, "No active devices\n");
             }
 

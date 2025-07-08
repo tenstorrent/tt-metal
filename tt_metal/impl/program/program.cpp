@@ -496,7 +496,7 @@ struct KernelGroupIntHasher {
 };
 
 void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_index) {
-    if (core_to_kernel_group_index_table_[programmable_core_type_index].size() == 0) {
+    if (core_to_kernel_group_index_table_[programmable_core_type_index].empty()) {
         bool erisc_is_idle = false;
 
         // Get the extent of the kernels in x, y
@@ -1127,7 +1127,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
         }
     }
 
-    if (binaries_data.size() > 0) {
+    if (!binaries_data.empty()) {
         this->program_transfer_info.binary_data = binaries_data;
     }
 
@@ -1240,7 +1240,7 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
                     for (size_t i = 0; i < device->num_sub_devices(); ++i) {
                         const auto& sub_device_cores = device->worker_cores(core_type, SubDeviceId{i});
                         auto intersection = sub_device_cores.intersection(kg->core_ranges);
-                        if (intersection.size() > 0) {
+                        if (!intersection.empty()) {
                             used_sub_device_ids.insert(SubDeviceId{i});
                             num_intersections += intersection.num_cores();
                         }

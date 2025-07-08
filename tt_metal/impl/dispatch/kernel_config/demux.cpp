@@ -75,7 +75,7 @@ void DemuxKernel::GenerateDependentConfigs() {
     }
 
     // Downstream, expect DISPATCH_H or DEMUX
-    TT_ASSERT(downstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_OUT && downstream_kernels_.size() > 0);
+    TT_ASSERT(downstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_OUT && !downstream_kernels_.empty());
     dependent_config_.output_depacketize = 0;  // Populated per downstream kernel
     for (int idx = 0; idx < downstream_kernels_.size(); idx++) {
         FDKernel* k = downstream_kernels_[idx];

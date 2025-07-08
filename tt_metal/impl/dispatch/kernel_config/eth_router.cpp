@@ -98,7 +98,7 @@ void EthRouterKernel::GenerateStaticConfigs() {
 void EthRouterKernel::GenerateDependentConfigs() {
     if (as_mux_) {
         // Upstream, expect PRETETCH_Hs
-        TT_ASSERT(upstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_IN && upstream_kernels_.size() > 0);
+        TT_ASSERT(upstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_IN && !upstream_kernels_.empty());
 
         // Downstream, expect US_TUNNELER_REMOTE
         TT_ASSERT(downstream_kernels_.size() == 1);
@@ -149,7 +149,7 @@ void EthRouterKernel::GenerateDependentConfigs() {
         }
 
         // Downstream, expect PREFETCH_D/US_TUNNELER_REMOTE
-        TT_ASSERT(downstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_OUT && downstream_kernels_.size() > 0);
+        TT_ASSERT(downstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_OUT && !downstream_kernels_.empty());
         std::vector<PrefetchKernel*> prefetch_kernels;
         EthTunnelerKernel* ds_tunneler_kernel = nullptr;
         for (auto k : downstream_kernels_) {

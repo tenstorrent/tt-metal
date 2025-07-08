@@ -85,7 +85,7 @@ void Kernel::register_kernel_with_watcher() {
 }
 
 void KernelImpl::register_kernel_elf_paths_with_watcher(IDevice& device) const {
-    TT_ASSERT(this->kernel_full_name_.size() > 0, "Kernel full name not set!");
+    TT_ASSERT(!this->kernel_full_name_.empty(), "Kernel full name not set!");
     watcher_register_kernel_elf_paths(this->watcher_kernel_id_, this->file_paths(device));
 }
 

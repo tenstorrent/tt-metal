@@ -293,7 +293,7 @@ int main(int argc, char** argv) {
 
         const auto& device_active_eth_cores = device_map[test_device_id_l]->get_active_ethernet_cores();
 
-        if (device_active_eth_cores.size() == 0) {
+        if (device_active_eth_cores.empty()) {
             log_info(
                 LogTest,
                 "Device {} does not have enough active cores. Need 1 active ethernet core for this test.",

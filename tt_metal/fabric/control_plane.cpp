@@ -202,7 +202,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     auto apply_count = [this](FabricNodeId fabric_node_id, RoutingDirection direction, size_t count) {
         if (this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id) &&
             this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).contains(direction) &&
-            this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).at(direction).size() > 0) {
+            !this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).at(direction).empty()) {
             this->router_port_directions_to_num_routing_planes_map_[fabric_node_id][direction] = count;
         }
     };
@@ -284,7 +284,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
                 }
             }
         }
-        TT_FATAL(local_mesh_ids.size() > 0, "No local meshes found for host rank {}", mpi_rank);
+        TT_FATAL(!local_mesh_ids.empty(), "No local meshes found for host rank {}", mpi_rank);
         return LocalMeshBinding{.mesh_ids = std::move(local_mesh_ids), .host_rank = HostRankId{mpi_rank}};
     }
 
@@ -1809,7 +1809,7 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
         }
         // WH has a special case where mmio chips with remote connections must always have certain channels active
         if (cluster.arch() == tt::ARCH::WORMHOLE_B0 && cluster_desc->is_chip_mmio_capable(chip_id) &&
-            cluster.get_tunnels_from_mmio_device(chip_id).size() > 0) {
+            !cluster.get_tunnels_from_mmio_device(chip_id).empty()) {
             // UMD routing FW uses these cores for base routing
             // channel 15 is used by syseng tools
             std::unordered_set<int> channels_to_skip = {};
@@ -1906,7 +1906,7 @@ void ControlPlane::generate_local_intermesh_link_table() {
             // For chips without intermesh links, we still need to populate the asic IDs
             // for consistency.
             // Skip this on Blackhole for now.
-            if (this->get_active_ethernet_cores(chip_id).size() == 0) {
+            if (this->get_active_ethernet_cores(chip_id).empty()) {
                 // No Active Ethernet Cores found. Not querying the board id off ethernet cores.
                 chip_id_to_asic_id_[chip_id] = chip_id;
             } else {

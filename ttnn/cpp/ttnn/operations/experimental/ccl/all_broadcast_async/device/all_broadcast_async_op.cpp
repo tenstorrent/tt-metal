@@ -33,7 +33,7 @@ void AllBroadcastAsync::validate_with_output_tensors(
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout());
 
-    if (output_tensors.size() > 0 and output_tensors[0].has_value()) {
+    if (!output_tensors.empty() and output_tensors[0].has_value()) {
         for (uint32_t k = 0; k < output_tensors.size(); k++) {
             const auto& output_tensor = output_tensors[k];
             TT_FATAL(

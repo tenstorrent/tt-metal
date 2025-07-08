@@ -102,7 +102,7 @@ void RunTest(
 TEST_F(DPrintFixture, ActiveEthTestPrint) {
     for (IDevice* device : this->devices_) {
         // Skip if no ethernet cores on this device
-        if (device->get_active_ethernet_cores(true).size() == 0) {
+        if (device->get_active_ethernet_cores(true).empty()) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
@@ -121,7 +121,7 @@ TEST_F(DPrintFixture, IdleEthTestPrint) {
     }
     for (IDevice* device : this->devices_) {
         // Skip if no ethernet cores on this device
-        if (device->get_inactive_ethernet_cores().size() == 0) {
+        if (device->get_inactive_ethernet_cores().empty()) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }

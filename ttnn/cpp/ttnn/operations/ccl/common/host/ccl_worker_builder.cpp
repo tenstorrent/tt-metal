@@ -807,7 +807,7 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     std::ranges::for_each(tensors, [](auto const& t) {
         TT_FATAL(t != nullptr, "Null tensor passed to generate_multi_command_stream_kernel_ct_args");
     });
-    if (tensors.size() > 0 && tensors[0]->is_sharded()) {
+    if (!tensors.empty() && tensors[0]->is_sharded()) {
         datamovement_kernel_config.defines["TENSOR0_SHARDED_MEM_LAYOUT"] = "1";
     }
     if (tensors.size() > 1 && tensors[1]->is_sharded()) {
@@ -824,13 +824,12 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     } else {
         datamovement_kernel_config.defines["NO_TENSOR_MODE"] = "1";
     }
-    if (datamovement_kernel_config.defines.size() > 0) {
+    if (!datamovement_kernel_config.defines.empty()) {
         log_trace(tt::LogOp, "Command Kernel Defines:");
         for (auto const& [k, v] : datamovement_kernel_config.defines) {
             log_trace(tt::LogOp, "\t{}: {}", k, v);
         }
     }
-
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index =
@@ -1361,7 +1360,7 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
     }
 
     // Finally teardown our local chip's fabric endpoint(s)
-    if (edm_termination_infos.size() > 0) {
+    if (!edm_termination_infos.empty()) {
         log_trace(tt::LogOp, "{} termination infos", edm_termination_infos.size());
     }
     for (auto& info : edm_termination_infos) {

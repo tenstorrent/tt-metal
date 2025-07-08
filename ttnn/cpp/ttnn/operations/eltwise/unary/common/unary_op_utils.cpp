@@ -617,8 +617,8 @@ std::pair<string, string> get_op_init_and_func(
     const std::vector<float>& params,
     const std::string& idst,
     std::optional<DataType> input_dtype) {
-    return params.size() > 0 ? get_op_init_and_func_parameterized(op_type, params, idst, input_dtype)
-                             : get_op_init_and_func_default(op_type, idst, input_dtype);
+    return !params.empty() ? get_op_init_and_func_parameterized(op_type, params, idst, input_dtype)
+                           : get_op_init_and_func_default(op_type, idst, input_dtype);
 }
 
 std::map<string, string> get_block_defines(

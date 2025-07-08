@@ -3661,7 +3661,7 @@ int main(int argc, char** argv) {
             // remove mmio chip from the set. get_devices_controlled_by_mmio_device() returns a set that
             // holds mmio chips as well as remote chips accessed through that mmmio chip.
             remote_chips.erase(device_id_l);
-            if (device_active_eth_cores.size() == 0) {
+            if (device_active_eth_cores.empty()) {
                 log_info(
                     LogTest,
                     "Device {} does not have enough active cores. Need 1 active ethernet core for this test.",

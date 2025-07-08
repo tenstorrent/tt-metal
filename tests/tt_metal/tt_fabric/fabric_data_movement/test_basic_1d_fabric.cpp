@@ -168,7 +168,7 @@ void RunTestLineMcast(
     uint32_t is_2d_fabric = edm_config.topology == Topology::Mesh;
 
     auto routers = control_plane.get_forwarding_eth_chans_to_chip(sender_id, mcast_start_id);
-    if (routers.size() == 0) {
+    if (routers.empty()) {
         log_info(
             tt::LogTest,
             "No fabric routers between Src MeshId {} ChipId {} - Dst MeshId {} ChipId {}",
@@ -339,7 +339,7 @@ void RunTestUnicastRaw(
 
         // get a port to connect to
         eth_chans = control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
-        if (eth_chans.size() == 0) {
+        if (eth_chans.empty()) {
             GTEST_SKIP() << "No active eth chans to connect to";
         }
     } else {
@@ -357,7 +357,7 @@ void RunTestUnicastRaw(
         mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
 
         eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id);
-        if (eth_chans.size() == 0) {
+        if (eth_chans.empty()) {
             log_info(
                 tt::LogTest,
                 "No fabric routers between Src MeshId {} ChipId {} - Dst MeshId {} ChipId {}",
@@ -580,7 +580,7 @@ void run_unicast_test_bw_chips(
 
     // append the EDM connection rt args
     const auto& available_links = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
-    EXPECT_EQ(available_links.size() > 0, true);
+    EXPECT_EQ(!available_links.empty(), true);
 
     uint32_t link_idx = available_links[0];
     append_fabric_connection_rt_args(

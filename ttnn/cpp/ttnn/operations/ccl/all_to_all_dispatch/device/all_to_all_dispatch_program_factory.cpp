@@ -160,7 +160,7 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
         process_axis(0);  // vertical (column)
     }
 
-    TT_FATAL(neighbors.size() > 0, "No neighbors found");
+    TT_FATAL(!neighbors.empty(), "No neighbors found");
     TT_FATAL(!(axis.has_value() && neighbors.size() > 2), "Along a single axis, there can only be 2 neighbors");
 
     if (!axis.has_value()) {

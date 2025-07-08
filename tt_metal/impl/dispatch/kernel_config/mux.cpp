@@ -53,7 +53,7 @@ void MuxKernel::GenerateStaticConfigs() {
 
 void MuxKernel::GenerateDependentConfigs() {
     // Upstream, expect DISPATCH_D or TUNNELER
-    TT_ASSERT(upstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_IN && upstream_kernels_.size() > 0);
+    TT_ASSERT(upstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_IN && !upstream_kernels_.empty());
     uint32_t num_upstream_dispatchers = 0;
     for (int idx = 0; idx < upstream_kernels_.size(); idx++) {
         FDKernel* k = upstream_kernels_[idx];

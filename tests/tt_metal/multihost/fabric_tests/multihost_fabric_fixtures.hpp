@@ -33,7 +33,7 @@ public:
         auto local_host_rank = std::string(host_rank_str);
 
         TT_FATAL(
-            local_mesh_id.size() and local_host_rank.size(),
+            !local_mesh_id.empty() and !local_host_rank.empty(),
             "TT_MESH_ID and TT_HOST_RANK environment variables must be set for Multi-Host Fabric Tests.");
 
         auto chip_to_eth_coord_mapping = multihost_utils::get_physical_chip_mapping_from_eth_coords_mapping(

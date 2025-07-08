@@ -783,7 +783,7 @@ void DeviceProfiler::logPacketData(
 
                 std::string newZoneName = this->current_dispatch_meta_data.cmd_type;
                 if (tracy::riscName[risc_num] == "BRISC") {
-                    if (this->current_dispatch_meta_data.cmd_subtype != "") {
+                    if (!this->current_dispatch_meta_data.cmd_subtype.empty()) {
                         newZoneName = fmt::format(
                             "{}:{}",
                             this->current_dispatch_meta_data.worker_runtime_id,
