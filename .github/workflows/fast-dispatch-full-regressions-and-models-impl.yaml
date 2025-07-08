@@ -14,6 +14,7 @@ on:
         type: string
 
 jobs:
+  # issue 24711: https://github.com/tenstorrent/tt-metal/issues/24711
   # fd-nightly:
   #   strategy:
   #     # Do not fail-fast because we need to ensure all tests go to completion
