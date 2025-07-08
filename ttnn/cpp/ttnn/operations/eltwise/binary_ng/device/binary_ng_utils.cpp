@@ -166,8 +166,8 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
             break;
         case BinaryOpType::GT: postprocess = unary::UnaryOpType::GTZ; break;
         case BinaryOpType::LT: postprocess = unary::UnaryOpType::LTZ; break;
-        case BinaryOpType::GTE: postprocess = unary::UnaryOpType::GEZ; break;
-        case BinaryOpType::LTE: postprocess = unary::UnaryOpType::LEZ; break;
+        case BinaryOpType::GE: postprocess = unary::UnaryOpType::GEZ; break;
+        case BinaryOpType::LE: postprocess = unary::UnaryOpType::LEZ; break;
         case BinaryOpType::EQ: postprocess = unary::UnaryOpType::EQZ; break;
         case BinaryOpType::NE: postprocess = unary::UnaryOpType::NEZ; break;
         // (a-b)**2

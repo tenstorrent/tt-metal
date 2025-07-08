@@ -39,8 +39,8 @@ namespace utils {
         case BinaryOpType::LOGICAL_XOR:
         case BinaryOpType::GT:
         case BinaryOpType::LT:
-        case BinaryOpType::GTE:
-        case BinaryOpType::LTE:
+        case BinaryOpType::GE:
+        case BinaryOpType::LE:
         case BinaryOpType::EQ:
         case BinaryOpType::NE: return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32));
         case BinaryOpType::GCD:
