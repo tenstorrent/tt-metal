@@ -70,7 +70,6 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
 
     CreateCircularBuffer(
         program,
@@ -175,7 +174,7 @@ void MorehMeanOperation::MorehMeanNCFactory::override_runtime_arguments(
     auto src_buffer_address = tensor_args.input.buffer()->address();
     auto dst_buffer_address = tensor_return_value.buffer()->address();
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
 
         {

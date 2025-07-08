@@ -360,7 +360,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
         auto cb_src0_config = CircularBufferConfig(rounded_input_page_size, {{src_cb_index, src_cb_data_format}})
                                   .set_page_size(src_cb_index, rounded_input_page_size);
-        auto cb_src0 = CreateCircularBuffer(program, all_cores, cb_src0_config);
+        CreateCircularBuffer(program, all_cores, cb_src0_config);
 
         for (uint32_t dim = 0; dim < 5; dim++) {
             if (!index_info[dim].is_defined) {
@@ -376,10 +376,9 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         }
 
         auto out_cb_index = CBIndex::c_16;
-        auto rounded_output_page_size = round_up_to_mul32(input_unit_size);
         auto cb_out0_config = CircularBufferConfig(rounded_input_page_size, {{out_cb_index, output_cb_data_format}})
                                   .set_page_size(out_cb_index, rounded_input_page_size);
-        auto cb_out0 = CreateCircularBuffer(program, all_cores, cb_out0_config);
+        CreateCircularBuffer(program, all_cores, cb_out0_config);
 
         // create read/wrtie kernel
         auto src_is_dram = is_dram(input);
