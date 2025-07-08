@@ -53,7 +53,9 @@ def _get_batch_rep_idxr(replication_axis, batch):
     return _idxr
 
 
-def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping, mesh_shape, axis, apply_fake_expert=True):
+def get_input_sparse_contribs(
+    sparse_tokens, expert_indices, expert_mapping, mesh_shape, axis, apply_fake_expert=True, local_reduce=False
+):
     # sparse tokens is [devices, batch, seq, hidden_size]
     # note, in the actual op batch*=replication_dim but the reference `sparse_tokens` is not doing that here
     # desired expert contributions tensor is [experts[/devices], batch*replicate_dim, seq, hidden_size]
@@ -71,7 +73,14 @@ def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping, mes
 
     # replication_dim, replication_group = _get_replication_dims(axis, mesh_shape)
 
-    input_contribs_tensor = torch.zeros([experts, batch, seq, hidden_size])
+    if local_reduce:
+        expert_dim = devices
+        expert_idxr = lambda d, local_idx: d * experts_per_device + local_idx
+    else:
+        expert_dim = experts
+        expert_idxr = lambda d, _: d
+
+    input_contribs_tensor = torch.zeros([expert_dim, batch, seq, hidden_size])
     batch_idxr = _get_batch_rep_idxr(axis, batch)
 
     token_expert_count = 0
@@ -85,12 +94,15 @@ def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping, mes
                     if expert_idx not in experts_on_device:
                         continue
 
-                    local_expert_idx = d * experts_per_device + experts_on_device.index(expert_idx)
+                    local_expert_idx = expert_idxr(d, experts_on_device.index(expert_idx))
 
                     # multiply by expert index to mock application of expert
-                    input_contribs_tensor[local_expert_idx, b, s, :] = sparse_tokens[d, b, s, :]
+
                     if apply_fake_expert:
-                        input_contribs_tensor[local_expert_idx, b, s, :] *= -1 if expert_idx == 0 else expert_idx
+                        contrib = sparse_tokens[d, b, s, :] * (-1 if expert_idx == 0 else expert_idx)
+                    else:
+                        contrib = sparse_tokens[d, b, s, :]
+                    input_contribs_tensor[local_expert_idx, b, s, :] += contrib
 
                     token_expert_count += 1
 
@@ -98,7 +110,9 @@ def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping, mes
     return input_contribs_tensor
 
 
-def get_output_combined_contribs(sparse_contribs, expert_indices, expert_mapping, mesh_shape, replication_axis):
+def get_output_combined_contribs(
+    sparse_contribs, expert_indices, expert_mapping, mesh_shape, replication_axis, local_reduce=False
+):
     # sparse_contribs is [E[/devices], b, seq, hidden]
     # output recalled contribs is [K, batch * replicate_dim [/devices], seq, hidden]
     batch = expert_indices.shape[0]
@@ -115,7 +129,14 @@ def get_output_combined_contribs(sparse_contribs, expert_indices, expert_mapping
     replication_dim, replication_group = _get_replication_dims(replication_axis, mesh_shape)
     batch_rep_idxr = _get_batch_rep_idxr(replication_axis, batch)
 
-    output_combined_contribs_tensor = torch.zeros(selected_experts_k, batch * replication_dim, seq, hidden)
+    if local_reduce:
+        k_dim = 1
+        expert_idxr = lambda d, _: d
+    else:
+        k_dim = selected_experts_k
+        expert_idxr = lambda d, local_idx: d * experts_per_device + local_idx
+
+    output_combined_contribs_tensor = torch.zeros(k_dim, batch * replication_dim, seq, hidden)
     real_data_map = torch.zeros(output_combined_contribs_tensor.shape[:-1])
 
     total_token_expert_count = 0
@@ -125,17 +146,17 @@ def get_output_combined_contribs(sparse_contribs, expert_indices, expert_mapping
             experts_on_device = _get_experts_on_device(experts, expert_mapping, d)
 
             for b in range(batch):
-                for k in range(selected_experts_k):
+                for k in range(k_dim):
                     for s in range(seq):
                         expert_idx = expert_indices[b, 0, s, k].item()
                         if expert_idx not in experts_on_device:
                             continue
 
                         axis_batch_idx = batch_rep_idxr(m0, m1, b)
-                        local_expert_idx = d * experts_per_device + experts_on_device.index(expert_idx)
+
+                        local_expert_idx = expert_idxr(d, experts_on_device.index(expert_idx))
 
                         sc = sparse_contribs[local_expert_idx, b, s, :]
-
                         output_combined_contribs_tensor[k, axis_batch_idx, s, :] = sc
 
                         real_data_map[k, axis_batch_idx, s] = 1
