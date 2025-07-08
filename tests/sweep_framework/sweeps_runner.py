@@ -143,6 +143,10 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(ARCH)
 
+    if len(test_vectors) > 1:
+        p = Process(target=run, args=(test_module, input_queue, output_queue))
+        p.start()
+
     for test_vector in test_vectors:
         if DRY_RUN:
             print(f"Would have executed test for vector {test_vector}")
@@ -161,21 +165,19 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
             test_vector.pop("invalid_reason")
             test_vector.pop("status")
             test_vector.pop("validity")
-            if p is None and len(test_vectors) > 1:
-                p = Process(target=run, args=(test_module, input_queue, output_queue))
-                p.start()
+
             try:
                 if MEASURE_PERF:
                     # Run one time before capturing result to deal with compile-time slowdown of perf measurement
                     input_queue.put(test_vector)
-                    if len(test_vectors) == 1:
+                    if p is None:
                         logger.info(
                             "Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
                         )
                         run(test_module, input_queue, output_queue)
                     output_queue.get(block=True, timeout=timeout)
                 input_queue.put(test_vector)
-                if len(test_vectors) == 1:
+                if p is None:
                     logger.info(
                         "Executing test on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
                     )
@@ -218,10 +220,22 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                     result["e2e_perf"] = None
                 result["device"] = device_name
             except Empty as e:
-                logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
-                p.terminate()
-                p = None
-                reset_util.reset()
+                if p:
+                    logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
+                    p.terminate()
+                    p.join(5)  # Wait for a bit for the process to terminate
+                    if p.is_alive():
+                        logger.error(f"Child process {p.pid} did not terminate, killing it.")
+                        p.kill()
+                        p.join()
+                    p = None
+                    reset_util.reset()
+
+                    # Restart the process for subsequent tests
+                    if len(test_vectors) > 1:
+                        p = Process(target=run, args=(test_module, input_queue, output_queue))
+                        p.start()
+
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
 
