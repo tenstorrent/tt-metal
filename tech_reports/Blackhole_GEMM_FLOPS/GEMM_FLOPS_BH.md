@@ -96,9 +96,9 @@ Even when operating on non-square matrices, we observe a similar trend: once the
 Depending on the fidelity, datatype, and matrix shape chosen, different peak teraflop values can be achieved. However, achieving full utilization of all cores can reveal the presence of memory bottlenecks. We first plot the utilization for the fixed 8×8 compute grid.
 
 
-![alt text](images/utilization_by_matrix_size_and_type_square.png "Title")
+![alt text](images/8x8utilizationSquare.png "Title")
 
-![alt text](images/utilization_by_matrix_size_and_type.png "Title")
+![alt text](images/8x8utilizationNonSquare.png "Title")
 
 As expected, since the Blackhole card has a larger available compute grid, utilization is significantly lower than on the Wormhole cards. However, by using different matrix sizes, we can obtain a better estimate of the maximum performance achievable on the Blackhole processor.
 
