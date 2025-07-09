@@ -445,11 +445,11 @@ int main() {
             // Run the BRISC kernel
             WAYPOINT("R");
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
-                uint32_t end_cb_index = launch_msg_address->kernel_config.max_local_cb_end_index;
-                setup_local_cb_read_write_interfaces(cb_l1_base, 0, end_cb_index, true, true, false);
+                uint32_t local_cb_mask = launch_msg_address->kernel_config.local_cb_mask;
+                setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
                 cb_l1_base =
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
-                end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
+                uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                 experimental::setup_remote_cb_interfaces<true>(
                     cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
                 barrier_remote_cb_interface_setup(noc_index, end_cb_index);
