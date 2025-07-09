@@ -15,6 +15,7 @@ import ttnn
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
+from models.demos.deepseek_v3.utils.run_config import create_run_config
 
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3_impl.model import MLA, ModelArgs, precompute_freqs_cis
@@ -149,15 +150,17 @@ def test_forward_pass(
     weight_config = MLA1D.convert_weights(hf_config, reference_model.state_dict(), temp_dir, mesh_device)
 
     # Generate appropriate configs
-    ccl = CCL1D(mesh_device, hf_config)
-    model_prefill_config = MLA1D.prefill_model_config(hf_config, mesh_device, ccl)
-    model_decode_config = MLA1D.decode_model_config(hf_config, mesh_device, ccl)
+    ccl = CCL1D(hf_config, mesh_device)
+    if mode == "prefill":
+        model_config = MLA1D.prefill_model_config(hf_config, mesh_device, ccl)
+    else:
+        model_config = MLA1D.decode_model_config(hf_config, mesh_device, ccl)
+
+    # Create a new model state
+    model_state = MLA1D.create_state(hf_config, mesh_device=mesh_device)
 
     # Create RunConfig using both weight_config and model_config
-    run_prefill_config, run_decode_config = MLA1D.run_config(
-        model_prefill_config, model_decode_config, weight_config, mesh_device
-    )
-    run_config = run_prefill_config if mode == "prefill" else run_decode_config
+    run_config = create_run_config(model_config, weight_config, model_state)
 
     ############################
     ### Torch inputs

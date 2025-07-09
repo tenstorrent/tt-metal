@@ -28,6 +28,7 @@ from models.utility_functions import nearest_y
 from transformers import AutoConfig
 from types import SimpleNamespace
 
+from models.demos.deepseek_v3.utils.run_config import create_run_config
 
 TP = 8
 DP = 4
@@ -729,8 +730,10 @@ def run_rmsnorm_impl(
         # Check that the shape is a function
         assert callable(shape), "Shape must be callable for prefill tests with variable sequence length."
         input_shape = shape(seq_len)
+        mode = "prefill"
     else:  # Decode
         input_shape = shape
+        mode = "decode"
 
     logger.info("Running RMSNorm with the following configurations:")
     logger.info(f"Shape: {input_shape}, Dtype: {dtype}, Memory Config: {mem_config}")
@@ -760,15 +763,20 @@ def run_rmsnorm_impl(
     weight_config = RMSNorm.convert_weights(hf_config, state_dict, temp_dir, device, norm_category=norm_category)
 
     # Generate appropriate config
-    model_decode_config = RMSNorm.decode_model_config(hf_config, device, norm_category=norm_category)
-    model_prefill_config = RMSNorm.prefill_model_config(hf_config, device, norm_category=norm_category)
+    if mode == "prefill":
+        model_config = RMSNorm.prefill_model_config(hf_config, device, norm_category=norm_category)
+    else:
+        model_config = RMSNorm.decode_model_config(hf_config, device, norm_category=norm_category)
+
+    model_state = RMSNorm.create_state(hf_config, mesh_device=device)
 
     # Create RunConfig using both weight_config and model_config
-    run_prefill_config, run_decode_config = RMSNorm.run_config(
-        model_prefill_config, model_decode_config, weight_config, device
-    )
+    run_config = create_run_config(model_config, weight_config, model_state)
 
-    tt_out = RMSNorm.forward_decode(tt_input, run_decode_config, None)
+    if mode == "prefill":
+        tt_out = RMSNorm.forward_prefill(tt_input, run_config)
+    else:
+        tt_out = RMSNorm.forward_decode(tt_input, run_config)
     tt_out_torch = ttnn.to_torch(tt_out)
 
     #################

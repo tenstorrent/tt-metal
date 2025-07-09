@@ -17,13 +17,16 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     FromWeightConfig,
     LinearConfig,
     MeshDeviceStub,
+    ReshardConfig,
+)
+from models.demos.deepseek_v3.utils.config_helpers import save_and_get_path
+from models.demos.deepseek_v3.utils.run_config import (
+    MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,
-    ReshardConfig,
     RunPrefillConfig,
     WeightConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import save_and_get_path
 from models.utility_functions import nearest_y
 
 
@@ -265,37 +268,37 @@ class MLA1D(AbstractModule):
         config["hf_config"] = hf_config
 
         config["wq_a"] = LinearConfig(
-            input_tensor_b=FromWeightConfig(),
+            input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=None,
         )
 
         config["wq_b"] = LinearConfig(
-            input_tensor_b=FromWeightConfig(),
+            input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=None,
         )
 
         config["wkv_a"] = LinearConfig(
-            input_tensor_b=FromWeightConfig(),
+            input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=None,
         )
 
         config["wkv_b1"] = LinearConfig(
-            input_tensor_b=FromWeightConfig(),
+            input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=None,
         )
 
         config["wkv_b2"] = LinearConfig(
-            input_tensor_b=FromWeightConfig(),
+            input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=None,
         )
 
         config["wo"] = LinearConfig(
-            input_tensor_b=FromWeightConfig(),
+            input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=None,
         )
@@ -374,39 +377,40 @@ class MLA1D(AbstractModule):
         config: ModelDecodeConfig = {}
 
         config["hf_config"] = hf_config
+        config["mesh_shape"] = list(mesh_device.shape)
 
         config["wq_a"] = LinearConfig(
-            input_tensor_b=FromWeightConfig(),
+            input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=None,
         )
 
         config["wq_b"] = LinearConfig(
-            input_tensor_b=FromWeightConfig(),
+            input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=None,
         )
 
         config["wkv_a"] = LinearConfig(
-            input_tensor_b=FromWeightConfig(),
+            input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=None,
         )
 
         config["wkv_b1"] = LinearConfig(
-            input_tensor_b=FromWeightConfig(),
+            input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=None,
         )
 
         config["wkv_b2"] = LinearConfig(
-            input_tensor_b=FromWeightConfig(),
+            input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=None,
         )
 
         config["wo"] = LinearConfig(
-            input_tensor_b=FromWeightConfig(),
+            input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=None,
         )
@@ -587,14 +591,11 @@ class MLA1D(AbstractModule):
         return config
 
     @classmethod
-    def _new_state(
+    def create_state(
         cls,
-        stateless_run_prefill_config: AbstractModule.StatelessRunPrefillConfig,
-        stateless_run_decode_config: AbstractModule.StatelessRunDecodeConfig,
+        hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
     ) -> Any:
-        hf_config = stateless_run_prefill_config["hf_config"]
-
         kv_lora_rank = hf_config.kv_lora_rank
         qk_rope_head_dim = hf_config.qk_rope_head_dim
         max_seq_len = hf_config.max_seq_len
@@ -623,7 +624,7 @@ class MLA1D(AbstractModule):
             # TODO: Add caching
         )
 
-        return {"kvpe_cache": tt_cache, "mesh_device": mesh_device}
+        return {"kvpe_cache": tt_cache, MESH_DEVICE_STATE_DICT_KEY: mesh_device}
 
     @classmethod
     def forward_decode(
@@ -631,12 +632,9 @@ class MLA1D(AbstractModule):
     ) -> ttnn.Tensor:
         """Straightforward forward pass for decode mode"""
 
-        mesh_device = cfg["mesh_device"]
-        mesh_shape = list(mesh_device.shape)
-
         hf_config = cfg["hf_config"]
         num_heads = hf_config.num_attention_heads
-        num_heads_local = num_heads // mesh_shape[0]
+        num_heads_local = num_heads // cfg["mesh_shape"][0]
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
         qk_rope_head_dim = hf_config.qk_rope_head_dim
@@ -654,7 +652,7 @@ class MLA1D(AbstractModule):
         tt_q = ttnn.experimental.reduce_scatter_async(tt_q, **cfg["wq_a_rs"])
         tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag"])
 
-        tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"], None)
+        tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
 
         # TODO: Use local heads here
@@ -701,7 +699,7 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(tt_kv)
 
         # KV Norm
-        tt_kv_nope = RMSNorm.forward_decode(tt_kv_nope, cfg["kv_norm"], None)
+        tt_kv_nope = RMSNorm.forward_decode(tt_kv_nope, cfg["kv_norm"])
 
         # KV RoPE
         tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, bsz_local, 1, qk_rope_head_dim]

@@ -12,8 +12,8 @@ class CCL1D:
 
     def __init__(
         self,
-        mesh_device,
         hf_config,
+        mesh_device,
     ):
         self.mesh_device = mesh_device
         self.grid = mesh_device.compute_with_storage_grid_size()
