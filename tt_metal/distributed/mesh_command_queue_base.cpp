@@ -23,7 +23,6 @@ namespace tt::tt_metal::distributed {
 
 void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const void* src) {
     auto global_buffer_shape = buffer.global_shard_spec().global_buffer_shape;
-    auto global_buffer_size = buffer.global_shard_spec().global_size;
 
     auto shard_shape = buffer.physical_shard_shape();
     auto datum_size_bytes = buffer.datum_size_bytes();

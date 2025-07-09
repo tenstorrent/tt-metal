@@ -175,7 +175,6 @@ bool test_load_write_read_risc_binary(
                                    .hal()
                                    .get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx)
                                    .local_init_addr;
-    auto core_type = tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type(core_type_idx);
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
