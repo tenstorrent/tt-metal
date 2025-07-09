@@ -81,6 +81,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     // Cannot have CCL workers on the same cores as the worker_receiver (for now!)
     auto sub_device_core_range_set = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0)));
+    log_info(
+        tt::LogOp, "sub_device_core_range_set: {}", corerange_to_cores(sub_device_core_range_set, std::nullopt, true));
     auto intermediate_tensor_cores = intermediate_tensor.memory_config().shard_spec()->grid;
     auto available_cores = sub_device_core_range_set.subtract(intermediate_tensor_cores);
 

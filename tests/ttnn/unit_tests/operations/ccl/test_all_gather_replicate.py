@@ -27,6 +27,12 @@ SUB_DEVICE_CRS = ttnn.CoreRangeSet(
         ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
     ]
 )
+MCAST_CRS = ttnn.CoreRangeSet(
+    [
+        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 9)),
+    ]
+)
+MCAST_NUM_CORES = 60
 QKV_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 10, SUB_DEVICE_CRS, row_wise=True)
 RING_CRS = ttnn.CoreRangeSet(
     [
@@ -105,7 +111,12 @@ def run_all_gather_replicate_impl(
     intermediate_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
         ttnn.CoreCoord(1, 0), intermediate_num_cores, SUB_DEVICE_CRS, row_wise=True
     )
+    aggregated_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+        ttnn.CoreCoord(1, 0), MCAST_NUM_CORES, MCAST_CRS, row_wise=True
+    )
     intermediate_shape = [*cluster_shape, M, N * cluster_shape[cluster_axis]]
+    aggregated_shape = [*cluster_shape, M * intermediate_num_cores, N * MCAST_NUM_CORES]
+
     interemediate_N_per_shard = round_up(math.ceil(intermediate_shape[-1] / intermediate_num_cores), ttnn.TILE_SIZE)
 
     # Output shapes
@@ -128,6 +139,15 @@ def run_all_gather_replicate_impl(
         ttnn.ShardSpec(
             intermediate_core_range_set,
             [M, interemediate_N_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    aggregated_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            aggregated_core_range_set,
+            [M * intermediate_num_cores, interemediate_N_per_shard],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -166,15 +186,16 @@ def run_all_gather_replicate_impl(
         # breakpoint()
         tt_intermediate_tensors.append(tt_intermediate_tensor)
 
-    aggregated_tensor = torch.zeros(intermediate_shape)
+    aggregated_tensor = torch.zeros(aggregated_shape)
     tt_aggregated_tensor = ttnn.from_torch(
         aggregated_tensor,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=input_dtype,
-        memory_config=intermediate_mem_config,
+        memory_config=aggregated_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
+    breakpoint()
     # All Gather Replicate Golden
     output_tensor_goldens_list = []
     for i in range(num_iters):
