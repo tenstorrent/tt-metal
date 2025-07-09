@@ -43,5 +43,5 @@ def pytest_addoption(parser):
         action="store",
         default=False,
         type=bool,
-        help="Whether to copmute top1 and top5 exact token mathcing accuracy",
+        help="Whether to copmute top1 and top5 exact token matching accuracy",
     )
