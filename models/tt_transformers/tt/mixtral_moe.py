@@ -122,7 +122,7 @@ class TtMoeLayer(LightweightModule):
             mask_B2.deallocate(True)
 
         gate_logits_1SB8.deallocate()
-
+        breakpoint()
         # MLP and masking
         weights = expert_i_HH(input_i_1SBH, mode=mode)
         if mode == "prefill":

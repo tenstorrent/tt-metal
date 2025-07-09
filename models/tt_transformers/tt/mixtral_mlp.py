@@ -119,8 +119,7 @@ class TtMixtralMLP(LightweightModule):
             if seq_len >= 2048:  # Reshape back to intended shape
                 w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, self.model_args.dim])
 
-        else:  # Decode mode
-            breakpoint()
+        else:  # Decode
             w1_out = ttnn.matmul(
                 x,
                 self.w1,
