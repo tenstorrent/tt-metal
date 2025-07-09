@@ -257,12 +257,29 @@ void DevicePool::initialize(
     // Never skip for TG Cluster
     bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
     bool skip = !is_galaxy;
+    bool any_remote_devices = false;
 
-    // Must open all devices in cluster to use fabric
+    // Fabric requires all devices to be open even though dispatch
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
     if (_inst->using_fast_dispatch && tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
-        device_ids_to_open.clear();
-        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
-            device_ids_to_open.push_back(id);
+        // Check if fabric needs to be enabled (any remote devices).
+        // Note, all devices must be open to use fabric. This check will happen in add_devices_to_pool.
+        for (auto dev_id : device_ids_to_open) {
+            any_remote_devices =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id) != dev_id;
+            if (any_remote_devices) {
+                break;
+            }
+        }
+        // Must launch for TG
+        any_remote_devices |= is_galaxy;
+
+        // Must open all devices in cluster to use fabric
+        if (any_remote_devices) {
+            device_ids_to_open.clear();
+            for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+                device_ids_to_open.push_back(id);
+            }
         }
     }
 
@@ -294,40 +311,20 @@ void DevicePool::initialize(
     // May be called again below
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
-    // Try to enable FD on Fabric if dispatching to remote devices. Fabric can only be enabled if all devices are open.
-    // If not, then fallback to tunneling.
-    // First check if all devices are enabled and if there any any remote devices. Then set the appropriate mode.
-    bool any_remote_devices = false;
-    // Fabric requires all devices to be open even though dispatch
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
-        // Check if fabric needs to be enabled (any remote devices).
-        // Note, all devices must be open to use fabric. This check will happen in add_devices_to_pool.
-        for (auto dev_id : device_ids_to_open) {
-            any_remote_devices =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id) != dev_id;
-            if (any_remote_devices) {
-                break;
-            }
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric() && any_remote_devices) {
+        FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+        if (fabric_config == FabricConfig::DISABLED) {
+            tt::tt_metal::detail::SetFabricConfig(
+                FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+            // Call initialize again because previously it was a no-op
+            tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+            fabric_config = FabricConfig::FABRIC_1D;
+        } else {
+            // Use the same mode
+            tt::tt_metal::detail::SetFabricConfig(
+                fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
         }
-        // Must launch for TG
-        any_remote_devices |= tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
-
-        if (any_remote_devices) {
-            FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-            if (fabric_config == FabricConfig::DISABLED) {
-                tt::tt_metal::detail::SetFabricConfig(
-                    FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-                // Call initialize again because previously it was a no-op
-                tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-                fabric_config = FabricConfig::FABRIC_1D;
-            } else {
-                // Use the same mode
-                tt::tt_metal::detail::SetFabricConfig(
-                    fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-            }
-            log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs);
-        }
+        log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs);
     }
 
     _inst->skip_remote_devices = skip;
@@ -922,6 +919,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
         tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
+        log_info(tt::LogMetal, "Fabric disabled after closing devices");
     }
 
     return pass;
