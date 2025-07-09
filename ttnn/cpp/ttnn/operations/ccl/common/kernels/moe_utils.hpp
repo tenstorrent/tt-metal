@@ -131,4 +131,103 @@ inline void dispatch_input_remote_device(
     dispatch_noc_uni<MaxPacketSzBytes>(
         payload_l1_address, noc_payload_write_address, size_bytes, fabric_connections[route], alignment, packet_header);
 }
+
+bool has_wrap_around(tt::tt_fabric::Topology topology) {
+    return topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus;
+}
+
+bool is_1d_topology(tt::tt_fabric::Topology topology) {
+    return topology == tt::tt_fabric::Topology::Linear || topology == tt::tt_fabric::Topology::Ring;
+}
+
+bool is_2d_topology(tt::tt_fabric::Topology topology) {
+    return topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus;
+}
+
+template <uint32_t mesh_cols, uint32_t mesh_rows>
+std::pair<uint32_t, uint32_t> get_mesh_coords(uint32_t linearized_mesh_coord) {
+    // {row, column}
+    return {linearized_mesh_coord / mesh_cols, linearized_mesh_coord % mesh_cols};
+}
+
+template <tt::tt_fabric::Topology topology>
+uint32_t distance(uint32_t position_1, uint32_t position_2, uint32_t axis_size) {
+    if (position_1 == position_2) {
+        return 0;
+    }
+    uint32_t line_distance = std::abs(int(position_2) - int(position_1));
+    if (has_wrap_around(topology)) {
+        return std::min(line_distance, axis_size - line_distance);
+    } else {
+        return line_distance;
+    }
+}
+
+template <tt::tt_fabric::Topology topology, uint32_t mesh_cols, uint32_t mesh_rows>
+uint32_t manhattan_distance(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
+    auto [src_row, src_col] = get_mesh_coords<mesh_cols, mesh_rows>(linearized_src_mesh_coord);
+    auto [dest_row, dest_col] = get_mesh_coords<mesh_cols, mesh_rows>(linearized_dest_mesh_coord);
+    return distance<topology>(src_row, dest_row, mesh_rows) + distance<topology>(src_col, dest_col, mesh_cols);
+}
+
+template <tt::tt_fabric::Topology topology, uint32_t mesh_cols, uint32_t mesh_rows>
+uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
+    auto [src_row, src_col] = get_mesh_coords<mesh_cols, mesh_rows>(linearized_src_mesh_coord);
+    auto [dest_row, dest_col] = get_mesh_coords<mesh_cols, mesh_rows>(linearized_dest_mesh_coord);
+
+    if (src_row == dest_row) {
+        if (!has_wrap_around(topology)) {
+            return src_col < dest_col ? eth_chan_directions::EAST : eth_chan_directions::WEST;
+        } else {
+            // with wrap around, we can go either East or West. Choose the shorter route
+            uint32_t east_distance = distance<tt::tt_fabric::Topology::Mesh>(src_col, dest_col, mesh_cols);
+            uint32_t west_distance = distance<tt::tt_fabric::Topology::Mesh>(src_col, dest_col, mesh_cols);
+            return east_distance < west_distance ? eth_chan_directions::EAST : eth_chan_directions::WEST;
+        }
+    } else if (src_col == dest_col) {
+        if (!has_wrap_around(topology)) {
+            return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
+        } else {
+            // with wrap around, we can go either North or South. Choose the shorter route
+            uint32_t north_distance = distance<tt::tt_fabric::Topology::Mesh>(src_row, dest_row, mesh_rows);
+            uint32_t south_distance = distance<tt::tt_fabric::Topology::Mesh>(src_row, dest_row, mesh_rows);
+            return north_distance < south_distance ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
+        }
+    } else {
+        // when diagonal, we go North or South first, then East or West
+        // so we route either North or South
+        if (!has_wrap_around(topology)) {
+            return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
+        } else {
+            // with wrap around, we can go either North or South. Choose the shorter route
+            uint32_t north_distance = distance<tt::tt_fabric::Topology::Mesh>(src_row, dest_row, mesh_rows);
+            uint32_t south_distance = distance<tt::tt_fabric::Topology::Mesh>(src_row, dest_row, mesh_rows);
+            return north_distance < south_distance ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
+        }
+    }
+}
+
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    uint32_t MeshCols,
+    uint32_t MeshRows,
+    int32_t MaxPacketSzBytes,
+    tt::tt_fabric::Topology topology>
+inline void dispatch_input_remote_device_1d(
+    const uint32_t linearized_dest_mesh_coord,
+    const uint32_t alignment,
+    int32_t size_bytes,
+    uint32_t payload_l1_address,
+    uint64_t noc_payload_write_address,
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header) {
+    uint32_t distance =
+        manhattan_distance<topology, MeshCols, MeshRows>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    packet_header->to_chip_unicast(distance);
+
+    uint32_t route = get_route<topology, MeshCols, MeshRows>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    dispatch_noc_uni<MaxPacketSzBytes>(
+        payload_l1_address, noc_payload_write_address, size_bytes, fabric_connections[route], alignment, packet_header);
+}
+
 }  // namespace ttnn::operations::ccl::common
