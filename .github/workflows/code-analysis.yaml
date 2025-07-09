@@ -95,6 +95,11 @@ jobs:
       - name: Update submodule
         id: update-submodule
         run: |
+          # Force all GitHub URLs to use anonymous HTTPS (in case SSH/auth was stored)
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "https://x-access-token@github.com/"
+          
           cd ${{ env.SUBMODULE_PATH }}
           OLD_SHA=$(git rev-parse --short=7 HEAD)
           echo "old-sha=$OLD_SHA" >> $GITHUB_OUTPUT
