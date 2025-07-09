@@ -78,29 +78,24 @@ def get_initiated_by():
         return get_username()
 
 
-# --- PostgreSQL Configuration ---
-def get_postgres_config(env="dev"):
-    if env == "prod":
-        # Replace with your production credentials
-        return {
-            "host": "corp_postgres_host",
-            "port": 5432,
-            "database": "unit_test_results",
-            "user": "username",
-            "password": "password",
-        }
-    elif env == "dev":
-        # Replace with your development credentials if needed
-        # Using placeholder credentials from sweeps_runner.py
-        return {
-            "host": "ep-misty-surf-a5lm1q6p-pooler.us-east-2.aws.neon.tech",
-            "port": 5432,
-            "database": "sweeps",
-            "user": "sweeps_owner",
-            "password": "npg_F7dqCB2ujKYx",
-        }
-    else:
-        raise ValueError(f"Unknown PostgreSQL environment: {env}")
+def get_postgres_config(env="prod"):
+    config = {
+        "host": os.getenv("POSTGRES_HOST"),
+        "port": os.getenv("POSTGRES_PORT", "5432"),
+        "database": os.getenv("POSTGRES_DATABASE"),
+        "user": os.getenv("POSTGRES_USER"),
+        "password": os.getenv("POSTGRES_PASSWORD"),
+    }
+
+    required_vars = ["host", "database", "user", "password"]
+    missing_keys = [key for key in required_vars if config[key] is None]
+
+    if missing_keys:
+        env_vars_to_set = [f"POSTGRES_{key.upper()}" for key in missing_keys]
+        raise ValueError(f"Missing required PostgreSQL environment variables: {', '.join(env_vars_to_set)}")
+
+    config["port"] = int(config["port"])
+    return config
 
 
 # --- Database Operations ---
@@ -400,7 +395,9 @@ def run_tests_in_file(file_path: pathlib.Path):
 # --- Main Execution ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unit Test Runner with PostgreSQL reporting.")
-    parser.add_argument("test_path", type=str, help="Path to a test file or a directory of tests.")
+    parser.add_argument(
+        "test_paths", type=str, help="A comma-separated list of paths to test files or directories to run."
+    )
     parser.add_argument(
         "--postgres-env",
         default="dev",
@@ -419,8 +416,12 @@ if __name__ == "__main__":
     run_id = push_run(pg_config, run_start_time)
 
     # 3. Discover and run tests
-    test_path = pathlib.Path(args.test_path)
-    all_results = discover_and_run_tests(test_path)
+    test_paths_list = [path.strip() for path in args.test_paths.split(",")]
+    all_results = {}
+    for test_path_str in test_paths_list:
+        test_path = pathlib.Path(test_path_str)
+        results_for_path = discover_and_run_tests(test_path)
+        all_results.update(results_for_path)
 
     # 4. Push results to the database
     overall_statuses = []
