@@ -3,9 +3,11 @@ Tests:
     fabric_setup:
       topology: Ring
 
+    parametrization_params:
+      ntype: [unicast_write, fused_atomic_inc]
+
     defaults:
       ftype: unicast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
@@ -16,9 +18,11 @@ Tests:
     fabric_setup:
       topology: Ring
 
+    parametrization_params:
+      ntype: [unicast_write, fused_atomic_inc]
+
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
@@ -29,9 +33,11 @@ Tests:
     fabric_setup:
       topology: Ring
 
+    parametrization_params:
+      ntype: [unicast_write, fused_atomic_inc]
+
     defaults:
       ftype: unicast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
@@ -42,9 +48,11 @@ Tests:
     fabric_setup:
       topology: Ring
 
+    parametrization_params:
+      ntype: [unicast_write, fused_atomic_inc]
+
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 1024
       num_packets: 100
 
