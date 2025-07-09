@@ -35,7 +35,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
         });
 
     // Create write kernel
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     switch (dtype) {
         case DataType::BFLOAT16: writer_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
         case DataType::INT32: writer_defines["OUTPUT_DTYPE_INT32"] = "1"; break;
