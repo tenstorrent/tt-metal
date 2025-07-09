@@ -422,22 +422,22 @@ if __name__ == "__main__":
     test_path = pathlib.Path(args.test_path)
     all_results = discover_and_run_tests(test_path)
 
-    # # 4. Push results to the database
-    # overall_statuses = []
-    # if not all_results:
-    #     print("No test results to report.")
-    #     run_status = "success"  # or 'error' if no tests found is an error
-    # else:
-    #     for file_path, results in all_results.items():
-    #         if results:
-    #             test_status = push_test_and_cases(pg_config, run_id, file_path, results)
-    #             overall_statuses.append(test_status)
-    #     run_status = map_test_status_to_run_status(overall_statuses)
+    # 4. Push results to the database
+    overall_statuses = []
+    if not all_results:
+        print("No test results to report.")
+        run_status = "success"  # or 'error' if no tests found is an error
+    else:
+        for file_path, results in all_results.items():
+            if results:
+                test_status = push_test_and_cases(pg_config, run_id, file_path, results)
+                overall_statuses.append(test_status)
+        run_status = map_test_status_to_run_status(overall_statuses)
 
-    # # 5. Finalize the run
-    # run_end_time = dt.datetime.now()
-    # update_run(pg_config, run_id, run_end_time, run_status)
+    # 5. Finalize the run
+    run_end_time = dt.datetime.now()
+    update_run(pg_config, run_id, run_end_time, run_status)
 
-    # print(f"\nRun completed with status: {run_status.upper()}")
-    # if run_status == "failure" or run_status == "error":
-    #     sys.exit(1)
+    print(f"\nRun completed with status: {run_status.upper()}")
+    if run_status == "failure" or run_status == "error":
+        sys.exit(1)

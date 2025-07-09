@@ -1157,24 +1157,23 @@ def disable_profiler():
 
 
 def get_postgres_config(env="prod"):
-    if env == "prod":
-        return {
-            "host": "corp_postgres_host",
-            "port": 5432,
-            "database": "sweeps_results",
-            "user": "username",
-            "password": "password",
-        }
-    elif env == "dev":
-        return {
-            "host": "ep-misty-surf-a5lm1q6p-pooler.us-east-2.aws.neon.tech",
-            "port": 5432,
-            "database": "sweeps",
-            "user": "sweeps_owner",
-            "password": "npg_TEBDYL0pUXs4",
-        }
-    else:
-        raise ValueError(f"Unknown PostgreSQL environment: {env}")
+    config = {
+        "host": os.getenv("POSTGRES_HOST"),
+        "port": os.getenv("POSTGRES_PORT", "5432"),
+        "database": os.getenv("POSTGRES_DATABASE"),
+        "user": os.getenv("POSTGRES_USER"),
+        "password": os.getenv("POSTGRES_PASSWORD"),
+    }
+
+    required_vars = ["host", "database", "user", "password"]
+    missing_keys = [key for key in required_vars if config[key] is None]
+
+    if missing_keys:
+        env_vars_to_set = [f"POSTGRES_{key.upper()}" for key in missing_keys]
+        raise ValueError(f"Missing required PostgreSQL environment variables: {', '.join(env_vars_to_set)}")
+
+    config["port"] = int(config["port"])
+    return config
 
 
 if __name__ == "__main__":
