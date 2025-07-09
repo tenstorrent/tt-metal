@@ -110,7 +110,7 @@ jobs:
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
       - name: tests 1
-        id: generate-device-perf-report
+        id: generate-device-perf-report-1
         timeout-minutes: ${{ matrix.test-info.timeout }}
         env:
           TRACY_NO_INVARIANT_CHECK: 1
@@ -126,7 +126,7 @@ jobs:
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       - name: tests 2
-        id: generate-device-perf-report
+        id: generate-device-perf-report-2
         timeout-minutes: ${{ matrix.test-info.timeout }}
         env:
           TRACY_NO_INVARIANT_CHECK: 1
@@ -142,7 +142,7 @@ jobs:
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       - name: tests 3
-        id: generate-device-perf-report
+        id: generate-device-perf-report-3
         timeout-minutes: ${{ matrix.test-info.timeout }}
         env:
           TRACY_NO_INVARIANT_CHECK: 1
