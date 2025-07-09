@@ -115,8 +115,6 @@ inline void dispatch_input_remote_device(
     uint64_t noc_payload_write_address,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header) {
-    // Clear the header buffer region.
-
     const uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
@@ -141,7 +139,8 @@ inline void dispatch_noc_uni_fused_sem_inc(
     uint16_t increment_value,
     bool flush,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
-    volatile PACKET_HEADER_TYPE* packet_header) {
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t alignment) {
     while (size > 0) {
         uint32_t curr_packet_size = std::min(FabricMaxPacketSize, (uint32_t)size);
 
@@ -150,11 +149,11 @@ inline void dispatch_noc_uni_fused_sem_inc(
             packet_header->to_noc_fused_unicast_write_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
                     noc_payload_write_address, noc_remote_semaphore_address, increment_value, 32, flush),
-                curr_packet_size);
+                align(curr_packet_size, alignment));
         } else {
             // Fill header for fused unicast + atomic increment command when it is not the last packet
             packet_header->to_noc_unicast_write(
-                tt::tt_fabric::NocUnicastCommandHeader{noc_payload_write_address}, curr_packet_size);
+                tt::tt_fabric::NocUnicastCommandHeader{noc_payload_write_address}, align(curr_packet_size, alignment));
         }
 
         // Send payload followed by header over the fabric.
@@ -180,7 +179,8 @@ inline void dispatch_chip_uni_noc_uni_fused_sem_inc(
     uint16_t increment_value,
     bool flush,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
-    volatile PACKET_HEADER_TYPE* packet_header) {
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t alignment) {
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
@@ -200,7 +200,8 @@ inline void dispatch_chip_uni_noc_uni_fused_sem_inc(
         increment_value,
         flush,
         fabric_connections[route],
-        packet_header);
+        packet_header,
+        alignment);
 }
 
 bool has_wrap_around(tt::tt_fabric::Topology topology) {

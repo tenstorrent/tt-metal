@@ -232,7 +232,8 @@ void kernel_main() {
                         1,
                         true,
                         fabric_connections,
-                        metadata_packet_header);
+                        metadata_packet_header,
+                        alignment);
                 }
             }
         }
@@ -259,7 +260,8 @@ void kernel_main() {
                     1,
                     true,
                     fabric_connections,
-                    metadata_packet_header);
+                    metadata_packet_header,
+                    alignment);
             }
         }
     }
