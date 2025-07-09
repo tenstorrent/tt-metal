@@ -4,6 +4,7 @@
 
 #include "dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "debug/dprint.h"
 
 inline uint32_t get_read_tile_id(uint32_t output_tile_id, uint32_t reduce_tile_size, uint32_t inner_tile_size) {
     return ((output_tile_id / inner_tile_size) * reduce_tile_size) + (output_tile_id % inner_tile_size);
@@ -41,14 +42,20 @@ void kernel_main() {
     uint32_t input_granularity_index = 0;
 
     for (uint32_t outer_id = start_id; outer_id < start_id + id_range_length; outer_id += outer_id_increment) {
-        for (uint32_t id_offset = 0; id_offset < shard_factor; id_offset++) {
+        for (uint32_t id_offset = 0; id_offset < shard_factor; ++id_offset) {
             uint32_t i = outer_id + id_offset;
             auto read_tile_id = (dim == 0) ? (i) : (get_read_tile_id(i, reduce_tile_size, inner_tile_size));
             for (uint32_t j = 0; j < num_input_tiles; ++j) {
+                DPRINT << dim << " RTI " << read_tile_id << " i " << i << " outer_id " << outer_id << " id_offset "
+                       << id_offset << " j " << j << " start_id " << start_id << " irl " << id_range_length << " oii "
+                       << outer_id_increment << " sf " << shard_factor << " nit " << num_input_tiles << " igi "
+                       << input_granularity_index << ENDL();
                 if (input_granularity_index == 0) {
                     cb_reserve_back(cb_id_in0, input_granularity);
                     l1_write_addr_in0 = get_write_ptr(cb_id_in0);
                 }
+                DPRINT << "READ TILE " << read_tile_id << " x " << (uint32_t)my_x[0] << " y " << (uint32_t)my_y[0]
+                       << " " << ENDL();
                 noc_async_read_tile(read_tile_id, tensor_accessor, l1_write_addr_in0);
                 l1_write_addr_in0 += input_tile_bytes;
                 read_tile_id += inner_tile_size;
