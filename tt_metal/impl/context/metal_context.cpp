@@ -526,61 +526,6 @@ void MetalContext::initialize_control_plane() {
 
 void MetalContext::reset_cores(chip_id_t device_id) {
     ZoneScoped;
-
-    auto get_active_erisc_launch_flag_addr = [&]() {
-        auto core_type_idx = hal_->get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-        std::uint32_t launch_erisc_addr = hal_->get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
-        return launch_erisc_addr;
-    };
-
-    auto erisc_app_still_running = [&](CoreCoord virtual_core) {
-        // Check if the kernel/erisc_app is still running on a ethernet core with context switching enabled
-        // The LAUNCH_ERISC_APP_FLAG is reset to 0 after reset/reboot, and set to 1 when Metal runtime launches erisc
-        // app FW Only applicable to WORMHOLE ethernet cores today, but could in theory extend to other cores, remove
-        // assert if so
-        if (cluster_->arch() != ARCH::WORMHOLE_B0) {
-            return false;
-        }
-        TT_ASSERT(
-            cluster_->is_ethernet_core(virtual_core, device_id),
-            "Invalid core {} for context switch check",
-            virtual_core.str());
-        std::uint32_t launch_erisc_addr = get_active_erisc_launch_flag_addr();
-        auto data = tt::llrt::read_hex_vec_from_core(device_id, virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
-        return (data[0] != 0);
-    };
-
-    // Send exit_erisc_kernel to the launch message
-    auto erisc_send_exit_signal = [&](CoreCoord virtual_core, bool is_idle_eth) {
-        go_msg_t go_msg;
-        std::memset(&go_msg, 0, sizeof(go_msg_t));
-        log_info(
-            tt::LogMetal,
-            "While initializing device {}, {} ethernet dispatch core {} detected as still "
-            "running, issuing exit signal.",
-            device_id,
-            is_idle_eth ? "idle" : "active",
-            virtual_core.str());
-
-        DeviceAddr launch_addr = hal_->get_dev_addr(
-            is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
-            HalL1MemAddrType::LAUNCH);
-
-        std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-        data = tt::llrt::read_hex_vec_from_core(device_id, virtual_core, launch_addr, sizeof(launch_msg_t));
-
-        launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
-        launch_msg->kernel_config.exit_erisc_kernel = 1;
-        llrt::write_launch_msg_to_core(device_id, virtual_core, launch_msg, &go_msg, launch_addr, false);
-
-        if (!is_idle_eth) {
-            // Active
-            std::vector<uint32_t> clear_flag_data = {0};
-            tt::llrt::write_hex_vec_to_core(
-                device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
-        }
-    };
-
     auto mmio_device_id = cluster_->get_associated_mmio_device(device_id);
     // Assert worker cores + dispatch cores, in case they were in a bad state from before.
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
