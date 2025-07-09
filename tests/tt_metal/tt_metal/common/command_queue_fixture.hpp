@@ -10,6 +10,7 @@
 #include "gtest/gtest.h"
 #include "dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
 #include <tt-metalium/host_api.hpp>
@@ -341,20 +342,28 @@ public:
 
 class CommandQueueMultiDeviceOnFabricFixture : public CommandQueueMultiDeviceFixture,
                                                public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
+private:
+    inline static ARCH arch_ = tt::ARCH::Invalid;
+    inline static bool is_galaxy_ = false;
+
 protected:
     // Multiple fabric configs so need to reset the devices for each test
-    static void SetUpTestSuite() {}
+    static void SetUpTestSuite() {
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        is_galaxy_ = tt::tt_metal::IsGalaxyCluster();
+    }
+
     static void TearDownTestSuite() {}
 
     void SetUp() override {
         if (CommandQueueMultiDeviceFixture::ShouldSkip()) {
             GTEST_SKIP() << CommandQueueMultiDeviceFixture::GetSkipMessage();
         }
-        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
+        if (arch_ != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
         }
         // Skip for TG as it's still being implemented
-        if (tt::tt_metal::IsGalaxyCluster()) {
+        if (is_galaxy_) {
             GTEST_SKIP();
         }
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);

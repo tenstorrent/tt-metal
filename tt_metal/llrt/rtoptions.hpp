@@ -342,7 +342,12 @@ public:
         }
     }
     inline std::string get_compile_hash_string() const {
-        std::string compile_hash_str = fmt::format("{}_{}", get_watcher_enabled(), get_kernels_early_return());
+        std::string compile_hash_str = fmt::format(
+            "{}_{}_{}_{}",
+            get_watcher_enabled(),
+            get_kernels_early_return(),
+            get_fd_fabric(),
+            get_erisc_iram_enabled());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);

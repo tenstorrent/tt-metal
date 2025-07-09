@@ -1047,6 +1047,7 @@ void test_basic_dispatch_functions(IDevice* device, int cq_id) {
     }
 
     // non blocking fast data movement APIs
+    log_info(tt::LogMetal, "Writing data from buffer after non-blocking writes");
     for (int iteration = 0; iteration < k_Iterations; ++iteration) {
         for (int i = 0; i < k_LoopPerDev; ++i) {
             EnqueueWriteBuffer(cq, *buffer, src_data_1, false);
@@ -1054,6 +1055,7 @@ void test_basic_dispatch_functions(IDevice* device, int cq_id) {
     }
 
     std::vector<uint32_t> dst_data;
+    log_info(tt::LogMetal, "Reading data from buffer after non-blocking writes");
     for (int iteration = 0; iteration < k_Iterations; ++iteration) {
         for (int i = 0; i < k_LoopPerDev; ++i) {
             EnqueueReadBuffer(cq, *buffer, dst_data, false);
