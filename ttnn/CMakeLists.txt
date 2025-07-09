@@ -48,9 +48,8 @@ target_sources(
         core/device.cpp
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp
+        core/distributed/distributed_tensor_config.cpp
         core/distributed/topology_config.cpp
-        core/distributed/distributed_tensor_config.cpp
-        core/distributed/distributed_tensor_config.cpp
         core/events.cpp
         core/global_circular_buffer.cpp
         core/global_semaphore.cpp

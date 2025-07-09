@@ -21,6 +21,9 @@ struct TopologyConfig {
     tt::tt_metal::distributed::MeshShape mesh_shape;
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords;
     tt::stl::SmallVector<Placement> placements;
+
+    tt::tt_metal::distributed::MeshCoordinate get_neighbor(
+        const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 };
 
 }  // namespace tt::tt_metal
