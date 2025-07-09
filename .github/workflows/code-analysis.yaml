@@ -94,7 +94,7 @@ jobs:
 
       - name: Update submodule
         id: update-submodule
-        run: |        
+        run: |
           cd ${{ env.SUBMODULE_PATH }}
           # ✅ Override submodule remote URL to anonymous HTTPS
           git remote set-url origin https://github.com/tenstorrent/tt_llk.git
