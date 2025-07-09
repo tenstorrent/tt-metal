@@ -16,6 +16,7 @@
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -198,7 +199,9 @@ Result conv2d_DRAM(
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
-    TT_FATAL(output_dtype != tt::tt_metal::DataType::BFLOAT8_B, "Conv DRAM currently doesn't support BFLOAT8_B");
+    TT_FATAL(
+        !(conv_config.output_layout == Layout::ROW_MAJOR && output_dtype == DataType::BFLOAT8_B),
+        "Conv output can't be in Row Major if output dtype is BFloat8_B.");
 
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -209,22 +212,33 @@ Result conv2d_DRAM(
             ttnn::Shape({batch_size, output_height, output_width, out_channels}),
             tt_metal::TensorLayout(
                 output_dtype,
-                tt_metal::PageConfig(tt_metal::Layout::ROW_MAJOR),
+                tt_metal::PageConfig(conv_config.output_layout),
                 MemoryConfig{
                     TensorMemoryLayout::INTERLEAVED,
                     BufferType::DRAM,
                 })),
         device);
 
+    uint32_t slice_rounding_value = 1;
+    if (conv_config.output_layout == tt_metal::Layout::TILE) {
+        // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+        slice_rounding_value = tt::constants::TILE_HEIGHT;
+    }
+
     bool first_run = true;
-    const uint32_t min_output_slice_size = output_sliced_dim / dram_slice_config.num_slices;
-    const uint32_t output_slice_rem = output_sliced_dim % dram_slice_config.num_slices;
+    const uint32_t min_output_slice_size =
+        tt::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
+    const uint32_t output_slice_rem =
+        tt::div_up(output_sliced_dim, slice_rounding_value) % dram_slice_config.num_slices;
 
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;
 
+    uint32_t additional_padded_width = 0;
+
     while ((output_slice_dim_start < output_sliced_dim) && (slice_index < dram_slice_config.num_slices)) {
-        const uint32_t output_slice_size = min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0);
+        const uint32_t output_slice_size =
+            slice_rounding_value * (min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0));
         const uint32_t output_slice_dim_end = std::min(output_sliced_dim, output_slice_dim_start + output_slice_size);
         const uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
 
@@ -260,6 +274,7 @@ Result conv2d_DRAM(
             output_slice_height_end = output_height;
             output_slice_width_start = output_slice_dim_start;
             output_slice_width_end = output_slice_dim_end;
+
             input_slice_height_start = 0;
             input_slice_height_end = input_height;
             input_slice_width_start = (output_slice_width_start * stride[1]) - padding_n4[2];
@@ -270,6 +285,7 @@ Result conv2d_DRAM(
             pad_bottom = padding_n4[1];
             pad_left = std::max<int>(0, -input_slice_width_start);
             pad_right = std::max<int>(0, input_slice_width_end - input_width);
+
             input_slice_width_start = std::max<int>(0, input_slice_width_start);
             input_slice_width_end = std::min<int>(input_width, input_slice_width_end);
 
@@ -278,11 +294,47 @@ Result conv2d_DRAM(
             }
         }
 
-        const uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
-        const uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
+        log_trace(
+            LogOp,
+            "Conv2d DRAM Slicing: Slice {}: Output Slice Start: ({}, {}), End: ({}, {})",
+            slice_index,
+            output_slice_height_start,
+            output_slice_width_start,
+            output_slice_height_end,
+            output_slice_width_end);
+        log_trace(
+            LogOp,
+            "Conv2d DRAM Slicing: Slice {}: Input Slice Start: ({}, {}), End: ({}, {})",
+            slice_index,
+            input_slice_height_start,
+            input_slice_width_start,
+            input_slice_height_end,
+            input_slice_width_end);
 
         const uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
         const uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
+
+        const uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
+
+        uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
+        if (output_slice_width % slice_rounding_value != 0) {
+            additional_padded_width = slice_rounding_value - (output_slice_width % slice_rounding_value);
+            log_trace(
+                LogOp,
+                "Conv2d DRAM Slicing: Slice {}: Additional padding of {} added to the right side.",
+                slice_index,
+                additional_padded_width);
+            pad_right += additional_padded_width * stride[1];
+            output_slice_width += additional_padded_width;
+        }
+
+        log_debug(
+            tt::LogOp,
+            "Input Slice : {} x {}, Output Slice {} x {}",
+            input_slice_height,
+            input_slice_width,
+            output_slice_height,
+            output_slice_width);
 
         if (!conv_config.shard_layout.has_value()) {
             if (!conv_config.weights_dtype.has_value()) {
@@ -309,6 +361,9 @@ Result conv2d_DRAM(
                 bias_tensor.has_value(),
                 compute_config);
         }
+
+        TT_FATAL(conv_config.shard_layout.has_value(), " Conv2D DRAM Slicing must have a shard layout set.");
+
         Tensor sliced_input_tensor;
         if (conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
             sliced_input_tensor = ttnn::slice(
@@ -342,6 +397,9 @@ Result conv2d_DRAM(
         conv_config_l1.deallocate_activation = true;
         conv_config_l1.reallocate_halo_output = true;
 
+        // Force Conv2d_L1 to always output tiled layout to reduce CB Memory usage.
+        conv_config_l1.output_layout = Layout::TILE;
+
         ttnn::Tensor sliced_output_tensor;
         std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
             conv2d_L1(
@@ -367,12 +425,16 @@ Result conv2d_DRAM(
                 conv_config_l1,
                 compute_config_,
                 memory_config_);
+
+        // slice_write supports all sharding layouts for tiled inputs. For row major, height & block sharding are
+        // supported.
         if (sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED &&
-            sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED) {
+            sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED &&
+            dram_output_tensor.layout() == Layout::ROW_MAJOR) {
             sliced_output_tensor = ttnn::to_memory_config(
                 sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         }
-        if (sliced_output_tensor.layout() != Layout::ROW_MAJOR) {
+        if (sliced_output_tensor.layout() != Layout::ROW_MAJOR && conv_config.output_layout == Layout::ROW_MAJOR) {
             sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
         }
         if (sliced_output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
