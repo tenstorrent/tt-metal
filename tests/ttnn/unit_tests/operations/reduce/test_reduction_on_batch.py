@@ -16,25 +16,25 @@ from models.utility_functions import torch_random
     [
         # Batch sharding
         # Batch dims are equal for shape and shard_shape, all other dims of shard shape are 1 (or tile size for the lower two dims, or other combinations)
-        # ((10, 4, 32 * 17, 32 * 17), (10, 1, 32, 32)), # SF all local
-        # ((5, 7, 32 * 11, 32 * 11), (5, 1, 32, 32)), # SF all local
-        # ((5, 1, 32 * 11, 32 * 11), (5, 1, 32, 32)), # SF, non local even though should be
-        # ((5, 1, 32, 32 * 11), (5, 1, 32, 32)), # SKIP SF, local
-        # ((5, 1, 32, 32), (5, 1, 32, 32)), #  SKIP SF, local
-        # ((1, 5, 32 * 11, 32 * 11), (1, 1, 32, 32)), # SF, local
-        # ((9, 5, 32 * 11, 32 * 11), (9, 1, 32, 32)), # SF, local
-        # ((1, 1, 32, 32), (1, 1, 32, 32)), #  SKIP SF, local
-        # ((10, 4, 32 * 16, 32 * 16), (10, 1, 32, 32)), # SF, local
-        ((10, 4, 32 * 16, 32 * 16), (10, 1, 64, 64)),  # SF, non local
-        # ((10, 4, 32 * 16, 32 * 16), (10, 2, 32, 64)), # SF, non local
-        # ((10, 4, 32 * 16, 32 * 16), (5, 2, 32, 64)), # SF, non local
-        # ((10, 5, 32 * 11, 32 * 11), (10, 2, 64, 64)), # SKIP SF, non local, which is expected
-        # ((10, 65, 32, 32), (10, 1, 32, 32)), # SF, local
-        # ((10, 65, 64, 64), (10, 1, 32, 32)), # SF, local
+        ((10, 4, 32 * 17, 32 * 17), (10, 1, 32, 32)),
+        ((5, 7, 32 * 11, 32 * 11), (5, 1, 32, 32)),
+        ((5, 1, 32 * 11, 32 * 11), (5, 1, 32, 32)),
+        ((5, 1, 32, 32 * 11), (5, 1, 32, 32)),
+        ((5, 1, 32, 32), (5, 1, 32, 32)),
+        ((1, 5, 32 * 11, 32 * 11), (1, 1, 32, 32)),
+        ((9, 5, 32 * 11, 32 * 11), (9, 1, 32, 32)),
+        ((1, 1, 32, 32), (1, 1, 32, 32)),
+        ((10, 4, 32 * 16, 32 * 16), (10, 1, 32, 32)),
+        ((10, 4, 32 * 16, 32 * 16), (10, 1, 64, 64)),
+        ((10, 4, 32 * 16, 32 * 16), (10, 2, 32, 64)),
+        ((10, 65, 32, 32), (10, 1, 32, 32)),
+        ((10, 65, 64, 64), (10, 1, 32, 32)),
+        ((10, 4, 32 * 16, 32 * 16), (5, 2, 32, 64)),  # half batch sharding
+        ((10, 5, 32 * 11, 32 * 11), (10, 2, 64, 64)),  # tensor dimensions not evenly divided by shard dimensions
     ],
 )
-@pytest.mark.parametrize("dim", [0])  # , 1],
-@pytest.mark.parametrize("interleaved", [False])  # , True],
+@pytest.mark.parametrize("dim", [0, 1])
+@pytest.mark.parametrize("interleaved", [False, True])
 def test_reduce_on_batch(shape, shard_shape, dim, interleaved, device):
     torch.manual_seed(0)
 

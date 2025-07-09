@@ -119,34 +119,11 @@ operation::ProgramWithCallbacks reduce_nc_factory(
             output_shard_size = output_shard_volume / tile_size;
             std::uint32_t num_output_shards = inner_tile_size / output_shard_size;
             bool more_shards_than_cores = num_output_shards > (num_cores_x * num_cores_y);
-            log_info(
-                tt::LogOp,
-                "inss {} isv {} onss {} osv {} iss {} oss {} nos {} mstc {}",
-                input_nd_shard_spec,
-                input_shard_volume,
-                output_nd_shard_spec,
-                output_shard_volume,
-                input_shard_size,
-                output_shard_size,
-                num_output_shards,
-                more_shards_than_cores);
             if (more_shards_than_cores) {
                 divide_by_shards = true;
                 units_to_divide = num_output_shards;
                 shard_factor = output_shard_size;
-                log_info(tt::LogOp, "USE SHARD FACTOR {} {}", input_shape, input_nd_shard_spec);
-            } else {
-                log_info(tt::LogOp, "SKIP SHARD FACTOR {} {}", input_shape, input_nd_shard_spec);
             }
-            log_info(
-                tt::LogOp,
-                "UNITS {} SHARD_SIZE input {} output {} inner_tile_size {} reduce_tile_size {} num_output_shards {}",
-                units_to_divide,
-                input_shard_size,
-                output_shard_size,
-                inner_tile_size,
-                reduce_tile_size,
-                num_output_shards);
         }
     }
     auto
@@ -156,27 +133,10 @@ operation::ProgramWithCallbacks reduce_nc_factory(
          core_group_2,
          num_cols_per_core_group_1,
          num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, units_to_divide, /*row_wise=*/true);
-    log_info(
-        tt::LogOp,
-        "UNITS {} SHARD_SIZE {} inner_tile_size {} num_cols_per_core_group_1 {} num_cols_per_core_group_2 {}",
-        units_to_divide,
-        input_shard_size,
-        inner_tile_size,
-        num_cols_per_core_group_1,
-        num_cols_per_core_group_2);
-    log_info(tt::LogOp, "CG1 {} CG2 {} AC {}", core_group_1, core_group_2, all_cores);
     if (divide_by_shards) {
         num_cols_per_core_group_1 *= output_shard_size;
         num_cols_per_core_group_2 *= output_shard_size;
     }
-    log_info(
-        tt::LogOp,
-        "NEW UNITS {} SHARD_SIZE {} inner_tile_size {} num_cols_per_core_group_1 {} num_cols_per_core_group_2 {}",
-        units_to_divide,
-        input_shard_size,
-        inner_tile_size,
-        num_cols_per_core_group_1,
-        num_cols_per_core_group_2);
     const auto intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format;
     const auto intermed_cb_single_tile_size = (fp32_dest_acc_en) ? single_tile_size * 2 : single_tile_size;
 
@@ -272,19 +232,6 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    log_info(
-        tt::LogOp,
-        "Wt {} Ht {} its {} rts {} nrit {} not {} input_granularity {} ncotbu {} ncpcg1 {} ncpcg2 {}",
-        Wt,
-        Ht,
-        inner_tile_size,
-        reduce_tile_size,
-        num_reduce_input_tile,
-        num_output_tiles,
-        input_granularity,
-        num_cores_to_be_used,
-        num_cols_per_core_group_1,
-        num_cols_per_core_group_2);
     for (std::uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
 
@@ -296,20 +243,6 @@ operation::ProgramWithCallbacks reduce_nc_factory(
         } else {
             TT_THROW("Core not in specified core ranges.");
         }
-        log_info(
-            tt::LogOp,
-            "i {} num_cores_x {} num_cores_y {} core {} num_tiles_per_core {} tile_offset {}",
-            i,
-            num_cores_x,
-            num_cores_y,
-            core,
-            num_tiles_per_core,
-            tile_offset);
-        /*TT_FATAL(
-            num_tiles_per_core % shard_factor == 0,
-            "num_tiles_per_core ({}) must divide shard_factor ({}) evenly",
-            num_tiles_per_core,
-            shard_factor);*/
 
         tt_metal::SetRuntimeArgs(
             program,
