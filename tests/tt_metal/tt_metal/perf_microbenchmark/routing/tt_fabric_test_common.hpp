@@ -323,12 +323,9 @@ public:
             total_hops);
 
         return ring_destinations;
-    // Data reading helpers
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
-        const MeshCoordinate& device_coord,
-        const std::vector<CoreCoord>& cores,
-        uint32_t address,
-        uint32_t size_bytes) const override {
+
+    std::shared_ptr<MeshBuffer> create_mesh_buffer_helper(
+        const std::vector<CoreCoord>& cores, uint32_t address, uint32_t size_bytes) const {
         std::set<CoreRange> all_cores_set;
         for (const auto& core : cores) {
             all_cores_set.insert(CoreRange(core));
@@ -358,6 +355,23 @@ public:
         };
         auto mesh_buffer = MeshBuffer::create(mesh_buffer_specs, buffer_specs, mesh_device_.get(), address);
 
+        return mesh_buffer;
+    }
+
+    // Data reading helpers
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const override {
+        auto mesh_buffer = create_mesh_buffer_helper(cores, address, size_bytes);
+
+        const auto& buffer_distribution_spec =
+            mesh_buffer->device_local_config().sharding_args.buffer_distribution_spec();
+        TT_FATAL(buffer_distribution_spec.has_value(), "Buffer distribution spec is not set");
+        const auto buffer_page_mapping = buffer_distribution_spec->compute_page_mapping();
+
+        auto total_size = size_bytes * buffer_page_mapping.all_cores.size();
         std::vector<uint32_t> data;
         data.resize(total_size / sizeof(uint32_t));
         tt::tt_metal::distributed::ReadShard(mesh_device_->mesh_command_queue(), data, mesh_buffer, device_coord);
@@ -383,6 +397,19 @@ public:
         }
 
         return results;
+    }
+
+    void zero_out_buffer_on_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const override {
+        auto mesh_buffer = create_mesh_buffer_helper(cores, address, size_bytes);
+
+        const auto total_size = size_bytes * cores.size();
+        std::vector<uint32_t> zero_buffer(total_size / sizeof(uint32_t), 0);
+        tt::tt_metal::distributed::WriteShard(
+            mesh_device_->mesh_command_queue(), mesh_buffer, zero_buffer, device_coord, true);
     }
 
     // ======================================================================================

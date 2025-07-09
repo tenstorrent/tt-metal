@@ -50,6 +50,11 @@ public:
         const std::vector<CoreCoord>& cores,
         uint32_t address,
         uint32_t size_bytes) const = 0;
+    virtual void zero_out_buffer_on_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const = 0;
 };
 
 class IRouteManager {
