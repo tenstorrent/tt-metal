@@ -109,7 +109,7 @@ std::string generate_multihost_socket_test_name(const testing::TestParamInfo<Par
            std::to_string(info.param.data_size);
 }
 
-using MultiHostSocketTestSplitT3K = MultiHostSocketTest<MeshDeviceDual2x2Fixture>;
+using MultiHostSocketTestSplitT3K = MultiHostSocketTest<MeshDeviceSplit2x2Fixture>;
 using MultiHostSocketTestDualT3K = MultiHostSocketTest<MeshDeviceDual2x4Fixture>;
 using MultiHostSocketTestNanoExabox = MultiHostSocketTest<MeshDeviceNanoExaboxFixture>;
 

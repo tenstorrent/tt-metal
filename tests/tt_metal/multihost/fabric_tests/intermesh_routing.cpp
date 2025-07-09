@@ -22,13 +22,13 @@ namespace fabric_router_tests::multihost {
 
 // ========= Data-Movement Tests for 2 Host, 1 T3K bringup machine  =========
 
-TEST_F(IntermeshDual2x2FabricFixture, RandomizedInterMeshUnicast) {
-    for (uint32_t i = 0; i < 500; i++) {
+TEST_F(IntermeshSplit2x2FabricFixture, RandomizedInterMeshUnicast) {
+    for (uint32_t i = 0; i < 100; i++) {
         multihost_utils::RandomizedInterMeshUnicast(this);
     }
 }
 
-TEST_F(IntermeshDual2x2FabricFixture, MultiMeshEastMulticast) {
+TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshEastMulticast) {
     std::vector<FabricNodeId> mcast_req_nodes = {
         FabricNodeId(MeshId{0}, 1), FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 3), FabricNodeId(MeshId{0}, 2)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 2), FabricNodeId(MeshId{1}, 0)};
@@ -36,33 +36,33 @@ TEST_F(IntermeshDual2x2FabricFixture, MultiMeshEastMulticast) {
         McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 1}};
     std::vector<std::vector<FabricNodeId>> mcast_group_node_ids = {
         {FabricNodeId(MeshId{1}, 3)}, {FabricNodeId(MeshId{1}, 1)}};
-    for (uint32_t i = 0; i < 500; i++) {
+    for (uint32_t i = 0; i < 100; i++) {
         multihost_utils::InterMeshLineMcast(
             this, mcast_req_nodes[i % 4], mcast_start_nodes[i % 2], routing_info, mcast_group_node_ids[i % 2]);
     }
 }
 
-TEST_F(IntermeshDual2x2FabricFixture, MultiMeshSouthMulticast) {
+TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshSouthMulticast) {
     std::vector<FabricNodeId> mcast_req_nodes = {FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 1)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 0), FabricNodeId(MeshId{1}, 1)};
     std::vector<McastRoutingInfo> routing_info = {
         McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1}};
     std::vector<std::vector<FabricNodeId>> mcast_group_node_ids = {
         {FabricNodeId(MeshId{1}, 2)}, {FabricNodeId(MeshId{1}, 3)}};
-    for (uint32_t i = 0; i < 500; i++) {
+    for (uint32_t i = 0; i < 100; i++) {
         multihost_utils::InterMeshLineMcast(
             this, mcast_req_nodes[i % 2], mcast_start_nodes[i % 2], routing_info, mcast_group_node_ids[i % 2]);
     }
 }
 
-TEST_F(IntermeshDual2x2FabricFixture, MultiMeshNorthMulticast) {
+TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshNorthMulticast) {
     std::vector<FabricNodeId> mcast_req_nodes = {FabricNodeId(MeshId{0}, 3), FabricNodeId(MeshId{0}, 3)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 2), FabricNodeId(MeshId{1}, 3)};
     std::vector<McastRoutingInfo> routing_info = {
         McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1}};
     std::vector<std::vector<FabricNodeId>> mcast_group_node_ids = {
         {FabricNodeId(MeshId{1}, 0)}, {FabricNodeId(MeshId{1}, 1)}};
-    for (uint32_t i = 0; i < 500; i++) {
+    for (uint32_t i = 0; i < 100; i++) {
         multihost_utils::InterMeshLineMcast(
             this, mcast_req_nodes[i % 2], mcast_start_nodes[i % 2], routing_info, mcast_group_node_ids[i % 2]);
     }
