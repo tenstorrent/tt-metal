@@ -821,7 +821,7 @@ Tensor to_device_mesh_tensor(
     auto mesh_buffer = allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
     DeviceStorage mesh_storage =
         to_device_mesh_buffer<T>(tensor.storage(), mesh_buffer, tensor_spec, *tensor.tensor_attributes, cq_id);
-    return Tensor(std::move(mesh_storage), tensor_spec, tensor.distributed_tensor_config());
+    return Tensor(std::move(mesh_storage), tensor_spec, tensor.distributed_tensor_config(), tensor.topology_config());
 }
 
 template <typename T>
