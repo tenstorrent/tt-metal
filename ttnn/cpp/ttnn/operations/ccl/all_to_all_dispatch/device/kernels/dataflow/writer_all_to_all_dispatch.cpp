@@ -40,27 +40,26 @@ inline void dispatch_noc_uni_fused_sem_inc(
     uint16_t increment_value,
     bool flush,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
-    volatile PACKET_HEADER_TYPE* metadata_packet_header) {
+    volatile PACKET_HEADER_TYPE* packet_header) {
     while (size > 0) {
         uint32_t curr_packet_size = std::min(fabric_max_packet_size, (uint32_t)size);
 
         if ((uint32_t)size == curr_packet_size) {
             // Fill header for fused unicast + atomic increment command when it is the last packet
-            metadata_packet_header->to_noc_fused_unicast_write_atomic_inc(
+            packet_header->to_noc_fused_unicast_write_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
                     noc_payload_write_address, noc_remote_semaphore_address, increment_value, 32, flush),
                 curr_packet_size);
         } else {
             // Fill header for fused unicast + atomic increment command when it is not the last packet
-            metadata_packet_header->to_noc_unicast_write(
+            packet_header->to_noc_unicast_write(
                 tt::tt_fabric::NocUnicastCommandHeader{noc_payload_write_address}, curr_packet_size);
         }
 
         // Send payload followed by header over the fabric.
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_without_header_non_blocking_from_address(payload_l1_address, curr_packet_size);
-        fabric_connection.send_payload_flush_blocking_from_address(
-            (uint32_t)metadata_packet_header, sizeof(PACKET_HEADER_TYPE));
+        fabric_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 
         payload_l1_address += curr_packet_size;
         noc_payload_write_address += curr_packet_size;
@@ -80,12 +79,12 @@ inline void dispatch_chip_uni_noc_uni_fused_sem_inc(
     uint16_t increment_value,
     bool flush,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
-    volatile PACKET_HEADER_TYPE* metadata_packet_header) {
+    volatile PACKET_HEADER_TYPE* packet_header) {
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
     fabric_set_unicast_route(
-        (LowLatencyMeshPacketHeader*)metadata_packet_header,
+        (LowLatencyMeshPacketHeader*)packet_header,
         static_cast<eth_chan_directions>(fabric_connections[route].direction),
         src_chip_id,
         dest_chip_id,
@@ -100,7 +99,7 @@ inline void dispatch_chip_uni_noc_uni_fused_sem_inc(
         increment_value,
         flush,
         fabric_connections[route],
-        metadata_packet_header);
+        packet_header);
 }
 
 void zero_buffer_async(uint32_t write_addr, int bytes) {

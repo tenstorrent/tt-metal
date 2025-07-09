@@ -71,6 +71,32 @@ bool is_configured_target_mesh(uint32_t linearized_dest_mesh_coord) {
     }
 }
 
+template <uint32_t MaxPacketSzBytes>
+inline void dispatch_noc_uni(
+    uint32_t payload_l1_address,
+    uint64_t noc_payload_write_address,
+    int32_t size_bytes,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    uint32_t alignment,
+    volatile PACKET_HEADER_TYPE* packet_header) {
+    while (size_bytes > 0) {
+        uint32_t curr_packet_size = std::min(MaxPacketSzBytes, (uint32_t)size_bytes);
+
+        packet_header->to_noc_unicast_write(
+            NocUnicastCommandHeader{noc_payload_write_address}, align(curr_packet_size, alignment));
+
+        fabric_connection.wait_for_empty_write_slot();
+
+        fabric_connection.send_payload_without_header_non_blocking_from_address(payload_l1_address, curr_packet_size);
+
+        fabric_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+
+        payload_l1_address += curr_packet_size;
+        noc_payload_write_address += curr_packet_size;
+        size_bytes -= curr_packet_size;
+    }
+}
+
 /*
 enum eth_chan_directions {
     EAST = 0,
@@ -85,40 +111,24 @@ inline void dispatch_input_remote_device(
     const uint32_t dest_mesh_id,
     const uint32_t alignment,
     int32_t size_bytes,
-    uint32_t input_token_read_addr,
-    uint64_t output_token_write_addr,
+    uint32_t payload_l1_address,
+    uint64_t noc_payload_write_address,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
-    volatile PACKET_HEADER_TYPE* token_unicast_packet_header) {
+    volatile PACKET_HEADER_TYPE* packet_header) {
     // Clear the header buffer region.
 
     const uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
     fabric_set_unicast_route(
-        const_cast<LowLatencyMeshPacketHeader*>(token_unicast_packet_header),
+        const_cast<LowLatencyMeshPacketHeader*>(packet_header),
         static_cast<eth_chan_directions>(fabric_connections[route].direction),
         SrcChipId,
         dest_chip_id,
         dest_mesh_id,
         MeshCols);
 
-    while (size_bytes > 0) {
-        uint32_t curr_packet_size = std::min(MaxPacketSzBytes, size_bytes);
-
-        token_unicast_packet_header->to_noc_unicast_write(
-            NocUnicastCommandHeader{output_token_write_addr}, align(curr_packet_size, alignment));
-
-        fabric_connections[route].wait_for_empty_write_slot();
-
-        fabric_connections[route].send_payload_without_header_non_blocking_from_address(
-            input_token_read_addr, curr_packet_size);
-
-        fabric_connections[route].send_payload_flush_blocking_from_address(
-            (uint32_t)token_unicast_packet_header, sizeof(PACKET_HEADER_TYPE));
-
-        input_token_read_addr += curr_packet_size;
-        output_token_write_addr += curr_packet_size;
-        size_bytes -= curr_packet_size;
-    }
+    dispatch_noc_uni<MaxPacketSzBytes>(
+        payload_l1_address, noc_payload_write_address, size_bytes, fabric_connections[route], alignment, packet_header);
 }
 }  // namespace ttnn::operations::ccl::common
