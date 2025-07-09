@@ -189,5 +189,6 @@ void jit_build_set(const JitBuildStateSet& builds, const JitBuildSettings* setti
 void jit_build_subset(const JitBuildStateSubset& builds, const JitBuildSettings* settings);
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events);
+void sync_build_steps(std::vector<std::shared_future<void>>& events);
 
 }  // namespace tt::tt_metal
