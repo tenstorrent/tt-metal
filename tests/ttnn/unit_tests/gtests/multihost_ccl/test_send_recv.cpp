@@ -50,6 +50,11 @@ class MeshDeviceSplit1x2SendRecvFixture : public tt::tt_fabric::fabric_router_te
 INSTANTIATE_TEST_SUITE_P(
     MeshDeviceSplit1x2SendRecvTests, MeshDeviceSplit1x2SendRecvFixture, ::testing::ValuesIn(tensor_specs));
 
+class MeshDeviceNanoExaboxSendRecvFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceNanoExaboxFixture,
+                                            public testing::WithParamInterface<TensorSpec> {};
+INSTANTIATE_TEST_SUITE_P(
+    MeshDeviceNanoExaboxSendRecvTests, MeshDeviceNanoExaboxSendRecvFixture, ::testing::ValuesIn(tensor_specs));
+
 void test_send_recv_async(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const TensorSpec& tensor_spec,
@@ -188,6 +193,23 @@ TEST_P(MeshDeviceSplit1x2SendRecvFixture, MultiSendRecvAsync) {
         // }
         if (rank == *receiver_rank || rank == 3) {
             test_send_recv_async(mesh_device_, tensor_spec, distributed::multihost::Rank{3}, receiver_rank, i);
+        }
+    }
+}
+
+TEST_P(MeshDeviceNanoExaboxSendRecvFixture, MultiSendRecvAsync) {
+    constexpr distributed::multihost::Rank receiver_rank = distributed::multihost::Rank{1};
+    auto tensor_spec = GetParam();
+    auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto rank = *(distributed_context->rank());
+    for (uint32_t i = 0; i < 100; i++) {
+        for (uint32_t r = 0; r < *(distributed_context->size()); r++) {
+            if (r == *receiver_rank) {
+                continue;
+            }
+            if (rank == *receiver_rank || rank == r) {
+                test_send_recv_async(mesh_device_, tensor_spec, distributed::multihost::Rank{r}, receiver_rank, i);
+            }
         }
     }
 }
