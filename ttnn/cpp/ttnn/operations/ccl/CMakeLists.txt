@@ -19,6 +19,7 @@ target_sources(
         common/uops/ccl_host_commands.cpp
         common/host/ccl_worker_builder.cpp
         common/host/ccl_command_stream_builders.cpp
+        common/host/moe_utils.cpp
         # Ops
         all_gather/all_gather.cpp
         all_gather/device/all_gather_op.cpp

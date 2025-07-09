@@ -98,6 +98,8 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
 
     const uint32_t hidden_size = input_shape[-1];
     const uint32_t batch_size = metadata_shape[1];
+    const uint32_t seq_size = metadata_shape[2];
+
     const uint32_t selected_experts_k = metadata_shape[-1];
 
     const auto& axis = operation_attributes.axis;
@@ -106,7 +108,7 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
 
     const uint32_t total_batch_per_device_size = total_batch_size / num_devices;
 
-    auto output_shape = ttnn::Shape({selected_experts_k, total_batch_per_device_size, 1, hidden_size});
+    auto output_shape = ttnn::Shape({selected_experts_k, total_batch_per_device_size, seq_size, hidden_size});
 
     auto mem_config = operation_attributes.output_mem_config;
     return TensorSpec(
