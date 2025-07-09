@@ -302,4 +302,39 @@ inline void dispatch_input_remote_device_1d(
         payload_l1_address, noc_payload_write_address, size_bytes, fabric_connections[route], alignment, packet_header);
 }
 
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    uint32_t MeshCols,
+    uint32_t MeshRows,
+    int32_t MaxPacketSzBytes,
+    tt::tt_fabric::Topology Topology>
+inline void dispatch_chip_uni_noc_uni_fused_sem_inc_1d(
+    const uint32_t linearized_dest_mesh_coord,
+    const uint32_t alignment,
+    int32_t size_bytes,
+    uint32_t payload_l1_address,
+    uint64_t noc_payload_write_address,
+    uint64_t noc_remote_semaphore_address,
+    int32_t size,
+    uint16_t increment_value,
+    bool flush,
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header) {
+    uint32_t distance =
+        manhattan_distance<Topology, MeshCols, MeshRows>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    packet_header->to_chip_unicast(distance);
+
+    uint32_t route = get_route<Topology, MeshCols, MeshRows>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    return dispatch_noc_uni_fused_sem_inc<MaxPacketSzBytes>(
+        payload_l1_address,
+        noc_payload_write_address,
+        noc_remote_semaphore_address,
+        size,
+        increment_value,
+        flush,
+        fabric_connections[route],
+        packet_header,
+        alignment);
+}
+
 }  // namespace ttnn::operations::ccl::common
