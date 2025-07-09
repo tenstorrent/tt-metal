@@ -31,8 +31,8 @@ GRAPH_OUT_FOLDER = "plots"
 )
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
-@pytest.mark.parametrize("reset_bool", [True])
-@pytest.mark.parametrize("reset_period", [200])
+@pytest.mark.parametrize("reset_bool", [True])  # Optional reset
+@pytest.mark.parametrize("reset_period", [200])  # reser device every N prompts
 def test_accuracy_with_reset(
     vae_on_device, captions_path, coco_statistics_path, evaluation_range, reset_bool, reset_period
 ):
@@ -151,19 +151,14 @@ def sdxl_collect_images(start_from, num_prompts):
 
 def check_clip_scores(start_from, num_prompts, prompts, clip_scores):
     assert len(clip_scores) == num_prompts == len(prompts), f"Expected {num_prompts} CLIP scores and prompts."
-    low_counter = 0
     for idx, score in enumerate(clip_scores):
-        if clip_scores[idx] < 27:  # Threshold for low CLIP score
-            if (
-                clip_scores[idx] < 20
-            ):  # Threshold for very low CLIP score, this indicates a fragmented image or noise or prompt mismatch
+        if clip_scores[idx] < 27:
+            if clip_scores[idx] < 20:
                 logger.error(
-                    f"Very low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]}"
+                    f"Very low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]},  \
+                        this indicates a fragmented image or noise or prompt mismatch or something else very wrong."
                 )
             else:
                 logger.warning(
                     f"Low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]}"
                 )
-            low_counter += 1
-    if low_counter == 0:
-        logger.info(f"All {num_prompts} CLIP scores are above the threshold.")
