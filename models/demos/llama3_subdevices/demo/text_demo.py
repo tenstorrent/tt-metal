@@ -652,7 +652,8 @@ def test_demo_text(
 
         top_5_accs = []
         top_1_accs = []
-
+        read_events = []
+        tt_out_toks = []
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
@@ -662,7 +663,7 @@ def test_demo_text(
             # Run decode forward
             try:
                 tt_out_logits_saved = torch.zeros(vocab_size) if pcc_check else None
-                tt_out_tok = generator.decode_forward_text(
+                tt_out_tok, read_event = generator.decode_forward_text(
                     out_tok,
                     current_pos,
                     enable_trace=enable_trace if not pcc_check else False,
@@ -673,6 +674,8 @@ def test_demo_text(
                     reset_inputs=iteration == 0,
                     tt_out_logits_saved=tt_out_logits_saved,
                 )
+                read_events.append(read_event)
+                tt_out_toks.append(tt_out_tok)
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
                 break
@@ -680,77 +683,82 @@ def test_demo_text(
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
-            else:
-                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+            # else:
+            #     profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+            #     decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # If there is PCC check we perform teacher forcing, swap token with reference model (decode check only done for 80 layers)
             teacher_forcing = (
                 pcc_check and max_encoded_prompt_len + iteration + 1 < len(ref_tokens) and num_layers == 80
             )
-            out_tok = tt_out_tok[0] if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
+            if iteration > 0:
+                ttnn.event_synchronize(read_events.pop(0))
+                tt_out_tok = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks.pop(0))[0])[0, 0, 0, :32]
+                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 
-            if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
-                out_tok = out_tok.repeat(32, 1)
+                if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
+                    out_tok = out_tok.repeat(32, 1)
 
-            if teacher_forcing:
-                torch_output_logits = torch_output[iteration + 1]
-                does_pass, pcc_message = comp_pcc(tt_out_logits_saved, torch_output_logits, 0.91)
-                logger.info(f"PCC: {pcc_message}")
+                if teacher_forcing:
+                    torch_output_logits = torch_output[iteration + 1]
+                    does_pass, pcc_message = comp_pcc(tt_out_logits_saved, torch_output_logits, 0.91)
+                    logger.info(f"PCC: {pcc_message}")
+                    logger.info(
+                        f"Teacher forced token at decode iteration {iteration} {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
+                    )
+                    _, tt_top5_tokens = torch.topk(tt_out_logits_saved, k=5, dim=-1)
+                    _, ref_top5_tokens = torch.topk(torch_output_logits, k=5, dim=-1)
+                    top_1_acc = tt_top5_tokens[0] == ref_top5_tokens[0]
+                    top_5_acc = torch.any(tt_top5_tokens == ref_top5_tokens)
+                    top_1_accs.append(top_1_acc)
+                    top_5_accs.append(top_5_acc)
+                    logger.info(f"Top-1 Accuracy: {top_1_acc}")
+                    logger.info(
+                        f"Top-5 Correctness:{torch.any(tt_top5_tokens == ref_top5_tokens).item(),} Accuracy: {top_5_acc}"
+                    )
+                # Always print perf after every iteration
+                tokens_per_second_per_user = 1 / decode_iteration_time
+
                 logger.info(
-                    f"Teacher forced token at decode iteration {iteration} {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
+                    f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
                 )
-                _, tt_top5_tokens = torch.topk(tt_out_logits_saved, k=5, dim=-1)
-                _, ref_top5_tokens = torch.topk(torch_output_logits, k=5, dim=-1)
-                top_1_acc = tt_top5_tokens[0] == ref_top5_tokens[0]
-                top_5_acc = torch.any(tt_top5_tokens == ref_top5_tokens)
-                top_1_accs.append(top_1_acc)
-                top_5_accs.append(top_5_acc)
-                logger.info(f"Top-1 Accuracy: {top_1_acc}")
-                logger.info(
-                    f"Top-5 Correctness:{torch.any(tt_top5_tokens == ref_top5_tokens).item(),} Accuracy: {top_5_acc}"
-                )
-            # Always print perf after every iteration
-            tokens_per_second_per_user = 1 / decode_iteration_time
 
-            logger.info(
-                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-            )
+                # Save output token to print out later
+                if not pcc_check:
+                    for user in range(batch_size):
+                        user_tok = out_tok.tolist()[user]
+                        if (
+                            user_tok not in tokenizer.stop_tokens and user_done[user] == False
+                        ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
+                            all_outputs[user].append(user_tok)
+                        else:
+                            if (
+                                stop_at_eos
+                            ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
+                                user_done[user] = True
+                                logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
+                                if all(user_done):
+                                    users_decoding = False
+
+                # Print out generated outputs for each user at the end of every iteration
+                if not is_ci_env and not pcc_check:
+                    for user in range(batch_size):
+                        text = "".join(tokenizer.decode(all_outputs[user]))
+                        if len(text) > 100:
+                            text = "..." + text[-97:]
+                        text = text.replace("\n", " ")
+                        logger.info("[User {}] {}".format(user, text))
 
             current_pos += 1
-
-            # Save output token to print out later
-            for user in range(batch_size):
-                user_tok = out_tok.squeeze(1).tolist()[user]
-                if (
-                    user_tok not in tokenizer.stop_tokens and user_done[user] == False
-                ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
-                    all_outputs[user].append(user_tok)
-                else:
-                    if (
-                        stop_at_eos
-                    ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
-                        user_done[user] = True
-                        logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
-                        if all(user_done):
-                            users_decoding = False
-
-            # Print out generated outputs for each user at the end of every iteration
-            if not is_ci_env:
-                for user in range(batch_size):
-                    text = "".join(tokenizer.decode(all_outputs[user]))
-                    if len(text) > 100:
-                        text = "..." + text[-97:]
-                    text = text.replace("\n", " ")
-                    logger.info("[User {}] {}".format(user, text))
-
             iteration += 1
 
             # Upper limit of generated tokens for each user
             users_decoding = iteration < max_generated_tokens
 
             # Final print
-            if not users_decoding:
+            if not users_decoding and not pcc_check:
                 profiler.start(f"log_saving_file", iteration=batch_idx)
                 logger.info("Finished decoding, printing the final outputs...\n")
                 for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
