@@ -21,9 +21,8 @@ tt::tt_metal::distributed::MeshCoordinate TopologyConfig::get_device_coord(
     std::size_t stride = 1;
 
     // Calculate row-major flattened index
-    for (int i = mesh_shape.dims() - 1; i >= 0; --i) {
-        flattened_index += coord[i] * stride;
-        stride *= mesh_shape[i];
+    for (std::size_t i = 0; i < mesh_shape.dims(); ++i) {
+        flattened_index += coord[i] * mesh_shape.get_stride(i);
     }
 
     // Return the device coordinate at the flattened position
