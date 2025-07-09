@@ -34,6 +34,9 @@ Documentation = "https://docs.tenstorrent.com/tt-metal/latest/ttnn"
 Repository = "https://github.com/tenstorrent/tt-metal"
 Issues = "https://github.com/tenstorrent/tt-metal/issues"
 
+[project.scripts]
+tt-run = "ttnn.distributed.ttrun:main"
+
 [tool.black]
 line-length = 120
 include = '^.*(ttnn|tests/scripts|tests/ttnn|tests/tt_eager/python_api_testing|tt_eager/tt_lib|tests/scripts|models/demos|infra|.github)/.*\.py$'
