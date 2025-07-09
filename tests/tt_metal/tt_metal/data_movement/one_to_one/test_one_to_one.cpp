@@ -75,6 +75,11 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     // Semaphores
     const uint32_t sem_id = CreateSemaphore(program, combined_core_set, 0);
 
+    // Physical Core Coordinates
+    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
+    uint32_t packed_subordinate_core_coordinates =
+        physical_subordinate_core.x << 16 | (physical_subordinate_core.y & 0xFFFF);
+
     // Compile-time arguments for kernels
     vector<uint32_t> sender_compile_args = {
         (uint32_t)l1_base_address,
@@ -82,23 +87,18 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
         (uint32_t)bytes_per_transaction,
         (uint32_t)test_config.test_id,
         (uint32_t)sem_id,
+        (uint32_t)packed_subordinate_core_coordinates,
         (uint32_t)test_config.virtual_channel};
 
     // Kernels
     auto sender_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/data_movement/one_to_one/kernels/sender.cpp",
-        master_core_set,
+        test_config.master_core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = sender_compile_args});
-
-    // Physical Core Coordinates
-    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
-
-    // Runtime Arguments
-    SetRuntimeArgs(program, sender_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
@@ -157,8 +157,8 @@ void directed_ideal_test(
 
     // Adjustable Parameters
     // Ideal: Less transactions, more data per transaction
-    uint32_t num_of_transactions = 1;
-    uint32_t pages_per_transaction = max_transmittable_pages / num_of_transactions;
+    uint32_t num_of_transactions = 256;
+    uint32_t pages_per_transaction = max_transmittable_pages;
 
     // Cores
     // NOTE: May be worth considering the performance of this test with different pairs of adjacent cores
