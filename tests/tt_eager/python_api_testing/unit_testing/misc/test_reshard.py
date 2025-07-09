@@ -13,6 +13,42 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 
+def run_nd_reshard_test(
+    device,
+    input_shape,
+    layout,
+    input_shard_shape,
+    input_shard_orientation,
+    output_shard_shape,
+    output_shard_orientation,
+    grid=None,
+):
+    if grid is None:
+        grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+
+    input_memory_config = ttnn.MemoryConfig(
+        ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(input_shard_shape), grid, input_shard_orientation)
+    )
+    output_memory_config = ttnn.MemoryConfig(
+        ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(output_shard_shape), grid, output_shard_orientation)
+    )
+
+    # torch_tensor = torch.randn(input_shape).bfloat16()
+    torch_tensor = torch.randint(0, 10, input_shape).bfloat16()
+    tt_tensor_sharded = ttnn.from_torch(
+        torch_tensor, dtype=ttnn.bfloat16, device=device, layout=layout, memory_config=input_memory_config
+    )
+    tt_tensor_output_sharded = ttnn.from_torch(
+        torch_tensor, dtype=ttnn.bfloat16, device=device, layout=layout, memory_config=output_memory_config
+    )
+
+    tt_tensor_resharded = ttnn.reshard(tt_tensor_sharded, output_memory_config)
+
+    round_trip_tensor = ttnn.to_torch(tt_tensor_resharded)
+    expected_resharded_tensor = ttnn.to_torch(tt_tensor_output_sharded)
+    return torch_tensor, round_trip_tensor, expected_resharded_tensor
+
+
 def run_reshard_test(
     device,
     input_shape,
@@ -231,6 +267,330 @@ def test_reshard(
         passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
     else:
         passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
+    assert passing, output
+
+
+# TODO: Fix Row-major implementationt
+# TODO: Make implementation for case n_input_tiles != n_output_tiles
+@pytest.mark.parametrize(
+    "input_shape, layout, input_shard_shape, input_shard_orientation, output_shard_shape, output_shard_orientation, grid",
+    [
+        (
+            [1, 1, 64, 64],
+            ttnn.TILE_LAYOUT,
+            (64, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            None,
+        ),
+        (
+            [1, 3, 64, 64],
+            ttnn.TILE_LAYOUT,
+            (3, 32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (3, 64, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            None,
+        ),
+        # ROW_MAJOR_LAYOUT test cases
+        (
+            [1, 1, 32, 64],
+            ttnn.TILE_LAYOUT,
+            (32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            None,
+        ),
+        # ([1, 1, 32, 64], ttnn.ROW_MAJOR_LAYOUT, (32, 32), ttnn.ShardOrientation.ROW_MAJOR, (32, 64), ttnn.ShardOrientation.ROW_MAJOR, None),
+        # ([1, 1, 64, 32], ttnn.ROW_MAJOR_LAYOUT, (32, 32), ttnn.ShardOrientation.COL_MAJOR, (64, 32), ttnn.ShardOrientation.COL_MAJOR, None),
+        # TILE_LAYOUT with COL_MAJOR orientation
+        (
+            [1, 1, 32, 64],
+            ttnn.TILE_LAYOUT,
+            (32, 32),
+            ttnn.ShardOrientation.COL_MAJOR,
+            (32, 64),
+            ttnn.ShardOrientation.COL_MAJOR,
+            None,
+        ),
+        (
+            [1, 1, 32, 128],
+            ttnn.TILE_LAYOUT,
+            (32, 32),
+            ttnn.ShardOrientation.COL_MAJOR,
+            (32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            None,
+        ),
+        # 2D tensor shapes
+        (
+            [128, 256],
+            ttnn.TILE_LAYOUT,
+            (64, 128),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (32, 256),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            None,
+        ),
+        # ([192, 96], ttnn.ROW_MAJOR_LAYOUT, (96, 64), ttnn.ShardOrientation.COL_MAJOR, (64, 96), ttnn.ShardOrientation.COL_MAJOR, None),
+        # 3D tensor shapes
+        # ([1, 96, 128], ttnn.TILE_LAYOUT, (1, 32, 64), ttnn.ShardOrientation.ROW_MAJOR, (1, 64, 32), ttnn.ShardOrientation.ROW_MAJOR, None),
+        # ([64, 64, 64], ttnn.ROW_MAJOR_LAYOUT, (32, 32, 64), ttnn.ShardOrientation.COL_MAJOR, (64, 32, 32), ttnn.ShardOrientation.ROW_MAJOR, None),
+        # Mixed dimensions with 4D inputs
+        (
+            [2, 3, 32, 32],
+            ttnn.TILE_LAYOUT,
+            (2, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (3, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            None,
+        ),
+        # ([4, 2, 32, 32], ttnn.ROW_MAJOR_LAYOUT, (1, 32, 32), ttnn.ShardOrientation.ROW_MAJOR, (2, 32, 32), ttnn.ShardOrientation.COL_MAJOR, None),
+        (
+            [1, 1, 64, 64],
+            ttnn.TILE_LAYOUT,
+            (32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 2))]),
+        ),
+        (
+            [1, 1, 64, 64],
+            ttnn.TILE_LAYOUT,
+            (32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+        ),
+        (
+            [1, 1, 128, 128],
+            ttnn.TILE_LAYOUT,
+            (32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))]),
+        ),
+        # 2D Tensor with 2D CoreRangeSet (2x2 grid)
+        (
+            [128, 128],
+            ttnn.TILE_LAYOUT,
+            (64, 64),
+            ttnn.ShardOrientation.COL_MAJOR,
+            (32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+        ),
+        # (
+        #     [96, 160],
+        #     ttnn.ROW_MAJOR_LAYOUT,
+        #     (32, 32),
+        #     ttnn.ShardOrientation.COL_MAJOR,
+        #     (32, 64),
+        #     ttnn.ShardOrientation.ROW_MAJOR,
+        #     ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+        # ),
+        # 3D Tensor with 2D CoreRangeSet
+        (
+            [32, 64, 64],
+            ttnn.TILE_LAYOUT,
+            (32, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (32, 32, 32),
+            ttnn.ShardOrientation.COL_MAJOR,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+        ),
+        # (
+        #     [32, 64, 96],
+        #     ttnn.ROW_MAJOR_LAYOUT,
+        #     (32, 32, 32),
+        #     ttnn.ShardOrientation.COL_MAJOR,
+        #     (32, 32, 32),
+        #     ttnn.ShardOrientation.ROW_MAJOR,
+        #     ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(3, 3))]),
+        # ),
+        # 4D Tensor with 2D CoreRangeSet
+        (
+            [2, 16, 64, 64],
+            ttnn.TILE_LAYOUT,
+            (2, 16, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (2, 16, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+        ),
+        # (
+        #     [32, 32, 64, 64],
+        #     ttnn.ROW_MAJOR_LAYOUT,
+        #     (32, 32, 32, 32),
+        #     ttnn.ShardOrientation.COL_MAJOR,
+        #     (32, 32, 32, 32),
+        #     ttnn.ShardOrientation.COL_MAJOR,
+        #     ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 2))]),
+        # ),
+        # Width-oriented CoreRangeSets (1 core high, multiple cores wide)
+        (
+            [64, 256],
+            ttnn.TILE_LAYOUT,
+            (32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (64, 32),
+            ttnn.ShardOrientation.COL_MAJOR,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))]),
+        ),
+        (
+            [32, 32, 64],
+            ttnn.TILE_LAYOUT,
+            (32, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (32, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))]),
+        ),
+        (
+            [3, 32, 64, 64],
+            ttnn.TILE_LAYOUT,
+            (3, 32, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (3, 32, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 3))]),
+        ),
+        # Height-oriented CoreRangeSets (multiple cores high, 1 core wide)
+        (
+            [128, 64],
+            ttnn.TILE_LAYOUT,
+            (32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))]),
+        ),
+        (
+            [32, 96, 32],
+            ttnn.TILE_LAYOUT,
+            (32, 32, 32),
+            ttnn.ShardOrientation.COL_MAJOR,
+            (32, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))]),
+        ),
+        (
+            [2, 3, 128, 64],
+            ttnn.TILE_LAYOUT,
+            (2, 3, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (2, 3, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(3, 2))]),
+        ),
+        # Multiple disjoint core ranges in the CoreRangeSet
+        (
+            [256, 128],
+            ttnn.TILE_LAYOUT,
+            (64, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (32, 64),
+            ttnn.ShardOrientation.COL_MAJOR,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(1, 2)),
+                ]
+            ),
+        ),
+        (
+            [1, 64, 64, 32],
+            ttnn.TILE_LAYOUT,
+            (1, 32, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (1, 32, 32, 32),
+            ttnn.ShardOrientation.COL_MAJOR,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 1)),
+                ]
+            ),
+        ),
+    ],
+)
+def test_nd_reshard(
+    device,
+    input_shape,
+    layout,
+    input_shard_shape,
+    input_shard_orientation,
+    output_shard_shape,
+    output_shard_orientation,
+    grid,
+):
+    torch.manual_seed(1)
+    torch_tensor, torch_tensor_after_round_trip, expected_resharded_tensor = run_nd_reshard_test(
+        device,
+        input_shape,
+        layout,
+        input_shard_shape,
+        input_shard_orientation,
+        output_shard_shape,
+        output_shard_orientation,
+        grid,
+    )
+    passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
+    passing2, output2 = comp_equal(torch_tensor_after_round_trip, expected_resharded_tensor)
+    passing3, output3 = comp_equal(torch_tensor, expected_resharded_tensor)
+    torch.set_printoptions(threshold=float("inf"), linewidth=1000)
+    # print(torch_tensor.shape)
+    # print(torch_tensor[0, :32, :32].shape)
+    # print(f"Tile 0:")
+    # print("Input Tensor:", torch_tensor[0, 0, :32, :32])
+    # print("After Round Trip Tensor:", torch_tensor_after_round_trip[0, 0, :32, :32])
+    # print("Expected Resharded Tensor:", expected_resharded_tensor[0, 0, :32, :32])
+
+    # print(f"Tile 1:")
+    # print("Input Tensor:", torch_tensor[0, 0, :32, 32:])
+    # print("After Round Trip Tensor:", torch_tensor_after_round_trip[0, 0, :32, 32:])
+    # print("Expected Resharded Tensor:", expected_resharded_tensor[0, 0, :32, 32:])
+
+    # print(f"Tile 2:")
+    # print("Input Tensor:", torch_tensor[0, 0, 32:, :32])
+    # print("After Round Trip Tensor:", torch_tensor_after_round_trip[0, 0, 32:, :32])
+    # print("Expected Resharded Tensor:", expected_resharded_tensor[0, 0, 32:, :32])
+
+    # print(f"Tile 3:")
+    # print("Input Tensor:", torch_tensor[0, 0, 32:, 32:])
+    # print("After Round Trip Tensor:", torch_tensor_after_round_trip[0, 0, 32:, 32:])
+    # print("Expected Resharded Tensor:", expected_resharded_tensor[0, 0, 32:, 32:])
+
+    # print(f"Tile 4:")
+    # print("Input Tensor:", torch_tensor[0, 1, :32, :32])
+    # print("After Round Trip Tensor:", torch_tensor_after_round_trip[0, 1, :32, :32])
+    # print("Expected Resharded Tensor:", expected_resharded_tensor[0, 1, :32, :32])
+
+    # print(f"Tile 5:")
+    # print("Input Tensor:", torch_tensor[0, 1, :32, 32:])
+    # print("After Round Trip Tensor:", torch_tensor_after_round_trip[0, 1, :32, 32:])
+    # print("Expected Resharded Tensor:", expected_resharded_tensor[0, 1, :32, 32:])
+
+    # print(f"Tile 6:")
+    # print("Input Tensor:", torch_tensor[0, 1, 32:, :32])
+    # print("After Round Trip Tensor:", torch_tensor_after_round_trip[0, 1, 32:, :32])
+    # print("Expected Resharded Tensor:", expected_resharded_tensor[0, 1, 32:, :32])
+
+    # print(f"Tile 7:")
+    # print("Input Tensor:", torch_tensor[0, 1, 32:, 32:])
+    # print("After Round Trip Tensor:", torch_tensor_after_round_trip[0, 1, 32:, 32:])
+    # print("Expected Resharded Tensor:", expected_resharded_tensor[0, 1, 32:, 32:])
+
+    # print("input == round_trip:", torch_tensor == torch_tensor_after_round_trip)
+    torch.set_printoptions(profile="default")
+    assert passing3, output3
+    assert passing2, output2
     assert passing, output
 
 
