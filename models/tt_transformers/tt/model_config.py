@@ -470,6 +470,7 @@ class ModelArgs:
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
+        self.num_experts_per_tok = 2
 
         assert not os.getenv(
             "FAKE_DEVICE"
