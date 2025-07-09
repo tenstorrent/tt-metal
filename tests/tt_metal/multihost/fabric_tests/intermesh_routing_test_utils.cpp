@@ -126,20 +126,8 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
         tt::tt_metal::distributed::multihost::Tag{0}                 // exchange fabric node id over tag 0
     );
 
-    // Determine the port to use for intermesh routing
-    std::vector<chan_id_t> eth_chans =
-        control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id);
-
-    // Pick any port, for now pick the 1st one in the set
-    auto edm_port = *eth_chans.begin();
-
     log_debug(tt::LogTest, "Src MeshId {} ChipId {}", *(src_fabric_node_id.mesh_id), src_fabric_node_id.chip_id);
     log_debug(tt::LogTest, "Dst MeshId {} ChipId {}", *(dst_fabric_node_id.mesh_id), dst_fabric_node_id.chip_id);
-
-    auto edm_direction = control_plane.get_eth_chan_direction(src_fabric_node_id, edm_port);
-    CoreCoord edm_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-        src_physical_device_id, edm_port);
-    log_debug(tt::LogTest, "Using edm port {} in direction {}", edm_port, edm_direction);
 
     CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
     auto receiver_noc_encoding =
@@ -267,12 +255,7 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
 
     // Create the receiver program
     std::vector<uint32_t> compile_time_args = {
-        worker_mem_map.test_results_address,
-        worker_mem_map.test_results_size_bytes,
-        target_address,
-        0 /* mcast_mode */,
-        true,
-        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC};
+        worker_mem_map.test_results_address, worker_mem_map.test_results_size_bytes, target_address, false};
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
 
@@ -392,63 +375,10 @@ void run_mcast_sender_step(
 
     sender_runtime_args.insert(sender_runtime_args.end(), mcast_header_rtas.begin(), mcast_header_rtas.end());
 
-    // Determine the port to use for intermesh routing
-    std::vector<chan_id_t> eth_chans;
-    chan_id_t edm_port;
-    if (control_plane.has_intermesh_links(sender_phys_id)) {
-        // In this case, the sender chip is an exit node. Choose an intermesh link to the mcast start mesh.
-        auto intermesh_routing_direction =
-            control_plane.get_forwarding_direction(mcast_sender_node, mcast_start_node).value();
-        auto eth_cores_and_chans =
-            control_plane.get_active_fabric_eth_channels_in_direction(mcast_sender_node, intermesh_routing_direction);
-        for (auto chan : eth_cores_and_chans) {
-            // Pin traffic to routing plane 0 for T3K
-            if (control_plane.get_routing_plane_id(mcast_sender_node, chan) == 0) {
-                eth_chans.push_back(chan);
-            }
-        }
-    } else {
-        // In this case, the sender chip is not an exit node. Find a route to an exit node.
-        chip_id_t edge_chip = 0;
-        for (auto chip_id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
-            if (control_plane.has_intermesh_links(chip_id)) {
-                edge_chip = chip_id;
-                break;
-            }
-        }
-        auto edge_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(edge_chip);
-        eth_chans = control_plane.get_forwarding_eth_chans_to_chip(mcast_sender_node, edge_fabric_node_id);
-    }
-    // Pick any port, for now pick the 1st one in the set
-    edm_port = *eth_chans.begin();
-    auto edm_direction = control_plane.get_eth_chan_direction(mcast_sender_node, edm_port);
-    CoreCoord edm_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-        sender_phys_id, edm_port);
     log_debug(tt::LogTest, "Using edm port {} in direction {}", edm_port, edm_direction);
 
-    const auto sender_channel = edm_direction;
-    tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
-        .edm_noc_x = edm_eth_core.x,
-        .edm_noc_y = edm_eth_core.y,
-        .edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel],
-        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel],
-        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
-        .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
-        .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
-        .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
-        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
-        .edm_direction = edm_direction};
-
-    auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(mcast_send_program, sender_logical_core, 0);
-    auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(mcast_send_program, sender_logical_core, 0);
-    auto worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(mcast_send_program, sender_logical_core, 0);
-
-    append_worker_to_fabric_edm_sender_rt_args(
-        edm_connection,
-        worker_flow_control_semaphore_id,
-        worker_teardown_semaphore_id,
-        worker_buffer_index_semaphore_id,
-        sender_runtime_args);
+    tt_fabric::append_fabric_connection_rt_args(
+        mcast_sender_node, mcast_start_node, 0, mcast_send_program, {sender_logical_core}, sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(mcast_send_program, mcast_send_kernel, sender_logical_core, sender_runtime_args);
 
@@ -534,7 +464,7 @@ void run_mcast_recv_step(
 
     // Create the mcast receiver programs
     std::vector<uint32_t> compile_time_args = {
-        worker_mem_map.test_results_address, worker_mem_map.test_results_size_bytes, target_address};
+        worker_mem_map.test_results_address, worker_mem_map.test_results_size_bytes, target_address, false};
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
     std::unordered_map<tt_metal::IDevice*, std::shared_ptr<tt_metal::Program>> recv_programs;
