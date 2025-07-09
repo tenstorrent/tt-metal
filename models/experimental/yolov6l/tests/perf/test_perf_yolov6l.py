@@ -7,7 +7,6 @@ import time
 import pytest
 import torch
 from loguru import logger
-import torch.nn.functional as F
 
 import ttnn
 from models.experimental.yolov6l.runner.performant_runner import YOLOv6lPerformantRunner
@@ -45,7 +44,6 @@ def test_perf_yolov6l(
     batch_size,
     act_dtype,
     weight_dtype,
-    model_location_generator,
     resolution,
 ):
     disable_persistent_kernel_cache()
@@ -60,15 +58,11 @@ def test_perf_yolov6l(
     performant_runner._capture_yolov6l_trace_2cqs()
     input_shape = (1, 3, *resolution)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-    input_shape = (1, *resolution, 3)
-    torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-    torch_input_tensor = F.pad(torch_input_tensor, (0, 29), mode="constant", value=0)
-    tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     iterations = 32
     t0 = time.time()
     for _ in range(iterations):
-        _ = performant_runner._execute_yolov6l_trace_2cqs_inference(tt_inputs_host)
+        _ = performant_runner.run(torch_input_tensor)
     ttnn.synchronize_device(device)
     t1 = time.time()
 
@@ -98,7 +92,7 @@ def test_perf_yolov6l(
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 65],
+        [1, 66],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

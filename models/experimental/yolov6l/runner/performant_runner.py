@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import torch.nn.functional as F
-
 import ttnn
 from models.experimental.yolov6l.runner.performant_runner_infra import YOLOv6lPerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -100,10 +98,7 @@ class YOLOv6lPerformantRunner:
 
     def run(self, torch_input_tensor, check_pcc=False):
         n, c, h, w = torch_input_tensor.shape
-        torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
-        torch_input_tensor = F.pad(torch_input_tensor, (0, 29), mode="constant", value=0)
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-
+        tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
         output = self._execute_yolov6l_trace_2cqs_inference(tt_inputs_host)
         if check_pcc:
             torch_input_tensor = torch_input_tensor.reshape(n, h, w, c)
