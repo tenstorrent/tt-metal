@@ -12,8 +12,6 @@
 
 namespace detail {
 
-enum Topology { Ring = 0, Linear = 1, Mesh = 2, Torus = 3 };
-
 inline void dispatch_input_local_device(
     uint32_t input_token_read_addr, uint64_t output_token_write_addr, uint32_t output_page_size) {
     noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
@@ -117,11 +115,43 @@ void zero_buffer_async(uint32_t write_addr, int bytes) {
 
 void zero_buffer_barrier() { noc_async_read_barrier(); }
 
-bool has_wrap_around(Topology topology) { return topology == Topology::Ring || topology == Topology::Torus; }
+bool has_wrap_around(tt::tt_fabric::Topology topology) {
+    return topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus;
+}
 
-bool is_1d_topology(Topology topology) { return topology == Topology::Linear || topology == Topology::Ring; }
+bool is_1d_topology(tt::tt_fabric::Topology topology) {
+    return topology == tt::tt_fabric::Topology::Linear || topology == tt::tt_fabric::Topology::Ring;
+}
 
-bool is_2d_topology(Topology topology) { return topology == Topology::Mesh || topology == Topology::Torus; }
+bool is_2d_topology(tt::tt_fabric::Topology topology) {
+    return topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus;
+}
+
+template <uint32_t mesh_cols, uint32_t mesh_rows>
+std::pair<uint32_t, uint32_t> get_mesh_coords(uint32_t linearized_mesh_coord) {
+    // {row, column}
+    return {linearized_mesh_coord / mesh_cols, linearized_mesh_coord % mesh_cols};
+}
+
+template <tt::tt_fabric::Topology topology>
+uint32_t distance(uint32_t position_1, uint32_t position_2, uint32_t axis_size) {
+    if (position_1 == position_2) {
+        return 0;
+    }
+    uint32_t line_distance = std::abs(int(position_2) - int(position_1));
+    if (has_wrap_around(topology)) {
+        return std::min(line_distance, axis_size - line_distance);
+    } else {
+        return line_distance;
+    }
+}
+
+template <tt::tt_fabric::Topology topology, uint32_t mesh_cols, uint32_t mesh_rows>
+uint32_t manhattan_distance(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
+    auto [src_row, src_col] = get_mesh_coords<mesh_cols, mesh_rows>(linearized_src_mesh_coord);
+    auto [dest_row, dest_col] = get_mesh_coords<mesh_cols, mesh_rows>(linearized_dest_mesh_coord);
+    return distance<topology>(src_row, dest_row, mesh_rows) + distance<topology>(src_col, dest_col, mesh_cols);
+}
 
 }  // namespace detail
 
