@@ -6,7 +6,7 @@
 
 #include "debug/dprint.h"
 
-#include "hybrid_common.hpp"
+#include "cross_core_data_exchange_common.hpp"
 
 #include <cstdint>
 #include <utility>

@@ -26,20 +26,20 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
     const auto index_dtype = output_specs[1].data_type();
 
     const uint32_t total_number_of_tiles_for_hybrid_approach =
-        total_number_of_cores *
-        sort::program::SortProgramFactoryHybrid::get_number_of_tiles_per_core(
-            total_number_of_cores,
-            Wt,
-            input_dtype,
-            index_dtype,
-            sort::program::SortProgramFactoryHybrid::HybridSortSlicingStrategy::USE_AS_MANY_CORES);
+        total_number_of_cores * sort::program::SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
+                                    total_number_of_cores,
+                                    Wt,
+                                    input_dtype,
+                                    index_dtype,
+                                    sort::program::SortProgramFactoryCrossCoreDataExchange::
+                                        CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES);
 
     if (Wt <= WT_THRESHOLD) {
         // Single-core implementation
         return sort::program::SortProgramFactorySingleRowSingleCore{};
     } else if (Wt <= total_number_of_tiles_for_hybrid_approach) {
         // Hybrid implementation
-        return sort::program::SortProgramFactoryHybrid{};
+        return sort::program::SortProgramFactoryCrossCoreDataExchange{};
     }
     // DRAM implementation
     return sort::program::SortProgramFactorySingleRowMultiCore{};

@@ -13,12 +13,12 @@ The TTNN Sort operation provides three sorting strategies, each optimized for di
 | Strategy                   | Description                                                                                                  | Strengths                                                                                                | Weaknesses                                                          | Typical Use Case                              |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------- |
 | **Single Row Single Core** | Each core sorts an entire row of tiles independently.                                     | Simple, low coordination overhead, efficient for small tensors.                                          | Limited to rows with ≤64 tiles; cannot handle larger tensors.       | Small tensors (≤64 tiles per sort row).       |
-| **Hybrid**                 | Each core processes multiple tiles locally; fast cross-core L1-to-L1 communication is used only when needed. | **Fastest option** due to interior NoC-based communication; minimal DRAM usage; excellent parallelism.   | Scalability limited by number of cores and L1 memory size per core. | Medium tensors where speed is key.            |
-| **Single Row Multi Core**  | Multiple cores collaboratively sort a single row in parallel across Bitonic Sort stages.                     | **Most scalable and reliable**—works for arbitrarily large tensors; ensures sorting can always complete. | Higher synchronization overhead; typically slower than Hybrid.      | Very large tensors exceeding Hybrid capacity. |
+| **Cross Core Data Exchange**                 | Each core processes multiple tiles locally; fast cross-core L1-to-L1 communication is used only when needed. | **Fastest option** due to interior NoC-based communication; minimal DRAM usage; excellent parallelism.   | Scalability limited by number of cores and L1 memory size per core. | Medium tensors where speed is key.            |
+| **Single Row Multi Core**  | Multiple cores collaboratively sort a single row in parallel across Bitonic Sort stages.                     | **Most scalable and reliable**—works for arbitrarily large tensors; ensures sorting can always complete. | Higher synchronization overhead; typically slower than Cross Core Data Exchange.      | Very large tensors exceeding Cross Core Data Exchange capacity. |
 
 ### Key Points:
 
-* **Hybrid** is the **fastest strategy** because it minimizes expensive DRAM access by using **internal core-to-core (L1-to-L1) communication** over the on-chip **Network-on-Chip (NoC)**. However, its scalability is bounded by:
+* **Cross Core Data Exchange** is the **fastest strategy** because it minimizes expensive DRAM access by using **internal core-to-core (L1-to-L1) communication** over the on-chip **Network-on-Chip (NoC)**. However, its scalability is bounded by:
 
   * The **number of available cores**.
   * The **L1 memory size** of each core.
@@ -103,9 +103,9 @@ T4 T5 T6 T7
 
 ---
 
-### Hybrid
+### Cross Core Data Exchange
 
-The Hybrid strategy combines the advantages of both single-core and multi-core sorting approaches to maximize performance and hardware efficiency on Tenstorrent devices. It allows each core to process multiple tiles locally while enabling cross-core communication only when necessary.
+The Cross Core Data Exchange strategy combines the advantages of both single-core and multi-core sorting approaches to maximize performance and hardware efficiency on Tenstorrent devices. It allows each core to process multiple tiles locally while enabling cross-core communication only when necessary.
 
 #### Overview:
 
@@ -118,7 +118,7 @@ The Hybrid strategy combines the advantages of both single-core and multi-core s
 
 #### Tile Assignment Strategies:
 
-The Hybrid approach supports two strategies for assigning tiles to cores:
+The Cross Core Data Exchange approach supports two strategies for assigning tiles to cores:
 
 1. **Max-Core Utilization (USE_AS_MANY_CORES)**:
 
@@ -130,11 +130,11 @@ The Hybrid approach supports two strategies for assigning tiles to cores:
 2. **Fixed Tile Per Core (FILL_CORES_FIRST)**:
 
    * Assigns a fixed number of tiles to each core based on input datatype and tile size.
-   * Fewer cores are used initially, with each core processing a larger chunk of data.
+   * Fewer cores are used, with each core processing a larger chunk of data.
    * This approach reduces synchronization overhead and is more resource-efficient for smaller tensors.
    * Suitable when it is important to conserve core usage or when hardware resources are limited.
 
-**Note:** Both strategies achieve the same performance when all available cores are utilized. The choice is a tradeoff: USE_AS_MANY_CORES delivers higher speed at the cost of greater core usage, while FILL_CORES_FIRST is slower for small tensors but uses resources more rationally.
+**Note:** Both strategies achieve the same performance when all available cores are utilized. When some cores are not utilized, the choice is a tradeoff: USE_AS_MANY_CORES delivers higher speed at the cost of greater core usage, while FILL_CORES_FIRST is slower but uses fewer resources.
 
 #### Sorting Mechanism:
 
@@ -158,7 +158,7 @@ The Hybrid approach supports two strategies for assigning tiles to cores:
      * The whole mechanism works the other way round, delivering data from the second core to the base core.
    * This mechanism enables direct L1-to-L1 memory exchange between cores without the need for DRAM access.
 
-    ![Communication process](media/Hybrid_data_movement.svg)
+    ![Communication process](media/Cross_core_data_exchange_data_movement.svg)
 
 3. **Sorting with Exchanged Tiles**:
 
@@ -172,13 +172,13 @@ The Hybrid approach supports two strategies for assigning tiles to cores:
      * It synchronizes all participating cores at key stages of the sort.
      * Ensures consistency and correct progression through Bitonic stages.
 
-![Hybrid overview](media/Hybrid_overview.svg)
+![Cross Core Data Exchange overview](media/Cross_core_data_exchange_overview.svg)
 
 ---
 
 ### Single Row Multi Core
 
-This strategy implements a parallel Bitonic Sort for a single row of tiles using multiple cores simultaneously, improving performance for large datasets. This strategy is used for extra large tensors which sorting dimension exceeds *number_of_available_cores* * *cores_processed_in_each_core_memory* in the approach used by the hybrid strategy.
+This strategy implements a parallel Bitonic Sort for a single row of tiles using multiple cores simultaneously, improving performance for large datasets. This strategy is used for extra large tensors which sorting dimension exceeds *number_of_available_cores* * *cores_processed_in_each_core_memory* in the approach used by the Cross Core Data Exchange strategy.
 
 #### Overview:
 

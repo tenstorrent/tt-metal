@@ -294,8 +294,9 @@ void SortProgramFactorySingleRowSingleCore::override_runtime_arguments(
     }
 }
 
-// Hybrid approach - single row, multi core with processing multiple tiles on one core
-SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
+// SortProgramFactoryCrossCoreDataExchange - single row, multi core with processing multiple tiles on one core with
+// cross core data exchange
+SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCrossCoreDataExchange::create(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
     // Program config
     tt::tt_metal::Program program{};
@@ -342,7 +343,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         Wt,
         tensor_args.input_tensor.dtype(),
         output_tensors.at(1).dtype(),
-        HybridSortSlicingStrategy::USE_AS_MANY_CORES);
+        CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES);
     number_of_tiles_per_core = std::min(number_of_tiles_per_core, Wt);
 
     // Calculate the number of cores utilized based on the input tensor shape
@@ -568,7 +569,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     };
     const std::string reader_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
-        "reader_hybrid.cpp";
+        "reader_cross_core_data_exchange.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program, reader_kernel_path, core_range, tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
     SetRuntimeArgs(
@@ -593,7 +594,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     };
     const std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
-        "writer_hybrid.cpp";
+        "writer_cross_core_data_exchange.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program, writer_kernel_path, core_range, tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
     SetRuntimeArgs(program, writer_kernel_id, core_range, {value_buffer->address()});
@@ -619,7 +620,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         packer_unpacker_sync_cb_index,
     };
     const std::string compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_hybrid.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_cross_core_data_exchange.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
@@ -629,7 +630,7 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     return {std::move(program), {reader_kernel_id, compute_kernel_id, writer_kernel_id, core_range}};
 }
 
-void SortProgramFactoryHybrid::override_runtime_arguments(
+void SortProgramFactoryCrossCoreDataExchange::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
@@ -671,18 +672,18 @@ void SortProgramFactoryHybrid::override_runtime_arguments(
     }  // core_range loop
 }
 
-uint32_t SortProgramFactoryHybrid::get_number_of_tiles_per_core(
+uint32_t SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
     uint32_t total_number_of_cores,
     uint32_t Wt,
     const DataType& input_dtype,
     const DataType& index_dtype,
-    HybridSortSlicingStrategy slicing_strategy) {
+    CrossCoreDataExchangeSortSlicingStrategy slicing_strategy) {
     switch (slicing_strategy) {
-        case HybridSortSlicingStrategy::USE_AS_MANY_CORES: {
+        case CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES: {
             constexpr uint32_t MIN_TILES_PER_CORE = 2;
             return std::max(Wt / total_number_of_cores, MIN_TILES_PER_CORE);
         }
-        case HybridSortSlicingStrategy::FILL_CORES_FIRST:
+        case CrossCoreDataExchangeSortSlicingStrategy::FILL_CORES_FIRST:
         default: {
             if (input_dtype == DataType::FLOAT32 || input_dtype == DataType::UINT32 || input_dtype == DataType::INT32 ||
                 index_dtype == DataType::INT32 || index_dtype == DataType::UINT32) {
@@ -695,7 +696,7 @@ uint32_t SortProgramFactoryHybrid::get_number_of_tiles_per_core(
     return 128;
 }
 
-uint32_t SortProgramFactoryHybrid::rounddown_pow2(uint32_t n) {
+uint32_t SortProgramFactoryCrossCoreDataExchange::rounddown_pow2(uint32_t n) {
     if (n == 0) {
         return 0;
     }
