@@ -69,7 +69,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
-
     uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
     uint32_t start_addr = input_tensor.buffer()->address();
 
@@ -79,6 +78,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         unpadded_row_size_bytes,
         unpadded_row_size_bytes_offset,
         num_dims,
+        misalignment,
         0,
         0,
         0,
@@ -123,7 +123,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         }
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         //
-        uint32_t addr_offset = 5;  // input buffer addr, padded_row_size_bytes, unpadded_row_size_bytes, num_dims
+        uint32_t addr_offset =
+            6;  // input buffer addr, padded_row_size_bytes, unpadded_row_size_bytes, num_dims, misalignment
         reader_kernel_args[addr_offset++] = start_id;
         reader_kernel_args[addr_offset++] = num_sticks_per_core;
         reader_kernel_args[addr_offset++] = num_sticks_per_core_read;
@@ -146,10 +147,48 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     return ret_val;
 }
 
+constexpr uint32_t MAX_READ_SIZE = 4096;
+
+std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
+    const Tensor& input,
+    const Tensor& output,
+    const Shape& output_tensor_start,
+    const uint32_t num_sticks_per_core_group_1,
+    const uint32_t num_sticks_per_core_group_2) {
+    auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                    ? ::hal::get_dram_alignment()
+                                    : ::hal::get_l1_alignment();
+    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                    ? ::hal::get_dram_alignment()
+                                    : ::hal::get_l1_alignment();
+    auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
+
+    // if begins is not aligned then we need to pad the cb size, so that we can read from the nearest aligned address
+    uint32_t begins_bytes = output_tensor_start[-1] * input.element_size();
+    uint32_t misalignment = begins_bytes % src_buffer_alignment;
+
+    if (misalignment != 0) {
+        alignment *= 2;
+    }
+    const ttnn::Shape& output_shape = output.padded_shape();
+    const uint32_t unpadded_row_size_bytes = output_shape[-1] * input.element_size();
+    const uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, alignment);
+    const uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2
+                                         ? num_sticks_per_core_group_1
+                                         : num_sticks_per_core_group_2;
+    uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
+    if (num_input_pages != 0) {
+        auto num_sticks_per_core_pad32 = num_input_pages + (32 - num_input_pages % 32) % 32;
+        num_sticks_per_core_read =
+            tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, cb_page_size, MAX_READ_SIZE);
+        num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+    }
+
+    return std::make_tuple(cb_page_size, num_read_per_barrier, misalignment);
+}
+
 operation::ProgramWithCallbacks slice_rm_multi_core(
     const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
-    const ttnn::Shape output_shape = output.padded_shape();
-
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
@@ -170,47 +209,17 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t padded_row_size_bytes = a.padded_shape()[-1] * a.element_size();
-    uint32_t unpadded_row_size_bytes = output_shape[-1] * a.element_size();
-
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    uint32_t src_stick_size = padded_row_size_bytes;
-    uint32_t dst_stick_size = unpadded_row_size_bytes;
+    constexpr uint32_t src0_cb_index = 0;
 
-    uint32_t src0_cb_index = 0;
-    uint32_t max_read_size = 4096;
+    const auto [cb_page_size, num_read_per_barrier, misalignment] =
+        compute_cb_size(a, output, output_tensor_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
 
-    auto src_buffer_alignment = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::hal::get_dram_alignment()
-                                    : ::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::hal::get_dram_alignment()
-                                    : ::hal::get_l1_alignment();
-    auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
-
-    // if begins is not aligned then we need to pad the cb size, so that we can read from the nearest aligned address
-    uint32_t begins_bytes = output_tensor_start[-1] * a.element_size();
-    uint32_t misalignment = begins_bytes % src_buffer_alignment;
-
-    if (misalignment != 0) {
-        alignment *= 2;
-    }
-    uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, alignment);
-
-    uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
-                                                                                         : num_sticks_per_core_group_2;
-    uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
-    if (num_input_pages != 0) {
-        auto num_sticks_per_core_pad32 = num_input_pages + (32 - num_input_pages % 32) % 32;
-        num_sticks_per_core_read =
-            tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, cb_page_size, max_read_size);
-        num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
-    }
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_read_per_barrier * 2 * cb_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, cb_page_size);
@@ -218,7 +227,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
 
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
 
-    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_is_dram, misalignment};
+    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_is_dram};
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
@@ -244,7 +253,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
         core_group_2,
         num_sticks_per_core_group_1,
         num_sticks_per_core_group_2,
-        max_read_size);
+        MAX_READ_SIZE);
 
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -254,9 +263,9 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     }
 
     auto override_runtime_args_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, compute_with_storage_grid_size, max_read_size](
+        [unary_reader_kernel_id, unary_writer_kernel_id, compute_with_storage_grid_size, src0_cb_index, cb_src0](
             const void* operation,
-            const Program& program,
+            Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
@@ -277,6 +286,14 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
 
             const auto tensor_start =
                 static_cast<const ttnn::operations::data_movement::SliceDeviceOperation*>(operation)->slice_start;
+
+            const auto [cb_page_size, num_read_per_barrier, misalignment] = compute_cb_size(
+                src_tensor, dst_tensor, tensor_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
+
+            const uint32_t cb_size_bytes = num_read_per_barrier * 2 * cb_page_size;  // same as PF
+            UpdateCircularBufferTotalSize(program, cb_src0, cb_size_bytes);
+            UpdateCircularBufferPageSize(program, cb_src0, src0_cb_index, cb_page_size);
+
             auto all_runtime_args = get_slice_runtime_args_rm(
                 src_tensor,
                 dst_tensor,
@@ -288,18 +305,18 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
                 core_group_2,
                 num_sticks_per_core_group_1,
                 num_sticks_per_core_group_2,
-                max_read_size);
+                MAX_READ_SIZE);
 
             for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-                {
-                    SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
-                }
+                auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                std::copy(
+                    all_runtime_args[i].first.begin(), all_runtime_args[i].first.end(), reader_runtime_args.data());
 
-                {
-                    SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
-                }
+                auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                std::copy(
+                    all_runtime_args[i].second.begin(), all_runtime_args[i].second.end(), writer_runtime_args.data());
             }
         };
 
