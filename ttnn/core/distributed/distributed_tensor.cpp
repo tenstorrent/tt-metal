@@ -284,10 +284,23 @@ public:
             auto distributed_buffer =
                 tt::tt_metal::DistributedHostBuffer::create(global_shape_, local_shape_, local_offset_);
             auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
+            std::vector<MeshCoordinate> buffer_coords;
             for (const auto& coord : MeshCoordinateRange(distribution_shape_)) {
-                distributed_buffer.emplace_shard(remap_fn(coord), [&b = replicated_buffer]() { return b; });
+                const auto mapped_coord = remap_fn(coord);
+                buffer_coords.push_back(mapped_coord);
+                distributed_buffer.emplace_shard(mapped_coord, [&b = replicated_buffer]() { return b; });
             }
-            return Tensor(tt::tt_metal::MultiDeviceHostStorage(std::move(distributed_buffer)), tensor_spec, config());
+
+            const auto topology_config = tt::tt_metal::TopologyConfig{
+                .mesh_shape = distribution_shape_,
+                .mesh_coords = buffer_coords,
+                .placements = convert_placements_to_topology_config(config_.placements)};
+
+            return Tensor(
+                tt::tt_metal::MultiDeviceHostStorage(std::move(distributed_buffer)),
+                tensor_spec,
+                config(),
+                topology_config);
         }
 
         // Otherwise, use xtensor to chunk the data into shards.

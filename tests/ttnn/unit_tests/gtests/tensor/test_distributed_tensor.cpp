@@ -71,7 +71,7 @@ TEST_F(TensorDistributionTest, SingleDeviceTensorTopology) {
     auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
     Tensor replicated_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
-    std::cout << input_tensor.topology_config().has_value() << std::endl;
+    std::cout << replicated_tensor.topology_config().has_value() << std::endl;
 }
 
 TEST_F(TensorDistributionT3000Test, Shard1DInvalidDim) {
