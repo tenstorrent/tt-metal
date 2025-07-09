@@ -742,7 +742,7 @@ def test_demo_text(
                 profiler.start(f"compile_decode", iteration=batch_idx)
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
-            # below the collect method also applies teacher forcing which necessary for exact token matching
+            # below the collect method also applies teacher forcing which is necessary for exact token matching
             if token_accuracy:
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
