@@ -6,6 +6,8 @@
 #include <utility>
 #include <vector>
 
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+
 namespace ttnn::operations::ccl::common {
 
 namespace detail {

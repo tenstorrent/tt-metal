@@ -147,9 +147,9 @@ void kernel_main() {
                             packet_headers[0]);
                     }
                     cb_pop_front(data_cb_id, 1);
-                }
             }
             cb_pop_front(metadata_cb_id, 1);
+        }
         }
     }
     cb_pop_front(local_experts_cb_id, 1);
