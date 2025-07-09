@@ -1,9 +1,12 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <memory>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include "tt-metalium/buffer.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -11,73 +14,98 @@ using namespace tt::tt_metal;
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
 int main() {
-    /* Silicon accelerator setup */
+    // Initialize a device
     IDevice* device = CreateDevice(0);
 
-    /* Setup program to execute along with its buffers and kernels to use */
+    // Create a command queue and program
+    // Command queue
+    //    * Submit work (execute programs and read/write buffers) to the device
+    // Program
+    //    * Contains kernels that perform computations or data movement
     CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
+    // We will only be using one Tensix core for this particular example. As Tenstorrent processors are a 2D grid of
+    // cores we can specify the core coordinates as (0, 0).
     constexpr CoreCoord core = {0, 0};
 
-    constexpr uint32_t single_tile_size = 2 * 1024;
+    // Adding 2 integers in RISC-V thus a buffer size of 4 bytes.
+    constexpr uint32_t buffer_size = sizeof(uint32_t);
+    // There are many modes of buffer allocation, here we use interleaved buffers. Interleaved buffers are the most
+    // flexible and generally recommended buffer type for most applications. As the Tensix core does not have direct
+    // access to DRAM, an extra buffer on L1 (SRAM) is required to read/write data from/to DRAM.
     InterleavedBufferConfig dram_config{
-        .device = device, .size = single_tile_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
+        .device = device, .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::DRAM};
+    InterleavedBufferConfig l1_config{
+        .device = device, .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::L1};
 
-    std::shared_ptr<Buffer> src0_dram_buffer = CreateBuffer(dram_config);
-    std::shared_ptr<Buffer> src1_dram_buffer = CreateBuffer(dram_config);
-    std::shared_ptr<Buffer> dst_dram_buffer = CreateBuffer(dram_config);
+    // Create the DRAM and SRAM buffers
+    auto src0_dram_buffer = CreateBuffer(dram_config);
+    auto src1_dram_buffer = CreateBuffer(dram_config);
+    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto src0_l1_buffer = CreateBuffer(l1_config);
+    auto src1_l1_buffer = CreateBuffer(dram_config);
+    auto dst_l1_buffer = CreateBuffer(l1_config);
 
-    // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
-    uint32_t src0_bank_id = 0;
-    uint32_t src1_bank_id = 0;
-    uint32_t dst_bank_id = 0;
+    // Create source data and write to DRAM
+    std::vector<uint32_t> src0_vec = {14};
+    std::vector<uint32_t> src1_vec = {7};
 
-    /* Create source data and write to DRAM */
-    std::vector<uint32_t> src0_vec(1, 14);
-    std::vector<uint32_t> src1_vec(1, 7);
+    // Enqueue write operations to copy data from host vectors to DRAM buffers. The last argument specifies whether the
+    // write operation should block until the data is written to the device. In this case, we set it to false for
+    // asynchronous writes, allowing the program to continue executing while the data is being written. This is
+    // recommended for most writes to device in applications to improve performance.
+    EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
+    EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, /*blocking=*/false);
 
-    EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
-
-    /* Use L1 circular buffers to set input buffers */
-    constexpr uint32_t src0_cb_index = CBIndex::c_0;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
-
-    constexpr uint32_t src1_cb_index = CBIndex::c_1;
-    CircularBufferConfig cb_src1_config =
-        CircularBufferConfig(single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src1_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
-
-    /* Specify data movement kernel for reading/writing data to/from DRAM */
-    KernelHandle binary_reader_kernel_id = CreateKernel(
+    // Create the kernel (code that runs on the Tensix core) that will perform the addition of the 2 integers.
+    // The Data Movement cores are the only cores that can read/write data from/to DRAM. Thus we use them for
+    // demonstration purposes here. In practice, you would perform addition using the compute kernel which have access
+    // to much more powerful vector and matrix engines. The Data Movement cores are used for data movement tasks such as
+    // reading/writing data from/to DRAM. But they are still fully capable of performing simple arithmetic operations
+    // like addition. Just slower.
+    KernelHandle kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "add_2_integers_in_riscv/kernels/reader_writer_add_in_riscv.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    /* Configure program and runtime kernel arguments, then execute */
+    // Set the arguments for the kernel. The arguments are set in the order they are defined in the kernel source code.
     SetRuntimeArgs(
         program,
-        binary_reader_kernel_id,
+        kernel_id,
         core,
-        {src0_dram_buffer->address(),
-         src1_dram_buffer->address(),
-         dst_dram_buffer->address(),
-         src0_bank_id,
-         src1_bank_id,
-         dst_bank_id});
+        {
+            src0_dram_buffer->address(),
+            src1_dram_buffer->address(),
+            dst_dram_buffer->address(),
+            src0_l1_buffer->address(),
+            src1_l1_buffer->address(),
+            dst_l1_buffer->address(),
+        });
 
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
+    // Enqueue the kernel for execution on the device. Setting blocking to false allows the program to continue
+    // executing while the kernel is being executed on the device (which is for demonstration purposes here as
+    // immidiately after we read the result).
+    EnqueueProgram(cq, program, /*blocking=*/false);
 
-    /* Read in result into a host vector */
+    // Read in result into a host vector. This time we set blocking to true as we can only compare the result after the
+    // data has been read from the device.
+    // NOTE: Everything in the command queue is executed in order, one by one after the previous command has completed.
+    // In no conditions a read on the command queue will be executed before kernel execution in front of it has
+    // completed.
     std::vector<uint32_t> result_vec;
-    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
-    printf("Result = %d : Expected = 21\n", result_vec[0]);
+    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, /*blocking=*/true);
+    if (result_vec.size() != 1) {
+        std::cout << "Error: Expected result vector size of 1, got " << result_vec.size() << std::endl;
+        CloseDevice(device);
+        return -1;
+    }
+    if (result_vec[0] != 21) {
+        std::cout << "Error: Expected result of 21, got " << result_vec[0] << std::endl;
+        CloseDevice(device);
+        return -1;
+    }
 
+    std::cout << "Success: Result is " << result_vec[0] << std::endl;
     CloseDevice(device);
 }

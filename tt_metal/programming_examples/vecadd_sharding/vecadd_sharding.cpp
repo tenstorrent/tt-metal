@@ -36,7 +36,7 @@ struct L1Config {
 
     // following sharding parameters are hardcode for this example
     tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
-    uint32_t element_size = 2;
+    uint32_t element_size = sizeof(bfloat16);
     uint32_t num_tiles_per_core_height = 2;
     uint32_t num_tiles_per_core_width = 2;
 
@@ -89,8 +89,8 @@ std::string next_arg(int& i, int argc, char** argv) {
 
 void help(std::string_view program_name) {
     std::cout << "Usage: " << program_name << " [options]\n";
-    std::cout << "This program demonstrates how to add two vectors using "
-                 "tt-Metalium.\n";
+    std::cout << "This program demonstrates how to add two vectors in sharding mode, "
+                 "using multiple cores and sharded L1 buffers.\n";
     std::cout << "\n";
     std::cout << "Options:\n";
     std::cout << "  --device, -d <device_id>  Specify the device to run the "
@@ -138,6 +138,11 @@ int main(int argc, char** argv) {
     Program program = CreateProgram();
 
     std::cout << "Sharding type: " << sharding_type << std::endl;
+    if (!test_configs.contains(sharding_type)) {
+        std::cout << "Invalid sharding type: " << sharding_type << std::endl;
+        help(argv[0]);
+        return 1;
+    }
     const auto& test_config = test_configs.at(sharding_type);
 
     // Create the input and output buffers.
@@ -164,14 +169,10 @@ int main(int argc, char** argv) {
             .defines = {}});
 
     // copy data from host to L1 directly
-    detail::WriteToBuffer(a, a_data);
-    detail::WriteToBuffer(b, b_data);
+    EnqueueWriteBuffer(device->command_queue(), a, a_data, false);
+    EnqueueWriteBuffer(device->command_queue(), b, b_data, false);
 
-    for (int i = 0; i < test_config.num_cores; ++i) {
-        // Set runtime arguments for each core.
-        CoreCoord core = {0, i};
-        SetRuntimeArgs(program, compute, core, {test_config.num_tiles_per_core});
-    }
+    SetRuntimeArgs(program, compute, test_config.cores, {test_config.num_tiles_per_core});
 
     CommandQueue& cq = device->command_queue();
     // Enqueue the program
@@ -181,7 +182,7 @@ int main(int argc, char** argv) {
 
     // Read the output buffer.
     std::vector<bfloat16> c_data;
-    detail::ReadFromBuffer(c, c_data);
+    EnqueueReadBuffer(cq, c, c_data, true);
 
     // Print partial results so we can see the output is correct (plus or minus
     // some error due to BFP16 precision)
@@ -201,6 +202,23 @@ int main(int argc, char** argv) {
         std::cout << std::endl;
     }
     std::cout << std::flush;
+
+    bool pass = true;
+    for (size_t i = 0; i < c_data.size(); i++) {
+        float expected = a_data[i].to_float() + b_data[i].to_float();
+        if (std::abs(c_data[i].to_float() - expected) > 0 &&
+            std::abs(c_data[i].to_float() - expected) > 0.2f) {  // Allow some error due to BFP16 precision
+            std::cout << "Mismatch at index " << i << ": expected " << expected << ", got " << c_data[i].to_float()
+                      << std::endl;
+            pass = false;
+        }
+    }
+
+    if (pass) {
+        fmt::print("All results match expected values within tolerance.\n");
+    } else {
+        fmt::print(stderr, "Some results did not match expected values.\n");
+    }
 
     // Finally, we close the device.
     CloseDevice(device);
