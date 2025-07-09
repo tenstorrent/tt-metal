@@ -253,20 +253,20 @@ public:
     uint32_t core_num_pages_remaining_to_write = 0;
 
     ShardedBufferWriteDispatchParams(
-        Buffer& buffer,
+        Buffer* buffer,
         uint32_t total_pages_to_write,
         uint32_t cq_id,
         tt::stl::Span<const uint32_t> expected_num_workers_completed) :
         buffer(buffer) {
         this->cq_id = cq_id;
-        this->device = buffer.device();
+        this->device = buffer->device();
         this->expected_num_workers_completed = expected_num_workers_completed;
-        this->buffer_page_mapping = buffer.get_buffer_page_mapping();
+        this->buffer_page_mapping = buffer->get_buffer_page_mapping();
         this->total_pages_written = 0;
-        this->are_pages_large = are_pages_larger_than_max_prefetch_cmd_size(buffer);
+        this->are_pages_large = are_pages_larger_than_max_prefetch_cmd_size(*buffer);
 
         if (this->are_pages_large) {
-            const PartialPageSpec partial_page_spec = calculate_partial_page_spec(buffer);
+            const PartialPageSpec partial_page_spec = calculate_partial_page_spec(*buffer);
             this->size_of_partial_page = partial_page_spec.partial_page_size;
             this->page_size_to_write = partial_page_spec.partial_page_size;
             this->data_size_to_copy = partial_page_spec.partial_page_size;
@@ -274,10 +274,10 @@ public:
             this->num_partial_pages_in_single_full_page = partial_page_spec.num_partial_pages_per_full_page;
         } else {
             this->total_pages_to_write = total_pages_to_write;
-            this->page_size_to_write = buffer.aligned_page_size();
-            this->data_size_to_copy = buffer.page_size();
+            this->page_size_to_write = buffer->aligned_page_size();
+            this->data_size_to_copy = buffer->page_size();
             this->num_partial_pages_in_single_full_page = 1;
-            this->size_of_partial_page = buffer.aligned_page_size();
+            this->size_of_partial_page = buffer->aligned_page_size();
         }
     }
 
@@ -286,10 +286,11 @@ public:
     void reset_params_for_core(const CoreCoord& core, const BufferCorePageMapping& core_page_mapping) {
         this->core = core;
         this->core_page_mapping_it = core_page_mapping.begin();
-        this->address = this->buffer.address() + core_page_mapping.device_start_page * this->buffer.aligned_page_size();
-        if (this->buffer.is_dram()) {
-            this->address += this->buffer.device()->allocator()->get_bank_offset(
-                BufferType::DRAM, this->buffer.device()->dram_channel_from_logical_core(core));
+        this->address =
+            this->buffer->address() + core_page_mapping.device_start_page * this->buffer->aligned_page_size();
+        if (this->buffer->is_dram()) {
+            this->address += this->buffer->device()->allocator()->get_bank_offset(
+                BufferType::DRAM, this->buffer->device()->dram_channel_from_logical_core(core));
         }
         if (this->are_pages_large) {
             this->core_num_pages_remaining_to_write =
@@ -323,10 +324,10 @@ public:
 
             if (num_partial_pages_remaining_in_curr_full_page == 1) {
                 this->page_size_to_write =
-                    this->buffer.aligned_page_size() -
+                    this->buffer->aligned_page_size() -
                     (this->num_partial_pages_written_for_curr_full_page * this->size_of_partial_page);
                 this->data_size_to_copy =
-                    this->buffer.page_size() -
+                    this->buffer->page_size() -
                     (this->num_partial_pages_written_for_curr_full_page * this->size_of_partial_page);
             }
         } else {
@@ -354,7 +355,7 @@ public:
     }
 
 private:
-    const Buffer& buffer;
+    const Buffer* buffer = nullptr;
     bool are_pages_large = false;
     uint32_t size_of_partial_page = 0;
     uint32_t num_partial_pages_written_for_curr_full_page = 0;
@@ -704,7 +705,7 @@ void write_to_device_buffer(
 
     if (is_sharded(buffer.buffer_layout())) {
         ShardedBufferWriteDispatchParams dispatch_params(
-            buffer, buffer.size() / buffer.page_size(), cq_id, expected_num_workers_completed);
+            &buffer, buffer.size() / buffer.page_size(), cq_id, expected_num_workers_completed);
         const std::vector<CoreCoord>& cores = dispatch_params.buffer_page_mapping->all_cores;
         // Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
