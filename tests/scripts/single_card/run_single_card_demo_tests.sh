@@ -321,6 +321,14 @@ run_yolov6l_perf() {
 
 }
 
+# commenting out the test from CI due to HF issue. TODO explore AWS alternative suggested by infra team.
+# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
+# run_swin_s_demo() {
+
+#   pytest -n auto models/experimental/swin_s/demo/demo.py --timeout 600
+
+# }
+
 # Commenting out VGG_Unet Demo since CIv2 does not support dataset download from Kaggle
 # Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
 # run_vgg_unet_demo() {

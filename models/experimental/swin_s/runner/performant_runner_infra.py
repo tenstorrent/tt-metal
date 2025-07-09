@@ -6,12 +6,7 @@
 import torch
 from loguru import logger
 import ttnn
-<<<<<<< HEAD
 from models.experimental.swin_s.tests.pcc.test_ttnn_swin_transformer import (
-=======
-from torchvision import models
-from tests.ttnn.integration_tests.swin_s.test_ttnn_swin_transformer import (
->>>>>>> 8d7d877bab (17785: Added Swin_S trace pipeline)
     create_custom_preprocessor,
     preprocess_attn_mask,
 )
