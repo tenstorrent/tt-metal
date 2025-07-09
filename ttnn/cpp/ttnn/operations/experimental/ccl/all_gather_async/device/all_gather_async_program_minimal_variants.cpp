@@ -152,7 +152,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     // scatter-write currently only supports 2 distinct noc addresses, and is only supported for wormhole
     uint32_t max_target_noc_addresses_per_packet = 1;
     if (tt::tt_metal::hal::get_arch() == tt::ARCH::WORMHOLE_B0) {
-        uint32_t max_target_noc_addresses_per_packet = 2;
+        max_target_noc_addresses_per_packet = 2;
     }
 
     // for bfloat8_b, tile_num_per_link=6, we would need to send 2 packages, but they can be of size 3 instead of 4
