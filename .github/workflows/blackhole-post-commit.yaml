@@ -86,12 +86,12 @@ jobs:
             civ2-viommu-matrix='["BH-LLMBox"]'
           else
             matrix='["P100", "P150"]'
-            civ2-matrix='["P100", "P150b"]'
-            civ2-viommu-matrix='["P100", "P150b-viommu"]'
+            civ2_matrix='["P100", "P150b"]'
+            civ2_viommu_matrix='["P100", "P150b-viommu"]'
           fi
           echo "matrix=$matrix" >> $GITHUB_OUTPUT
-          echo "civ2-matrix=$civ2-matrix" >> $GITHUB_OUTPUT
-          echo "civ2-viommu-matrix=$civ2-viommu-matrix" >> $GITHUB_OUTPUT
+          echo "civ2-matrix=$civ2_matrix" >> $GITHUB_OUTPUT
+          echo "civ2-viommu-matrix=$civ2_viommu_matrix" >> $GITHUB_OUTPUT
 
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
