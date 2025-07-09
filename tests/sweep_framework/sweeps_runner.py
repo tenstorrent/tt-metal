@@ -206,7 +206,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                             "DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: "
                             + message,
                         )
-                        logger.info("Skipping test suite because of device error, proceeding...")
+                        logger.info("Device error detected. The suite will be aborted after this test.")
                     if "Out of Memory: Not enough space to allocate" in message:
                         result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
                     elif "Watcher" in message:
@@ -249,6 +249,14 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
 
         suite_pbar.update()
         results.append(result)
+
+        # Abort the suite if a fatal device error was encountered
+        if "DEVICE EXCEPTION" in result.get("exception", ""):
+            logger.error("Aborting test suite due to fatal device error.")
+            if p and p.is_alive():
+                p.terminate()
+                p.join()
+            break
 
     if p is not None:
         p.join()
@@ -421,7 +429,8 @@ def initialize_postgres_database():
             message TEXT,
             exception TEXT,
             e2e_perf FLOAT,
-            device_perf JSONB
+            device_perf JSONB,
+            error_signature VARCHAR(255)
         );
         """
 
@@ -448,6 +457,7 @@ def initialize_postgres_database():
         CREATE INDEX IF NOT EXISTS idx_sweep_testcases_status ON sweep_testcases(status);
         CREATE INDEX IF NOT EXISTS idx_sweep_testcases_host ON sweep_testcases(host);
         CREATE INDEX IF NOT EXISTS idx_sweep_testcases_start_time_ts ON sweep_testcases(start_time_ts);
+        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_error_signature ON sweep_testcases(error_signature);
         """
 
         cursor.execute(create_indexes_query)
@@ -465,6 +475,14 @@ def initialize_postgres_database():
             cursor.close()
         if conn:
             conn.close()
+
+
+def generate_error_signature(exception_message):
+    """Generate a concise error signature from an exception message."""
+    if not exception_message:
+        return None
+    # Take the first line of the exception as the signature, capped at 255 chars
+    return exception_message.splitlines()[0][:255]
 
 
 def push_run(initiated_by, git_author, git_branch_name, git_commit_hash, start_time_ts, status):
@@ -551,9 +569,9 @@ def push_test(run_id, header_info, test_results, test_start_time, test_end_time)
         INSERT INTO sweep_testcases (
             test_id, name, device, host, start_time_ts, end_time_ts,
             status, suite_name, test_vector, message, exception,
-            e2e_perf, device_perf
+            e2e_perf, device_perf, error_signature
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         """
         test_statuses = []
@@ -562,6 +580,8 @@ def push_test(run_id, header_info, test_results, test_start_time, test_end_time)
             db_status = map_test_status_to_db_status(result.get("status", None))
             test_statuses.append(db_status)
             testcase_name = f"{sweep_name}_{header_info[i].get('vector_id', 'unknown')}"
+            exception_text = result.get("exception", None)
+            error_sig = generate_error_signature(exception_text)
             # Create testcase record
             testcase_values = (
                 test_id,
@@ -574,9 +594,10 @@ def push_test(run_id, header_info, test_results, test_start_time, test_end_time)
                 header_info[i].get("suite_name", None),
                 json.dumps(result.get("original_vector_data", None)),
                 result.get("message", None),
-                result.get("exception", None),
+                exception_text,
                 result.get("e2e_perf", None),
                 json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
+                error_sig,
             )
             cursor.execute(testcase_insert_query, testcase_values)
             logger.info(
