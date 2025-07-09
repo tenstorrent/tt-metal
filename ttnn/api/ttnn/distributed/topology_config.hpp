@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/mesh_coord.hpp>
+
 namespace tt::tt_metal {
 struct TopologyConfig {
     // TODO: Merge with MeshMapperConfig::Placement

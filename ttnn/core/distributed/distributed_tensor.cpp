@@ -132,6 +132,31 @@ tt::tt_metal::HostBuffer create_host_buffer_from_span(
         pad_value));
 }
 
+// TODO: Remove this once we use same Placement in TopologyConfig as in MeshMapperConfig
+// Converts MeshMapperConfig::Placement to TopologyConfig::Placement
+tt::stl::SmallVector<tt::tt_metal::TopologyConfig::Placement> convert_placements_to_topology_config(
+    const tt::stl::SmallVector<MeshMapperConfig::Placement>& placements) {
+    auto convert_placement =
+        [](const MeshMapperConfig::Placement& placement) -> tt::tt_metal::TopologyConfig::Placement {
+        return std::visit(
+            tt::stl::overloaded{
+                [](const MeshMapperConfig::Replicate& replicate) -> tt::tt_metal::TopologyConfig::Placement {
+                    return tt::tt_metal::TopologyConfig::Replicate{};
+                },
+                [](const MeshMapperConfig::Shard& shard) -> tt::tt_metal::TopologyConfig::Placement {
+                    return tt::tt_metal::TopologyConfig::Shard{.dim = shard.dim};
+                },
+            },
+            placement);
+    };
+
+    tt::stl::SmallVector<tt::tt_metal::TopologyConfig::Placement> topology_placements;
+    for (const auto& placement : placements) {
+        topology_placements.push_back(convert_placement(placement));
+    }
+    return topology_placements;
+}
+
 }  // namespace
 
 std::ostream& operator<<(std::ostream& os, const MeshMapperConfig::Placement& placement) {
@@ -369,14 +394,13 @@ private:
             }
         }
 
-        // const auto topology_config = ttnn::distributed::TopologyConfig{
-        //     .mesh_shape = distribution_shape_,
-        //     .coords = buffer_coords,
-        //     .placements = config_.placements
-        // };
+        const auto topology_config = tt::tt_metal::TopologyConfig{
+            .mesh_shape = distribution_shape_,
+            .mesh_coords = buffer_coords,
+            .placements = convert_placements_to_topology_config(config_.placements)};
 
         return Tensor(
-            tt::tt_metal::MultiDeviceHostStorage(std::move(distributed_buffer)), shard_spec, config(), std::nullopt);
+            tt::tt_metal::MultiDeviceHostStorage(std::move(distributed_buffer)), shard_spec, config(), topology_config);
     }
 
     // MeshDevice parameters.
