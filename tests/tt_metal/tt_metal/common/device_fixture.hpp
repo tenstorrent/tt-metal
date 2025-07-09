@@ -21,9 +21,6 @@ private:
     std::map<chip_id_t, tt::tt_metal::IDevice*> id_to_device_;
 
 protected:
-    static void SetUpTestSuite() {}
-    static void TearDownTestSuite() {}
-
     void SetUp() override {
         // Save time. Don't do any setup if invalid dispatch mode
         if (!this->validate_dispatch_mode()) {
@@ -79,6 +76,9 @@ protected:
         this->num_devices_ = this->devices_.size();
     }
 
+    DeviceFixture(size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
+        DispatchFixture(l1_small_size, trace_region_size) {}
+
     size_t num_devices_;
 
 public:
@@ -97,25 +97,11 @@ public:
 
 class DeviceFixtureWithL1Small : public DeviceFixture {
 public:
-    static void SetUpTestSuite() {}
-    static void TearDownTestSuite() {}
-
-    void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        DispatchFixture::DoSetUpTestSuite(24 * 1024);
-        num_devices_ = NumDevices();
-    }
-
-    void TearDown() override { DispatchFixture::TearDownTestSuite(); }
+    DeviceFixtureWithL1Small() : DeviceFixture(24 * 1024) {}
 };
 
 class DeviceSingleCardFixture : public DispatchFixture {
 protected:
-    static void SetUpTestSuite() {}
-    static void TearDownTestSuite() {}
-
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
@@ -158,9 +144,6 @@ class DeviceSingleCardBufferFixture : public DeviceSingleCardFixture {};
 
 class BlackholeSingleCardFixture : public DeviceSingleCardFixture {
 protected:
-    static void SetUpTestSuite() {}
-    static void TearDownTestSuite() {}
-
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();

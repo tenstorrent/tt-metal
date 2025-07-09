@@ -295,14 +295,12 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 }
 
 class EarlyReturnFixture : public DispatchFixture {
-protected:
-    static void SetUpTestSuite() {
+    void SetUp() override {
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(true);
-        DispatchFixture::SetUpTestSuite();
+        DispatchFixture::SetUp();
     }
-
-    static void TearDownTestSuite() {
-        DispatchFixture::TearDownTestSuite();
+    void TearDown() override {
+        DispatchFixture::TearDown();
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(false);
     }
 };
