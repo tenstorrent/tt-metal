@@ -16,7 +16,6 @@ void kernel_main() {
     const uint32_t num_sticks_per_core = get_arg_val<uint32_t>(6);
     const uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(7);
     const uint32_t num_read_per_barrier = get_arg_val<uint32_t>(8);
-
 #ifdef DEBUG
     DPRINT << "dst_addr: " << dst_addr << ENDL();
     DPRINT << "output_stick_size: " << output_stick_size << ENDL();
@@ -38,6 +37,9 @@ void kernel_main() {
     const uint32_t noc_write_size = std::min(output_stick_size, input_stick_size);
     uint32_t dst_stick_id = start_id;
     uint32_t sticks_read = 0;
+#ifdef DEBUG
+    uint32_t base_src_l1_addr = get_read_ptr(cb_id_out0);
+#endif
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
         cb_wait_front(cb_id_out0, num_read_per_barrier);
         uint32_t src_buffer_l1_addr = get_read_ptr(cb_id_out0);
@@ -46,6 +48,11 @@ void kernel_main() {
             sticks_read++;
             uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s0);
             noc_async_write(src_buffer_l1_addr, dst_noc_addr, noc_write_size);
+#ifdef DEBUG
+            DPRINT << "SRC L1 : " << src_buffer_l1_addr - base_src_l1_addr << " Dst Stick ID " << dst_stick_id
+                   << " Coord " << id_per_dim[0] << ", " << id_per_dim[1] << ", " << id_per_dim[2] << ", "
+                   << id_per_dim[3] << ENDL();
+#endif
             src_buffer_l1_addr += stick_size_offset;
             dst_stick_id++;
             for (uint32_t j = 0; j < num_dims; j++) {
