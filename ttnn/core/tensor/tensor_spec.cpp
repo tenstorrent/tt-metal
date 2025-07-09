@@ -149,7 +149,7 @@ TensorSpec TensorSpec::sharded_across_dims(
         shard_shape[dim] = 1;
     }
     NdShardSpec shard_spec(std::move(shard_shape), std::move(grid), orientation);
-    return sharded(std::move(shard_spec), ShardAlignment::Recommended);
+    return sharded(std::move(shard_spec), ShardShapeAlignment::Recommended);
 }
 
 TensorSpec TensorSpec::sharded_across_dims_except(
@@ -160,40 +160,58 @@ TensorSpec TensorSpec::sharded_across_dims_except(
         shard_shape[dim] = padded_shape[dim];
     }
     auto shard_spec = NdShardSpec(std::move(shard_shape), std::move(grid), orientation);
-    return sharded(std::move(shard_spec), ShardAlignment::Recommended);
+    return sharded(std::move(shard_spec), ShardShapeAlignment::Recommended);
 }
 
 TensorSpec TensorSpec::height_sharded(CoreRangeSet grid, ShardOrientation orientation) const {
     auto num_cores = grid.num_cores();
     auto shard_height = div_up(physical_shape().height(), num_cores);
     NdShardSpec shard_spec(Shape({shard_height, physical_shape().width()}), std::move(grid), orientation);
-    return sharded(std::move(shard_spec), ShardAlignment::Required);
+    return sharded(std::move(shard_spec), ShardShapeAlignment::Required);
 }
 
 TensorSpec TensorSpec::width_sharded(CoreRangeSet grid, ShardOrientation orientation) const {
     auto num_cores = grid.num_cores();
     auto shard_width = div_up(physical_shape().width(), num_cores);
     NdShardSpec shard_spec(Shape({physical_shape().height(), shard_width}), std::move(grid), orientation);
-    return sharded(std::move(shard_spec), ShardAlignment::Required);
+    return sharded(std::move(shard_spec), ShardShapeAlignment::Required);
 }
 
-TensorSpec TensorSpec::block_sharded(CoreRange grid) const {
+TensorSpec TensorSpec::block_sharded(CoreRange grid, ShardOrientation orientation) const {
     auto grid_size = grid.grid_size();
-    auto shard_height = div_up(physical_shape().height(), grid_size.y);
-    auto shard_width = div_up(physical_shape().width(), grid_size.x);
-    NdShardSpec shard_spec(Shape({shard_height, shard_width}), std::move(grid), ShardOrientation::ROW_MAJOR);
-    return sharded(std::move(shard_spec), ShardAlignment::Recommended);
+    auto shard_height =
+        div_up(physical_shape().height(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.y : grid_size.x);
+    auto shard_width =
+        div_up(physical_shape().width(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.x : grid_size.y);
+    NdShardSpec shard_spec(Shape({shard_height, shard_width}), std::move(grid), orientation);
+    return sharded(std::move(shard_spec), ShardShapeAlignment::Recommended);
 }
 
-TensorSpec TensorSpec::sharded(NdShardSpec nd_shard_spec, ShardAlignment shard_alignment) const {
-    if (shard_alignment == ShardAlignment::Required) {
-        nd_shard_spec.apply_required_alignment(page_config());
-    } else if (shard_alignment == ShardAlignment::Recommended) {
-        nd_shard_spec.apply_recommended_alignment(page_config(), data_type(), memory_config().buffer_type());
+TensorSpec TensorSpec::sharded(NdShardSpec nd_shard_spec, ShardShapeAlignment shard_alignment) const {
+    if (shard_alignment != ShardShapeAlignment::None) {
+        auto alignment =
+            shard_alignment == ShardShapeAlignment::Required
+                ? page_config().get_required_shard_shape_alignment()
+                : page_config().get_recommended_shard_shape_alignment(data_type(), memory_config().buffer_type());
+        auto& shard_shape = nd_shard_spec.shard_shape;
+        for (int dim = 1; dim <= alignment.size(); dim++) {
+            shard_shape[-dim] = round_up(shard_shape[-dim], alignment[-dim]);
+        }
     }
     TensorLayout new_layout(
         data_type(), page_config(), MemoryConfig(memory_config().buffer_type(), std::move(nd_shard_spec)));
     return TensorSpec(logical_shape(), std::move(new_layout));
+}
+
+TensorSpec TensorSpec::sharded(
+    Shape shard_shape,
+    CoreRangeSet grid,
+    ShardShapeAlignment shard_alignment,
+    ShardOrientation orientation,
+    ShardDistributionStrategy shard_distribution_strategy) const {
+    return sharded(
+        NdShardSpec(std::move(shard_shape), std::move(grid), orientation, shard_distribution_strategy),
+        shard_alignment);
 }
 
 void TensorSpec::populate_sharding_specs() {

@@ -88,8 +88,6 @@ using Array6D = std::array<uint32_t, 6>;
 using Array7D = std::array<uint32_t, 7>;
 using Array8D = std::array<uint32_t, 8>;
 
-class PageConfig;
-
 struct NdShardSpec {
     Shape shard_shape;
     CoreRangeSet grid;
@@ -99,8 +97,6 @@ struct NdShardSpec {
     NdShardSpec with_shard_shape(Shape new_shard_shape) const {
         return NdShardSpec{std::move(new_shard_shape), grid, orientation, shard_distribution_strategy};
     }
-    void apply_required_alignment(const PageConfig& page_config);
-    void apply_recommended_alignment(const PageConfig& page_config, DataType dtype, BufferType buffer_type);
 
     bool operator==(const NdShardSpec& other) const = default;
     bool operator!=(const NdShardSpec& other) const = default;

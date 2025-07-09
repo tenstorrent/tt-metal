@@ -41,14 +41,20 @@ public:
         ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
     TensorSpec height_sharded(CoreRangeSet grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
     TensorSpec width_sharded(CoreRangeSet grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
-    TensorSpec block_sharded(CoreRange grid) const;
+    TensorSpec block_sharded(CoreRange grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
 
-    enum class ShardAlignment {
+    enum class ShardShapeAlignment {
         None,
         Required,
         Recommended,
     };
-    TensorSpec sharded(NdShardSpec nd_shard_spec, ShardAlignment shard_alignment) const;
+    TensorSpec sharded(
+        Shape shard_shape,
+        CoreRangeSet grid,
+        ShardShapeAlignment shard_alignment,
+        ShardOrientation orientation = ShardOrientation::ROW_MAJOR,
+        ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D) const;
+    TensorSpec sharded(NdShardSpec nd_shard_spec, ShardShapeAlignment shard_alignment) const;
 
     Strides compute_strides() const { return tensor_layout_.compute_strides(logical_shape_); }
     BufferShardingArgs compute_buffer_sharding_args() const {
