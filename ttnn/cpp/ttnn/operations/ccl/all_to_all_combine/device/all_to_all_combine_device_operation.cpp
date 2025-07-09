@@ -71,21 +71,21 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
         "Input, metadata, and mapping tensors must all be rank 4");
 
     const auto num_devices = mesh_view.num_devices();
-    
+
     TT_FATAL(experts%num_devices==0, "Number of experts {} should be evenly divisible by devices: {}", experts, num_devices);
-    
+
     if (operation_attributes.locally_reduced){
         TT_FATAL(
-            input_shape[0]==1, 
+            input_shape[0] == 1,
             "Expecting input dim 0 equal to num devices: {}, got: {}",
             num_devices,
             input_shape[0]);
     }
     else{
         TT_FATAL(
-            input_shape[0]==experts/num_devices, 
+            input_shape[0] == experts / num_devices,
             "Expected input shape dim 0: {} to be equal to expert mapping dim 2: {}",
-            input_shape[0], 
+            input_shape[0],
             mapping_shape[2]);
     }
 
@@ -127,8 +127,7 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
 
     const uint32_t total_batch_per_device_size = total_batch_size / num_devices;
 
-    const auto dense_expert_dim = (operation_attributes.locally_reduced)? 1:selected_experts_k;
-    auto output_shape = ttnn::Shape({dense_expert_dim, total_batch_per_device_size, seq_size, hidden_size});
+    auto output_shape = ttnn::Shape({selected_experts_k, total_batch_per_device_size, seq_size, hidden_size});
 
     auto mem_config = operation_attributes.output_mem_config;
     return TensorSpec(
@@ -164,7 +163,7 @@ AllToAllCombineDeviceOperation::invoke(
             .num_links = num_links,
             .topology = topology,
             .cross_device_semaphore = global_semaphore,
-            .locally_reduced = locally_reduced, 
+            .locally_reduced = locally_reduced,
             .subdevice_id = std::move(subdevice_id)},
         tensor_args_t{
             .input_tensor = input_tensor,

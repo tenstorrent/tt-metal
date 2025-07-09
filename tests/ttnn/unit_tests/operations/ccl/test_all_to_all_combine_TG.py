@@ -6,7 +6,6 @@ from loguru import logger
 import pytest
 import ttnn
 
-# tests/ttnn/unit_tests/operations/cl/test_all_to_all_dispatch_t3000.py
 from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
     run_all_to_all_combine_test,
     trace_all_to_all_combine,
@@ -28,6 +27,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7000])
 @pytest.mark.parametrize("seq", [1, 2])
+@pytest.mark.parametrize("local_reduce", [False, True])
 @pytest.mark.parametrize("num_iters", [2])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
@@ -44,6 +44,7 @@ def test_all_to_all_combine_no_trace(
     select_experts_k,
     hidden_size,
     seq,
+    local_reduce,
     num_iters,
     num_links,
     topology,
@@ -64,6 +65,7 @@ def test_all_to_all_combine_no_trace(
         axis,
         batch,
         seq,
+        local_reduce,
         experts,
         select_experts_k,
         hidden_size,
@@ -136,6 +138,7 @@ def test_perf(
         cluster_axis,
         batch,
         seq_len,
+        local_reduce,
         experts,
         select_experts_k,
         hidden_size,

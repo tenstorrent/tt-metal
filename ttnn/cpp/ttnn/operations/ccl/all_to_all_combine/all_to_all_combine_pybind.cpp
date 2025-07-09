@@ -58,7 +58,7 @@ void py_bind_all_to_all_combine(py::module& module) {
             py::arg("expert_mapping_tensor").noconvert(),
             py::arg("global_semaphore"),
             py::kw_only(),
-            py::arg("local_reduce") = false,            
+            py::arg("local_reduce") = false,
             py::arg("num_links") = 1,
             py::arg("topology") = tt::tt_fabric::Topology::Linear,
             py::arg("memory_config") = std::nullopt,

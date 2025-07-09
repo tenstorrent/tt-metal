@@ -17,8 +17,7 @@ template <uint32_t Batch, uint32_t Seq, bool LocallyReduced>
 inline uint32_t get_input_data_page_idx(const uint32_t e, const uint32_t bs) {
     if constexpr (LocallyReduced){
         return bs;
-    } 
-    else{
+    } else {
         return e * Batch*Seq + bs;
     }
 }
@@ -109,7 +108,7 @@ void kernel_main() {
                 noc_async_read_barrier();
 
                 cb_push_back(data_cb_id, 1);
-                
+
                 if constexpr (locally_reduced){
                     break;
                 }
