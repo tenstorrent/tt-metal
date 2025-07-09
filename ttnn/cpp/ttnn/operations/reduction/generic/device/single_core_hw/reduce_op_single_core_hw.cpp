@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::constants;
@@ -77,23 +80,22 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
 
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram, packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
+    TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {output_cb_index, (std::uint32_t)dst_is_dram};
-    std::map<string, string> reader_defines;
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-        "reader_unary_reduce_interleaved_start_id.cpp",
+        "reader_unary_reduce_universal_start_id.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_universal_start_id.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

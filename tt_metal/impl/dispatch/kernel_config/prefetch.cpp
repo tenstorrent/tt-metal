@@ -29,7 +29,6 @@
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
 #include "dispatch/system_memory_manager.hpp"
-#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -413,68 +412,6 @@ void PrefetchKernel::GenerateDependentConfigs() {
 }
 
 void PrefetchKernel::CreateKernel() {
-    std::vector<uint32_t> compile_args = {
-        dependent_config_.downstream_cb_base.value(),
-        dependent_config_.downstream_cb_log_page_size.value(),
-        dependent_config_.downstream_cb_pages.value(),
-        static_config_.my_downstream_cb_sem_id.value(),
-        dependent_config_.downstream_cb_sem_id.value(),
-        static_config_.pcie_base.value(),
-        static_config_.pcie_size.value(),
-        static_config_.prefetch_q_base.value(),
-        static_config_.prefetch_q_size.value(),
-        static_config_.prefetch_q_rd_ptr_addr.value(),
-        static_config_.prefetch_q_pcie_rd_ptr_addr.value(),
-        static_config_.cmddat_q_base.value(),
-        static_config_.cmddat_q_size.value(),
-        static_config_.scratch_db_base.value(),
-        static_config_.scratch_db_size.value(),
-        static_config_.downstream_sync_sem_id.value(),
-        static_config_.cmddat_q_pages.value(),
-        static_config_.my_upstream_cb_sem_id.value(),
-        dependent_config_.upstream_cb_sem_id.value(),
-        static_config_.cmddat_q_log_page_size.value(),
-        static_config_.cmddat_q_blocks.value(),
-        static_config_.dispatch_s_buffer_base.value(),
-        static_config_.my_dispatch_s_cb_sem_id.value(),
-        dependent_config_.downstream_dispatch_s_cb_sem_id.value(),
-        static_config_.dispatch_s_buffer_size.value(),
-        static_config_.dispatch_s_cb_log_page_size.value(),
-        static_config_.ringbuffer_size.value(),
-
-        static_config_.fabric_header_rb_base.value(),
-        static_config_.fabric_header_rb_entries.value(),
-        static_config_.my_fabric_sync_status_addr.value(),
-
-        dependent_config_.fabric_mux_client_config.virtual_x.value_or(0),
-        dependent_config_.fabric_mux_client_config.virtual_y.value_or(0),
-        dependent_config_.fabric_mux_client_config.num_buffers_per_channel.value_or(0),
-        dependent_config_.fabric_mux_client_config.channel_buffer_size_bytes.value_or(0),
-        dependent_config_.fabric_mux_client_config.channel_base_address.value_or(0),
-        dependent_config_.fabric_mux_client_config.connection_info_address.value_or(0),
-        dependent_config_.fabric_mux_client_config.connection_handshake_address.value_or(0),
-        dependent_config_.fabric_mux_client_config.flow_control_address.value_or(0),
-        dependent_config_.fabric_mux_client_config.buffer_index_address.value_or(0),
-        dependent_config_.fabric_mux_client_config.status_address.value_or(0),
-        dependent_config_.fabric_mux_client_config.termination_signal_address.value_or(0),
-        dependent_config_.fabric_mux_client_config.worker_credits_stream_id.value_or(0),
-
-        edm_connection_attributes_.worker_flow_control_sem,
-        edm_connection_attributes_.worker_teardown_sem,
-        edm_connection_attributes_.worker_buffer_index_sem,
-
-        dependent_config_.num_hops.value(),
-
-        dependent_config_.my_dev_id.value_or(0),
-        dependent_config_.ew_dim.value_or(0),
-        dependent_config_.to_mesh_id.value_or(0),
-        dependent_config_.to_dev_id.value_or(0),
-        dependent_config_.router_direction.value_or(0),
-
-        static_config_.is_d_variant.value(),
-        static_config_.is_h_variant.value(),
-    };
-
     auto my_virtual_core = get_virtual_core_coord(logical_core_, GetCoreType());
     auto upstream_virtual_core = get_virtual_core_coord(dependent_config_.upstream_logical_core.value(), GetCoreType());
     auto downstream_virtual_core =
@@ -490,7 +427,7 @@ void PrefetchKernel::CreateKernel() {
     auto downstream_s_virtual_noc_coords =
         device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_s_virtual_core);
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
         {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
         {"UPSTREAM_NOC_INDEX", std::to_string(noc_selection_.upstream_noc)},  // Unused, remove later
@@ -500,6 +437,76 @@ void PrefetchKernel::CreateKernel() {
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},
+
+        // Direct configuration values
+        {"DOWNSTREAM_CB_BASE", std::to_string(dependent_config_.downstream_cb_base.value())},
+        {"DOWNSTREAM_CB_LOG_PAGE_SIZE", std::to_string(dependent_config_.downstream_cb_log_page_size.value())},
+        {"DOWNSTREAM_CB_PAGES", std::to_string(dependent_config_.downstream_cb_pages.value())},
+        {"MY_DOWNSTREAM_CB_SEM_ID", std::to_string(static_config_.my_downstream_cb_sem_id.value())},
+        {"DOWNSTREAM_CB_SEM_ID", std::to_string(dependent_config_.downstream_cb_sem_id.value())},
+        {"PCIE_BASE", std::to_string(static_config_.pcie_base.value())},
+        {"PCIE_SIZE", std::to_string(static_config_.pcie_size.value())},
+        {"PREFETCH_Q_BASE", std::to_string(static_config_.prefetch_q_base.value())},
+        {"PREFETCH_Q_SIZE", std::to_string(static_config_.prefetch_q_size.value())},
+        {"PREFETCH_Q_RD_PTR_ADDR", std::to_string(static_config_.prefetch_q_rd_ptr_addr.value())},
+        {"PREFETCH_Q_PCIE_RD_PTR_ADDR", std::to_string(static_config_.prefetch_q_pcie_rd_ptr_addr.value())},
+        {"CMDDAT_Q_BASE", std::to_string(static_config_.cmddat_q_base.value())},
+        {"CMDDAT_Q_SIZE", std::to_string(static_config_.cmddat_q_size.value())},
+        {"SCRATCH_DB_BASE", std::to_string(static_config_.scratch_db_base.value())},
+        {"SCRATCH_DB_SIZE", std::to_string(static_config_.scratch_db_size.value())},
+        {"DOWNSTREAM_SYNC_SEM_ID", std::to_string(static_config_.downstream_sync_sem_id.value())},
+        {"CMDDAT_Q_PAGES", std::to_string(static_config_.cmddat_q_pages.value())},
+        {"MY_UPSTREAM_CB_SEM_ID", std::to_string(static_config_.my_upstream_cb_sem_id.value())},
+        {"UPSTREAM_CB_SEM_ID", std::to_string(dependent_config_.upstream_cb_sem_id.value())},
+        {"CMDDAT_Q_LOG_PAGE_SIZE", std::to_string(static_config_.cmddat_q_log_page_size.value())},
+        {"CMDDAT_Q_BLOCKS", std::to_string(static_config_.cmddat_q_blocks.value())},
+        {"DISPATCH_S_BUFFER_BASE", std::to_string(static_config_.dispatch_s_buffer_base.value())},
+        {"MY_DISPATCH_S_CB_SEM_ID", std::to_string(static_config_.my_dispatch_s_cb_sem_id.value())},
+        {"DOWNSTREAM_DISPATCH_S_CB_SEM_ID", std::to_string(dependent_config_.downstream_dispatch_s_cb_sem_id.value())},
+        {"DISPATCH_S_BUFFER_SIZE", std::to_string(static_config_.dispatch_s_buffer_size.value())},
+        {"DISPATCH_S_CB_LOG_PAGE_SIZE", std::to_string(static_config_.dispatch_s_cb_log_page_size.value())},
+        {"RINGBUFFER_SIZE", std::to_string(static_config_.ringbuffer_size.value())},
+        // Fabric configuration
+        {"FABRIC_HEADER_RB_BASE", std::to_string(static_config_.fabric_header_rb_base.value())},
+        {"FABRIC_HEADER_RB_ENTRIES", std::to_string(static_config_.fabric_header_rb_entries.value())},
+        {"MY_FABRIC_SYNC_STATUS_ADDR", std::to_string(static_config_.my_fabric_sync_status_addr.value())},
+
+        {"FABRIC_MUX_X", std::to_string(dependent_config_.fabric_mux_client_config.virtual_x.value_or(0))},
+        {"FABRIC_MUX_Y", std::to_string(dependent_config_.fabric_mux_client_config.virtual_y.value_or(0))},
+        {"FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL",
+         std::to_string(dependent_config_.fabric_mux_client_config.num_buffers_per_channel.value_or(0))},
+        {"FABRIC_MUX_CHANNEL_BUFFER_SIZE_BYTES",
+         std::to_string(dependent_config_.fabric_mux_client_config.channel_buffer_size_bytes.value_or(0))},
+        {"FABRIC_MUX_CHANNEL_BASE_ADDRESS",
+         std::to_string(dependent_config_.fabric_mux_client_config.channel_base_address.value_or(0))},
+        {"FABRIC_MUX_CONNECTION_INFO_ADDRESS",
+         std::to_string(dependent_config_.fabric_mux_client_config.connection_info_address.value_or(0))},
+        {"FABRIC_MUX_CONNECTION_HANDSHAKE_ADDRESS",
+         std::to_string(dependent_config_.fabric_mux_client_config.connection_handshake_address.value_or(0))},
+        {"FABRIC_MUX_FLOW_CONTROL_ADDRESS",
+         std::to_string(dependent_config_.fabric_mux_client_config.flow_control_address.value_or(0))},
+        {"FABRIC_MUX_BUFFER_INDEX_ADDRESS",
+         std::to_string(dependent_config_.fabric_mux_client_config.buffer_index_address.value_or(0))},
+        {"FABRIC_MUX_STATUS_ADDRESS",
+         std::to_string(dependent_config_.fabric_mux_client_config.status_address.value_or(0))},
+        {"FABRIC_MUX_TERMINATION_SIGNAL_ADDRESS",
+         std::to_string(dependent_config_.fabric_mux_client_config.termination_signal_address.value_or(0))},
+        {"WORKER_CREDITS_STREAM_ID",
+         std::to_string(dependent_config_.fabric_mux_client_config.worker_credits_stream_id.value_or(0))},
+
+        {"FABRIC_WORKER_FLOW_CONTROL_SEM", std::to_string(edm_connection_attributes_.worker_flow_control_sem)},
+        {"FABRIC_WORKER_TEARDOWN_SEM", std::to_string(edm_connection_attributes_.worker_teardown_sem)},
+        {"FABRIC_WORKER_BUFFER_INDEX_SEM", std::to_string(edm_connection_attributes_.worker_buffer_index_sem)},
+
+        {"NUM_HOPS", std::to_string(dependent_config_.num_hops.value())},
+
+        {"MY_DEV_ID", std::to_string(dependent_config_.my_dev_id.value_or(0))},
+        {"EW_DIM", std::to_string(dependent_config_.ew_dim.value_or(0))},
+        {"TO_MESH_ID", std::to_string(dependent_config_.to_mesh_id.value_or(0))},
+        {"TO_DEV_ID", std::to_string(dependent_config_.to_dev_id.value_or(0))},
+        {"ROUTER_DIRECTION", std::to_string(dependent_config_.router_direction.value_or(0))},
+        {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
+        {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
 
     if (!is_hd() && tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
@@ -515,7 +522,7 @@ void PrefetchKernel::CreateKernel() {
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
     configure_kernel_variant(
         dispatch_kernel_file_names[PREFETCH],
-        compile_args,
+        {},
         defines,
         false,
         true,
@@ -544,14 +551,6 @@ void PrefetchKernel::ConfigureCore() {
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
         uint32_t prefetch_q_pcie_rd_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
-        uint32_t completion_q_wr_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
-        uint32_t completion_q_rd_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-        uint32_t completion_q0_last_event_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
-        uint32_t completion_q1_last_event_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
         std::vector<uint32_t> prefetch_q_pcie_rd_ptr_addr_data = {
             get_absolute_cq_offset(channel, cq_id_, cq_size) + cq_start};
         detail::WriteToDeviceL1(device_, logical_core_, prefetch_q_rd_ptr, prefetch_q_rd_ptr_addr_data, GetCoreType());

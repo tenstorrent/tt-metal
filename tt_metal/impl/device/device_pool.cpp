@@ -30,9 +30,9 @@
 #include "hal.hpp"
 #include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "profiler_types.hpp"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -388,12 +388,7 @@ void DevicePool::initialize_active_devices() const {
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         log_info(tt::LogMetal, "Initializing Fabric");
-        if (tt_fabric::is_2d_fabric_config(fabric_config)) {
-            // TODO: need to write routing tables for unified 2d fabric.
-            // write routing tables to all ethernet cores
-            tt::tt_metal::MetalContext::instance()
-                .get_control_plane().write_routing_tables_to_all_chips();
-        }
+        tt::tt_metal::MetalContext::instance().get_control_plane().write_routing_tables_to_all_chips();
 
         // Initialize fabric on mmio device
         init_fabric(active_devices);
@@ -454,6 +449,33 @@ void DevicePool::initialize_active_devices() const {
             }
         }
     }
+
+    // Create command queue programs
+    for (auto dev : active_devices) {
+        // For Galaxy init, we only need to loop over mmio devices
+        const auto& mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev->id());
+        if (mmio_device_id != dev->id()) {
+            continue;
+        }
+
+        create_cq_program(dev);
+        auto tunnels_from_mmio =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+        if (not this->skip_remote_devices) {
+            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+                // Need to create devices from farthest to the closest.
+                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
+                    auto device = get_device(mmio_controlled_device_id);
+                    create_cq_program(device);
+                }
+            }
+        }
+    }
+
+    // Compile programs
+    compile_cq_programs();
 
     // Init command queue
     for (auto dev : active_devices) {
@@ -799,7 +821,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         if (mmio_devices_to_close.find(mmio_device_id) != mmio_devices_to_close.end()) {
             continue;
         }
-        auto mmio_dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
         // iterate over all tunnels origination from this mmio device

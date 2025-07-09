@@ -11,6 +11,9 @@
 #include "args_location.h"
 #include <cstring>
 
+// Forward declared from dataflow_api.h
+static uint32_t get_common_arg_addr(int arg_idx);
+
 namespace tensor_accessor {
 
 /**

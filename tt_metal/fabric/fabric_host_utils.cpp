@@ -54,7 +54,7 @@ uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology) {
 
 FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::ClusterType cluster_type) {
     if (cluster_type == tt::ClusterType::GALAXY && fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING) {
-        return FabricType::TORUS_2D;
+        return FabricType::TORUS_XY;
     }
     return FabricType::MESH;
 }
@@ -98,20 +98,6 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     }
 
     return link_indices;
-}
-
-std::vector<uint32_t> get_forwarding_link_indices(
-    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    // find the forwarding direction b/w src and dest chip
-    const auto& forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
-    if (!forwarding_direction.has_value()) {
-        return {};
-    }
-
-    return get_forwarding_link_indices_in_direction(
-        src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
 }
 
 void set_routing_mode(uint16_t routing_mode) {

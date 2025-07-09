@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "hostdevcommon/profiler_common.h"
 
 using namespace tt;
@@ -27,7 +28,7 @@ void RunFillUpAllBuffers(tt_metal::IDevice* device, int loop_count, bool fast_di
     std::map<std::string, std::string> kernel_defines = {
         {"LOOP_COUNT", std::to_string(loop_count)}, {"LOOP_SIZE", std::to_string(loop_size)}};
 
-    tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp",
         all_cores,
@@ -35,7 +36,7 @@ void RunFillUpAllBuffers(tt_metal::IDevice* device, int loop_count, bool fast_di
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
             .defines = kernel_defines});
-    tt_metal::KernelHandle ncrisc_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp",
         all_cores,
@@ -44,14 +45,14 @@ void RunFillUpAllBuffers(tt_metal::IDevice* device, int loop_count, bool fast_di
             .noc = tt_metal::NOC::RISCV_1_default,
             .defines = kernel_defines});
     std::vector<uint32_t> trisc_kernel_args = {};
-    tt_metal::KernelHandle trisc_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer_compute.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
     for (auto core : eth_cores) {
-        auto eth_reader_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer_ether.cpp",
             (CoreCoord){core.x, core.y},

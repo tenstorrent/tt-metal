@@ -41,6 +41,13 @@ run_sentencebert_func() {
 
 }
 
+run_yolov11_func() {
+
+  #Yolov11 Demo
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov11/demo/demo.py --timeout 600; fail+=$?
+
+}
+
 run_llama3_func() {
   fail=0
 
@@ -67,6 +74,8 @@ run_llama3_func() {
 run_ufld_v2_func() {
   #ufld_v2
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
+  #ufld_v2 eval
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
 }
 run_vgg_func() {
 
@@ -247,7 +256,7 @@ run_yolov8s_world_perf() {
 
 run_vanilla_unet_demo() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_vanilla_unet/demo/demo.py::test_unet_demo_single_image
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/vanilla_unet/demo/demo.py::test_unet_demo_single_image
 
 }
 run_yolov8x_perf() {

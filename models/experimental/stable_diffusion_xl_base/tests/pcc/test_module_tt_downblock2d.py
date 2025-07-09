@@ -51,7 +51,6 @@ def test_downblock2d(device, temb_shape, input_shape, reset_seeds):
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_output_tensor, output_shape, _ = tt_downblock.forward(ttnn_input_tensor, [B, C, H, W], ttnn_temb_tensor)
-    model_config.clear_weight_preprocess()
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
 

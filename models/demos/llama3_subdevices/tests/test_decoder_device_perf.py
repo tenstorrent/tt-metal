@@ -21,7 +21,6 @@ from tt_metal.tools.profiler.process_model_log import (
 from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 DECODER_OP_START_INDEX = 4
 DECODER_OP_END_INDEX = -23
@@ -81,7 +80,7 @@ MAX_TYPE = "max"
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": True,
         }
     ],
     indirect=True,
@@ -382,7 +381,7 @@ def load_perf_targets(galaxy_type):
 @pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
+# Run FAKE_DEVICE=TG pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
 # Copy the printed kernel_duration_per_instance_averaged_dict and dispatch_duration_per_instance_averaged_dict dictionaries
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?
@@ -788,7 +787,7 @@ def test_llama_TG_perf_device(
 @pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
+# Run FAKE_DEVICE=TG TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
 # Copy the printed dispatch_duration_per_instance_averaged_dict dictionary
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?

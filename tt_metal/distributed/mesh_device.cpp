@@ -449,7 +449,7 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
 
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
     // However, going from a Line mesh to an MxN mesh is not always possible.
-    if (is_line_topology(new_shape)) {
+    if (new_shape.is_line_topology()) {
         return view_->get_line_devices();
     }
 
@@ -485,7 +485,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 
 bool MeshDevice::close() {
     ZoneScoped;
-    log_info(tt::LogMetal, "Closing mesh device {}", this->id());
+    log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
     // We only dump profile results for mesh devices that don't have any submeshes as they have active mesh command
     // queues, whereas mesh devices with submeshes don't.
@@ -599,9 +599,10 @@ std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::ve
         return device->worker_cores_from_logical_cores(logical_cores);
     });
 }
-std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment() {
-    return validate_and_get_reference_value(
-        this->get_devices(), [](auto* device) { return device->get_optimal_dram_bank_to_logical_worker_assignment(); });
+std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
+    return validate_and_get_reference_value(this->get_devices(), [noc](auto* device) {
+        return device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    });
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_coord, core_type](const auto* device) {
