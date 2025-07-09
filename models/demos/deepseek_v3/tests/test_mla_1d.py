@@ -46,8 +46,6 @@ def reference(hf_config, reset_seeds):
     config_path = "models/demos/deepseek_v3_impl/configs/config_671B.json"
     with open(config_path) as f:
         model_args = ModelArgs(**json.load(f))
-
-    model_args.n_heads = hf_config.num_attention_heads
     model_args.max_seq_len = hf_config.max_seq_len
 
     model = MLA(model_args)
@@ -59,8 +57,7 @@ def reference(hf_config, reset_seeds):
 def get_cache_on_host(tt_cache, mesh_device):
     """
     Get the KVPE cache on the host from the TTNN cache.
-    This specifically retrieves the first row of the mesh_device,
-    which currently only supports DP on the first row.
+    This specifically retrieves the first row of the mesh_device.
     """
     host_cache = []
     for i, t in enumerate(
@@ -73,33 +70,6 @@ def get_cache_on_host(tt_cache, mesh_device):
     return host_cache
 
 
-# Unit Tests
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        get_mesh_device(),
-    ],
-    indirect=True,
-)
-def test_convert_weights(reference, hf_config, temp_dir, mesh_device):
-    """Test that weights are correctly converted to TTNN format."""
-
-    logger.info(f"Converting weights for MLA1D to {temp_dir}")
-
-    _, reference_model = reference
-
-    # Convert weights - now returns weight_config
-    weight_config = MLA1D.convert_weights(hf_config, reference_model.state_dict(), temp_dir, mesh_device)
-
-    assert "wq_a" in weight_config
-    assert "wq_b" in weight_config
-    assert "wkv_a" in weight_config
-    assert "wkv_b1" in weight_config
-    assert "wkv_b2" in weight_config
-    assert "wo" in weight_config
-
-
-# Integration Tests
 @pytest.mark.parametrize(
     "mesh_device",
     [get_mesh_device()],
@@ -165,7 +135,7 @@ def test_forward_pass(
     ############################
     ### Torch inputs
     ############################
-    start_pos = randint(0, hf_config.max_seq_len) if mode == "decode" else 0
+    start_pos = randint(0, hf_config.max_seq_len // 2) if mode == "decode" else 0
 
     freqs_cis = precompute_freqs_cis(reference_args)
     if mode == "prefill":
@@ -173,8 +143,7 @@ def test_forward_pass(
     else:
         freqs_cis = freqs_cis[start_pos, :]
 
-    torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size)
-    torch_input = torch_input.to(dtype=torch.bfloat16)
+    torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size).to(dtype=torch.bfloat16)
 
     # Generate the mask
     mask = None
@@ -185,6 +154,7 @@ def test_forward_pass(
     ############################
     ### Torch reference
     ############################
+    # TODO: Save reference output?
     reference_output = reference_model(
         torch_input,
         start_pos=start_pos,
@@ -272,22 +242,19 @@ def test_forward_pass(
     ############################
     logger.info("Validating MLA 1D output")
     all_passing = True
-    pcc_required = 0.98  # Slightly lower due to bfloat conversions
+    pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     all_passing = all_passing and passing
 
-    logger.info(f"Mode: {mode}, Seq len: {seq_len}")
+    logger.info(f"Mode: {mode}, Seq len: {seq_len}, Batch size: {batch_size}")
     logger.info(f"PCC: {pcc_message}")
 
     if check_cache:
         logger.info("Checking KVPE cache PCC")
 
-        pcc_required_kvpe = 0.98
-        if mode == "prefill":
-            range_to_check = range(start_pos, seq_len)
-        else:
-            range_to_check = range(start_pos, start_pos + 1)
+        pcc_required_kvpe = 0.999
+        range_to_check = range(start_pos, start_pos + seq_len)
 
         tt_cache = get_cache_on_host(run_config["kvpe_cache"], mesh_device)[: MLA1D.MAX_BATCH_SIZE, ...].squeeze(
             1

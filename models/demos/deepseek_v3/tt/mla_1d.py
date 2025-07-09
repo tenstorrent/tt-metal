@@ -14,9 +14,11 @@ from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
+    AllGatherConfig,
     FromWeightConfig,
     LinearConfig,
     MeshDeviceStub,
+    ReduceScatterConfig,
     ReshardConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import save_and_get_path
@@ -31,7 +33,9 @@ from models.utility_functions import nearest_y
 
 
 class MLA1D(AbstractModule):
-    """ """
+    """
+    Multi-Latent Attention Module for 1D tensor parallelism.
+    """
 
     MAX_BATCH_SIZE = ttnn.TILE_SIZE
     TG_GRID = (8, 4)
@@ -222,12 +226,14 @@ class MLA1D(AbstractModule):
         )
 
         # Norm weights
-        q_norm_state_dict = {"weight": state_dict["q_norm.weight"]}
+        our_name = "q_norm"
+        q_norm_state_dict = {"weight": state_dict[f"{our_name}.weight"]}
         weight_config["q_norm"] = RMSNorm.convert_weights(
             hf_config, q_norm_state_dict, output_path, mesh_device, norm_category="q_norm"
         )
 
-        kv_norm_state_dict = {"weight": state_dict["kv_norm.weight"]}
+        our_name = "kv_norm"
+        kv_norm_state_dict = {"weight": state_dict[f"{our_name}.weight"]}
         weight_config["kv_norm"] = RMSNorm.convert_weights(
             hf_config, kv_norm_state_dict, output_path, mesh_device, norm_category="k_norm"
         )
@@ -243,16 +249,15 @@ class MLA1D(AbstractModule):
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device
+            ccl: CCL1D object for communication configuration
 
         Returns:
             Dict containing operator configurations for prefill mode
         """
-        # Extract dimensions from HF config
-        dim = hf_config.hidden_size
-        hidden_dim = hf_config.intermediate_size
-        num_devices = mesh_device.get_num_devices()
+
         grid_size = mesh_device.compute_with_storage_grid_size()
 
+        # Extract dimensions from HF config
         num_heads = hf_config.num_attention_heads
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
@@ -265,7 +270,9 @@ class MLA1D(AbstractModule):
         max_seq_len = hf_config.max_seq_len
 
         config: ModelPrefillConfig = {}
+
         config["hf_config"] = hf_config
+        config["mesh_shape"] = list(mesh_device.shape)
 
         config["wq_a"] = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -355,12 +362,10 @@ class MLA1D(AbstractModule):
         Returns:
             Dict containing operator configurations for decode mode
         """
-        # Extract dimensions from HF config
-        dim = hf_config.hidden_size
-        hidden_dim = hf_config.intermediate_size
-        num_devices = mesh_device.get_num_devices()
+
         grid_size = mesh_device.compute_with_storage_grid_size()
 
+        # Extract dimensions from HF config
         num_heads = hf_config.num_attention_heads
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
@@ -372,12 +377,12 @@ class MLA1D(AbstractModule):
         original_seq_len = hf_config.rope_scaling["original_max_position_embeddings"]
         max_seq_len = hf_config.max_seq_len
 
-        num_heads_local = num_heads // list(mesh_device.shape)[0]
+        mesh_shape = list(mesh_device.shape)
+        num_heads_local = num_heads // mesh_shape[0]
 
         config: ModelDecodeConfig = {}
-
         config["hf_config"] = hf_config
-        config["mesh_shape"] = list(mesh_device.shape)
+        config["mesh_shape"] = mesh_shape
 
         config["wq_a"] = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -535,37 +540,37 @@ class MLA1D(AbstractModule):
         # **Must be in order of execution**
 
         # Q
-        config["wq_a_rs"] = {
-            "mesh_device": MeshDeviceStub(list(mesh_device.shape)),
-            "cluster_axis": 0,
-            "dim": 3,
-            "from_remote_multi_device_global_semaphore": ccl.get_semaphore(0),
-            "to_remote_multi_device_global_semaphore": ccl.get_semaphore(0),
-            "math_op": ttnn.ReduceType.Sum,
-            "num_links": ccl.get_max_links(0),
-            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-            "topology": ttnn.Topology.Linear,
-        }
-        config["wq_a_ag"] = {
-            "mesh_device": MeshDeviceStub(list(mesh_device.shape)),
-            "cluster_axis": 0,
-            "dim": 3,
-            "multi_device_global_semaphore": ccl.get_semaphore(0),
-            "num_links": ccl.get_max_links(0),
-            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-            "topology": ttnn.Topology.Linear,
-        }
+        config["wq_a_rs"] = ReduceScatterConfig(
+            mesh_device=MeshDeviceStub(list(mesh_device.shape)),
+            cluster_axis=0,
+            dim=3,
+            from_remote_multi_device_global_semaphore=ccl.get_semaphore(0),
+            to_remote_multi_device_global_semaphore=ccl.get_semaphore(0),
+            math_op=ttnn.ReduceType.Sum,
+            num_links=ccl.get_max_links(0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+        config["wq_a_ag"] = AllGatherConfig(
+            mesh_device=MeshDeviceStub(list(mesh_device.shape)),
+            cluster_axis=0,
+            dim=3,
+            multi_device_global_semaphore=ccl.get_semaphore(0),
+            num_links=ccl.get_max_links(0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
 
         # KV
-        config["wkv_a_ag"] = {
-            "mesh_device": MeshDeviceStub(list(mesh_device.shape)),
-            "cluster_axis": 0,
-            "dim": 1,
-            "multi_device_global_semaphore": ccl.get_semaphore(0),
-            "num_links": ccl.get_max_links(0),
-            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-            "topology": ttnn.Topology.Linear,
-        }
+        config["wkv_a_ag"] = AllGatherConfig(
+            mesh_device=MeshDeviceStub(list(mesh_device.shape)),
+            cluster_axis=0,
+            dim=1,
+            multi_device_global_semaphore=ccl.get_semaphore(0),
+            num_links=ccl.get_max_links(0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
         config["wkv_a_r"] = {
             "dims": [1],
             "output": None,
@@ -578,15 +583,15 @@ class MLA1D(AbstractModule):
         }
 
         # WO
-        config["wo_ag"] = {
-            "mesh_device": MeshDeviceStub(list(mesh_device.shape)),
-            "cluster_axis": 0,
-            "dim": 1,
-            "multi_device_global_semaphore": ccl.get_semaphore(0),
-            "num_links": ccl.get_max_links(0),
-            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-            "topology": ttnn.Topology.Linear,
-        }
+        config["wo_ag"] = AllGatherConfig(
+            mesh_device=MeshDeviceStub(list(mesh_device.shape)),
+            cluster_axis=0,
+            dim=1,
+            multi_device_global_semaphore=ccl.get_semaphore(0),
+            num_links=ccl.get_max_links(0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
 
         return config
 
@@ -630,7 +635,17 @@ class MLA1D(AbstractModule):
     def forward_decode(
         self, x: ttnn.Tensor, position_idxs: [int], rope_tensors: dict, cfg: RunPrefillConfig
     ) -> ttnn.Tensor:
-        """Straightforward forward pass for decode mode"""
+        """Forward pass of MLA1D in decode mode.
+
+        Args:
+            x: Input tensor of shape (batch_size, seq_len, dim)
+            position_idxs: List of position indices for the current batch
+            rope_tensors: Dictionary containing RoPE tensors
+            cfg: RunConfig containing weights and op configurations
+        Returns:
+            Output tensor after MLA1D computation
+
+        """
 
         hf_config = cfg["hf_config"]
         num_heads = hf_config.num_attention_heads
@@ -655,9 +670,7 @@ class MLA1D(AbstractModule):
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
 
-        # TODO: Use local heads here
         tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
-
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads_local, qk_nope_head_dim])
         tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim])
 
@@ -735,7 +748,7 @@ class MLA1D(AbstractModule):
             kvpe_cache,
             cur_pos_tensor=position_idxs,
             **cfg["flash_mla"],
-        )  #  [1, bsz_local, num_heads, kv_lora_rank]
+        )  #  [1, bsz, num_heads_local, kv_lora_rank]
         ttnn.deallocate(tt_q)
         attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
 

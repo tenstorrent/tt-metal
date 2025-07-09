@@ -47,7 +47,7 @@ class DecodeModelConfig:
         self.args.qk_head_dim = self.args.qk_nope_head_dim + self.args.qk_rope_head_dim
 
         self.grid_size = (8, 8)
-        self.bsz = 64 * 2  # Use padded shapes
+        self.bsz = 128
         self.configs = {}
 
         #################
@@ -461,7 +461,7 @@ def run_matmul_impl(
     out_pass, out_pcc = comp_pcc(tt_out_torch, out_torch, pcc_threshold)
     logger.info(f"Output PCC: {out_pcc}")
 
-    assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
+    assert out_pass, f"Output mismatch: PCC {out_pcc} < {pcc_threshold}"
 
 
 def run_rope_impl(
@@ -567,7 +567,7 @@ def run_rope_impl(
     out_pass, out_pcc = comp_pcc(tt_out_torch, out_torch, pcc_threshold)
     logger.info(f"Output PCC: {out_pcc}")
 
-    assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
+    assert out_pass, f"Output mismatch: PCC {out_pcc} < {pcc_threshold}"
 
 
 def run_update_cache_impl(
@@ -643,7 +643,7 @@ def run_update_cache_impl(
     out_pass, out_pcc = comp_pcc(tt_cache_torch, cache_torch, pcc_threshold)
     logger.info(f"Output PCC: {out_pcc}")
 
-    assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
+    assert out_pass, f"Output mismatch: PCC {out_pcc} < {pcc_threshold}"
 
 
 def run_fill_cache_impl(
@@ -711,7 +711,7 @@ def run_fill_cache_impl(
     out_pass, out_pcc = comp_pcc(tt_cache_torch, cache_torch, pcc_threshold)
     logger.info(f"Output PCC: {out_pcc}")
 
-    assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
+    assert out_pass, f"Output mismatch: PCC {out_pcc} < {pcc_threshold}"
 
 
 def run_rmsnorm_impl(
@@ -744,7 +744,7 @@ def run_rmsnorm_impl(
     ### Torch
     #################
     input_torch = torch.randn(input_shape).float()
-    rms_norm = ReferenceRMSNorm(head_dim, eps=1e-5)
+    rms_norm = ReferenceRMSNorm(head_dim, eps=hf_config.rms_norm_eps)
     out_torch = rms_norm(input_torch)
 
     #################
@@ -787,7 +787,7 @@ def run_rmsnorm_impl(
     out_pass, out_pcc = comp_pcc(tt_out_torch, out_torch, pcc_threshold)
     logger.info(f"Output PCC: {out_pcc}")
 
-    assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
+    assert out_pass, f"Output mismatch: PCC {out_pcc} < {pcc_threshold}"
 
 
 #################

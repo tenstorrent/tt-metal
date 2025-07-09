@@ -5,7 +5,6 @@
 import torch
 
 import ttnn
-from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
 from models.utility_functions import nearest_32
 
@@ -20,6 +19,21 @@ def get_rot_transformation_mat():
 
 
 def get_cos_sin_matrix(hf_config):
+    """Function to get the cos and sin matrices for rotary positional embeddings.
+
+    Args:
+        hf_config: HuggingFace configuration object containing model parameters.
+    Returns:
+        cos: Cosine matrix for rotary embeddings.
+        sin: Sine matrix for rotary embeddings.
+    This function uses the DeepseekV3YarnRotaryEmbedding class to generate the matrices
+    based on the provided HuggingFace configuration.
+
+    HuggingFace returns cos/sin matrices in the format of [max_seq_len, dim], where dim is [t1, .., td//2, t1, .., td//2].
+    This is because HF is the format of [r, r, ..., i, i, ...] which requires cos/sin to be [t1, t2, ..., td//2, t1, t2, ..., td//2].
+    However, the Meta-style frequencies are in the format of [r, i, r, i, ...], so the cos/sin need to be [t1, t1, ..., td//2, td//2].
+
+    """
     args = {
         "dim": hf_config.qk_rope_head_dim,
         "max_position_embeddings": hf_config.max_seq_len,
@@ -52,27 +66,18 @@ def get_cos_sin_matrix(hf_config):
     return cos, sin
 
 
-class RotarySetup(LightweightModule):
+class RotarySetup:
     """
     Class to set up rotary positional embeddings for DeepSeekV3 models.
 
-    Duplicate + changes from models/tt_transformers/tt/rope.py
+    Duplicate + changes from TTT rope.py
     """
 
-    def __init__(
-        self,
-        device,
-        batch_size: int,
-        hf_config,
-        use_dp: bool = False,
-    ):
-        super().__init__()
-
+    def __init__(self, device, batch_size: int, hf_config, use_dp: bool = False):
         self.batch_size = batch_size
         self.hf_config = hf_config
         self.dim = hf_config.qk_rope_head_dim
         self.device = device
-        self.num_devices = device.get_num_devices()
         self.use_dp = use_dp
 
         if self.use_dp:
@@ -84,11 +89,8 @@ class RotarySetup(LightweightModule):
         # Generate the cos/sin matrices needed for ttnn.embedding op
         self.cos_matrix, self.sin_matrix = self.get_rot_mats_table()
 
-        self.batch_grid = (
-            ttnn.CoreGrid(y=4, x=8)
-            if ttnn.get_arch_name() == "blackhole"
-            else ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
-        )
+        self.batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
+
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat().repeat(
             1,
@@ -124,6 +126,14 @@ class RotarySetup(LightweightModule):
         )
 
     def get_rot_idxs(self, position_idxs, on_host=False):
+        """
+        Get the rotary positional embedding indices for the given position indices.
+        Args:
+            position_idxs: A tensor of shape [batch] containing the position indices.
+            on_host: If True, the indices will be sent to the host device.
+        Returns:
+            rot_idxs: A tensor of shape [1, batch] containing the rotary positional embedding indices.
+        """
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
 
@@ -184,6 +194,16 @@ class RotarySetup(LightweightModule):
         return cos_matrix, sin_matrix
 
     def get_rot_mats(self, position_idxs, return_rot_idxs=False):
+        """
+        Get the cos and sin matrices for the given position indices.
+        Args:
+            position_idxs: A tensor of shape [1, batch] containing the position indices.
+            return_rot_idxs: If True, the function will also return the rotary positional embedding indices.
+        Returns:
+            A list containing the cos matrix, sin matrix, and transformation matrix.
+            If return_rot_idxs is True, it will also return the rotary positional embedding indices.
+        """
+
         device = self.device
 
         # If position_idxs is a torch tensor, get the TTNN version of it
