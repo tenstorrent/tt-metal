@@ -687,8 +687,8 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = input.device();
-    const auto output_padded_shape = output.padded_shape();
-    const auto input_padded_shape = input.padded_shape();
+    const auto& output_padded_shape = output.padded_shape();
+    const auto& input_padded_shape = input.padded_shape();
 
     auto input_shape = input.logical_shape();
     auto output_shape = output.logical_shape();
@@ -818,8 +818,8 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_tensor = input_tensors.at(0);
-        auto dst_tensor = output_tensors.at(0);
+        auto& src_tensor = input_tensors.at(0);
+        auto& dst_tensor = output_tensors.at(0);
 
         UpdateDynamicCircularBufferAddress(program, std::get<1>(cb_input_tuple), *src_tensor.buffer());
 
