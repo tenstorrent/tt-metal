@@ -54,6 +54,19 @@ def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dty
     ttnn_is_float = ttnn_dtype in [ttnn.float32, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b]
     torch_is_float = torch_dtype in [torch.float16, torch.float32]
 
+    conversion_pcc = None
+
+    if (ttnn_dtype == ttnn.float32 and torch_dtype == torch.float32) or (
+        ttnn_dtype == ttnn.int32 and torch_dtype == torch.int32
+    ):
+        conversion_pcc = 1
+
+    elif ttnn_is_float != torch_is_float:
+        conversion_pcc = 0.99
+
+    else:
+        conversion_pcc = 0.9999
+
     print("")
 
     if ttnn_dtype_has_random:
@@ -75,6 +88,12 @@ def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dty
                 torch_result_tensor.dtype == torch_dtype
             ), f"Expected result {torch_dtype}, got result tensor {torch_result_tensor.dtype} when converting TTNN tensor {ttnn_input_tensor.dtype}"
 
+        assert_with_pcc(
+            expected_pytorch_result=torch_result_tensor,
+            actual_pytorch_result=ttnn_input_tensor.cpu().to_torch(),
+            pcc=conversion_pcc,
+        )
+
     if torch_dtype in [torch.int32]:
         torch_input_tensor = torch.randint(0, 100, (height, width), dtype=torch_dtype)
     else:
@@ -92,15 +111,40 @@ def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dty
         ttnn_result_tensor.dtype == ttnn_dtype
     ), f"Expected result {ttnn_dtype}, got result tensor {ttnn_result_tensor.dtype} when converting torch tensor {torch_input_tensor.dtype}"
 
-    print(
-        f"test_dtype_conversion_on_device::torch_input_tensor:\n{torch_input_tensor} {torch_input_tensor.dtype} {torch_input_tensor.shape}"
-    )
-    print(
-        f"test_dtype_conversion_on_device::ttnn_result_tensor:\n{ttnn_result_tensor} {ttnn_result_tensor.dtype} {ttnn_result_tensor.shape}"
-    )
+    # print(
+    #     f"test_dtype_conversion_on_device::torch_input_tensor:\n{torch_input_tensor} {torch_input_tensor.dtype} {torch_input_tensor.shape}"
+    # )
+    # print(
+    #     f"test_dtype_conversion_on_device::ttnn_result_tensor:\n{ttnn_result_tensor} {ttnn_result_tensor.dtype} {ttnn_result_tensor.shape}"
+    # )
 
     assert_with_pcc(
         expected_pytorch_result=torch_input_tensor,
         actual_pytorch_result=ttnn_result_tensor.cpu().to_torch(),
-        pcc=0.99 if ttnn_is_float != torch_is_float else 0.9999,
+        pcc=conversion_pcc,
     )
+
+
+@pytest.mark.parametrize(
+    "ttnn_dtype",
+    [
+        pytest.param(ttnn.float32, marks=pytest.mark.xfail),
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        ttnn.int32,
+    ],
+)
+def test_layout_conversion_precision_stability(device, ttnn_dtype):
+    ttnn_tile_tensor = ttnn.rand(
+        (32, 32),
+        dtype=ttnn_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    ttnn_row_major_tensor = ttnn.to_layout(ttnn_tile_tensor, ttnn.ROW_MAJOR_LAYOUT)
+
+    tile_repr = str(ttnn_tile_tensor).replace("layout=Layout::TILE", "<layout>")
+    row_major_repr = str(ttnn_row_major_tensor).replace("layout=Layout::ROW_MAJOR", "<layout>")
+
+    assert tile_repr == row_major_repr

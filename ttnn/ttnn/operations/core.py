@@ -276,6 +276,8 @@ def from_torch(
 
     import torch
 
+    # print("")
+
     if memory_config is not None and memory_config.is_sharded():
         if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
             raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
@@ -305,9 +307,12 @@ def from_torch(
 
     host_type_conversion = False
 
+    # print(f"from_torch::input: tensor dtype:{tensor.dtype} target dtype:{dtype} layout:{layout} device:{device}")
+
     if not device and dtype in ttnn_fallback_type_mapping:
+        # No device, conversion must be performed on the host
         tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
-        print(f"from_torch::tensor.to no device:\n{tensor} {tensor.dtype} {tensor.shape}")
+        # print(f"from_torch::tensor.to no device:\n{tensor} {tensor.dtype} {tensor.shape}")
         host_type_conversion = True
 
     elif tensor.dtype in ttnn_unsupported_type_mapping:
@@ -318,12 +323,28 @@ def from_torch(
         else:
             tensor = tensor.to(ttnn_unsupported_type_mapping[tensor.dtype])
 
-        print(f"from_torch::tensor.to unsupported origin:\n{tensor} {tensor.dtype} {tensor.shape}")
+        # print(f"from_torch::tensor.to unsupported origin:\n{tensor} {tensor.dtype} {tensor.shape}")
 
         host_type_conversion = True
 
     elif layout == ttnn.ROW_MAJOR_LAYOUT and tensor.dtype in [torch.float32, torch.int32] and dtype == ttnn.uint8:
         # `to_layout` turns the whole tensor into zeroes when converting float32/int32 to uint8 in row-major layout
+        tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
+        host_type_conversion = True
+
+    elif dtype == None or (dtype == ttnn.float32 and tensor.dtype == ttnn.float32):
+        # No target type specified, will copy the tensor from source data w/o typecast.
+        host_type_conversion = True
+
+    elif layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.float32:
+        # https://github.com/tenstorrent/tt-metal/issues/23405
+        # This condition handles the tensor conversion case where
+        # - input device exists
+        # - type conversion is necessary and is not handled by other edge cases
+        # - the final layout should be a row-major
+        #
+        # Due to the bug linked above this case should also be performed on device, to avoid precision loss
+        # print("????")
         tensor = tensor.to(ttnn_fallback_type_mapping[dtype])
         host_type_conversion = True
 
@@ -333,14 +354,14 @@ def from_torch(
     else:
         construct_with_dtype = None
 
-    print(f"from_torch::tensor:\n{tensor} {tensor.dtype} {tensor.shape}")
+    # print(f"from_torch::tensor:\n{tensor} {tensor.dtype} {tensor.shape}")
 
     result = ttnn.Tensor(
         tensor=tensor,
         data_type=construct_with_dtype,
         device=device,
-        # If dtype is specified explicitly create the tensor in tile layout for the
-        # typecast operation.
+        # If type conversion was performed on host, create tensor in the target layout.
+        # If type conversion will be performed on device, create tensor typecast-friendly layout
         layout=layout if host_type_conversion else ttnn.TILE_LAYOUT,
         mem_config=memory_config,
         tile=tile,
@@ -349,17 +370,17 @@ def from_torch(
         mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
     )
 
-    print(f"from_torch::result:\n{result} {result.dtype} {result.shape} {result.padded_shape}")
+    # print(f"from_torch::result:\n{result} {result.dtype} {result.shape} {result.padded_shape}")
 
     if not host_type_conversion:
         assert result.layout == ttnn.TILE_LAYOUT
         assert ttnn.is_tensor_storage_on_device(result)
         result = ttnn.typecast(result, dtype=dtype)
         assert ttnn.is_tensor_storage_on_device(result)
-        print(f"from_torch::typecast:\n{result} {result.dtype} {result.shape} {result.padded_shape}")
+        # print(f"from_torch::typecast:\n{result} {result.dtype} {result.shape} {result.padded_shape}")
         if layout != result.layout:
             result = ttnn.to_layout(result, layout)
-            print(f"from_torch::to_layout:\n{result} {result.dtype} {result.shape} {result.padded_shape}")
+            # print(f"from_torch::to_layout:\n{result} {result.dtype} {result.shape} {result.padded_shape}")
 
     return result
 
@@ -422,15 +443,19 @@ def to_torch(
     }
 
     on_device_typecast = False
-    if dtype in torch_dtype_to_ttnn_dtype and (ttnn.is_tensor_storage_on_device(tensor) or device):
-        if not ttnn.is_tensor_storage_on_device(tensor) and device:
-            tensor = ttnn.to_device(tensor, device=device)
+    if dtype in torch_dtype_to_ttnn_dtype and ttnn.is_tensor_storage_on_device(tensor):
+        if tensor.dtype == ttnn.float32 and tensor.layout != ttnn.TILE_LAYOUT:
+            # https://github.com/tenstorrent/tt-metal/issues/23405 `to_layout` loses precision on float32
+            # and the original tensor is not in the tile layout => cannot convert to the format required
+            # for on-device typecast.
+            pass
 
-        if tensor.layout != ttnn.TILE_LAYOUT:
-            tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
+        else:
+            if tensor.layout != ttnn.TILE_LAYOUT:
+                tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
 
-        tensor = ttnn.typecast(tensor, dtype=torch_dtype_to_ttnn_dtype[dtype])
-        on_device_typecast = True
+            tensor = ttnn.typecast(tensor, dtype=torch_dtype_to_ttnn_dtype[dtype])
+            on_device_typecast = True
 
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id)

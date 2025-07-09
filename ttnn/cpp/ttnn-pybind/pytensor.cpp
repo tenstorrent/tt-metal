@@ -198,7 +198,7 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
             .py_data_ptr = py::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")()),
         };
 
-        {
+        if (false) {
             auto dtype = contiguous_py_tensor.attr("dtype");
             auto data_ptr = reinterpret_cast<void*>(result.py_data_ptr);
 
