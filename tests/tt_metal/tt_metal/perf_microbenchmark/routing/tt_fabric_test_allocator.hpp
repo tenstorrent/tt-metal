@@ -75,10 +75,10 @@ public:
 
     std::vector<uint32_t> get_available_atomic_counters() const {
         const uint32_t available_space = atomic_region_.end() - next_atomic_addr_;
-        const uint32_t counter_count = available_space / l1_alignment_;
+        const uint32_t num_counters = available_space / l1_alignment_;
 
         std::vector<uint32_t> counters;
-        counters.reserve(counter_count);
+        counters.reserve(num_counters);
 
         for (uint32_t addr = next_atomic_addr_; addr + l1_alignment_ <= atomic_region_.end(); addr += l1_alignment_) {
             counters.push_back(addr);
