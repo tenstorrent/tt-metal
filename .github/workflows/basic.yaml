@@ -31,7 +31,7 @@ jobs:
         UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
       volumes:
         - /work
-        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /dev/hugepages-1G:${{ contains(inputs.runner, 'viommu') && '/hugepages_unused:ro' && '/dev/hugepages-1G' }}
       options: --device /dev/tenstorrent
     defaults:
       run:
