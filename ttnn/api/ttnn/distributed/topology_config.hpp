@@ -19,10 +19,13 @@ struct TopologyConfig {
     using Placement = std::variant<Replicate, Shard>;
 
     tt::tt_metal::distributed::MeshShape mesh_shape;
-    std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords;
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> device_coords;
     tt::stl::SmallVector<Placement> placements;
 
     tt::tt_metal::distributed::MeshCoordinate get_neighbor(
+        const tt::tt_metal::distributed::MeshCoordinate& coord) const;
+
+    tt::tt_metal::distributed::MeshCoordinate get_device_coord(
         const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 };
 

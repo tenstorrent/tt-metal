@@ -293,7 +293,7 @@ public:
 
             const auto topology_config = tt::tt_metal::TopologyConfig{
                 .mesh_shape = distribution_shape_,
-                .mesh_coords = buffer_coords,
+                .device_coords = buffer_coords,
                 .placements = convert_placements_to_topology_config(config_.placements)};
 
             return Tensor(
@@ -409,7 +409,7 @@ private:
 
         const auto topology_config = tt::tt_metal::TopologyConfig{
             .mesh_shape = distribution_shape_,
-            .mesh_coords = buffer_coords,
+            .device_coords = buffer_coords,
             .placements = convert_placements_to_topology_config(config_.placements)};
 
         return Tensor(
