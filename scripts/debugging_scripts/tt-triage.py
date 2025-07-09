@@ -7,14 +7,16 @@
 Script Name: tt-triage.py
 
 Usage:
-    tt-triage [--halt-on-error] [-v | --verbose] [-V | --vverbose] [--dev=<device_id>]...
+    tt-triage [--halt-on-error] [-v | --verbose] [-V | --vverbose] [-g | --gdb] [--port=<port>] [--dev=<device_id>]...
 
 Options:
     -h --help         Show this screen.
-    --dev=<device_id> Specify the device id       [default: all]
-    -v --verbose      Print verbose output.       [default: False]
-    -V --vverbose     Print more verbose output.  [default: False]
-    --halt-on-error   Halt on first error.        [default: False]
+    --dev=<device_id> Specify the device id              [default: all]
+    -v --verbose      Print verbose output.              [default: False]
+    -V --vverbose     Print more verbose output.         [default: False]
+    --halt-on-error   Halt on first error.               [default: False]
+    -g --gdb          Enable getting callstack from GDB. [default: False]
+    --port=<port>     Port for GDB server.               [default: 6767]
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -32,6 +34,7 @@ import time
 import os
 import sys
 from parse_inspector_logs import InspectorData
+import subprocess
 
 RST = "\033[0m"
 BLUE = "\033[34m"  # For good values
@@ -44,6 +47,8 @@ VERBOSE_CLR = "\033[94m"  # For verbose output
 VERBOSE = False
 VVERBOSE = False
 context = None
+GDB_EN = False
+PORT = 6767
 
 try:
     from tabulate import tabulate, TableFormat, Line, DataRow
@@ -63,6 +68,8 @@ try:
     from ttexalens.hw.tensix.blackhole.blackhole import BlackholeDevice
     from ttexalens.firmware import ELF
     from ttexalens.parse_elf import mem_access
+    from ttexalens.uistate import UIState
+    from ttexalens.context import Context
 except ImportError as e:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     install_script = os.path.join(os.path.dirname(script_dir), "install_debugger.sh")
@@ -352,7 +359,6 @@ def format_callstack(cs):
         result.append(line)
     return result
 
-
 def get_firmware_elf_path(a_kernel_path: str, risc_name: str) -> str:
     firmware_elf_path = a_kernel_path + f"../../../firmware/{risc_name.lower()}/{risc_name.lower()}.elf"
     return os.path.realpath(firmware_elf_path)
@@ -509,10 +515,49 @@ def get_running_ops_table(dev, blocks, enum_values, inspector_data, programmable
 
     return printout_table
 
+def set_up_gdb(ui_state: UIState):
+    # Start GDB server
+    try:
+        ui_state.start_gdb(PORT)
+    except Exception as e:
+        raiseTTTriageError(f"Failed to start GDB server on port {PORT}. Error: {e}")
 
-def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
+    # Start GDB process
+    return subprocess.Popen(
+        ["../tt-exalens/build/sfpi/compiler/bin/riscv32-tt-elf-gdb", "--quiet"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True, 
+        bufsize=1
+    )
+
+def tear_down_gdb(gdb_process, ui_state: UIState):
+    # Stop GDB process
+    gdb_process.stdin.write("quit\n")
+    gdb_process.stdin.flush()
+
+    # Stop GDB server
+    ui_state.stop_gdb()
+
+def get_callstack_with_gdb(gdb_process, pid: int, elf_path: str, kernel_offset: int):
+
+    gdb_process.stdin.write(f"""\
+    target extended-remote localhost:{PORT}
+    attach {pid}
+    add-symbol-file {elf_path} {kernel_offset}
+    backtrace
+    detach
+    """)
+    gdb_process.stdin.flush()
+
+def dump_running_ops(dev: Device, inspector_data: InspectorData | None, context: Context):
     """Print the running operations on the device."""
     title(dump_running_ops.__doc__)
+
+    if GDB_EN:
+        ui_state = UIState(context)
+        gdb_client = set_up_gdb(ui_state)
 
     if inspector_data is None:
         print(f"  {ORANGE}We don't have inspector data. We will skip running ops dump.{RST}")
@@ -590,6 +635,9 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
     if type(dev) == BlackholeDevice:
         enum_values_eth["ProcessorTypes"]["ERISC1"] = idle_erisc_elf.enumerators["EthProcessorTypes::DM1"].value
 
+    if GDB_EN:
+        get_callstack_with_gdb(gdb_client, 333, "/home/adjordjevic/.cache/tt-metal-cache/474011dcd8/4098/kernels/erisc_print/8333010637973881611/idle_erisc/idle_erisc.elf", 29648)
+
     # Getting running ops tables
     running_ops_table_tensix = get_running_ops_table(
         dev,
@@ -620,6 +668,13 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
         if runinng_ops_table_idle_eth is not None:
             print(tabulate(runinng_ops_table_idle_eth, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
 
+    if GDB_EN:
+        tear_down_gdb(gdb_client, ui_state)
+
+        output, _ = gdb_client.communicate()
+        print(output)
+
+
     # WIP:
     # # Print callstack for this location using tt_exalens_lib
     # fw_elf_path = a_kernel_path + "../../../firmware/trisc1/trisc1.elf"
@@ -644,12 +699,14 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
 
 def main(argv=None):
     """Main function that runs the triage script."""
-    global VERBOSE, VVERBOSE, context, HALT_ON_ERROR
+    global VERBOSE, VVERBOSE, context, HALT_ON_ERROR, GDB_EN, PORT
 
     args = docopt(__doc__, argv=argv)
     VERBOSE = args["--verbose"]
     VVERBOSE = args["--vverbose"]
     HALT_ON_ERROR = args["--halt-on-error"]
+    GDB_EN = args["--gdb"]
+    PORT = int(args["--port"]) 
 
     context = init_ttexalens(use_noc1=False)
     device_ids = list(context.devices.keys())
@@ -690,7 +747,7 @@ def main(argv=None):
                 check_NOC(dev)
                 check_L1(dev)
                 check_riscV(dev)
-                dump_running_ops(dev, inspector_data)
+                dump_running_ops(dev, inspector_data, context)
             else:
                 raiseTTTriageError(f"{dev._arch} devices are not supported yet.")
     except TTTriageError as e:
