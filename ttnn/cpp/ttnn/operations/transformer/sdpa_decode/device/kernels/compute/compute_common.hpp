@@ -68,6 +68,10 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
     cb_push_back(out_cb, num_tiles);
 }
 
+/*
+reduce_c is a function used to sum up the values along a dimension - typically rows.
+--> stores the result in a separate output buffer
+*/
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in0_cb, uint32_t scale_cb, uint32_t out_cb, uint32_t rows>
 void reduce_c(uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
@@ -157,6 +161,70 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t
         }
     }
 }
+
+/*
+template <uint32_t in0_cb, uint32_t rows, uint32_t scale_fp32>
+void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols) {
+    // Precondition: in0_cb has rows*cols produced
+    // Precondition: in1_cb has rows produced
+    // Postcondition: in0_cb has rows*cols produced
+    // Postcondition: in1_cb has rows produced
+    sub_bcast_cols_init_short(in0_cb, in1_cb);
+
+    exp_tile_init<true, true, scale_fp32>();
+    cb_wait_front(in0_cb, rows * cols);
+    cb_wait_front(in1_cb, rows);
+    cb_reserve_back(reduce_cb, rows);
+
+#ifdef SUB_EXP_GRANULARITY
+    constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
+    constexpr uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
+#else
+    uint32_t dst_tiles = cols;
+    uint32_t granularity = 1;
+#endif
+    uint32_t in0_index = 0;
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t u = 0; u < granularity; u++) {
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                sub_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
+                exp_tile<true, true>(j);
+                in0_index++;
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile(j, in0_cb);
+            }
+
+            // While we have results in DST, take advantage of L1 accumulation
+            // to reduce row x cols tiles to rows x 1 tiles.
+            if (u > 0) {
+                // If on the same row, keep accumulating
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
+
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile<true>(j, reduce_cb, i);
+
+                if (u == 0 && j == 0) {
+                    // If this was the first tile of a row, start accumulating
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                }
+
+            }
+            tile_regs_release();
+            PACK((llk_pack_reconfig_l1_acc(0)));
+        }
+    }
+    cb_pop_front(in0_cb, rows * cols);
+    cb_reserve_back(in0_cb, rows * cols);
+    cb_push_back(in0_cb, rows * cols);
+    cb_push_back(reduce_cb, rows);
+}
+*/
 
 void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
@@ -279,21 +347,26 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     }
 }
 
+template <uint32_t scale_fp32>
 void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: out_cb has num_tiles produced
     // Postcondition: in0_cb and in1_cb has num_tiles produced
     sub_tiles_init(in0_cb, in1_cb);
-    exp_tile_init<EXP_APPROX_MODE>();
+    exp_tile_init<EXP_APPROX_MODE, false>();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
+
+    // convert scale from fp32 to bf16
+    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         invalidate_l1_cache();
         acquire_dst();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
-        exp_tile<EXP_APPROX_MODE>(0);
+        // exp_tile<EXP_APPROX_MODE>(0);
+        exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(VectorMode::C), scale_bf16);
         pack_tile(0, out_cb);
         cb_push_back(out_cb, 1);
         release_dst();
@@ -348,6 +421,7 @@ ALWI void cb_matmul_blocks(
     cb_wait_front(in1_cb, K * N);
 
     uint32_t output_num_tiles = M * N;
+    // cb_reserve_back(out_cb, output_num_tiles);
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
 
@@ -373,6 +447,17 @@ ALWI void cb_matmul_blocks(
             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                 pack_tile(i, out_cb);
             }
+            /*
+            uint32_t dst_idx = 0;
+            uint32_t out_col_offset = in1_subblock * subblock_w;
+            for (uint32_t r = 0; r < subblock_h; r++) {
+                uint32_t out_row_offset = (r + subblock_h * in0_subblock) * N;
+                for (uint32_t c = 0; c < subblock_w; c++) {
+                    pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
+                    dst_idx++;
+                }
+            }
+            */
             tile_regs_release();
             cb_push_back(out_cb, out_subblock_num_tiles);
             // in1_index_offset += in1_subblock * subblock_w;
@@ -382,6 +467,7 @@ ALWI void cb_matmul_blocks(
         in0_index_offset += subblock_h * in0_block_w;
     }
     cb_pop_front(in1_cb, K * N);
+    // cb_push_back(out_cb, output_num_tiles);
 }
 
 /******************************************************************************
@@ -471,7 +557,8 @@ template <
     uint32_t cb_exp_max_diff,
     uint32_t cb_out_o,
     uint32_t cb_out_m,
-    uint32_t cb_out_l>
+    uint32_t cb_out_l,
+    uint32_t scale_fp32>
 void flash_attention_loop(
     // Runtime parameters
     uint32_t k_chunk_start,
@@ -574,11 +661,11 @@ void flash_attention_loop(
             reconfig_data_format(cb_prev_max, cb_cur_max);  // DEBUG
             pack_reconfig_data_format(cb_exp_max_diff);
             /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
-            sub_exp_block(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+            sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
             cb_pop_front(cb_prev_max, Sq_chunk_t);
 
             /* cb_prev_sum *= cb_exp_max_diff */
-            mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+            // mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
             /* cb_out_accumulate_im *= cb_exp_max_diff */
             reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);  // DEBUG

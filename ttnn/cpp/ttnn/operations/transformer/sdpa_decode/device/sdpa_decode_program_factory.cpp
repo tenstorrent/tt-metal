@@ -687,6 +687,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         use_attention_mask,
         max_dynamic_chunk_size,
         tilize_q,
+        scale_union.u,
     };
 
     // Determine granularity for compute loops
