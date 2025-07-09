@@ -59,7 +59,7 @@ struct BufferWriteDispatchParams {
     IDevice* device = nullptr;
     uint32_t cq_id = 0;
 
-    virtual void calculate_issue_wait() {
+    void calculate_issue_wait() {
         this->issue_wait = this->total_pages_written == 0;  // only stall for the first write of the buffer
     }
 };
