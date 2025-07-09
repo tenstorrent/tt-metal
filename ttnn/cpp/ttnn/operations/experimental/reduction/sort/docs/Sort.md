@@ -6,6 +6,68 @@ The TTNN Sort operation is a high-performance sorting algorithm optimized for ex
 
 The sorting is performed along a specified dimension of the input tensor, typically requiring data to be rearranged such that the sort dimension is the innermost dimension. To maximize hardware utilization, the operation offers multiple strategies that leverage the parallelism available in the architecture.
 
+## Brief Functional Description
+
+The TTNN Sort operation sorts the elements of an input tensor along a specified dimension in ascending or descending order. If no dimension is specified, the last dimension of the tensor is used by default.
+
+The operation returns both the sorted tensor and the indices representing the original positions of the sorted elements.
+
+### Arguments
+
+- input_tensor (Tensor): The input tensor to be sorted.
+- dim (int, optional): The dimension along which to sort. Defaults to -1 (last dimension).
+- descending (bool, optional): If True, sorts in descending order. Defaults to False.
+- stable (bool, optional): If True, ensures stable sorting (preserves order of equal elements). Defaults to False. Note: Currently not supported.
+- memory_config (MemoryConfig, optional): Specifies memory configuration for the output tensor. Defaults to None.
+- out (tuple of Tensors, optional): Preallocated tensors for the sorted values and indices. Defaults to None.
+
+### Usage
+
+#### TTNN
+
+```python
+import ttnn
+
+# Create a TTNN tensor
+input_tensor = ttnn.Tensor([3, 1, 2])
+
+# Sort in ascending order
+sorted_tensor, indices = ttnn.sort(input_tensor)
+
+# Sort in descending order
+sorted_tensor_desc, indices_desc = ttnn.sort(input_tensor, descending=True)
+
+# Sort along a specific dimension
+input_tensor_2d = ttnn.Tensor([[3, 1, 2], [6, 5, 4]])
+sorted_tensor_dim, indices_dim = ttnn.sort(input_tensor_2d, dim=1)
+```
+
+#### Metalium
+
+```cpp
+// Create input tensor
+const ttnn::Tensor input_tensor = ...
+
+// Set sorting dim
+const int8_t dim = -1;
+
+// Set sorting params
+const bool descending = false;
+const bool stable = false;
+
+// Optional params
+std::optional<std::tuple<ttnn::Tensor&, ttnn::Tensor&>> optional_output_tensors;
+const std::optional<ttnn::MemoryConfig> memory_config;
+
+std::vector<Tensor> sorted_tensors = ttnn::sort(queue_id, input_tensor, dim, descending, stable, memory_config, optional_output_tensors);
+```
+
+### Usage Limitations
+
+- Supported index tensor types: `uint32`, `uint16`,
+- Supported value tensor types: `float32`, `bfloat32`, `bfloat16`,
+- `stable=True` is not supported in this implementation.
+
 ## Strategy Comparison Overview
 
 The TTNN Sort operation provides three sorting strategies, each optimized for different tensor sizes and hardware resource constraints. The choice of strategy reflects a trade-off between **performance**, **scalability**, and **resource utilization**.
