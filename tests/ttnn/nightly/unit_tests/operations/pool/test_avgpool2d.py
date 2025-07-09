@@ -36,6 +36,7 @@ def run_avg_pool2d(
     count_include_pad,
     shard_scheme,
     run_twice=False,
+    dtype=ttnn.bfloat16,
 ):
     ## Test setup for both.
     in_n, in_c, in_h, in_w = input_shape
@@ -43,7 +44,10 @@ def run_avg_pool2d(
     torch_input = randomize_tensor(tensor_map, input_shape)
 
     ## Test setup for Actual.
-    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    if dtype == ttnn.bfloat8_b:
+        ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    else:
+        ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_input = ttnn.permute(ttnn_input, (0, 2, 3, 1))
     ttnn_input = ttnn.reshape(ttnn_input, (1, 1, in_n * in_h * in_w, in_c))
 

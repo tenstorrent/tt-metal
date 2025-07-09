@@ -52,12 +52,12 @@ static Tensor pool2d_invoke(
         .ceil_mode = ceil_mode,
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
-    auto output_shape = sliding_window_config.get_output_shape();  // last dim/width is 0
+    auto output_shape = sliding_window_config.get_output_shape();
     auto input_tensor_sharded = input_tensor;
 
     // pool output is row major
     bool is_out_tiled = false;
-    bool is_in_tiled = input_tensor.dtype() == DataType::BFLOAT8_B;  // input tiled for bfp8_b
+    bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
 
     sliding_window::ParallelConfig parallel_config;
     MemoryConfig out_memory_config = input_tensor_sharded.memory_config();
@@ -85,7 +85,7 @@ static Tensor pool2d_invoke(
                 ShardOrientation::ROW_MAJOR,
                 false,
                 false,
-                false,
+                is_in_tiled,  // if input is tiled we need the shard width to be a tile multiple
                 0);
         } else {  // auto-sharding
             std::optional<sliding_window::ParallelConfig> sw_parallel_config =
