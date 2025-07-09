@@ -179,11 +179,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
         // Get physical chip ID to check if this is an MMIO chip
         auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(node_id);
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        bool is_mmio_chip = cluster.get_cluster_desc()->is_chip_mmio_capable(physical_chip_id);
 
         // For MMIO chips, allow multiple neighbor meshes (multiple tunnels)
         // For non-MMIO chips, skip if there are multiple neighbor meshes (inter-mesh connections)
-        if (!is_mmio_chip && (neighbors.size() > 1 || neighbors.begin()->first != node_id.mesh_id)) {
+        if (neighbors.size() > 1 || neighbors.begin()->first != node_id.mesh_id) {
             return true;
         }
 
