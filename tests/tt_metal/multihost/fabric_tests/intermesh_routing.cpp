@@ -22,13 +22,13 @@ namespace fabric_router_tests::multihost {
 
 // ========= Data-Movement Tests for 2 Host, 1 T3K bringup machine  =========
 
-TEST_F(IntermeshSplit2x4FabricFixture, RandomizedInterMeshUnicast) {
+TEST_F(IntermeshDual2x2FabricFixture, RandomizedInterMeshUnicast) {
     for (uint32_t i = 0; i < 500; i++) {
         multihost_utils::RandomizedInterMeshUnicast(this);
     }
 }
 
-TEST_F(IntermeshSplit2x4FabricFixture, MultiMeshEastMulticast) {
+TEST_F(IntermeshDual2x2FabricFixture, MultiMeshEastMulticast) {
     std::vector<FabricNodeId> mcast_req_nodes = {
         FabricNodeId(MeshId{0}, 1), FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 3), FabricNodeId(MeshId{0}, 2)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 2), FabricNodeId(MeshId{1}, 0)};
@@ -42,7 +42,7 @@ TEST_F(IntermeshSplit2x4FabricFixture, MultiMeshEastMulticast) {
     }
 }
 
-TEST_F(IntermeshSplit2x4FabricFixture, MultiMeshSouthMulticast) {
+TEST_F(IntermeshDual2x2FabricFixture, MultiMeshSouthMulticast) {
     std::vector<FabricNodeId> mcast_req_nodes = {FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 1)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 0), FabricNodeId(MeshId{1}, 1)};
     std::vector<McastRoutingInfo> routing_info = {
@@ -55,7 +55,7 @@ TEST_F(IntermeshSplit2x4FabricFixture, MultiMeshSouthMulticast) {
     }
 }
 
-TEST_F(IntermeshSplit2x4FabricFixture, MultiMeshNorthMulticast) {
+TEST_F(IntermeshDual2x2FabricFixture, MultiMeshNorthMulticast) {
     std::vector<FabricNodeId> mcast_req_nodes = {FabricNodeId(MeshId{0}, 3), FabricNodeId(MeshId{0}, 3)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 2), FabricNodeId(MeshId{1}, 3)};
     std::vector<McastRoutingInfo> routing_info = {

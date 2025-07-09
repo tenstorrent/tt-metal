@@ -25,24 +25,9 @@ enum class SystemConfig { SPLIT_T3K, DUAL_T3K, NANO_EXABOX };
 // Socket Test Variants
 enum class TestVariant { SINGLE_CONN_BWD, SINGLE_CONN_FWD, MULTI_CONN_FWD, MULTI_CONN_BIDIR };
 
-std::string get_system_config_name(SystemConfig system_config) {
-    switch (system_config) {
-        case SystemConfig::SPLIT_T3K: return "SplitT3K";
-        case SystemConfig::DUAL_T3K: return "DualT3K";
-        case SystemConfig::NANO_EXABOX: return "NanoExabox";
-        default: return "Unknown";
-    }
-}
+std::string get_system_config_name(SystemConfig system_config);
 
-std::string get_test_variant_name(TestVariant variant) {
-    switch (variant) {
-        case TestVariant::SINGLE_CONN_BWD: return "MultiMeshSingleConnectionBwd";
-        case TestVariant::SINGLE_CONN_FWD: return "MultiMeshSingleConnectionFwd";
-        case TestVariant::MULTI_CONN_FWD: return "MultiMeshMultiConnectionFwd";
-        case TestVariant::MULTI_CONN_BIDIR: return "MultiConnectionBidirectional";
-        default: return "Unknown";
-    }
-}
+std::string get_test_variant_name(TestVariant variant);
 
 // Configuration for Multi-Host Socket Tests
 struct SocketTestConfig {

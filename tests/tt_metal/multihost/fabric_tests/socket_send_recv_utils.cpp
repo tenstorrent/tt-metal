@@ -16,10 +16,31 @@
 #include <random>
 #include <algorithm>
 
+#include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
+
 namespace tt::tt_fabric {
 namespace fabric_router_tests::multihost {
 
 namespace multihost_utils {
+
+std::string get_system_config_name(SystemConfig system_config) {
+    switch (system_config) {
+        case SystemConfig::SPLIT_T3K: return "SplitT3K";
+        case SystemConfig::DUAL_T3K: return "DualT3K";
+        case SystemConfig::NANO_EXABOX: return "NanoExabox";
+        default: return "Unknown";
+    }
+}
+
+std::string get_test_variant_name(TestVariant variant) {
+    switch (variant) {
+        case TestVariant::SINGLE_CONN_BWD: return "MultiMeshSingleConnectionBwd";
+        case TestVariant::SINGLE_CONN_FWD: return "MultiMeshSingleConnectionFwd";
+        case TestVariant::MULTI_CONN_FWD: return "MultiMeshMultiConnectionFwd";
+        case TestVariant::MULTI_CONN_BIDIR: return "MultiConnectionBidirectional";
+        default: return "Unknown";
+    }
+}
 
 void test_socket_send_recv(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device_,

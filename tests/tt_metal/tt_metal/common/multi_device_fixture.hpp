@@ -77,6 +77,7 @@ protected:
         P150,
         N300,
         P300,
+        N300_2x2,
         T3000,
         TG,
     };
@@ -164,6 +165,7 @@ private:
             case MeshDeviceType::P150: return MeshShape(1, 1);
             case MeshDeviceType::N300:
             case MeshDeviceType::P300: return MeshShape(2, 1);
+            case MeshDeviceType::N300_2x2: return MeshShape(2, 2);
             case MeshDeviceType::T3000: return MeshShape(2, 4);
             case MeshDeviceType::TG: return MeshShape(4, 8);
             default: TT_FATAL(false, "Querying shape for unspecified Mesh Type.");
@@ -184,6 +186,12 @@ private:
                 switch (arch) {
                     case tt::ARCH::WORMHOLE_B0: return MeshDeviceType::N300;
                     case tt::ARCH::BLACKHOLE: return MeshDeviceType::P300;
+                    default: return std::nullopt;
+                }
+            }
+            case 4: {
+                switch (arch) {
+                    case tt::ARCH::WORMHOLE_B0: return MeshDeviceType::N300_2x2;
                     default: return std::nullopt;
                 }
             }
@@ -248,6 +256,12 @@ protected:
     T3000MeshDevice1DFabricFixture() :
         MeshDeviceFixtureBase(Config{
             .mesh_device_types = {MeshDeviceType::T3000}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_1D}) {}
+};
+
+class GenericMeshDevice2DFabricFixture : public MeshDeviceFixtureBase {
+protected:
+    GenericMeshDevice2DFabricFixture() :
+        MeshDeviceFixtureBase(Config{.num_cqs = 1, .fabric_config = FabricConfig::FABRIC_2D_DYNAMIC}) {}
 };
 
 class T3000MeshDevice2DFabricFixture : public MeshDeviceFixtureBase {

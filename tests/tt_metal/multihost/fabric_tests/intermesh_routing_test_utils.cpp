@@ -11,6 +11,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
+#include <tt-metalium/fabric.hpp>
 #include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
