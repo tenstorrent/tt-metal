@@ -118,9 +118,12 @@ public:
         // If this address is before or at the current next_atomic_addr_, advance the allocator
         if (addr >= next_atomic_addr_) {
             next_atomic_addr_ = addr + memory_map_.l1_alignment;
+        } else {
+            TT_THROW(
+                "Atomic counter address {} is smaller than the expected allocation address {}",
+                addr,
+                next_atomic_addr_);
         }
-        // Note: If addr < next_atomic_addr_, it means this address was already allocated,
-        // which should be caught by our uniform address finding logic
     }
 
     uint32_t get_num_available_payload_chunks() const { return available_payload_chunks_.size(); }
