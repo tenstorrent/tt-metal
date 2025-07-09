@@ -73,6 +73,7 @@ static const StringEnumMapper<NocSendType> noc_send_type_mapper({
     {"unicast_write", NocSendType::NOC_UNICAST_WRITE},
     {"atomic_inc", NocSendType::NOC_UNICAST_ATOMIC_INC},
     {"fused_atomic_inc", NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC},
+    {"unicast_scatter_write", NocSendType::NOC_UNICAST_SCATTER_WRITE},
 });
 
 static const StringEnumMapper<RoutingDirection> routing_direction_mapper({
