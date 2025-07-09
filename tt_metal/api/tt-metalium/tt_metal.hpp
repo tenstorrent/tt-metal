@@ -61,6 +61,8 @@ void SetFabricConfig(
     FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
     std::optional<uint8_t> num_routing_planes = std::nullopt);
 
+FabricConfig GetFabricConfig();
+
 std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool
     const std::vector<chip_id_t>& device_ids,
