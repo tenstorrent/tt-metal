@@ -43,9 +43,6 @@ def run_perf_e2e_yolov4(
     input_shape = (batch_size_per_device * num_devices, 3, *resolution)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
-    # for i in range(batch_size - 1):
-    #    torch_input_tensor = torch.cat([torch_input_tensor] * batch_size, dim=0)
-
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=inputs_mesh_mapper)
 
     inference_times = []
