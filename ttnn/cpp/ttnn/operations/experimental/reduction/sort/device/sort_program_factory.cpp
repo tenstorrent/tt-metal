@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
+#include <cmath>
 #include <cstdint>
 
 namespace ttnn::operations::experimental::reduction::sort::program {
@@ -755,6 +756,9 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     // uint32 index tensor support
     const bool is_32_bit_data = index_tensor_cb_data_format == tt::DataFormat::UInt32;
 
+    // Log 2 of Wt for compute kernel
+    const uint32_t log2Wt = std::log2(Wt);
+
     /**
      * Calculates the core range based on the input tensor shape (Wt) and the total number of cores available
      * in the device's compute grid (minus one reserved for coordinator). The core range determines which
@@ -971,7 +975,8 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y,
         static_cast<uint32_t>(attributes.descending),
-        static_cast<uint32_t>(attributes.stable)};
+        static_cast<uint32_t>(attributes.stable),
+        log2Wt};
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/"
         "sort_single_row_multi_core.cpp";
