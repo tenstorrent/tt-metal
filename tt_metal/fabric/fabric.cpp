@@ -239,6 +239,8 @@ tt::tt_fabric::Topology get_fabric_topology() {
     return control_plane.get_fabric_context().get_fabric_topology();
 }
 
+FabricConfig GetFabricConfig() { return tt::tt_metal::MetalContext::instance().get_fabric_config(); }
+
 namespace experimental {
 
 size_t get_number_of_available_routing_planes(
