@@ -10,6 +10,7 @@
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tests/ttnn/unit_tests/gtests/accessor/common.hpp"
 
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -243,24 +244,12 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
     std::vector<InputOutputBufferParams> test_params;
     for (const auto& base_param : base_params) {
         // All combinations of runtime/static arguments
-        for (uint8_t i = 0; i < 1 << 5; ++i) {
-            tensor_accessor::ArgsConfig config(i);
-            if (config.test(tensor_accessor::ArgConfig::RuntimeRank) and
-                (!config.test(tensor_accessor::ArgConfig::RuntimeTensorShape) or
-                 !config.test(tensor_accessor::ArgConfig::RuntimeShardShape))) {
-                // If rank is runtime, tensor and shard shapes must also be runtime
-                continue;
-            }
-            if (config.test(tensor_accessor::ArgConfig::RuntimeNumBanks) and
-                !config.test(tensor_accessor::ArgConfig::RuntimeBankCoords)) {
-                // If number of banks is runtime, bank coordinates must also be runtime
-                continue;
-            }
-
+        auto all_args_combinations = get_all_sharded_args_configs();
+        for (const auto& arg_config : all_args_combinations) {
             for (int src_interleaved = 0; src_interleaved <= 1; ++src_interleaved) {
                 for (int dst_interleaved = 0; dst_interleaved <= 1; ++dst_interleaved) {
                     auto p = base_param;
-                    p.crta_config = config;
+                    p.crta_config = arg_config;
                     if (src_interleaved) {
                         p.input_shard_spec = std::nullopt;
                     }

@@ -143,6 +143,7 @@ add_executable(unit_tests_ttnn_accessor)
 target_sources(
     unit_tests_ttnn_accessor
     PRIVATE
+        accessor/common.cpp
         accessor/test_accessor_benchmarks.cpp
         accessor/test_tensor_accessor.cpp
         accessor/test_tensor_accessor_on_device.cpp
