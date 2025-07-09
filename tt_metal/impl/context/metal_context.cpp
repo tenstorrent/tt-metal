@@ -465,9 +465,10 @@ void MetalContext::initialize_control_plane() {
     const char* custom_mesh_graph_desc = std::getenv("TT_MESH_GRAPH_DESC_PATH");
     if (custom_mesh_graph_desc != nullptr) {
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc);
-        if (!std::filesystem::exists(mesh_graph_desc_path)) {
-            TT_THROW("Custom mesh graph descriptor file not found: {}", mesh_graph_desc_path.string());
-        }
+        TT_FATAL(
+            std::filesystem::exists(mesh_graph_desc_path),
+            "Custom mesh graph descriptor file not found: {}",
+            mesh_graph_desc_path.string());
 
         log_info(tt::LogDistributed, "Using custom mesh graph descriptor: {}", mesh_graph_desc_path.string());
         global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
