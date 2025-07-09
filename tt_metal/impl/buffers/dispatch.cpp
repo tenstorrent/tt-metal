@@ -749,6 +749,7 @@ void write_to_device_buffer(
                 return nullptr;
             },
             dispatch_params_variant);
+        TT_ASSERT(dispatch_params != nullptr);
 
         const std::vector<CoreCoord>& cores = dispatch_params->buffer_page_mapping->all_cores;
         // Since we read core by core we are reading the device pages sequentially
@@ -781,6 +782,7 @@ void write_to_device_buffer(
                 return nullptr;
             },
             dispatch_params_variant);
+        TT_ASSERT(dispatch_params != nullptr);
 
         write_interleaved_buffer_to_device(
             src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
