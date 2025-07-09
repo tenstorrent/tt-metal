@@ -74,8 +74,6 @@ test_suite_bh_llmbox_llama_demo_tests() {
 
     verify_llama_dir_
 
-    # TODO: remove me once upgraded
-    pip3 install -r models/tt_transformers/requirements.txt
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4
 }
 
