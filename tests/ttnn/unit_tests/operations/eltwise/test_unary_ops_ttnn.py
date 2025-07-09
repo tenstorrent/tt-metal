@@ -5,7 +5,11 @@
 import torch
 import pytest
 import ttnn
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
+from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+    data_gen_with_range,
+    data_gen_with_range_dtype,
+    compare_pcc,
+)
 
 
 @pytest.mark.parametrize(
@@ -622,16 +626,18 @@ def test_unary_isnan_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_neg_ttnn(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+def test_unary_neg_ttnn(input_shapes, device, ttnn_dtype):
+    in_data1, input_tensor1 = data_gen_with_range_dtype(input_shapes, -100, 100, device, ttnn_dtype=ttnn_dtype)
 
-    cq_id = 0
-    ttnn.neg(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.neg(in_data)
+    output_tensor = ttnn.neg(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.neg)
+    golden_tensor = golden_function(in_data1)
+    output = ttnn.to_torch(output_tensor)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    if ttnn_dtype == ttnn.int32:
+        golden_tensor = golden_tensor.to(torch.int32)
+    assert torch.equal(output, golden_tensor)
 
 
 @pytest.mark.parametrize(
