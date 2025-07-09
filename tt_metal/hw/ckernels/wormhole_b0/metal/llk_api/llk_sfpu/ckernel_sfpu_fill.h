@@ -15,12 +15,18 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_fill(const float value) {
+inline void calculate_fill(const uint value) {
     // SFPU microcode
-    vFloat fill_val = value;
+    int scalar = value;
+    if (scalar < 0) {  // To convert from 2's complement to sign+magnitude
+        scalar = -scalar;
+        int res = 0x80000000 | (scalar & 0x7FFFFFFF);
+        scalar = res;
+    }
+    _sfpu_load_imm32_(p_sfpu::LREG1, scalar);
 
     for (int d = 0; d < ITERATIONS; d++) {
-        dst_reg[0] = fill_val;
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
         dst_reg++;
     }
 }
