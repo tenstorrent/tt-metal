@@ -120,8 +120,8 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> bcast_compute_defines = bcast_op_utils::get_defines(BcastOpDim::HW, bcast_math);
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> bcast_compute_defines = bcast_op_utils::get_defines(BcastOpDim::HW, bcast_math);
     if (bnc1) {
         reader_defines["BCAST_SCALAR"] = "1";
         bcast_compute_defines["BCAST_SCALAR"] = "1";
@@ -136,7 +136,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     if (output_sharded) {
         writer_defines["OUT_SHARDED"] = "1";
     }

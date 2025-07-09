@@ -95,7 +95,7 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
         }
     }();
 
-    if (is_line_topology(shape)) {
+    if (shape.is_line_topology()) {
         // TODO: consider if we can do this in 3D.
         TT_FATAL(system_shape.dims() == 2, "Line topology is only supported for 2D meshes");
         TT_FATAL(

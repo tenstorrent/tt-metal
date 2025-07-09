@@ -6,7 +6,6 @@
 #include <host_api.hpp>
 #include <map>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -18,9 +17,7 @@
 #include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "eth_tunneler.hpp"
-#include "hal.hpp"
 #include <umd/device/tt_xy_pair.h>
-#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -174,7 +171,7 @@ void DemuxKernel::CreateKernel() {
     TT_ASSERT(compile_args.size() == 30);
     const auto& grid_size = device_->grid_size();
     const auto& hal = MetalContext::instance().hal();
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         // All of these unused, remove later
         {"MY_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.non_dispatch_noc, grid_size.x, 0))},
         {"MY_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.non_dispatch_noc, grid_size.y, 0))},
@@ -183,8 +180,10 @@ void DemuxKernel::CreateKernel() {
         {"UPSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.y, 0))},
         {"DOWNSTREAM_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
         {"DOWNSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
-        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
-        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X",
+         std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y",
+         std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
         {"SKIP_NOC_LOGGING", "1"}};
     configure_kernel_variant(dispatch_kernel_file_names[DEMUX], compile_args, defines, false, false, false);
 }

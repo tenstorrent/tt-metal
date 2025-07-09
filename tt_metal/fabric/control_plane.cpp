@@ -1669,7 +1669,7 @@ void ControlPlane::initialize_intermesh_eth_links() {
             intermesh_eth_links_[chip_id] = {};
             continue;
         }
-
+        // Remote connections not visible to UMD
         // Read multi-mesh configuration from the first available eth core
         auto first_eth_core = soc_desc.logical_eth_core_to_chan_map.begin()->first;
         tt_cxy_pair virtual_eth_core(
@@ -1686,6 +1686,20 @@ void ControlPlane::initialize_intermesh_eth_links() {
                 if (channel == link) {
                     intermesh_eth_links.push_back({core_coord, link});
                     break;
+                }
+            }
+        }
+
+        // Remote connections visible to UMD
+        auto remote_connections = cluster.get_ethernet_connections_to_remote_devices().find(chip_id);
+        if (remote_connections != cluster.get_ethernet_connections_to_remote_devices().end()) {
+            for (auto [link, _] : remote_connections->second) {
+                // Find the CoreCoord for this channel
+                for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
+                    if (channel == link) {
+                        intermesh_eth_links.push_back({core_coord, link});
+                        break;
+                    }
                 }
             }
         }
@@ -1709,6 +1723,12 @@ bool ControlPlane::is_intermesh_enabled() const {
         return false;
     }
 
+    // UMD Visible Intermesh Links
+    if (!cluster.get_ethernet_connections_to_remote_devices().empty()) {
+        return true;
+    }
+
+    // UMD Hidden Intermesh Links
     std::vector<uint32_t> config_data(1, 0);
     auto first_eth_core = soc_desc.logical_eth_core_to_chan_map.begin()->first;
     tt_cxy_pair virtual_eth_core(

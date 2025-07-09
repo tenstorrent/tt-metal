@@ -102,7 +102,7 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
-    std::map<string, string> eltwise_defines = utils::get_defines_fp32(
+    std::map<std::string, std::string> eltwise_defines = utils::get_defines_fp32(
         op_type, a_dtype, b_dtype, fused_activations, operation_attributes.input_tensor_a_activation);
 
     uint32_t src0interim_cb_index = tt::CBIndex::c_3;
@@ -134,14 +134,14 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
 
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     if (src0_sharded) {
         reader_defines["IN0_SHARDED"] = "1";
     }
     if (src1_sharded) {
         reader_defines["IN1_SHARDED"] = "1";
     }
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     if (out_sharded) {
         writer_defines["OUT_SHARDED"] = "1";
     }

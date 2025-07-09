@@ -87,7 +87,9 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
 
     std::vector<uint32_t> compute_kernel_args = {};
 
-    std::map<string, string> binary_defines = {
+    bool fp32_dest_acc_en = false;
+    bool math_approx_mode = false;
+    std::map<std::string, std::string> binary_defines = {
         {"ELTWISE_OP", op_id_to_op_define[eltwise_op_index]},
         {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op_index]}};
     auto eltwise_binary_kernel = tt_metal::CreateKernel(
