@@ -245,6 +245,10 @@ std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
     return {cb_sizes, cb_page_sizes};
 }
 
+uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const ttnn::MeshDeviceView& mesh_view) {
+    return mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
+}
+
 }  // namespace detail
 
 AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::cached_mesh_workload_t
@@ -290,16 +294,18 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
     uint32_t src_mesh_id = *fabric_node_id.mesh_id;
     uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
+    uint32_t linearized_mesh_coord = detail::get_linearized_index(mesh_coordinate, mesh_view);
 
-    log_debug(
-        tt::LogOp,
+    log_info(
+        tt::LogAlways,
         "\nCreating all to all dispatch program for mesh coordinate: ({}, {}) with physical device id: {} mesh id: {} "
-        "chip id: {}",
+        "chip id: {} linearized mesh coord: {}",
         mesh_coordinate[0],
         mesh_coordinate[1],
         src_device->id(),
         src_mesh_id,
-        src_chip_id);
+        src_chip_id,
+        linearized_mesh_coord);
 
     const auto [neighbors, directions] =
         detail::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
@@ -519,6 +525,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         (uint32_t)fabric_max_packet_size,
         metadata_buffer_id,
         operation_attributes.impl == AllToAllImpl::PageByPage ? 1 : 0,
+        linearized_mesh_coord,
     };
 
     const auto& writer_compile_time_args = reader_compile_time_args;

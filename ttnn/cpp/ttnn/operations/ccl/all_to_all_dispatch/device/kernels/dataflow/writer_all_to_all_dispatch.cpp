@@ -206,6 +206,7 @@ void kernel_main() {
     constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(37);
     constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(38);
     constexpr uint32_t write_page_by_page = get_compile_time_arg_val(39);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(40);
 
     size_t rt_args_idx = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -285,7 +286,7 @@ void kernel_main() {
             for (uint32_t d = 0; d < num_devices; d++) {
                 if (devices_for_expert[d] == 1 && send_preparation_buffer[local_token * num_devices + d] == 0) {
                     send_preparation_buffer[local_token * num_devices + d] = 1;
-                    if (dest_chip_ids[d] == src_chip_id) {
+                    if (d == linearized_mesh_coord) {
                         // if the expert lives on the current device, we dispatch the input token to it
                         dispatch_input_local_device(input_token_read_addr, output_token_write_addr, output_page_size);
                     } else if (is_configured_target<mesh_cols, mesh_rows, axis>(src_chip_id, dest_chip_ids[d])) {
