@@ -26,11 +26,6 @@ namespace tt::tt_metal {
 class CommandQueueFixture : public DispatchFixture {
 protected:
     tt::tt_metal::IDevice* device_;
-
-    // This test fixture closes/opens devices on each test
-    static void SetUpTestSuite() {}
-    static void TearDownTestSuite() {}
-
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
@@ -85,9 +80,6 @@ protected:
 
 class UnitMeshCommandQueueFixture : public DispatchFixture {
 protected:
-    static void SetUpTestSuite() {}
-    static void TearDownTestSuite() {}
-
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
@@ -139,9 +131,6 @@ protected:
 
 class CommandQueueSingleCardFixture : virtual public DispatchFixture {
 protected:
-    static void SetUpTestSuite() {}
-    static void TearDownTestSuite() {}
-
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
@@ -201,9 +190,6 @@ class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture
 
 class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture {
 protected:
-    static void SetUpTestSuite() {}
-    static void TearDownTestSuite() {}
-
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
@@ -215,35 +201,22 @@ protected:
 
 class CommandQueueSingleCardProgramFixture : virtual public CommandQueueSingleCardFixture {};
 
-// Multi device command queue fixture. This fixture keeps the device open between test cases.
-// If the device should open closed/reopned for each test case then override the SetUpTestSuite and TearDownTestSuite
-// methods
 class CommandQueueMultiDeviceFixture : public DispatchFixture {
-private:
-    inline static std::vector<tt::tt_metal::IDevice*> devices_internal;
-    inline static std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_internal;
-    inline static size_t num_devices_internal;
-
 protected:
-    static bool ShouldSkip() {
-        if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-            return true;
+    void SetUp() override {
+        this->slow_dispatch_ = false;
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch) {
+            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            this->slow_dispatch_ = true;
+            GTEST_SKIP();
         }
-        if (tt::tt_metal::GetNumAvailableDevices() < 2) {
-            return true;
-        }
 
-        return false;
-    }
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
-    static std::string_view GetSkipMessage() { return "Requires fast dispatch and at least 2 devices"; }
-
-    static void DoSetUpTestSuite(
-        uint32_t num_cqs = 1,
-        uint32_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-        uint32_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        if (ShouldSkip()) {
-            return;
+        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
+        if (num_devices_ < 2) {
+            GTEST_SKIP();
         }
 
         std::vector<chip_id_t> chip_ids;
@@ -251,105 +224,30 @@ protected:
             chip_ids.push_back(id);
         }
 
-        auto dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
-        if (num_cqs > 1 && arch == tt::ARCH::WORMHOLE_B0 && tt::tt_metal::GetNumAvailableDevices() != 1) {
-            if (!tt::tt_metal::IsGalaxyCluster()) {
-                log_warning(
-                    tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
-                dispatch_core_config = DispatchCoreType::ETH;
-            }
-        }
-
-        reserved_devices_internal = tt::tt_metal::detail::CreateDevices(
-            chip_ids, num_cqs, l1_small_size, trace_region_size, dispatch_core_config);
-        for (const auto& [id, device] : reserved_devices_internal) {
-            devices_internal.push_back(device);
+        const auto& dispatch_core_config =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        reserved_devices_ = tt::tt_metal::detail::CreateDevices(
+            chip_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
+        for (const auto& [id, device] : reserved_devices_) {
+            devices_.push_back(device);
         }
     }
 
-    static void DoTearDownTestSuite() {
-        if (ShouldSkip()) {
-            return;
-        }
-        tt::tt_metal::detail::CloseDevices(reserved_devices_internal);
-    }
-
-    static void SetUpTestSuite() { CommandQueueMultiDeviceFixture::DoSetUpTestSuite(); }
-
-    static void TearDownTestSuite() { CommandQueueMultiDeviceFixture::DoTearDownTestSuite(); }
-
-    void SetUp() override {
-        if (ShouldSkip()) {
-            GTEST_SKIP() << GetSkipMessage();
-        }
-
-        slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        num_devices_ = devices_internal.size();
-        devices_ = devices_internal;
-        reserved_devices_ = reserved_devices_internal;
-    }
-
-    void TearDown() override {
-        slow_dispatch_ = false;
-        devices_.clear();
-        reserved_devices_.clear();
-        num_devices_ = 0;
-        arch_ = tt::ARCH::Invalid;
-    }
+    void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
 
     std::vector<tt::tt_metal::IDevice*> devices_;
     std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
     size_t num_devices_;
 };
 
-class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {
-public:
-    static void SetUpTestSuite() {
-        if (ShouldSkip()) {
-            return;
-        }
-        CommandQueueMultiDeviceFixture::DoSetUpTestSuite();
-    }
+class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};
 
-    static void TearDownTestSuite() {
-        if (ShouldSkip()) {
-            return;
-        }
-        CommandQueueMultiDeviceFixture::DoTearDownTestSuite();
-    }
-};
-
-class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {
-public:
-    static void SetUpTestSuite() {
-        if (ShouldSkip()) {
-            return;
-        }
-        CommandQueueMultiDeviceFixture::DoSetUpTestSuite();
-    }
-
-    static void TearDownTestSuite() {
-        if (ShouldSkip()) {
-            return;
-        }
-        CommandQueueMultiDeviceFixture::DoTearDownTestSuite();
-    }
-};
+class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
 
 class CommandQueueMultiDeviceOnFabricFixture : public CommandQueueMultiDeviceFixture,
                                                public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
 protected:
-    // Multiple fabric configs so need to reset the devices for each test
-    static void SetUpTestSuite() {}
-    static void TearDownTestSuite() {}
-
     void SetUp() override {
-        if (CommandQueueMultiDeviceFixture::ShouldSkip()) {
-            GTEST_SKIP() << CommandQueueMultiDeviceFixture::GetSkipMessage();
-        }
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
         }
@@ -360,7 +258,6 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param
         tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-        CommandQueueMultiDeviceFixture::DoSetUpTestSuite();
         CommandQueueMultiDeviceFixture::SetUp();
 
         if (::testing::Test::IsSkipped()) {
@@ -370,7 +267,6 @@ protected:
 
     void TearDown() override {
         CommandQueueMultiDeviceFixture::TearDown();
-        CommandQueueMultiDeviceFixture::DoTearDownTestSuite();
         tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
     }

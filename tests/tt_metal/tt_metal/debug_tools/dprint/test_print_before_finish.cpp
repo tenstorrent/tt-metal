@@ -57,7 +57,7 @@ static void RunTest(DPrintFixture* fixture, IDevice* device) {
     }
     fixture->RunProgram(device, program);
     // Close system instantly after running to attempt to cut off prints.
-    fixture->EarlyTeardown();
+    fixture->TearDownTestSuite();
 
     // Check the print log against expected output.
     vector<std::string> expected_output;
