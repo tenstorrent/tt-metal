@@ -519,7 +519,13 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             op_init_and_name = {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
             break;
         case UnaryOpType::NEG:
-            op_init_and_name = {"negative_tile_init();", fmt::format("negative_tile({});", idst)};
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {"negative_tile_init();", fmt::format("negative_tile_int32({});", idst)};
+            } else {
+                op_init_and_name = {"negative_tile_init();", fmt::format("negative_tile({});", idst)};
+            }
             break;
         case UnaryOpType::ALT_COMPLEX_ROTATE90:
             op_init_and_name = {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
