@@ -1,7 +1,7 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import tempfile
 from pathlib import Path
 from random import randint
@@ -43,9 +43,27 @@ def hf_config():
 def reference(hf_config, reset_seeds):
     """Get the actual DeepSeek MLA model using local implementation."""
 
-    config_path = "models/demos/deepseek_v3_impl/configs/config_671B.json"
-    with open(config_path) as f:
-        model_args = ModelArgs(**json.load(f))
+    model_args_dict = {
+        "vocab_size": hf_config.vocab_size,
+        "dim": hf_config.hidden_size,
+        "inter_dim": hf_config.intermediate_size,
+        "n_layers": hf_config.num_hidden_layers,
+        "n_heads": hf_config.num_attention_heads,
+        "q_lora_rank": hf_config.q_lora_rank,
+        "kv_lora_rank": hf_config.kv_lora_rank,
+        "qk_nope_head_dim": hf_config.qk_nope_head_dim,
+        "qk_rope_head_dim": hf_config.qk_rope_head_dim,
+        "v_head_dim": hf_config.v_head_dim,
+        "max_batch_size": MLA1D.MAX_BATCH_SIZE,
+        "original_seq_len": hf_config.rope_scaling["original_max_position_embeddings"],
+        "rope_theta": hf_config.rope_theta,
+        "rope_factor": hf_config.rope_scaling["factor"],
+        "beta_fast": hf_config.rope_scaling["beta_fast"],
+        "beta_slow": hf_config.rope_scaling["beta_slow"],
+        "mscale": hf_config.rope_scaling["mscale"],
+    }
+
+    model_args = ModelArgs(**model_args_dict)
     model_args.max_seq_len = hf_config.max_seq_len
 
     model = MLA(model_args)
