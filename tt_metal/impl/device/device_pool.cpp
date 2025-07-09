@@ -919,7 +919,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
         tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
-        log_info(tt::LogMetal, "Fabric disabled after closing devices");
     }
 
     return pass;
