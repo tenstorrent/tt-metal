@@ -21,4 +21,4 @@
 [submodule "tt_metal/third_party/mlp-op-perf"]
 	path = tt_metal/third_party/mlp-op-perf
 	url = https://github.com/xanderchin/mlp-op-perf.git
-	branch = brapanan/exp-op-mlp
+	branch = brapanan/metal-build-integration
