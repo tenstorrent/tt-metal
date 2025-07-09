@@ -696,7 +696,6 @@ def test_demo_text(
                 tt_out_tok = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks.pop(0))[0])[0, 0, 0, :32]
                 profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
-
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 
                 if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
@@ -727,23 +726,24 @@ def test_demo_text(
                 )
 
                 # Save output token to print out later
-                for user in range(batch_size):
-                    user_tok = out_tok.tolist()[user]
-                    if (
-                        user_tok not in tokenizer.stop_tokens and user_done[user] == False
-                    ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
-                        all_outputs[user].append(user_tok)
-                    else:
+                if not pcc_check:
+                    for user in range(batch_size):
+                        user_tok = out_tok.tolist()[user]
                         if (
-                            stop_at_eos
-                        ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
-                            user_done[user] = True
-                            logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
-                            if all(user_done):
-                                users_decoding = False
+                            user_tok not in tokenizer.stop_tokens and user_done[user] == False
+                        ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
+                            all_outputs[user].append(user_tok)
+                        else:
+                            if (
+                                stop_at_eos
+                            ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
+                                user_done[user] = True
+                                logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
+                                if all(user_done):
+                                    users_decoding = False
 
                 # Print out generated outputs for each user at the end of every iteration
-                if not is_ci_env:
+                if not is_ci_env and not pcc_check:
                     for user in range(batch_size):
                         text = "".join(tokenizer.decode(all_outputs[user]))
                         if len(text) > 100:
@@ -758,7 +758,7 @@ def test_demo_text(
             users_decoding = iteration < max_generated_tokens
 
             # Final print
-            if not users_decoding:
+            if not users_decoding and not pcc_check:
                 profiler.start(f"log_saving_file", iteration=batch_idx)
                 logger.info("Finished decoding, printing the final outputs...\n")
                 for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
