@@ -981,7 +981,7 @@ def test_demo_text(
                 # T3K targets
                 "T3K_Llama3.1-70B": 181,
                 # "T3K_Qwen2.5-72B": 211,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
-                "T3K_Qwen3-32B": 250,
+                # "T3K_Qwen3-32B": 250, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
