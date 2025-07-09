@@ -61,6 +61,21 @@ parameters = {
             [1, 256, 20, 20, 8, 8, 6, 6, 0, 0, 1, 1, False],  # max rows per reduction multiple large kernel
             [1, 512, 20, 20, 8, 8, 6, 6, 0, 0, 1, 1, False],  # max rows per reduction multiple large kernel wide
             [1, 320, 48, 48, 36, 36, 1, 1, 0, 0, 1, 1, False],  # 3 reduction stages, multiple indexes per core, wide
+            [
+                1,
+                300,
+                45,
+                45,
+                36,
+                36,
+                1,
+                1,
+                0,
+                0,
+                1,
+                1,
+                False,
+            ],  # 3 reduction stages, multiple indexes per core, wide, non tile multiple for bfloat8
         ],
     },
     "test_run_max_pool": {
