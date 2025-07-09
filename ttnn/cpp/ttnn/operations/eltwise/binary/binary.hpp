@@ -157,6 +157,28 @@ struct BinaryOperationSfpu {
         std::optional<bool> use_legacy = std::nullopt);
 };
 
+template <BinaryOpType binary_op_type>
+struct BinaryOperationAddalpha {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& lhs,
+        const Tensor& rhs,
+        float alpha,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output = std::nullopt);
+};
+
+template <BinaryOpType binary_op_type>
+struct BinaryOperationSubalpha {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& lhs,
+        const Tensor& rhs,
+        float alpha,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output = std::nullopt);
+};
+
 }  // namespace binary
 }  // namespace operations
 
@@ -257,6 +279,12 @@ constexpr auto rsub_ = ttnn::register_operation<
 constexpr auto bias_gelu_ = ttnn::register_operation<
     "ttnn::bias_gelu_",
     operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::BIAS_GELU>>();
+constexpr auto addalpha = ttnn::register_operation<
+    "ttnn::addalpha",
+    operations::binary::BinaryOperationAddalpha<operations::binary::BinaryOpType::ADDALPHA>>();
+constexpr auto subalpha = ttnn::register_operation<
+    "ttnn::subalpha",
+    operations::binary::BinaryOperationSubalpha<operations::binary::BinaryOpType::SUBALPHA>>();
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor& lhs, InputBType rhs) {
