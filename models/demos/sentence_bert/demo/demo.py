@@ -14,11 +14,6 @@ from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom
 from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
 
 
-def mean_pooling(token_embeddings, attention_mask):
-    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-
-
 @pytest.mark.parametrize(
     "inputs",
     [
@@ -54,21 +49,24 @@ def test_sentence_bert_demo_inference(device, inputs, model_name, sequence_lengt
     position_ids = torch.arange(0, input_ids.shape[-1], dtype=torch.int64).unsqueeze(dim=0)
     reference_module = BertModel(config).to(torch.bfloat16)
     reference_module.load_state_dict(transformers_model.state_dict())
-    reference_out = reference_module(
-        input_ids, attention_mask=extended_mask, token_type_ids=token_type_ids, position_ids=position_ids
-    )
+    Reference_sentence_embeddings = reference_module(
+        input_ids,
+        extended_attention_mask=extended_mask,
+        token_type_ids=token_type_ids,
+        position_ids=position_ids,
+        attention_mask=attention_mask,
+    ).post_processed_output
     ttnn_module = SentenceBERTPerformantRunner(
         device=device,
         input_ids=input_ids,
         extended_mask=extended_mask,
+        attention_mask=attention_mask,
         token_type_ids=token_type_ids,
         position_ids=position_ids,
     )
     ttnn_module._capture_sentencebert_trace_2cqs()
-    ttnn_out = ttnn_module.run(input_ids, token_type_ids, position_ids, extended_mask)
-    ttnn_out = ttnn.to_torch(ttnn_out).squeeze(dim=1)
-    Reference_sentence_embeddings = mean_pooling(reference_out[0], attention_mask)
-    ttnn_sentence_embeddings = mean_pooling(ttnn_out, attention_mask)
+    ttnn_out = ttnn_module.run(input_ids, token_type_ids, position_ids, extended_mask, attention_mask)
+    ttnn_sentence_embeddings = ttnn.to_torch(ttnn_out, dtype=torch.float32)
     cosine_sim_matrix1 = cosine_similarity(Reference_sentence_embeddings.detach().squeeze().cpu().numpy())
     upper_triangle1 = np.triu(cosine_sim_matrix1, k=1)
     similarities1 = upper_triangle1[upper_triangle1 != 0]
