@@ -8,7 +8,6 @@
 #include "../gather.hpp"
 
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/expand/expand.hpp"
@@ -27,15 +26,6 @@ Tensor pre_tosa_gather_transform_input_index_tensor(const Tensor& input_tensor, 
     // Create a shape vector for the new tensor
     ttnn::SmallVector<int32_t> shape_vector = {input_tensor.logical_shape()[0], input_tensor.logical_shape()[1], C};
     Tensor expanded_tensor = ttnn::expand(unsqueezed_tensor, shape_vector, unsqueezed_tensor.memory_config());
-    // --- --- ---
-    // NOTE: Converting to uint16, this will be removed once ttnn.transpose will support uint32, currently index needs
-    // to be of type bfloat16 to be compatible with the ttnn.expand as well as ttnn.transpose
-    // See issue: https://github.com/tenstorrent/tt-metal/issues/18057
-    auto device = expanded_tensor.device();
-    expanded_tensor = expanded_tensor.cpu();  // blocking
-    expanded_tensor = ttnn::to_dtype(expanded_tensor, DataType::UINT16);
-    expanded_tensor = expanded_tensor.to_device(device);
-    // --- --- ---
 
     return expanded_tensor;
 }
