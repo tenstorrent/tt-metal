@@ -878,4 +878,10 @@ void launch_build_step(const std::function<void()>& build_func, std::vector<std:
     events.emplace_back(detail::async(build_func));
 }
 
+void sync_build_steps(std::vector<std::shared_future<void>>& events) {
+    for (auto& event : events) {
+        event.wait();
+    }
+}
+
 }  // namespace tt::tt_metal
