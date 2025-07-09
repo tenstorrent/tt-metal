@@ -124,11 +124,9 @@ int main(int argc, char** argv) {
             const std::array<uint32_t, 8> runtime_args = {
                 l1_buffer->address(),
                 input_dram_buffer->address(),
-                0,
                 output_dram_buffer->address(),
-                0,
-                l1_buffer->size()
-            };
+                l1_buffer->size(),
+                num_tiles};
 
             SetRuntimeArgs(
                 program,
