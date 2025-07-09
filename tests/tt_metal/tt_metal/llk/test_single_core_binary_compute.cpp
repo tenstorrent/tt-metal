@@ -15,7 +15,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -56,7 +55,7 @@ using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
 namespace unit_tests::compute::binary {
-const map<string, string> binary_op_name_to_op_type = {
+const map<std::string, std::string> binary_op_name_to_op_type = {
     {"add", "EltwiseBinaryType::ELWADD"},
     {"sub", "EltwiseBinaryType::ELWSUB"},
     {"mul", "EltwiseBinaryType::ELWMUL"},
@@ -64,7 +63,7 @@ const map<string, string> binary_op_name_to_op_type = {
     {"sub_with_dest_reuse", "EltwiseBinaryType::ELWSUB"},
     {"mul_with_dest_reuse", "EltwiseBinaryType::ELWMUL"},
 };
-const map<string, string> binary_op_name_to_op_kernel = {
+const map<std::string, std::string> binary_op_name_to_op_kernel = {
     {"add", "add_tiles"},
     {"sub", "sub_tiles"},
     {"mul", "mul_tiles"},
@@ -155,7 +154,8 @@ bool single_core_binary(tt_metal::IDevice* device, const SingleCoreBinaryConfig&
     auto l1_output_cb = tt_metal::CreateCircularBuffer(program, test_config.core, l1_output_cb_config);
 
     vector<uint32_t> compute_kernel_args = {};
-    std::map<string, string> defines = {{"ELTWISE_OP_TYPE", binary_op_name_to_op_type.at(test_config.binary_op)}};
+    std::map<std::string, std::string> defines = {
+        {"ELTWISE_OP_TYPE", binary_op_name_to_op_type.at(test_config.binary_op)}};
 
     if (test_config.binary_op.find("_with_dest_reuse") != std::string::npos) {
         defines["ELTWISE_DEST_REUSE_TYPE"] = "EltwiseBinaryReuseDestType::DEST_TO_SRCA";
