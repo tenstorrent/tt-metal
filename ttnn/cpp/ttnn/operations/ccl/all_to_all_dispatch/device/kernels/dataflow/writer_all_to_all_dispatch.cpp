@@ -31,18 +31,52 @@ inline void dispatch_metadata_local_device(
     noc_async_atomic_barrier();
 }
 
+template <uint32_t fabric_max_packet_size>
+inline void dispatch_noc_uni_fused_sem_inc(
+    uint32_t payload_l1_address,
+    uint64_t noc_payload_write_address,
+    uint64_t noc_remote_semaphore_address,
+    int32_t size,
+    uint16_t increment_value,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    volatile PACKET_HEADER_TYPE* metadata_packet_header) {
+    while (size > 0) {
+        uint32_t curr_packet_size = std::min(fabric_max_packet_size, (uint32_t)size);
+
+        if ((uint32_t)size == curr_packet_size) {
+            // Fill header for fused unicast + atomic increment command when it is the last packet
+            metadata_packet_header->to_noc_fused_unicast_write_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+                    noc_payload_write_address, noc_remote_semaphore_address, increment_value, 32, true),
+                curr_packet_size);
+        } else {
+            // Fill header for fused unicast + atomic increment command when it is not the last packet
+            metadata_packet_header->to_noc_unicast_write(
+                tt::tt_fabric::NocUnicastCommandHeader{noc_payload_write_address}, curr_packet_size);
+        }
+
+        // Send payload followed by header over the fabric.
+        fabric_connection.wait_for_empty_write_slot();
+        fabric_connection.send_payload_without_header_non_blocking_from_address(payload_l1_address, curr_packet_size);
+        fabric_connection.send_payload_flush_blocking_from_address(
+            (uint32_t)metadata_packet_header, sizeof(PACKET_HEADER_TYPE));
+
+        payload_l1_address += curr_packet_size;
+        noc_payload_write_address += curr_packet_size;
+        size -= curr_packet_size;
+    }
+}
+
 // Insert helper that handles the remote-device metadata path with fused atomic increment
-inline void dispatch_metadata_remote_device(
-    uint32_t src_chip_id,
+template <uint32_t src_chip_id, uint32_t mesh_cols, uint32_t mesh_rows, uint32_t fabric_max_packet_size>
+inline void dispatch_chip_uni_noc_uni_fused_sem_inc(
     uint32_t dest_chip_id,
     uint32_t dest_mesh_id,
-    uint32_t mesh_cols,
-    uint32_t mesh_rows,
-    uint32_t token_indices_address,
-    uint64_t metadata_write_addr,
-    uint64_t global_noc_semaphore_address,
-    int size,
-    uint32_t fabric_max_packet_size,
+    uint32_t payload_l1_address,
+    uint64_t noc_payload_write_address,
+    uint64_t noc_remote_semaphore_address,
+    int32_t size,
+    uint16_t increment_value,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* metadata_packet_header) {
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
@@ -56,36 +90,15 @@ inline void dispatch_metadata_remote_device(
         dest_mesh_id,
         mesh_cols);
 
-    while (size > 0) {
-        uint32_t curr_packet_size = std::min(fabric_max_packet_size, (uint32_t)size);
-
-        if ((uint32_t)size == curr_packet_size) {
-            // Fill header for fused unicast + atomic increment command when it is the last packet
-            metadata_packet_header->to_noc_fused_unicast_write_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
-                    metadata_write_addr, global_noc_semaphore_address, 1, 32, true),
-                curr_packet_size);
-        } else {
-            // Fill header for fused unicast + atomic increment command when it is not the last packet
-            metadata_packet_header->to_noc_unicast_write(
-                tt::tt_fabric::NocUnicastCommandHeader{metadata_write_addr}, curr_packet_size);
-        }
-
-        // Send payload followed by header over the fabric.
-        fabric_connections[route].wait_for_empty_write_slot();
-        fabric_connections[route].send_payload_without_header_non_blocking_from_address(
-            token_indices_address, curr_packet_size);
-        fabric_connections[route].send_payload_flush_blocking_from_address(
-            (uint32_t)metadata_packet_header, sizeof(PACKET_HEADER_TYPE));
-
-        token_indices_address += curr_packet_size;
-        metadata_write_addr += curr_packet_size;
-        size -= curr_packet_size;
-    }
+    return dispatch_noc_uni_fused_sem_inc<fabric_max_packet_size>(
+        payload_l1_address,
+        noc_payload_write_address,
+        noc_remote_semaphore_address,
+        size,
+        increment_value,
+        fabric_connections[route],
+        metadata_packet_header);
 }
-}  // namespace detail
-
-using namespace ttnn::operations::ccl::common;
 
 void zero_buffer_async(uint32_t write_addr, int bytes) {
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
@@ -98,6 +111,10 @@ void zero_buffer_async(uint32_t write_addr, int bytes) {
 }
 
 void zero_buffer_barrier() { noc_async_read_barrier(); }
+
+}  // namespace detail
+
+using namespace ttnn::operations::ccl::common;
 
 void kernel_main() {
     constexpr bool input_is_dram = (bool)get_compile_time_arg_val(0);
@@ -174,7 +191,7 @@ void kernel_main() {
     }
 
     uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);
-    zero_buffer_async(send_preparation_buffer_address, tokens_per_device * num_devices * sizeof(uint8_t));
+    detail::zero_buffer_async(send_preparation_buffer_address, tokens_per_device * num_devices * sizeof(uint8_t));
 
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
@@ -197,7 +214,7 @@ void kernel_main() {
 
     uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
 
-    zero_buffer_barrier();
+    detail::zero_buffer_barrier();
     for (uint32_t i = 0; i < directions.size(); i++) {
         if (directions[i] == true) {
             fabric_connections[i].open_finish();
@@ -233,7 +250,7 @@ void kernel_main() {
                         // if the expert lives on the current device, we dispatch the input token to it
                         detail::dispatch_input_local_device(
                             input_token_read_addr, output_token_write_addr, output_page_size);
-                    } else if (is_configured_target<src_chip_id, mesh_cols, mesh_rows, axis>(dest_chip_ids[d])) {
+                    } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_cols, mesh_rows, axis>(d)) {
                         // if the expert lives on a remote device, we dispatch the input token to it
                         // if axis is specified then we only send to the devices that are along the axis
                         // if axis is not specified then we send to all devices
@@ -267,24 +284,25 @@ void kernel_main() {
 
             // dispatch the metadata to all other devices
             for (uint32_t d = 0; d < num_devices; d++) {
-                if (dest_chip_ids[d] == src_chip_id) {
+                if (d == linearized_mesh_coord) {
                     // dispatch the metadata to the current device and increment the local copy of the semaphore
                     detail::dispatch_metadata_local_device(
                         token_indices_address, metadata_write_addr, metadata_page_size, global_noc_semaphore_address);
-                } else if (is_configured_target<src_chip_id, mesh_cols, mesh_rows, axis>(dest_chip_ids[d])) {
+                } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_cols, mesh_rows, axis>(d)) {
                     // dispatch the metadata to the remote device and increment the remote device's copy of the
                     // semaphore
-                    detail::dispatch_metadata_remote_device(
+                    detail::dispatch_chip_uni_noc_uni_fused_sem_inc<
                         src_chip_id,
-                        dest_chip_ids[d],
-                        dest_mesh_ids[d],
                         mesh_cols,
                         mesh_rows,
+                        fabric_max_packet_size>(
+                        dest_chip_ids[d],
+                        dest_mesh_ids[d],
                         token_indices_address,
                         metadata_write_addr,
                         global_noc_semaphore_address,
                         (int)metadata_page_size,
-                        fabric_max_packet_size,
+                        1,
                         fabric_connections,
                         metadata_packet_header);
                 }
@@ -296,26 +314,24 @@ void kernel_main() {
         // dispatch the metadata to the current device
         uint64_t intermediate_metadata_write_addr = get_noc_addr(get_read_ptr(metadata_buffer_id));
         for (uint32_t d = 0; d < num_devices; d++) {
-            if (dest_chip_ids[d] == src_chip_id) {
+            if (d == linearized_mesh_coord) {
                 detail::dispatch_metadata_local_device(
                     base_indices_addr,
                     intermediate_metadata_write_addr + (dispatch_index * indices_size),
                     indices_size,
                     global_noc_semaphore_address);
-            } else if (is_configured_target<src_chip_id, mesh_cols, mesh_rows, axis>(dest_chip_ids[d])) {
-                detail::dispatch_metadata_remote_device(
-                    src_chip_id,
-                    dest_chip_ids[d],
-                    dest_mesh_ids[d],
-                    mesh_cols,
-                    mesh_rows,
-                    base_indices_addr,
-                    intermediate_metadata_write_addr + (dispatch_index * indices_size),
-                    global_noc_semaphore_address,
-                    (int)indices_size,
-                    fabric_max_packet_size,
-                    fabric_connections,
-                    metadata_packet_header);
+            } else if (is_configured_target_mesh<linearized_mesh_coord, mesh_cols, mesh_rows, axis>(d)) {
+                detail::
+                    dispatch_chip_uni_noc_uni_fused_sem_inc<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size>(
+                        dest_chip_ids[d],
+                        dest_mesh_ids[d],
+                        base_indices_addr,
+                        intermediate_metadata_write_addr + (dispatch_index * indices_size),
+                        global_noc_semaphore_address,
+                        (int)indices_size,
+                        1,
+                        fabric_connections,
+                        metadata_packet_header);
             }
         }
     }

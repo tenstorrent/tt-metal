@@ -55,6 +55,22 @@ bool is_configured_target(uint32_t dest_chip_id) {
     }
 }
 
+template <uint32_t linearized_src_mesh_coord, uint32_t mesh_cols, uint32_t mesh_rows, ReplicateGroup Axis>
+bool is_configured_target_mesh(uint32_t linearized_dest_mesh_coord) {
+    // axis is the direction along which we are allowed to send packets
+    // axis = 1; means we are allowed to send packets in the row direction
+    // axis = 0; means we are allowed to send packets in the column direction
+    // axis = -1; means we are allowed to send packets in all directions
+    if constexpr (Axis == ReplicateGroup::COLS) {  // check if they're on the same column
+        return linearized_src_mesh_coord % mesh_cols == linearized_dest_mesh_coord % mesh_cols;
+    } else if constexpr (Axis == ReplicateGroup::ROWS) {  // check if they're on the same row
+        return linearized_src_mesh_coord / mesh_cols == linearized_dest_mesh_coord / mesh_cols;
+    } else {
+        return true;  // if axis is not configured, we assume the target is configured, which is the default case, which
+                      // is all directions
+    }
+}
+
 /*
 enum eth_chan_directions {
     EAST = 0,
