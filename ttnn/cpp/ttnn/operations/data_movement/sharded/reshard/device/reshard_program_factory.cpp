@@ -722,8 +722,6 @@ operation::ProgramWithCallbacks nd_reshard_multicore_generic_naive(const Tensor&
     // TODO: Fix multicore resharding
     auto grid = input_nd_shard_spec.grid;
     auto cores = corerange_to_cores(grid, std::nullopt, input_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    // constexpr CoreCoord grid{0, 0};
-    // auto cores = std::vector<CoreCoord>{CoreCoord{0, 0}};
 
     // Create Circular Buffer
     const auto data_format = datatype_to_dataformat_converter(input.dtype());
@@ -789,7 +787,7 @@ operation::ProgramWithCallbacks nd_reshard_multicore_generic_naive(const Tensor&
         auto& runtime_args_by_core_writer = GetRuntimeArgs(program, writer_kernel_id);
 
         uint32_t start_page = 0;
-        uint32_t num_dev_pages = input.buffer()->num_dev_pages();
+        uint32_t num_dev_pages = input.buffer()->buffer_distribution_spec()->get_tensor_shape_in_pages().volume();
         uint32_t n_pages_per_core = num_dev_pages / cores.size();
         uint32_t remainder = num_dev_pages % cores.size();
 
@@ -814,6 +812,7 @@ operation::ProgramWithCallbacks nd_reshard_multicore_generic_naive(const Tensor&
 }
 
 operation::ProgramWithCallbacks nd_reshard_multi_core(const Tensor& input, Tensor& output) {
+    log_error(tt::LogTest, "nd_reshard_multi_core");
     return nd_reshard_multicore_generic_naive(input, output);
 }
 }  // namespace ttnn::operations::data_movement::detail
