@@ -93,10 +93,10 @@ def load_knowledge_base(kb_file="knowledge_base.txt"):
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
-    "model_name, sequence_length, batch_size,kb_file",
+    "model_name, sequence_length, device_batch_size, kb_file",
     [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, "knowledge_base.txt")],
 )
-def test_interactive_demo_inference(device, model_name, sequence_length, batch_size, kb_file):
+def test_interactive_demo_inference(device, model_name, sequence_length, device_batch_size, kb_file):
     logger.info(f"Loading knowledge base from {kb_file}...")
     kb_sentences = load_knowledge_base(kb_file)
     kb_embeddings, kb_sentences, model_instance = compute_ttnn_embeddings(kb_sentences, model_name, device)
@@ -110,9 +110,9 @@ def test_interactive_demo_inference(device, model_name, sequence_length, batch_s
             logger.info("Exiting interactive demo.")
             break
         orig_batch_size = len([query])
-        if orig_batch_size < batch_size:
+        if orig_batch_size < device_batch_size:
             # Repeat sentences as needed to fill the batch, even if original batch is very small
-            batch_sentences = list(islice(cycle([query]), batch_size))
+            batch_sentences = list(islice(cycle([query]), device_batch_size))
         tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
         encoded_input = tokenizer(
             batch_sentences, padding="max_length", max_length=sequence_length, truncation=True, return_tensors="pt"

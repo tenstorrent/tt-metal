@@ -59,6 +59,7 @@ def test_sentence_bert_eval_data_parallel(
         example = dataset[i]
         sen1, sen2, score = example["sentence1_tr"], example["sentence2_tr"], example["score"]
         sen1_list, sen2_list = [sen1] * (batch_size // 2), [sen2] * (batch_size // 2)
+        logger.info(f"Input length: {len(sen1_list + sen2_list)}")
         encoded_input = tokenizer(
             sen1_list + sen2_list,
             padding="max_length",
