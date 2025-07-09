@@ -1,4 +1,17 @@
 Tests:
+  - name: "FullRingUnicast"
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: full_ring
+
   - name: "FullRingMulticast"
     fabric_setup:
       topology: Ring
@@ -10,7 +23,20 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: full_ring_multicast
+      - type: full_ring
+
+  - name: "HalfRingUnicast"
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: half_ring
 
   - name: "HalfRingMulticast"
     fabric_setup:
@@ -23,4 +49,4 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: half_ring_multicast
+      - type: half_ring

@@ -471,15 +471,9 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 continue;
             }
 
-            if (pattern.ftype.value() == ChipSendType::CHIP_MULTICAST) {
-                std::vector<FabricNodeId> dst_node_ids;
-                if (dest.hops.has_value()) {
-                    dst_node_ids = route_manager_.get_dst_node_ids_from_hops(
-                        sender.device, dest.hops.value(), pattern.ftype.value());
-                } else {
-                    TT_FATAL(dest.device.has_value(), "Multicast destination requires hops");
-                    dst_node_ids.push_back(dest.device.value());
-                }
+            if (dest.hops.has_value()) {  // process based on hops
+                std::vector<FabricNodeId> dst_node_ids =
+                    route_manager_.get_dst_node_ids_from_hops(sender.device, dest.hops.value(), pattern.ftype.value());
 
                 const auto& receiver_policy =
                     get_or_create_device_resources(dst_node_ids.front()).core_pools_[RECEIVER_TYPE_IDX].policy;
@@ -558,8 +552,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                     }
                 }
 
-            } else {  // Unicast
-                TT_FATAL(dest.device.has_value(), "Unicast destination requires a device ID.");
+            } else if (dest.device.has_value()) {  // process dest devices directly
                 auto& device_resources = get_or_create_device_resources(dest.device.value());
 
                 if (!dest.core.has_value()) {

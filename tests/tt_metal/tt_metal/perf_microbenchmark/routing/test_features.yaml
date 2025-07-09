@@ -69,7 +69,7 @@ Tests:
 
     # High-level patterns automatically generate the sender configurations.
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
         # 'iterations' will run the entire generated test matrix this many times,
         # each time with a new random seed for the payload data.
         iterations: 2
@@ -186,7 +186,7 @@ Tests:
 
   # ======================================================================================
   # Test 7: Ring Topology and All-to-All Multicast
-  # This demonstrates the Ring topology and the all_to_all_multicast pattern, which
+  # This demonstrates the Ring topology and the all_to_all pattern, which
   # creates a multicast from each device to every other device.
   # ======================================================================================
   - name: "Ring_AllToAllMulticast"
@@ -200,7 +200,7 @@ Tests:
       num_packets: 10
 
     patterns:
-      - type: all_to_all_multicast
+      - type: all_to_all
 
   # ======================================================================================
   # Test 8: Dynamic Routing and Custom Atomic Operations

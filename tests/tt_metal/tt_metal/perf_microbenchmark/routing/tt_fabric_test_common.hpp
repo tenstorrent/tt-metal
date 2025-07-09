@@ -201,7 +201,10 @@ public:
      * - Left columns: South → East, Right columns: South → West
      */
     std::vector<FabricNodeId> get_wrap_around_mesh_ring_topology_dst_node_ids(
-        const FabricNodeId& src_node_id, RoutingDirection initial_direction, uint32_t total_hops) const {
+        const FabricNodeId& src_node_id,
+        RoutingDirection initial_direction,
+        uint32_t total_hops,
+        ChipSendType chip_send_type) const {
         std::vector<FabricNodeId> ring_destinations;
         ring_destinations.reserve(total_hops);
 
@@ -295,7 +298,14 @@ public:
 
             // Move to next coordinate and add to destinations
             current_coord = next_coord;
-            ring_destinations.push_back(get_fabric_node_id(current_coord));
+            if (chip_send_type == ChipSendType::CHIP_UNICAST) {
+                // only push the dest node for last hop
+                if (hop == total_hops - 1) {
+                    ring_destinations.push_back(get_fabric_node_id(current_coord));
+                }
+            } else if (chip_send_type == ChipSendType::CHIP_MULTICAST) {
+                ring_destinations.push_back(get_fabric_node_id(current_coord));
+            }
         }
 
         log_debug(
@@ -329,7 +339,8 @@ public:
                 }
             }
             TT_FATAL(total_hops != 0, "all directions has 0 hops");
-            return get_wrap_around_mesh_ring_topology_dst_node_ids(src_node, initial_direction, total_hops);
+            return get_wrap_around_mesh_ring_topology_dst_node_ids(
+                src_node, initial_direction, total_hops, chip_send_type);
         }
 
         std::vector<FabricNodeId> dst_nodes;
@@ -605,10 +616,10 @@ public:
         // TODO: fix for 6U since this is not a valide config for it.
         uint32_t full_hop_count = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1) - 1;
 
-        if (pattern_type == HighLevelTrafficPattern::FullRingMulticast) {
+        if (pattern_type == HighLevelTrafficPattern::FullRing) {
             num_forward_hops = full_hop_count;
             num_backward_hops = full_hop_count;
-        } else if (pattern_type == HighLevelTrafficPattern::HalfRingMulticast) {
+        } else if (pattern_type == HighLevelTrafficPattern::HalfRing) {
             num_forward_hops = tt::div_up(full_hop_count, 2);
             num_backward_hops = full_hop_count - num_forward_hops;
             if (src_node_id.chip_id % 2 == 0) {
@@ -616,7 +627,7 @@ public:
             }
         } else {
             TT_THROW(
-                "Unsupported pattern type for ring multicast: only FullRingMulticast and HalfRingMulticast are "
+                "Unsupported pattern type for ring multicast: only FullRing and HalfRing are "
                 "supported");
         }
 
