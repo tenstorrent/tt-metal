@@ -128,7 +128,13 @@ def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> Li
 
 def build_mpi_command(config: TTRunConfig, program: List[str], mpi_args: Optional[List[str]] = None) -> List[str]:
     """Build OpenMPI command with per-rank environment variables."""
-    cmd = ["mpirun"]
+    # Find mpirun-ulfm executable, fall back to mpirun if not found
+    mpi_launcher = shutil.which("mpirun-ulfm")
+    if not mpi_launcher:
+        logger.warning(f"{TT_RUN_PREFIX} mpirun-ulfm not found in PATH, falling back to mpirun")
+        mpi_launcher = "mpirun"
+
+    cmd = [mpi_launcher]
 
     if mpi_args:
         cmd.extend(mpi_args)
