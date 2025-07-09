@@ -837,6 +837,8 @@ bool test_EnqueueWrap_on_EnqueueProgram(IDevice* device, CommandQueue& cq, const
     return pass;
 }
 
+bool riscv_is_eth(const tt::RISCV& riscv) { return (riscv == tt::RISCV::ERISC0 || riscv == tt::RISCV::ERISC1); }
+
 // Verify RT args for a core at a given address by comparing to expected values.
 bool verify_rt_args(
     bool unique,
@@ -850,8 +852,8 @@ bool verify_rt_args(
     std::string label = unique ? "Unique" : "Common";
     // Same idea as ReadFromDeviceL1() but with ETH support.
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
-    auto noc_xy = riscv == tt::RISCV::ERISC0 ? device->ethernet_core_from_logical_core(logical_core)
-                                             : device->worker_core_from_logical_core(logical_core);
+    auto noc_xy = riscv_is_eth(riscv) ? device->ethernet_core_from_logical_core(logical_core)
+                                      : device->worker_core_from_logical_core(logical_core);
     std::vector<uint32_t> args_readback = tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
     log_debug(tt::LogTest, "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}", expected_rt_args.size(), label, noc_xy, logical_core.str(), addr, incr_val);
 
@@ -1044,8 +1046,7 @@ static void test_my_coordinates(
     CoreRangeSet cr{CoreRange{{2, 2}, {6, 6}}};
 
     auto device = mesh_device->get_devices()[0];
-
-    bool is_erisc = processor_class == tt::RISCV::ERISC0 || processor_class == tt::RISCV::ERISC1;
+    bool is_erisc = riscv_is_eth(processor_class);
     if (is_erisc) {
         const auto eth_cores =
             idle_eth ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
