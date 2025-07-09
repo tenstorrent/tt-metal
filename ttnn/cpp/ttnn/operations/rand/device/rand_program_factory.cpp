@@ -22,7 +22,6 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
     tensor_return_value_t& output) {
     IDevice* device = output.device();
     auto grid = device->compute_with_storage_grid_size();
-    auto core_h = grid.y;
 
     uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
@@ -46,13 +45,13 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
     CircularBufferConfig cb_intermed_config =
         CircularBufferConfig(intermed_num_tiles * intermed_tile_size, {{intermed_cb_id, tt::DataFormat::Float32}})
             .set_page_size(intermed_cb_id, intermed_tile_size);
-    CBHandle cb_intermed = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed_config);
 
     constexpr uint32_t dst_cb_id = CBIndex::c_0;
     CircularBufferConfig cb_output_config =
         CircularBufferConfig(in_out_num_tiles * dtype_tile_size, {{dst_cb_id, out_data_format}})
             .set_page_size(dst_cb_id, dtype_tile_size);
-    CBHandle cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/rand/device/kernels/";
     const uint32_t output_is_dram = output.buffer()->buffer_type() == BufferType::DRAM ? 1 : 0;
