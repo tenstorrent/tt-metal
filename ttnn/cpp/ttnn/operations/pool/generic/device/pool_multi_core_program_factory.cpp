@@ -649,8 +649,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         input, kernel_size_h, kernel_size_w, out_h, out_w, input.memory_config(), output.memory_config(), pool_type);
     uint32_t output_cb_size = post_allocate_size - memory_used;
 
+    // For now assume that if post_op_l1_allocation_size == 0 op is being run
+    // in graph capture NO_DISPATCH mode.
+    bool is_graph_capture_no_dispatch_mode = post_allocate_size == 0;
     TT_FATAL(
-        temporary_size + output_cb_size == l1_usage,
+        temporary_size + output_cb_size == l1_usage || is_graph_capture_no_dispatch_mode,
         "Calculated CB size {} does not match with the actual CB size {}  ",
         temporary_size + output_cb_size,
         l1_usage);
